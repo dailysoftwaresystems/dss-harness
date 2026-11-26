@@ -699,6 +699,14 @@ engine raises the triage for each issue a reasoning step's answer reports under 
 reasoning step that names one is told, at the end of its prompt, every issue the run holds where it starts -
 what became of each, its title and where it is - and reports one again only where it stops its own work.
 
+An issue sent to fix is the recovery's at once, its fix beside any other at work - save one that a step of the
+recovery itself reported, which waits for that visit to end, and one a fix at work already mends for another step,
+which waits for that fix; a step two issues stop runs again once, after both are settled. While it is being fixed, the
+issue holds the files its triage names (never a command it names) and, once its diagnosis is checked, the files its
+remedy items own: a work item that has not begun and owns one of them starts once that fix is done, building on the
+tree it leaves, and `ask-orchestrator-status` says what it waits for; every other item goes on at once. The planner
+and the self-audit are told the same: no work item fixes an issue being fixed, or rewrites its lines.
+
 A reasoning step's `effort` is one level for every model it may run on, or a map giving each its own -
 `all` for the rest and a model's code for one; the shipped workflow runs its heaviest steps at
 `xhigh` and its other agents at `high`, or `low` on the `fast` tier, every model of a step's tier at

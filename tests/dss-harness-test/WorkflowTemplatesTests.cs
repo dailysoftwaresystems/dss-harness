@@ -1229,6 +1229,77 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
+    /// The help, the README and the architecture say when the recovery takes an issue sent to fix - at once, beside any
+    /// other fix at work, save one a step of a visit reported or one a visit at work fixes already - that a step two issues
+    /// stop runs again once, and what an issue being fixed holds: its triage's paths and its remedies', which a work item
+    /// that has not begun waits on, every other going on; and the orchestrators topic says such a wait among what a run
+    /// waits for.
+    /// </summary>
+    [Fact]
+    public void TheHelpTheReadmeAndTheArchitecture_SayWhenTheRecoveryTakesAnIssue_AndWhatItsFixHolds()
+    {
+        var help = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "An issue sent to fix is the recovery's at once, its visit beside any other at work - save one a step of a visit of the recovery reported, which waits for that visit to end, for the recovery never calls itself, and one a visit at work fixes already for another step it stopped, which waits for that visit; a step two issues stop runs again once, after both are settled. "
+                + "From the moment it is sent to fix until its visit ends, the issue holds the files its triage's where names - each a path from the repository's root, never a command - and, once a check of its visit has read the remedy items its diagnosis gives, the paths those items own: an instance of the work-item group that has not begun and owns one of them starts once that visit has ended, building on the tree the fix leaves,",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "an instance waiting on another, on the resume, on room - a claim, the run to be quiet, a counter of its limits - or on the fix of an issue that holds a file its work item owns,",
+            Prose.Words(DssHarness.Core.Help.HelpTopics.Render("orchestrators")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "An issue sent to fix is the recovery's at once, its fix beside any other at work - save one that a step of the recovery itself reported, which waits for that visit to end, and one a fix at work already mends for another step, which waits for that fix; a step two issues stop runs again once, after both are settled.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a work item that has not begun and owns one of them starts once that fix is done, building on the tree it leaves, and `ask-orchestrator-status` says what it waits for; every other item goes on at once.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "only one that a step of a visit reported waits, for that visit to end - the recovery never calls itself (V50) - and one a visit at work fixes already, for another step it stopped, waits for that visit,",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"the issue holds the files its triage's `where` names, each entry a path from the repository's root and never the command it may name instead (`{nameof(FlowIssueHold)}.{nameof(FlowIssueHold.IsPath)}`), and, once a check of its visit has read the remedy items its diagnosis gives, every path those items own: `{nameof(FlowIssueHold)}`, the one owner of what an issue holds and which of it a work item owns,",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"its record's `waitsOn` names the fix, `{FlowWaits.Fix("<title>", "<visit>", ["<paths>"])}` (`{nameof(FlowWaits)}.{nameof(FlowWaits.Fix)}`), and `ask-orchestrator-status` says it among what the run waits for.",
+            architecture,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The planner's prompts and the self-audit leave an issue the recovery is fixing to the recovery: each reads
+    /// <c>{run.preExisting}</c> and says once that no work item fixes an issue it lists as being fixed or rewrites its
+    /// lines, and that an item needing it fixed builds after the fix, which the run holds it for - a plan that folded the
+    /// fix into an item of its own would build the fix's lines beside the recovery's remedy. No other shipped file says it.
+    /// </summary>
+    [Fact]
+    public void ThePlannersPromptsAndTheSelfAudit_LeaveAnIssueBeingFixedToTheRecovery()
+    {
+        const string Rule = "An issue the list says is being fixed is the recovery's: no work item fixes it or rewrites its lines; an item that needs it fixed builds after the fix, on the tree the fix leaves - the run holds it until the fix is done.";
+        string[] told = ["prompts/plan-update.md", "prompts/plan.md", "prompts/replan.md", "prompts/self-audit.md"];
+
+        Assert.Equal<IEnumerable<string>>(
+            told,
+            [.. WorkflowTemplates.Files.Where(file => Prose.Words(WorkflowTemplates.TextOf(file)!).Contains(Rule, StringComparison.Ordinal)).Order(StringComparer.Ordinal)]);
+
+        foreach (var prompt in told)
+        {
+            var words = Prose.Words(WorkflowTemplates.TextOf(prompt)!);
+
+            // The list the rule names is the one the prompt reads, and the rule is said once.
+            Assert.Contains("its title and where; empty where none is: {run.preExisting} " + Rule, words, StringComparison.Ordinal);
+            Assert.Equal(words.IndexOf(Rule, StringComparison.Ordinal), words.LastIndexOf(Rule, StringComparison.Ordinal));
+        }
+    }
+
+    /// <summary>
     /// The README and the architecture say how a failure reaches the recovery and where the run goes after it, as the
     /// grammar has it: a step says onFailure: recover, the recovery says onSuccess and onFailure, and a reasoning step is
     /// never recovered.

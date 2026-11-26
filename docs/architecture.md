@@ -2538,6 +2538,26 @@ run holds then (`FlowPreExistingReport.Known`, the part `<pre-existing>` wraps a
 issue whose triage has not ended, being triaged - so a repeat it would word its own way, which `HolderOf` cannot
 match, is reported again only where it stops its own work, and raises no triage only to be merged as a duplicate.
 
+An issue a triage sends to fix is the recovery's at once, its visit beside any other at work (`FlowCoordinator.FixOf`):
+only one that a step of a visit reported waits, for that visit to end - the recovery never calls itself (V50) - and one
+a visit at work fixes already, for another step it stopped, waits for that visit, so one defect has one fix at a time and
+the next is diagnosed on the tree the first left (`FixWaitsFor`, the triage's record saying which it waits for). A step
+two issues stop runs again once (`RunTheReporterAgain`): after every issue that stops it is settled - no triage of one
+still to answer, no fix of one waiting or at work - where a visit fixed one, sent back by the visit that ended last;
+never while a fix of another still works, and never twice. `{run.preExisting}` says each issue in the place it was taken,
+whichever visit ended first. From the moment it is sent to fix until its visit ends - a visit paused on a person, or
+asked whether its failure is tried again, included - the issue holds the files its triage's `where` names, each entry a
+path from the repository's root and never the command it may name instead (`FlowIssueHold.IsPath`), and, once a check of
+its visit has read the remedy items its diagnosis gives, every path those items own: `FlowIssueHold`, the one owner of
+what an issue holds and which of it a work item owns, over `FlowCoordinator.IssueHolds`, which reads the issues being
+fixed from the run's state. A work item - an instance of the work-item group - that has not begun and owns any of those
+paths starts once that visit has ended, so it builds on the tree the fix leaves (`FlowCoordinator.FixHoldOf`, a hold of
+`HoldOf`, which reserves no claim, so every other item goes on at once and none waits behind it); its record's `waitsOn`
+names the fix, `the fix of '<title>' (<visit>), which holds <paths>` (`FlowWaits.Fix`), and `ask-orchestrator-status`
+says it among what the run waits for. An item that has begun goes on - its fold and its reconcile meet the fix as any two
+changes meet. The planner's prompts and the self-audit say the same: an issue `{run.preExisting}` lists as being fixed is
+the recovery's, and no work item fixes it or rewrites its lines.
+
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
 against the table that owns it (`WorkflowStepTypes`, which the parser reads exactly and `help
 workflows` lists from, so what is listed is what is read), every step, input, param and output an
@@ -4874,7 +4894,8 @@ methods `list-orchestrator` reads: `flow.json`, `questions.json`, `updates.json`
 `definition.json` and the run's owner), computed and never guessed, stamped with the moment they
 were read: how the run stands and for how long, its engine and its pause; each step instance in
 progress; what it waits for - each open question with the command that answers it, a plan update
-under way or queued, an instance waiting on another or on a claim or room, a `ci-wait` reading the
+under way or queued, an instance waiting on another, on a claim or room, or on the fix of an issue that holds a file its
+work item owns, a `ci-wait` reading the
 checks of the commit the run last pushed; what is done and what was spent of the budget; what is
 left at least and at most, with the bound that gave the most - each member of a scope still open not
 drawn yet, a loop's iterations to its bound, a handler's visits to its `maxVisits` with the steps its

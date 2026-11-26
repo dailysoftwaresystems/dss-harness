@@ -24,6 +24,16 @@ is asked once for a round: where the items still do not pass, a person is asked 
 
 {update.work}
 
+## What the recovery is fixing
+
+Every issue that was there before the run that the run has taken, each with its id, what became of it (listed, being
+fixed or fixed), its title and where; empty where none is:
+
+{run.preExisting}
+
+An issue the list says is being fixed is the recovery's: no work item fixes it or rewrites its lines; an item that
+needs it fixed builds after the fix, on the tree the fix leaves - the run holds it until the fix is done.
+
 ## What to do
 
 1. First work out, in your notes, what is different: set what was there before beside what is there now, and name

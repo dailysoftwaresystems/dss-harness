@@ -252,6 +252,17 @@ public static partial class HelpTopics
         builder.AppendLine("of its prompt, every issue the run holds where it starts - what became of each, its title and");
         builder.AppendLine("where it is - and reports one again only where it stops its own work.");
         builder.AppendLine();
+        builder.AppendLine("An issue sent to fix is the recovery's at once, its visit beside any other at work - save one a");
+        builder.AppendLine("step of a visit of the recovery reported, which waits for that visit to end, for the recovery");
+        builder.AppendLine("never calls itself, and one a visit at work fixes already for another step it stopped, which");
+        builder.AppendLine("waits for that visit; a step two issues stop runs again once, after both are settled. From the");
+        builder.AppendLine("moment it is sent to fix until its visit ends, the issue holds the files its triage's where");
+        builder.AppendLine("names - each a path from the repository's root, never a command - and, once a check of its");
+        builder.AppendLine("visit has read the remedy items its diagnosis gives, the paths those items own: an instance of");
+        builder.AppendLine("the work-item group that has not begun and owns one of them starts once that visit has ended,");
+        builder.AppendLine("building on the tree the fix leaves, its record waiting for the fix of the issue, by its title");
+        builder.AppendLine("and its visit, and the files it holds; every other item goes on at once.");
+        builder.AppendLine();
         builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");
         builder.AppendLine("may run on, or a map giving each its own - all for the rest, a model's code for one, so a");
         builder.AppendLine("step can run one model at xhigh and another at max, where that is the highest it takes. Each");

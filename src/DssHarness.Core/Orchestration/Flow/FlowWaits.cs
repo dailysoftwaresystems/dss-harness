@@ -57,6 +57,16 @@ public static class FlowWaits
     /// <param name="question">The question's id.</param>
     public static string Answer(string question) => $"{AnswerTo}{question}";
 
+    /// <summary>
+    /// The fix of an issue the recovery is making, which holds files the step's work item owns: the item has not begun,
+    /// and starts once the fix's visit has ended, so it builds on the tree the fix leaves (<see cref="FlowIssueHold"/>).
+    /// </summary>
+    /// <param name="title">The issue's title.</param>
+    /// <param name="fixer">The id of what fixes it: the recovery's visit, or the triage that sent it while that visit waits to be made.</param>
+    /// <param name="paths">The paths the issue holds that the item owns.</param>
+    public static string Fix(string title, string fixer, IReadOnlyList<string> paths)
+        => $"the fix of '{title}' ({fixer}), which holds {string.Join(", ", paths)}";
+
     /// <summary>The machine a step's legs run on, its dispatch queue: every leg of the step still to run waits its turn there.</summary>
     public const string MachineQueue = "the machine's queue";
 

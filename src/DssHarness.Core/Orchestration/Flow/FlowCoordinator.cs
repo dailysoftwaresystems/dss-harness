@@ -660,6 +660,12 @@ public sealed class FlowCoordinator
     private readonly List<FlowAffectedTests> _affected = [];
 
     private readonly List<PreExistingTally> _tally = [];
+
+    /// <summary>
+    /// Each triage that answered fix whose issue waits for a visit of the recovery at work to end before the recovery
+    /// takes it (<see cref="FixWaitsFor"/>), in the order the triages ended; given to the recovery as each is free
+    /// (<see cref="DrainPendingFixes"/>).
+    /// </summary>
     private readonly List<FlowInstance> _pendingFixes = [];
     /// <summary>The redirects the run owes, in the order they were decided: each is made in its turn, once nothing it resets is running.</summary>
     private readonly List<PendingRedirect> _redirects = [];
@@ -1546,8 +1552,9 @@ public sealed class FlowCoordinator
             RaiseOwedIssues(reporter);
         }
 
-        // An issue a triage answered fix for whose recovery was never raised - it waited behind a visit at work, or
-        // a crash came between the triage's end and the raise - is given to the recovery now, one at a time.
+        // An issue a triage answered fix for whose recovery was never raised - it waited for a visit at work, or a crash
+        // came between the triage's end and the raise - is given to the recovery now, beside every visit at work, save
+        // one that waits still for a visit the records say is at work.
         DrainPendingFixes();
 
         // What an update done owes the loop around the round, or the work-item group with no loop around it, is carried
@@ -3834,7 +3841,9 @@ public sealed class FlowCoordinator
     /// </summary>
     private void DrawFreed()
     {
-        foreach (var instance in _created.Where(instance => instance is { State: FlowInstanceState.NotStarted, Step.IsGroup: false, DrawnIn: 0 } && HoldOf(instance).Count == 0))
+        var holds = new Lazy<IReadOnlyList<FlowIssueHold>>(IssueHolds);
+
+        foreach (var instance in _created.Where(instance => instance is { State: FlowInstanceState.NotStarted, Step.IsGroup: false, DrawnIn: 0 } && HoldOf(instance, holds).Count == 0))
         {
             Draw(instance);
         }
@@ -6822,7 +6831,7 @@ public sealed class FlowCoordinator
     /// <see cref="FlowInstance.DrawnIn"/> - every step one pass frees alike - and one not drawn yet after every one that
     /// is), then declaration order, then
     /// instance id - held to what keeps the run from starting it (a hard stop, a pause under way, a stopping run, a
-    /// pending redirect, an update's hold), to its dependencies, to the <c>alone</c> barrier, to the claims and to the
+    /// pending redirect, an update's hold, a fix's hold of a work item's files), to its dependencies, to the <c>alone</c> barrier, to the claims and to the
     /// limits, all-or-nothing, each step the walk admits counted as running for the ones after it. A step blocked on a
     /// claim reserves every claim it waits for, so no step that became ready after it takes what it waits for first: a
     /// fold or an agent's making waiting behind readers is not starved by the readers a busy run keeps starting - a
@@ -6851,15 +6860,16 @@ public sealed class FlowCoordinator
             .ToList();
         var reserved = new List<FlowClaim>();
         var decisions = new List<Admission>();
+        var holds = new Lazy<IReadOnlyList<FlowIssueHold>>(IssueHolds);
 
         // The quiescence barrier: an alone step found waiting for quiet stays the barrier until it starts, and while it
         // waits nothing new is admitted - steps ready beside it in the same walk and declared before it went first, as
         // the fixed order says - so it starts when nothing runs, and nothing starts while it runs.
-        var barrier = _barrier is { State: FlowInstanceState.NotStarted } waitingAlone && HoldOf(waitingAlone).Count == 0 ? waitingAlone : null;
+        var barrier = _barrier is { State: FlowInstanceState.NotStarted } waitingAlone && HoldOf(waitingAlone, holds).Count == 0 ? waitingAlone : null;
 
         foreach (var instance in waiting)
         {
-            var hold = HoldOf(instance);
+            var hold = HoldOf(instance, holds);
 
             if (hold.Count > 0)
             {
@@ -6919,10 +6929,13 @@ public sealed class FlowCoordinator
     /// a stopping run (only always steps start), an advice of its own question that was ended and whose runner has not
     /// yet (it would work beside the step's next attempt), a plan update under way (nothing starts outside the scope it is
     /// planned in - and a step the hold keeps back reserves no claim, so nothing it waited for stands in the way of
-    /// the steps inside that scope), a pending redirect that will reset it, or a dependency it still waits on. Empty
-    /// where nothing does.
+    /// the steps inside that scope), a pending redirect that will reset it, a dependency it still waits on, or - for a
+    /// step of a work item that has not begun - the fix of an issue that holds a file the item owns
+    /// (<see cref="FixHoldOf"/>). Empty where nothing does.
     /// </summary>
-    private IReadOnlyList<string> HoldOf(FlowInstance instance)
+    /// <param name="instance">A step not started.</param>
+    /// <param name="holds">The issues being fixed, read once for the walk or the pass that asks, and only where a step of a work item asks.</param>
+    private IReadOnlyList<string> HoldOf(FlowInstance instance, Lazy<IReadOnlyList<FlowIssueHold>> holds)
     {
         if (_hardStop || _pausing && (!_alwaysPhase || !instance.IsAlways || instance.Step.Type == "reason"))
         {
@@ -6997,7 +7010,11 @@ public sealed class FlowCoordinator
             return [FlowWaits.Answer(question)];
         }
 
-        return WaitsOf(place, scope, instance.IsAlways).Waiting;
+        var waiting = WaitsOf(place, scope, instance.IsAlways).Waiting;
+
+        // A work item that has not begun and owns a file an issue being fixed holds starts once the fix's visit has
+        // ended, building on the tree the fix leaves: a hold, reserving no claim, so every other item goes on beside it.
+        return waiting.Count > 0 ? waiting : FixHoldOf(instance, holds);
     }
 
     /// <summary>Admits every step the walk admits, in its order, and answers how many it started.</summary>
@@ -7675,6 +7692,13 @@ public sealed class FlowCoordinator
             FixOf(instance);
         }
 
+        if (instance.Step.Raised == WorkflowStep.RaisedByPreExisting && instance.Issue is { Blocks: true } && instance.RaisedBy is { } stopped)
+        {
+            // A triage of an issue that stops its reporter has ended, however it ended: where it settled the last of the
+            // reporter's issues and a fix of another was done, the reporter runs again now, once.
+            RunTheReporterAgain(stopped);
+        }
+
         if (instance.IssuesOwed.Count > 0)
         {
             if (_pausing || _stopping || _hardStop)
@@ -8006,20 +8030,220 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Gives the issue a triage answered fix for to the recovery, once the triage's end is recorded: the recovery fixes
-    /// it at its root as it fixes a failure; where it blocks the reporting step, that step runs again from where it
-    /// stopped once the fix is done. A fix asked while the recovery is already at work waits for that visit's end: the
-    /// recovery never calls itself (V50).
+    /// Gives the issue a triage answered fix for to the recovery, once the triage's end is recorded: at once, its visit
+    /// beside any other at work, and the recovery fixes it at its root as it fixes a failure; where it blocks the
+    /// reporting step, that step runs again from where it stopped once every issue that stops it is settled
+    /// (<see cref="RunTheReporterAgain"/>). Only a fix that would meet a visit at work waits, for that visit's end, the
+    /// run's records saying so (<see cref="FixWaitsFor"/>).
     /// </summary>
     private void FixOf(FlowInstance instance)
     {
-        if (_created.Any(atWork => IsRecovery(atWork) && atWork.State is FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.NotStarted))
+        if (FixWaitsFor(instance) is { } atWork)
         {
             _pendingFixes.Add(instance);
+            Record(FlowChangeKind.Step, instance, detail: instance.RaisedBy is { } reporter && ReferenceEquals(RecoveryAround(reporter), atWork)
+                ? $"the issue '{TitleOf(instance)}' waits for '{atWork.Id}' to end, a step of which reported it: the recovery never calls itself"
+                : $"the issue '{TitleOf(instance)}' waits for '{atWork.Id}' to end, which fixes it already for another step it stopped");
             return;
         }
 
         TakeRecoveryOf(instance);
+    }
+
+    /// <summary>
+    /// The visit of the recovery at work that the fix <paramref name="triage"/> sent waits for before the recovery takes
+    /// it: the visit a step of which reported the issue - the recovery never calls itself (V50) - or one at work on the
+    /// same issue already, its title at the same place, for a step it stopped beside this triage's reporter, so a defect
+    /// has one fix at a time and the next is diagnosed on the tree the first left. Null where neither is, and the
+    /// recovery takes the fix at once, beside any other visit at work.
+    /// </summary>
+    private FlowInstance? FixWaitsFor(FlowInstance triage)
+    {
+        if (triage.RaisedBy is { } reporter && RecoveryAround(reporter) is { } reporting && FixAtWork(reporting))
+        {
+            return reporting;
+        }
+
+        return triage.Issue is { } issue
+            ? _created.FirstOrDefault(visit => IsRecovery(visit)
+                && FixAtWork(visit)
+                && visit.RaisedBy is { } source
+                && !ReferenceEquals(source, triage)
+                && IssueSentToFix(source) is { } fixing
+                && SameIssue(fixing, issue))
+            : null;
+    }
+
+    /// <summary>The visit of the recovery <paramref name="step"/> is a step of, at any depth - one of its own, or one of a remedy it builds; null where it is none.</summary>
+    private FlowInstance? RecoveryAround(FlowInstance step)
+    {
+        for (var at = step.DeclaredScope; at is not null; at = at.Parent)
+        {
+            if (at.OwnGroupInstance is { } group && IsRecovery(group))
+            {
+                return group;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="visit"/>, a visit of the recovery, is at work: it has not ended, or it ended failed and
+    /// asks a person what its failure does - whose retry takes its source again. The one reading of a visit at work that
+    /// a fix waiting for one (<see cref="FixWaitsFor"/>), the files an issue holds (<see cref="IssueHolds"/>) and a
+    /// reporter waiting for its fixes (<see cref="MayStillFix"/>) all ask.
+    /// </summary>
+    private static bool FixAtWork(FlowInstance visit)
+        => visit.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped
+            || visit.WaitingQuestion is not null;
+
+    /// <summary>
+    /// Whether <paramref name="triage"/> may yet have the recovery fix its issue: it has not ended, or it waits on a
+    /// question; or it sent the issue to fix, and that fix waits for a visit, has none made yet, or has one at work.
+    /// </summary>
+    private bool MayStillFix(FlowInstance triage)
+    {
+        if (triage.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped
+            || triage.WaitingQuestion is not null)
+        {
+            return true;
+        }
+
+        if (triage.State != FlowInstanceState.Done || CourseOf(triage) != "fix")
+        {
+            return false;
+        }
+
+        var visits = RecoveriesOf(triage).ToList();
+
+        return _pendingFixes.Contains(triage) || visits.Count == 0 || visits.Any(FixAtWork);
+    }
+
+    /// <summary>
+    /// Sends the run back to <paramref name="reporter"/>, a step issues it reported stop, once: after every issue that
+    /// stops it is settled - no triage of one still to answer, no fix of one waiting or at work (<see cref="MayStillFix"/>)
+    /// - and where a visit of the recovery fixed one of them, that visit the last to end being the redirect's handler, as
+    /// a visit that ends sends back the step it took. Never while a fix of another still runs, and never twice: a
+    /// reporter left by a redirect already, or owed one by a visit for one of its issues, is not sent again. A reporter
+    /// whose issues were all settled with none fixed stays as it ended.
+    /// </summary>
+    private void RunTheReporterAgain(FlowInstance reporter)
+    {
+        var stopping = _created
+            .Where(triage => triage.Step.Raised == WorkflowStep.RaisedByPreExisting && ReferenceEquals(triage.RaisedBy, reporter) && triage.Issue is { Blocks: true })
+            .ToList();
+
+        if (stopping.Any(MayStillFix)
+            || stopping.SelectMany(RecoveriesOf).Where(visit => visit.State == FlowInstanceState.Done).MaxBy(visit => visit.EndedIn) is not { } fixedLast
+            || reporter.LeftBy is not null
+            || _redirects.Any(redirect => stopping.Any(triage => ReferenceEquals(redirect.Handler.RaisedBy, triage))))
+        {
+            return;
+        }
+
+        if (reporter.DeclaredScope is { } scope && ResolveStep(scope, reporter.Step.Name) is { } declaration)
+        {
+            DecideRedirectOf(fixedLast, scope, declaration);
+        }
+    }
+
+    /// <summary>
+    /// Every issue the recovery is fixing now, with the files it holds (<see cref="FlowIssueHold"/>): each a triage sent
+    /// to fix, from the moment it sent it until its visit ended - while the fix waits for a visit, its bound's question is
+    /// put, or a visit of it is at work (<see cref="FixAtWork"/>), a visit paused on a person among them - with its
+    /// triage's <c>where</c> and the items each check of a visit at work read. Read from the run's state alone, in one
+    /// walk of its instances, so every session reads the same holds from the records.
+    /// </summary>
+    private IReadOnlyList<FlowIssueHold> IssueHolds()
+    {
+        var fixes = new List<FlowInstance>();
+        var atWork = new Dictionary<FlowInstance, List<FlowInstance>>();
+
+        foreach (var created in _created)
+        {
+            if (created.Step.Raised == WorkflowStep.RaisedByPreExisting && created.State == FlowInstanceState.Done && CourseOf(created) == "fix")
+            {
+                fixes.Add(created);
+            }
+            else if (IsRecovery(created) && created.RaisedBy is { } source && FixAtWork(created))
+            {
+                if (!atWork.TryGetValue(source, out var visits))
+                {
+                    atWork[source] = visits = [];
+                }
+
+                visits.Add(created);
+            }
+        }
+
+        var holds = new List<FlowIssueHold>();
+
+        foreach (var triage in fixes)
+        {
+            var visits = atWork.GetValueOrDefault(triage);
+
+            if (visits is not null || _pendingFixes.Contains(triage) || triage.WaitingQuestion is not null)
+            {
+                holds.Add(FlowIssueHold.Of(TitleOf(triage), visits?[^1].Id ?? triage.Id, triage.Output?["where"], (visits ?? []).SelectMany(CheckedItemsOf)));
+            }
+        }
+
+        return holds;
+    }
+
+    /// <summary>The work items every <c>validate-plan</c> step of <paramref name="visit"/>, a visit of the recovery, read and ended done with: the remedy items its diagnosis gives, as they were checked.</summary>
+    private static IEnumerable<JsonNode?> CheckedItemsOf(FlowInstance visit)
+        => ScopesUnder(visit)
+            .SelectMany(scope => scope.Members.Values)
+            .Where(check => check.Step.Type == "validate-plan" && check.State == FlowInstanceState.Done)
+            .SelectMany(check => check.Output?["items"] as JsonArray ?? []);
+
+    /// <summary>
+    /// The fixes <paramref name="instance"/> waits for, each as its record says it (<see cref="FlowWaits.Fix"/>): where it
+    /// is a step of a work item that has not begun - an instance of the work-item group none of whose steps has started
+    /// (<see cref="ItemBegun"/>) - and that item owns a path an issue being fixed holds (<see cref="FlowIssueHold.Meeting"/>),
+    /// it starts once that issue's visit has ended, so it builds on the tree the fix leaves. Empty for every other step,
+    /// which nothing of a fix holds: an item that has begun goes on - its fold and its reconcile meet the fix as any two
+    /// changes meet - and a step of the recovery is never a work item, whatever scope its visit stands in.
+    /// </summary>
+    /// <param name="instance">A step not started.</param>
+    /// <param name="holds">The issues being fixed, read once for the walk that asks.</param>
+    private IReadOnlyList<string> FixHoldOf(FlowInstance instance, Lazy<IReadOnlyList<FlowIssueHold>> holds)
+    {
+        if (instance.DeclaredScope is not { } scope || WorkItemAround(scope) is not { } item || ItemBegun(item))
+        {
+            return [];
+        }
+
+        var owned = item.Item.IsMissing ? null : item.Item.ToNode();
+
+        return
+        [
+            .. holds.Value
+                .Select(hold => (Hold: hold, Meeting: hold.Meeting(owned)))
+                .Where(held => held.Meeting.Count > 0)
+                .Select(held => FlowWaits.Fix(held.Hold.Title, held.Hold.Fixer, held.Meeting)),
+        ];
+    }
+
+    /// <summary>The item scope of the work-item group <paramref name="scope"/> is, or is nested in; null where it is in none, or in a visit of the recovery before one.</summary>
+    private Scope? WorkItemAround(Scope scope)
+    {
+        for (var at = scope; at is not null; at = at.Parent)
+        {
+            if (at.OwnGroupInstance is { } group && IsRecovery(group))
+            {
+                return null;
+            }
+
+            if (WorkItemStepsOf(at) is not null)
+            {
+                return at;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -10273,46 +10497,55 @@ public sealed class FlowCoordinator
             // issue the recovery fixed blocks no one, where it did not block its reporter: the run goes on.
             again.FailureSettled = true;
 
-            if (again.Issue is not null)
+            if (again.Issue is not null && _tally.FindIndex(entry => ReferenceEquals(entry.Triage, again)) is >= 0 and var at)
             {
-                var fixedEntry = _tally.FirstOrDefault(entry => ReferenceEquals(entry.Triage, again));
-
-                if (fixedEntry is not null)
-                {
-                    _tally.Remove(fixedEntry);
-                    _tally.Add(fixedEntry with { State = "fixed" });
-                }
+                // Fixed in its place: {run.preExisting} says each issue in the order it was taken, whichever of the
+                // visits side by side ended first.
+                _tally[at] = _tally[at] with { State = "fixed" };
             }
 
-            if (RecoveryOf(again).Rerun is { } target && target.DeclaredScope is { } targetScope && ResolveStep(targetScope, target.Step.Name) is { } declaration)
+            var (rerun, issue, _) = RecoveryOf(again);
+
+            if (issue is not null && rerun is not null)
+            {
+                // A reporter an issue stops runs again once, after every issue that stops it is settled.
+                RunTheReporterAgain(rerun);
+            }
+            else if (rerun is { DeclaredScope: { } targetScope } target && ResolveStep(targetScope, target.Step.Name) is { } declaration)
             {
                 DecideRedirectOf(instance, targetScope, declaration);
             }
         }
 
-        if (IsRecovery(instance) && state is FlowInstanceState.Done or FlowInstanceState.Failed)
+        if (IsRecovery(instance) && state is FlowInstanceState.Done or FlowInstanceState.Failed or FlowInstanceState.Skipped or FlowInstanceState.NotRun)
         {
             DrainPendingFixes();
         }
     }
 
-    /// <summary>Gives the recovery each issue a triage answered fix for while a visit of it was already at work: one at a time, for the recovery never calls itself (V50).</summary>
+    /// <summary>
+    /// Gives the recovery each issue a triage answered fix for that waited for a visit at work, once nothing it waits for
+    /// is at work any more (<see cref="FixWaitsFor"/>): each in the order its triage ended, beside every visit at work,
+    /// and one that would meet a visit this drain made waits again, for that one.
+    /// </summary>
     private void DrainPendingFixes()
     {
-        if (_created.Any(atWork => IsRecovery(atWork) && atWork.State is FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.NotStarted))
-        {
-            return;
-        }
-
         foreach (var waiting in _pendingFixes.ToList())
         {
-            _ = _pendingFixes.Remove(waiting);
-
-            if (waiting.State == FlowInstanceState.Done)
+            if (waiting.State != FlowInstanceState.Done)
             {
-                // Counted being fixed when it ended; now given to the recovery, or waiting again behind it.
-                FixOf(waiting);
+                _ = _pendingFixes.Remove(waiting);
+                continue;
             }
+
+            if (FixWaitsFor(waiting) is not null)
+            {
+                continue;
+            }
+
+            // Counted being fixed when it ended; now given to the recovery.
+            _ = _pendingFixes.Remove(waiting);
+            TakeRecoveryOf(waiting);
         }
     }
 
