@@ -671,7 +671,7 @@ graph arm against `graph: off`, the same requests) found the repository map and 
 at the head of every graphed step's first message - some 4,000 tokens - all but unused: a step's work
 touched 0 to 2% of its pack's nodes in the triages, the reviews and fixes and the diagnosis, 10% in the
 planner and 35% only in the implementer, on three samples; no step asked the map for a page; and the
-two only added to the input, 60% to 98% more of it in those steps. By the user's ruling the graph stays only where it saves money and
+two only added to the input, 60% to 98% more of it in those steps. The graph is given only where it saves money and
 time and raises quality, so the tool's `map` and `pack` serve their pages when asked, from page 1, and a
 step that wants its pack pushed says `graphPromptTokens`; a step at `graph: map`, which has no tool, is
 still pushed both, for push is its only way to see the graph. What a graphed step is given never cuts: the repository map of its ground of reads is paged

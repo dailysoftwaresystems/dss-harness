@@ -6286,7 +6286,7 @@ written by `OrchestrationStore.MapOnce` in the map's own cross-process section, 
 are. A kept map's count is read from its first page's own last line (`CodebaseRepositoryMap.PagesOf`), the line every
 step of the ground is told, so a step is offered every page it is told there is, whatever became of the map's other records; a
 page is read back by the one reader beside the writer (`OrchestrationStore.MapPage`), for a run's steps and a
-side-task alike, a page the disk will not give back said with why. Every step of the ground pushed the map
+side-task alike, a page the disk will not give back said with why. Every step of the ground that is pushed the map
 reads the same first page - the prefix a client caches never moves - and a step given the tool asks every page of it,
 from page 1, as `graph`'s `map` with page. One wording of a page's last line serves the map's every step, with the tool and without
 it: it says the rest is on the pages after it, which a step whose graph is tools asks the graph for, never how this
