@@ -2089,22 +2089,23 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
-    /// A session's end holds what a member started before its own hold, on Linux and macOS: the system is read again until a
-    /// reading holds nothing new. Here the leader's child and its child each lead a group of their own in the leader's
-    /// session; the process table is read as before either started, and the first listing of every process lacks one of
-    /// them - as one started by the other after that listing was read would be. That listing holds the other, so the next
-    /// finds the one it lacked, which is held and ended with the rest; read once, it was left running.
+    /// A group's end holds what a member started before its own hold, on Linux and macOS: the system is read again round by
+    /// round until a round takes none. Here the leader, refusing to be asked to end, leads a group, and its child leads one
+    /// of its own with a child of its own in it - both outside the group; the process table is read as before either
+    /// started, and the first listing of every process lacks the grandchild - as one the child started after that listing
+    /// was read would. The round that holds the child is followed by one that finds the grandchild below it, held and ended
+    /// with the rest; read once, the grandchild was left running, outside the group, where nothing read after the kill finds
+    /// it.
     /// </summary>
     [Fact]
-    public async Task ASessionsEnd_HoldsWhatAMemberStartedBeforeItsOwnHold_ReadingTheSystemUntilNothingNewIsHeld()
+    public async Task AGroupsEnd_HoldsWhatAMemberStartedBeforeItsOwnHold_ReadingTheSystemUntilARoundTakesNone()
     {
-        Assert.SkipWhen(OperatingSystem.IsWindows(), "a session is Linux's and macOS's; Windows ends a job.");
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a group is Linux's and macOS's; Windows ends a job.");
 
         var cancellationToken = TestContext.Current.CancellationToken;
         var start = TestHost.StartOf(Child(
-            "lead-then", "session", "spawn-holder", "sleep", "300000", "lead-then", "group", "spawn-holder", "sleep", "300000", "lead-then", "group", "sleep", "300000"));
-        var child = LearnedProcess.None;
-        var grandchild = LearnedProcess.None;
+            "lead-then", "group", "spawn-holder", "ignore-term", "300000", "lead-then", "group", "spawn-holder", "sleep", "300000", "sleep", "300000"));
+        var (child, grandchild) = (LearnedProcess.None, LearnedProcess.None);
 
         start.RedirectStandardOutput = true;
 
@@ -2112,15 +2113,7 @@ public sealed class ContainExecTests
 
         try
         {
-            var first = await leader.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken);
-            var second = await leader.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken);
-
-            child = LearnedProcess.In(first ?? string.Empty, "holder=") ?? LearnedProcess.None;
-            grandchild = LearnedProcess.In(second ?? string.Empty, "holder=") ?? LearnedProcess.None;
-
-            Assert.True(
-                Until(() => getsid(leader.Id) == leader.Id && GroupOf(child.Id) == child.Id && GroupOf(grandchild.Id) == grandchild.Id),
-                $"the leader {leader.Id} never led a session holding {child} and {grandchild}, each leading a group of its own: '{first}', '{second}'");
+            (child, grandchild) = await TwoHoldersAsync(leader, cancellationToken);
 
             var ending = await Containment.EndSessionAsync(
                 leader.Id,
@@ -2128,12 +2121,13 @@ public sealed class ContainExecTests
                 TimeSpan.Zero,
                 _ => { },
                 TimeProvider.System,
-                new ListedLate(grandchild.Id)).WaitAsync(LongBound, cancellationToken);
+                new ListedLate(grandchild.Id),
+                group: true).WaitAsync(LongBound, cancellationToken);
 
             Assert.Equal(new HeldEnding(Found: true, null), ending);
-            Assert.True(child.AwaitGone(), $"the child {child}, in the session, outlived the session's end");
-            Assert.True(grandchild.AwaitGone(), $"the grandchild {grandchild}, missing from the first listing of every process, outlived the session's end");
-            Assert.True(leader.WaitForExit(LongBound), $"the leader {leader.Id} outlived its session's end");
+            Assert.True(child.AwaitGone(), $"the child {child}, leading a group of its own, outlived the group's end");
+            Assert.True(grandchild.AwaitGone(), $"the grandchild {grandchild}, missing from the first listing of every process, outlived the group's end");
+            Assert.True(leader.WaitForExit(LongBound), $"the leader {leader.Id} outlived its group's end");
         }
         finally
         {
