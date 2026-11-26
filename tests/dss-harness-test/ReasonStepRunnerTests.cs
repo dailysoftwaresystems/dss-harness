@@ -2370,7 +2370,7 @@ public sealed class ReasonStepRunnerTests
     /// A reason step whose agent only reads and that names the commit its tree starts at is served the graph's view of that
     /// tree - its agent's own, synced once the tree stands at the commit - never the base's, which holds what the main
     /// checkout has committed since: its pack, seeded from a task that names the class the commit declares and the main
-    /// checkout no longer does, holds that class, and its view is named for its agent.
+    /// checkout no longer does and pulled through its tool, holds that class, and its view is named for its agent.
     /// </summary>
     [Fact]
     public async Task AStepThatOnlyReadsAndNamesACommit_IsServedTheViewOfItsOwnTreeAtThatCommit()
@@ -2393,10 +2393,12 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal("a9", result.Graph!["view"]!.GetValue<string>());
         Assert.True(File.Exists(kit.Layout.GraphViewFile("a9")), "the agent's own view was not synced");
 
+        // Its pack - pulled through its tool, for a step with the tool is pushed none - is of its own tree's view.
         var asked = agents.Asked.Single();
         Assert.Equal(start, await kit.Harness.GitClient.ResolveCommitAsync(asked.Workspace.WorkingDirectory, "HEAD", Token));
-        Assert.Contains("src/Planner.cs", asked.Codebase, StringComparison.Ordinal);
-        Assert.DoesNotContain("Scheduler", asked.Codebase, StringComparison.Ordinal);
+        var pack = await PulledPackAsync(asked);
+        Assert.Contains("src/Planner.cs", pack, StringComparison.Ordinal);
+        Assert.DoesNotContain("Scheduler", pack, StringComparison.Ordinal);
     }
 
     /// <summary>
