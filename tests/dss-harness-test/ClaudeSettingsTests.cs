@@ -69,7 +69,9 @@ public sealed class ClaudeSettingsTests
                 "DISABLE_AUTOUPDATER": "1",
                 "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
                 "CLAUDE_CODE_RETRY_WATCHDOG": "0",
-                "MAX_MCP_OUTPUT_TOKENS": "98304"
+                "MAX_MCP_OUTPUT_TOKENS": "98304",
+                "CLAUDE_CODE_PROMPT_CACHE_TTL": "5m",
+                "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "5m"
               },
               "permissions": {
                 "ask": [
@@ -95,7 +97,7 @@ public sealed class ClaudeSettingsTests
         var whole = JsonNode.Parse(rendered)!;
 
         Assert.False(whole["sandbox"]!["enabled"]!.GetValue<bool>());
-        Assert.Equal(ClaudeSettings.Launched.Select(variable => variable.Key), whole["env"]!.AsObject().Select(variable => variable.Key));
+        Assert.Equal(ClaudeSettings.LaunchedWith("5m").Select(variable => variable.Key), whole["env"]!.AsObject().Select(variable => variable.Key));
         Assert.Equal(["disableAllHooks", "fallbackModel", "switchModelsOnFlag", "outputStyle", "sandbox", "env", "permissions"], whole.AsObject().Select(entry => entry.Key));
     }
 

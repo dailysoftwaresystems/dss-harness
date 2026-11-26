@@ -45,7 +45,7 @@ public static partial class HelpTopics
              + $", and a step whose agent runs commands, of a repository that declares legs, takes {Agents.ClaudeCode.ClaudeCodeTools.ServedName(Agents.AgentMeasureSupport.ToolName)}, which measures one cell of the universe a class of the item names on one of the run's legs";
         var own = string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.Table.SelectMany(row => row.Tools).Select(tool => tool.Name));
         var ownWeb = string.Join(" and ", Agents.ClaudeCode.ClaudeCodeTools.OwnWeb.Select(tool => tool.Name));
-        var launched = string.Join(", ", Agents.Policy.ClaudeSettings.Launched.Select(name => $"{name.Key}={name.Value}"));
+        var launched = string.Join(", ", Agents.Policy.ClaudeSettings.LaunchedWith(Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes).Select(name => $"{name.Key}={name.Value}"));
 
         return "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed "
             + "and never continued, keeping no session file (one a launch leaves all the same is removed once it has ended, "

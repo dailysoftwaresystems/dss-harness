@@ -349,7 +349,7 @@ public sealed class AgentProviderTests
 
     /// <summary>
     /// The API clients' keys are each held to the clients it is of - their tries, their longest wait and the fields merged
-    /// into their requests both API clients', the cache's lifetime and the betas claude-api's, keeping the reasoning glm's
+    /// into their requests both API clients', the cache's lifetime both Claude clients', the betas claude-api's, keeping the reasoning glm's
     /// - and to what each can be: the API's own fallback never asked for by claude-api, and no field either client sends
     /// itself set by its requestExtras.
     /// </summary>
@@ -364,9 +364,12 @@ public sealed class AgentProviderTests
             "agentClients 'claude-code' names maxRetries, a key of the API clients alone (claude-api, glm): how many times a failed request is asked again",
             "agentClients 'claude-code' names maxRetryWaitSeconds, a key of the API clients alone (claude-api, glm): the longest wait before a failed request is asked again",
             "agentClients 'claude-code' names requestExtras, a key of the API clients alone (claude-api, glm): the fields merged into every request's body",
-            "agentClients 'claude-code' names cacheTtl, a key of the claude-api client alone: how long what a request caches is kept",
             "agentClients 'claude-code' names betas, a key of the claude-api client alone: the beta headers sent beside the tool's own",
             "agentClients 'claude-code' names preserveThinking, a key of the glm client alone: whether Z.AI keeps the model's reasoning across turns");
+        Exactly(
+            Refused(new() { ["claude-code"] = new AgentClientConfig { CacheTtl = "1d" } }, Anthropic()),
+            "agentClients 'claude-code' cacheTtl '1d' is none of: 5m, 1h");
+        Assert.Empty(Refused(new() { ["claude-code"] = new AgentClientConfig { CacheTtl = "1h" } }, Anthropic()));
         Exactly(
             Refused(new() { [ClaudeApiClient] = new AgentClientConfig { PreserveThinking = false } }, api),
             "agentClients 'claude-api' names preserveThinking, a key of the glm client alone: whether Z.AI keeps the model's reasoning across turns");
@@ -375,7 +378,7 @@ public sealed class AgentProviderTests
 
         Exactly(
             Refused(new() { [Glm] = new AgentClientConfig { MaxRetries = -1, MaxRetryWaitSeconds = 0, CacheTtl = "5m", RequestExtras = zaiExtras.RootElement.Clone(), Betas = ["b"] } }, Provider()),
-            "agentClients 'glm' names cacheTtl, a key of the claude-api client alone: how long what a request caches is kept",
+            "agentClients 'glm' names cacheTtl, a key of the claude-api and claude-code clients alone: how long what a request caches is kept",
             "agentClients 'glm' names betas, a key of the claude-api client alone: the beta headers sent beside the tool's own",
             "agentClients 'glm' maxRetries is -1; how many times a failed request is asked again is none or more",
             "agentClients 'glm' maxRetryWaitSeconds is 0; the longest wait before a failed request is asked again is a second or more",
@@ -387,10 +390,10 @@ public sealed class AgentProviderTests
         Assert.Empty(Refused(new() { [Glm] = new AgentClientConfig { MaxRetries = 0, MaxRetryWaitSeconds = 1, PreserveThinking = true, RequestExtras = zaiFine.RootElement.Clone() } }, Provider()));
         Exactly(
             Refused(new() { [ClaudeApiClient] = new AgentClientConfig { MaxRetries = -1, MaxRetryWaitSeconds = 0, CacheTtl = "1d", RequestExtras = extras.RootElement.Clone(), Betas = ["a b", "server-side-fallback-2026-01-01", "x", "x", ""] } }, api),
+            "agentClients 'claude-api' cacheTtl '1d' is none of: 5m, 1h",
             "agentClients 'claude-api' maxRetries is -1; how many times a failed request is asked again is none or more",
             "agentClients 'claude-api' maxRetryWaitSeconds is 0; the longest wait before a failed request is asked again is a second or more",
             "agentClients 'claude-api' requestExtras.fallbacks is refused: no request carries fallbacks, for the engine's fallback is the only one a step has",
-            "agentClients 'claude-api' cacheTtl '1d' is none of: 5m, 1h",
             "agentClients 'claude-api' betas 'a b' is no beta's name: one word, sent in a header beside the tool's own",
             "agentClients 'claude-api' betas 'server-side-fallback-2026-01-01' is refused: the API's own fallback is never asked for, for the engine's fallback is the only one a step has",
             "agentClients 'claude-api' betas '' is no beta's name: one word, sent in a header beside the tool's own",

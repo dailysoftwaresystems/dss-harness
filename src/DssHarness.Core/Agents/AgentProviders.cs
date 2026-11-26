@@ -446,6 +446,7 @@ public sealed class AgentProviders
     private static void RequestRules(List<KeyValuePair<string, AgentClientConfig>> clients, List<string> problems)
     {
         const string Claude = ClaudeApi.ClaudeApiClient.ClientName;
+        const string ClaudeCodeName = Agents.ClaudeCode.ClaudeCodeClient.ClientName;
         const string Glm = ZaiApi.ZaiApiClient.ClientName;
         string[] apis = [.. ApiClients];
 
@@ -460,16 +461,19 @@ public sealed class AgentProviders
                 ("requestsPerMinute", entry.RequestsPerMinute is not null, "at most this many requests in any minute on one provider and key", apis),
                 ("inputTokensPerMinute", entry.InputTokensPerMinute is not null, "at most this many input tokens in any minute on one provider and key", apis),
                 ("outputTokensPerMinute", entry.OutputTokensPerMinute is not null, "at most this many output tokens in any minute on one provider and key", apis),
-                ("cacheTtl", entry.CacheTtl is not null, "how long what a request caches is kept", [Claude]),
+                ("cacheTtl", entry.CacheTtl is not null, "how long what a request caches is kept", [Claude, ClaudeCodeName]),
                 ("betas", entry.Betas is not null, "the beta headers sent beside the tool's own", [Claude]),
                 ("preserveThinking", entry.PreserveThinking is not null, "whether Z.AI keeps the model's reasoning across turns", [Glm]),
             ];
 
             foreach (var (key, _, what, of) in keys.Where(key => key.Named && !key.Of.Contains(client, StringComparer.Ordinal)))
             {
-                problems.Add(of is [var alone]
-                    ? $"{where} names {key}, a key of the {alone} client alone: {what}"
-                    : $"{where} names {key}, a key of the API clients alone ({string.Join(", ", of)}): {what}");
+                problems.Add(of switch
+                {
+                    [var alone] => $"{where} names {key}, a key of the {alone} client alone: {what}",
+                    _ when of.Order(StringComparer.Ordinal).SequenceEqual(apis.Order(StringComparer.Ordinal), StringComparer.Ordinal) => $"{where} names {key}, a key of the API clients alone ({string.Join(", ", of)}): {what}",
+                    _ => $"{where} names {key}, a key of the {string.Join(" and ", of)} clients alone: {what}",
+                });
             }
 
             if (entry.MaxParallel is < 1)
@@ -485,6 +489,11 @@ public sealed class AgentProviders
             }.Where(bucket => bucket.Given is < 1))
             {
                 problems.Add($"{where} {key} is {given!.Value.ToString(CultureInfo.InvariantCulture)}; a minute's bucket is one or more, or left out");
+            }
+
+            if (entry.CacheTtl is { } cached && client is Claude or ClaudeCodeName && !ClaudeApi.ClaudeApiRequest.CacheTtls.Contains(cached, StringComparer.Ordinal))
+            {
+                problems.Add($"{where} cacheTtl '{cached}' is none of: {string.Join(", ", ClaudeApi.ClaudeApiRequest.CacheTtls)}");
             }
 
             if (KindOf(client) is not { ExtrasProblems: { } extrasProblems })
@@ -510,11 +519,6 @@ public sealed class AgentProviders
             if (client != Claude)
             {
                 continue;
-            }
-
-            if (entry.CacheTtl is { } ttl && !ClaudeApi.ClaudeApiRequest.CacheTtls.Contains(ttl, StringComparer.Ordinal))
-            {
-                problems.Add($"{where} cacheTtl '{ttl}' is none of: {string.Join(", ", ClaudeApi.ClaudeApiRequest.CacheTtls)}");
             }
 
             foreach (var beta in entry.Betas ?? [])

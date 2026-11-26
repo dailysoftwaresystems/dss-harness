@@ -483,7 +483,7 @@ public sealed class ClaudeCodeClient(
                 files.CreateDirectory(whole.Profile.Temp!);
             }
 
-            files.WriteAllTextAtomic(settings, ClaudeSettings.Render(_given, run.Ground!, client._platform.PathComparison, isolated: whole is not null));
+            files.WriteAllTextAtomic(settings, ClaudeSettings.Render(_given, run.Ground!, client._platform.PathComparison, isolated: whole is not null, cacheTtl: ClaudeSettings.CacheTtlOf(run.Entries?.Client)));
             files.WriteAllTextAtomic(system, run.Mask.Redact(run.SystemPrompt));
 
             // The engine's tool server, named where the launch takes its tools and nowhere else.

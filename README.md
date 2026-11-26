@@ -1865,7 +1865,10 @@ next message; an attempt compacted again is reduced
 whole again, its earlier records never copied into the next, and a later launch's first message is
 read as its task alone, never the record it carried; a
 `claude-code` child is started with `DISABLE_COMPACT=1`, so it never compacts by itself and a full
-context ends the step `ContextExhausted`.
+context ends the step `ContextExhausted`, and with `CLAUDE_CODE_PROMPT_CACHE_TTL` and
+`CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` at `agentClients.claude-code.cacheTtl` (`5m` or `1h`, `5m` where nothing is
+said), so a login's own hour - a Claude subscription's main conversation caches an hour by default, each write priced
+at the hour's rate - is never paid for requests that come seconds apart.
 
 The requests of one provider and one key go through one lane of the gate: at most
 `agentClients.<client>.maxParallel` of them under way at once (3 for claude-code, 4 for claude-api and 2 for glm where
@@ -1948,9 +1951,9 @@ request sent again with the model changed and the credit the API gave sent back 
 `fallback_credit_token` (a failure naming it answered by the same request without it), `Refused`
 with its category only where none is left; no request carries
 `fallbacks` or a `server-side-fallback-*` beta, for the engine's
-fallback is the only one a step has. Two keys are `claude-api`'s alone: `betas`, sent beside the
-tool's own, each one word and never the API's fallback's, and `cacheTtl`; three are both API
-clients': `requestExtras`, an object merged into every request's body - a member it adds sent as
+fallback is the only one a step has. One key is `claude-api`'s alone: `betas`, sent beside the
+tool's own, each one word and never the API's fallback's; `cacheTtl` is both Claude clients' (`claude-code`
+sets its launches' cache from it); three are both API clients': `requestExtras`, an object merged into every request's body - a member it adds sent as
 given, an object's members merged into the tool's own - refused where it sets what the tool sends
 itself or, here, `fallbacks` or a sampling parameter (`temperature`, `top_p`, `top_k`), which
 `anthropic-version 2026-10-21` refuses on every model, and free to add a tool choice or

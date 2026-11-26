@@ -135,9 +135,9 @@ public static partial class HelpTopics
         builder.AppendLine($"                 clients' ({string.Join(", ", Agents.AgentProviders.ApiClients)}), their tries, longest wait and the");
         builder.AppendLine("                 fields merged into each request; requestsPerMinute,");
         builder.AppendLine("                 inputTokensPerMinute and outputTokensPerMinute, the API clients'");
-        builder.AppendLine("                 too, the buckets that pace a lane's minute; cacheTtl and betas,");
-        builder.AppendLine("                 claude-api's");
-        builder.AppendLine("                 alone, how long its requests are cached and the betas sent beside");
+        builder.AppendLine("                 too, the buckets that pace a lane's minute; cacheTtl, claude-api's");
+        builder.AppendLine("                 and claude-code's, how long their requests are cached (5m where");
+        builder.AppendLine("                 nothing is said); betas, claude-api's alone, the betas sent beside");
         builder.AppendLine("                 the tool's own; preserveThinking, glm's alone, whether Z.AI keeps");
         builder.AppendLine("                 the model's reasoning across turns; maxParallel, every client's,");
         builder.AppendLine("                 the requests of one provider and key under way at once - a");

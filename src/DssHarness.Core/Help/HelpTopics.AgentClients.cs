@@ -175,7 +175,11 @@ public static partial class HelpTopics
             + "record carried before the person's next message; an attempt compacted again is reduced whole again, its earlier "
             + "records never copied into the next, and a later launch's first message is read as its task alone, never the "
             + "record it carried; a claude-code child is started "
-            + "with DISABLE_COMPACT=1, so it never compacts by itself and a full context ends the step ContextExhausted.");
+            + "with DISABLE_COMPACT=1, so it never compacts by itself and a full context ends the step ContextExhausted, and "
+            + $"with {string.Join(" and ", Agents.Policy.ClaudeSettings.CacheTtlVariables)} at agentClients.claude-code.cacheTtl "
+            + $"({string.Join(" or ", Agents.ClaudeApi.ClaudeApiRequest.CacheTtls)}, {Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes} where nothing is said), "
+            + "so a login's own hour - a Claude subscription's main conversation caches an hour by default, each write priced "
+            + "at the hour's rate - is never paid for requests that come seconds apart.");
         builder.AppendLine();
         AppendWrapped(
             builder,

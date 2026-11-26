@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
@@ -139,6 +140,35 @@ public sealed class ClaudeCodeClientTests : IDisposable
     /// the provider's address. Every other name of the tool's own reaches it as it was.
     /// </summary>
     [Fact]
+    public async Task TheCacheTtl_IsTheClientsEntrys_InTheSettingsAndTheEnvironment_FiveMinutesWhereItSaysNone()
+    {
+        foreach (var (entry, expected) in new (AgentClientConfig? Entry, string Expected)[] { (new AgentClientConfig { CacheTtl = "1h" }, "1h"), (new AgentClientConfig(), "5m"), (null, "5m") })
+        {
+            using var kit = new Kit();
+            kit.Script([new JsonObject()]);
+            kit.Own["ENABLE_PROMPT_CACHING_1H"] = "1";
+            var run = kit.Run() with
+            {
+                Entries = new AgentEntries(
+                    new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Api = "https://api.anthropic.com", Currency = "USD" },
+                    new AgentModelConfig { Code = "claude-sonnet-5-5" },
+                    entry),
+            };
+
+            Assert.Equal(AgentRunStatus.Completed, (await kit.Client().RunAsync(run, new Sink(), Token)).Status);
+
+            var given = Assert.Single(kit.Runner.Requests).Environment;
+            var env = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!["env"]!.AsObject();
+
+            foreach (var name in ClaudeSettings.CacheTtlVariables)
+            {
+                Assert.Equal(expected, given[name]);
+                Assert.Equal(expected, (string?)env[name]);
+            }
+        }
+    }
+
+    [Fact]
     public async Task TheEnvironment_HoldsWhatItsWayOfSigningInGives_AndNothingOfAHostSession()
     {
         using var kit = new Kit();
@@ -191,14 +221,14 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Null(given["CLAUDE_CODE_OAUTH_TOKEN"]);
         Assert.Equal(config, given["CLAUDE_CONFIG_DIR"]);
 
-        foreach (var (name, value) in ClaudeSettings.Launched)
+        foreach (var (name, value) in ClaudeSettings.LaunchedWith("5m"))
         {
             Assert.Equal(value, given[name]);
         }
 
         // The names the engine sets are its settings' env too, and none bounds a shell of Claude Code's own: it is given none.
         var env = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!["env"]!.AsObject();
-        Assert.Equal(ClaudeSettings.Launched.Select(name => name.Key), env.Select(name => name.Key));
+        Assert.Equal(ClaudeSettings.LaunchedWith("5m").Select(name => name.Key), env.Select(name => name.Key));
         Assert.DoesNotContain(given.Keys.Concat(env.Select(name => name.Key)), name => name.StartsWith("BASH_", StringComparison.Ordinal) || name.StartsWith("CLAUDE_BASH_", StringComparison.Ordinal));
 
         var seen = Assert.Single(kit.Launches()).Environment;
@@ -211,7 +241,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal("sk-work", seen["ANTHROPIC_API_KEY"]);
         Assert.Equal(config, seen[ClaudeTranscripts.ConfigDirectoryVariable]);
 
-        foreach (var (name, value) in ClaudeSettings.Launched)
+        foreach (var (name, value) in ClaudeSettings.LaunchedWith("5m"))
         {
             Assert.Equal(value, seen[name]);
         }
