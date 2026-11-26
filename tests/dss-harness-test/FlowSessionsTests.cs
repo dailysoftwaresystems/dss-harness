@@ -412,6 +412,46 @@ public sealed class FlowSessionsTests
     }
 
     /// <summary>
+    /// A start whose run's places cannot all be made - its temp directory refused - takes back what it had made of the run
+    /// and is refused saying which run's places and why, and that no run was started: no directory is left holding no
+    /// run's record.
+    /// </summary>
+    [Fact]
+    public async Task AStartWhoseRunsPlacesCannotBeMade_IsRefused_AndTakesBackWhatItMade()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var run = OrchestratorLayout.Of(layout, "r1");
+        var sessions = new FlowSessions(harness.OrchestrationStore, new UnmadeDirectory(harness.FileSystem, run.TempDirectory), harness.Identity, harness.GitClient, harness.Platform);
+
+        var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, Definition(), () => ChildSweep.None, FlowService.RunCommand, InputGround(layout), cancellationToken: Token));
+
+        Assert.Equal(
+            (HarnessExit.Refused, $"the places of run 'r1' could not be made: {UnmadeDirectory.Said}; what the start had made of run 'r1' was removed. No run was started."),
+            (raised.ExitCode, raised.Message));
+        Assert.False(Directory.Exists(run.Directory), "the start left a directory of the run it did not make");
+        Assert.False(File.Exists(run.OwnerFile));
+    }
+
+    /// <summary>A file system that refuses to make the directory <paramref name="refused"/>, as one denied access does.</summary>
+    private sealed class UnmadeDirectory(DssHarness.Core.FileSystem.IFileSystem inner, string refused) : PassThroughFileSystem(inner)
+    {
+        /// <summary>What the refusal says.</summary>
+        public const string Said = "Access to the path is denied";
+
+        public override void CreateDirectory(string path)
+        {
+            if (string.Equals(path, refused, StringComparison.Ordinal))
+            {
+                throw new UnauthorizedAccessException($"{Said}.");
+            }
+
+            base.CreateDirectory(path);
+        }
+    }
+
+    /// <summary>
     /// A file system whose every whole write beneath <paramref name="under"/> fails as a full disk's does, and whose removal
     /// of a directory fails as one held open does where <paramref name="removes"/> is false.
     /// </summary>
