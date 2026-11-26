@@ -59,6 +59,19 @@ public sealed class FlowStepGraph
     public const string NoPackCompacted = "the launch began from the engine's compaction record, which holds no map and no pack";
 
     /// <summary>
+    /// Why a launch of a step whose pack pages are <paramref name="tokens"/> - <paramref name="pushed"/> of them pushed - is
+    /// given no pack, the one place it is decided: <see cref="NoPackAsked"/> where no pack is made; <see cref="NoPackHeld"/>
+    /// where the pack made held nothing, said before anything else, for its step is offered no <c>pack</c> to ask either; and
+    /// <see cref="NoPackPushed"/> where the pack holds pages and the step pushes none, which it asks of the tool. Null where
+    /// page 1 of a pack that holds something is pushed.
+    /// </summary>
+    /// <param name="tokens">The size of a page of the step's pack; 0 where none is made.</param>
+    /// <param name="pushed">The size of page 1 pushed into the first message; 0 where none is.</param>
+    /// <param name="held">Whether the pack made holds a page.</param>
+    internal static string? NoPackOf(int tokens, int pushed, bool held)
+        => tokens == 0 ? NoPackAsked : !held ? NoPackHeld : pushed == 0 ? NoPackPushed : null;
+
+    /// <summary>
     /// Whether <paramref name="ex"/> is a record of the step's graph the disk would not keep or give back - a write or a
     /// read it refused, a record that would not read back - which the step's graph says and never fails its step over.
     /// </summary>
@@ -293,7 +306,7 @@ public sealed class FlowStepGraph
                     ChangesUnread = changesUnread,
                 })
             : null;
-        var noPack = tokens == 0 ? NoPackAsked : pushed == 0 ? NoPackPushed : pack is not { Text.Length: > 0 } ? NoPackHeld : null;
+        var noPack = NoPackOf(tokens, pushed, held: pack is { Text.Length: > 0 });
         var served = new FlowStepGraph(mode, from, read.View, tokens, pushed > 0, map, mapPages, pack, missing: null, noPack, store, output, directory, run.Instance)
         {
             view = queries,

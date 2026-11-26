@@ -6434,8 +6434,9 @@ gone). A reason step that has a graph writes both files as it ends (`FlowStepGra
 the view at the step's end, its `graph.jsonl` and its stored stream) and its pack is given the seeds; its `graph.jsonl`
 holds a line for each launch's first message, written as the message is and before any line of that launch's calls
 (`GraphPromptLine`: the pushed map's tokens and the pushed pack's seeds, nodes, tokens and what was left out, or the tokens of the
-changes a conversation gone on with was told in their place, or why no pack was given - `FlowStepGraph.NoPackPushed` for
-a step at `tools` that pushes none), one line for each call of the tool (`GraphCallLine`, with its answer's estimated tokens and its text hits), and
+changes a conversation gone on with was told in their place, or why no pack was given, by one rule (`FlowStepGraph.NoPackOf`) -
+`FlowStepGraph.NoPackHeld` where the pack made held nothing, said first, since such a step is offered no `pack` to ask,
+and `FlowStepGraph.NoPackPushed` for a step at `tools` that pushes none), one line for each call of the tool (`GraphCallLine`, with its answer's estimated tokens and its text hits), and
 one for each escape of its narrowing and each whole read the narrowing answered with the file's outline
 (`GraphEscapeLine`, `GraphOutlinedLine`: the file, its lines, what reading it whole would have cost and what the outline
 cost) - a line an earlier build wrote of a read the narrowing refused (`GraphDeniedLine`) still read, and counted in no
