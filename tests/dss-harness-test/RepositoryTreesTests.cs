@@ -72,6 +72,44 @@ public sealed class RepositoryTreesTests
     }
 
     /// <summary>
+    /// An agent's repository a deletion takes away while git is asked about it - the engine's own deletion of an agent that
+    /// only read runs beside the run's next steps, whose legs name the trees here - is none of the trees, and the rest are
+    /// listed whole, never said unlisted: whether git could not be started in it or started and could not read it.
+    /// </summary>
+    /// <param name="started">Whether git had started in it when it went.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnAgentRepositoryTakenAwayAsItIsAsked_IsNoneOfTheTrees_AndTheRestAreListed(bool started)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        var main = (await harness.GitClient.GetMainWorktreeAsync(temp.Path, cancellationToken))!.Path;
+        var context = new HarnessContext(new HarnessLayout(main, main), new HarnessConfig());
+        var root = context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root);
+        Directory.CreateDirectory(Path.Combine(root, "o1"));
+        var repositories = new AgentRepositories(harness.GitClient, harness.FileSystem, harness.Platform);
+
+        foreach (var agent in new[] { "a", "b" })
+        {
+            Assert.Null((await repositories.MakeAsync(main, WorktreeAddress.Nested("o1", agent), Path.Combine(root, "o1", agent), cancellationToken)).Failure);
+        }
+
+        var taken = Path.Combine(root, "o1", "b");
+        var git = InterceptingGitClient.TakingAway(harness.GitClient, harness.FileSystem, taken, "count-objects", started);
+
+        var found = await new RepositoryTrees(git, harness.LocalTransport, harness.FileSystem, harness.Platform).HereAsync(context, here: null, cancellationToken);
+
+        Assert.Null(found.Unlisted);
+        Assert.Equal(
+            [new RepositoryTree(main, RepositoryTree.MainCheckout), new RepositoryTree(Path.Combine(root, "o1", "a"), "worktree o1/a")],
+            found.Trees);
+        Assert.False(Directory.Exists(taken));
+    }
+
+    /// <summary>
     /// Trees git's record could not be read for are said, with why, rather than taken for none - and the main checkout,
     /// known without asking git anything, is still among them.
     /// </summary>

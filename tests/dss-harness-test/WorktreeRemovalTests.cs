@@ -1406,6 +1406,43 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     /// <summary>An answer to give instead of running a command, or <see langword="null"/> to run it.</summary>
     public Func<IReadOnlyList<string>, GitCommandResult?>? InsteadOfRun { get; init; }
 
+    /// <summary>
+    /// Asked before each arbitrary git command with the directory it runs in and its arguments, before
+    /// <see cref="InsteadOfRun"/>: an answer to give instead of running it, or <see langword="null"/> to go on.
+    /// </summary>
+    public Func<string, IReadOnlyList<string>, GitCommandResult?>? InsteadOfRunIn { get; init; }
+
+    /// <summary>What git answers where it started in a directory taken away before it could read it.</summary>
+    public const string LostItsDirectory = "fatal: Unable to read current working directory: No such file or directory";
+
+    /// <summary>
+    /// The real git client, save that the first command naming <paramref name="asked"/> run in <paramref name="tree"/> finds
+    /// it taken away, as a deletion running meanwhile takes it: the tree is deleted, and then git is asked in it - which the
+    /// process runner cannot start in a directory that is gone - or, where <paramref name="started"/>, git answers as one
+    /// that started in it and could not read it (<see cref="LostItsDirectory"/>).
+    /// </summary>
+    /// <param name="inner">The real client.</param>
+    /// <param name="fileSystem">Deletes the tree.</param>
+    /// <param name="tree">The tree taken away.</param>
+    /// <param name="asked">An argument of the command it is taken away at: <c>config</c> as its mark is read, <c>count-objects</c> as what it borrows is.</param>
+    /// <param name="started">Whether git had started in it when it went.</param>
+    public static InterceptingGitClient TakingAway(IGitClient inner, IFileSystem fileSystem, string tree, string asked, bool started)
+        => new(inner)
+        {
+            InsteadOfRunIn = (directory, arguments) =>
+            {
+                if (!arguments.Contains(asked, StringComparer.Ordinal)
+                    || !string.Equals(Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(tree).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)
+                    || !Directory.Exists(tree))
+                {
+                    return null;
+                }
+
+                fileSystem.DeleteDirectory(tree);
+                return started ? new GitCommandResult(128, string.Empty, LostItsDirectory) : null;
+            },
+        };
+
     /// <summary>Replaces the result of each arbitrary git command once it has run.</summary>
     public Func<IReadOnlyList<string>, GitCommandResult, GitCommandResult>? AfterRun { get; init; }
 
@@ -1831,7 +1868,7 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
             _runs.Add(([.. arguments], cancellationToken.CanBeCanceled));
         }
 
-        if (InsteadOfRun?.Invoke(arguments) is { } answer)
+        if ((InsteadOfRunIn?.Invoke(directory, arguments) ?? InsteadOfRun?.Invoke(arguments)) is { } answer)
         {
             return answer;
         }

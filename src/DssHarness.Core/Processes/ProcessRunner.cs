@@ -201,11 +201,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // as "git is not installed" when git is installed and it is the directory that is gone.
         // Raised as the program not starting, which it did not, so every reader names the cause:
         // a leg already running has failed, and a command ends as one whose program never ran.
+        // One taken away between this look and the start is said so by the start's failure.
         if (!string.IsNullOrEmpty(request.WorkingDirectory) && !Directory.Exists(request.WorkingDirectory))
         {
-            throw new ProgramStartException(
-                request.FileName,
-                $"'{request.FileName}' could not be started: the working directory '{request.WorkingDirectory}' does not exist.");
+            throw WorkingDirectoryGone(request.FileName, request.WorkingDirectory);
         }
 
         var startInfo = new ProcessStartInfo
@@ -292,7 +291,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             // Looked for before the step is started for it, as a start would look for it: what the
             // step starts first is this tool, which is there. Anything that is there, and still
             // cannot be started, the step says why of.
-            throw StartFailure(request.FileName, resolved, new Win32Exception(ErrorFileNotFound));
+            throw StartFailure(request.FileName, resolved, new Win32Exception(ErrorFileNotFound), request.WorkingDirectory);
         }
 
         // An isolated child is started by the mechanism the step becomes in its place, the program and its arguments handed
@@ -413,7 +412,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
             if (ex is Win32Exception failed)
             {
-                throw StartFailure(request.FileName, startInfo.FileName, failed);
+                throw StartFailure(request.FileName, startInfo.FileName, failed, request.WorkingDirectory);
             }
 
             throw;
@@ -445,7 +444,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
                 if (heard is not { Placed: true, Failure: null })
                 {
-                    throw await NotStartedAsync(request.FileName, resolved, heard, process).ConfigureAwait(false);
+                    throw await NotStartedAsync(request.FileName, resolved, request.WorkingDirectory, heard, process).ConfigureAwait(false);
                 }
 
                 placed = true;
@@ -965,9 +964,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// </summary>
     /// <param name="requested">The program as the request names it.</param>
     /// <param name="resolved">The file the step was asked to start.</param>
+    /// <param name="workingDirectory">The directory it was to start in; null or empty for this process's own.</param>
     /// <param name="heard">What the step said, or <see langword="null"/> where it reached no channel.</param>
     /// <param name="process">The step.</param>
-    private async Task<ProgramStartException> NotStartedAsync(string requested, string resolved, ContainExec.StartHeard? heard, Process process)
+    private async Task<ProgramStartException> NotStartedAsync(string requested, string resolved, string? workingDirectory, ContainExec.StartHeard? heard, Process process)
     {
         // The step ends once it has said what failed: waited for until it does, told every five minutes.
         await Waits.ForAsync(
@@ -982,7 +982,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         switch (heard)
         {
             case { Failure: ContainExec.Stage.Start }:
-                return StartFailure(requested, resolved, new Win32Exception(heard.Code));
+                return StartFailure(requested, resolved, new Win32Exception(heard.Code), workingDirectory);
 
             case { Failure: { } stage }:
                 return new ProgramStartException(
@@ -1403,17 +1403,36 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     private string? OnPath(string name)
         => ProgramOnPath(name, Environment.GetEnvironmentVariable(PathVariable), _platform.Current == PlatformId.Windows, _filePermissions.IsExecutable);
 
+    /// <inheritdoc cref="StartFailure(string, string, Win32Exception, string?, bool)"/>
+    private ProgramStartException StartFailure(string requested, string resolved, Win32Exception exception, string? workingDirectory)
+        => StartFailure(requested, resolved, exception, workingDirectory, _platform.Current == PlatformId.Windows);
+
     /// <summary>
-    /// What a failure to start <paramref name="resolved"/> means. It is reported as not found only when the
-    /// file really is missing: the operating system gives the same error for a script whose interpreter, or
-    /// a program whose loader, is missing, and "not found" would send the reader after a file that is there.
-    /// Anything else, such as a file that is not a program for this machine or may not be run, is reported
-    /// with the reason the operating system gave.
+    /// What a failure to start <paramref name="resolved"/> in <paramref name="workingDirectory"/> means. A working
+    /// directory that is not there by then is what failed it, said as the look before the start says it
+    /// (<see cref="WorkingDirectoryGone"/>): one a deletion took away after that look - Linux and macOS fail the
+    /// start with the error a missing program gives - is never said as the program's fault. Otherwise it is
+    /// reported as not found only when the file really is missing: the operating system gives the same error for a
+    /// script whose interpreter, or a program whose loader, is missing, and "not found" would send the reader after
+    /// a file that is there. Anything else, such as a file that is not a program for this machine or may not be run,
+    /// is reported with the reason the operating system gave.
     /// </summary>
-    private ProgramStartException StartFailure(string requested, string resolved, Win32Exception exception)
+    /// <param name="requested">The program as the request names it.</param>
+    /// <param name="resolved">The file that was started.</param>
+    /// <param name="exception">What the operating system said.</param>
+    /// <param name="workingDirectory">The directory it was started in; null or empty for this process's own.</param>
+    /// <param name="windows">Whether this machine runs Windows, which names a missing path with an error of its own.</param>
+    internal static ProgramStartException StartFailure(string requested, string resolved, Win32Exception exception, string? workingDirectory, bool windows)
     {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        if (!string.IsNullOrEmpty(workingDirectory) && !Directory.Exists(workingDirectory))
+        {
+            return WorkingDirectoryGone(requested, workingDirectory, exception);
+        }
+
         var missing = exception.NativeErrorCode == ErrorFileNotFound
-            || (exception.NativeErrorCode == WindowsErrorPathNotFound && _platform.Current == PlatformId.Windows);
+            || (exception.NativeErrorCode == WindowsErrorPathNotFound && windows);
 
         if (!missing)
         {
@@ -1427,6 +1446,16 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 exception)
             : new ExecutableNotFoundException(requested, exception);
     }
+
+    /// <summary>
+    /// The program named <paramref name="fileName"/> could not be started because its working directory is not there:
+    /// the one wording of it, before the start and after one that failed.
+    /// </summary>
+    /// <param name="fileName">The program as the request names it.</param>
+    /// <param name="workingDirectory">The directory it was to start in.</param>
+    /// <param name="innerException">What the operating system said, where a start was tried.</param>
+    private static ProgramStartException WorkingDirectoryGone(string fileName, string workingDirectory, Exception? innerException = null)
+        => new(fileName, $"'{fileName}' could not be started: the working directory '{workingDirectory}' does not exist.", innerException);
 
     /// <summary>
     /// The file Windows starts for <paramref name="name"/>: the name itself when it has an extension, and

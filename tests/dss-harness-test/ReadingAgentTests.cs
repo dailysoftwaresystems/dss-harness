@@ -889,6 +889,40 @@ public sealed class ReadingAgentTests
         Assert.DoesNotContain("--no-worktree", text, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// An agent made while the tree of one that only reads is taken away is made. The engine deletes such an agent once its
+    /// work is over apart from the run's own thread, so the run's next step - the shipped flow's notes, after the rounds'
+    /// last reader - makes its agent while that tree goes, and the making counts the orchestrator's open agents over every
+    /// tree below it, asking git in each. The tree taken away as git is asked about it is no tree, whether it went as its
+    /// mark was read or as what it borrows was, and whether git could not be started in it or started and could not read
+    /// it: the making goes on, never failed by the deletion.
+    /// </summary>
+    /// <param name="asked">The command the tree is taken away at.</param>
+    /// <param name="started">Whether git had started in it when it went.</param>
+    [Theory]
+    [InlineData("config", false)]
+    [InlineData("config", true)]
+    [InlineData("count-objects", false)]
+    [InlineData("count-objects", true)]
+    public async Task AnAgentMadeWhileAReadersTreeIsTakenAway_IsMade(string asked, bool started)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateReadingAgentAsync("a1");
+        var taken = kit.Worktree("a1");
+        var agents = kit.Harness.Agents(
+            kit.Harness.FileSystem,
+            kit.Harness.AnchorRegistryService,
+            InterceptingGitClient.TakingAway(kit.Harness.GitClient, kit.Harness.FileSystem, taken, asked, started));
+
+        var created = await agents.CreateAsync(kit.Main, OrchestrationKit.Orchestrator, "a2", "model-b", empty: false, session: null, Token);
+
+        Assert.True(created.Succeeded, OrchestrationKit.Describe(created));
+        Assert.False(Directory.Exists(taken));
+        Assert.True(Directory.Exists(Path.Combine(kit.Worktree("a2"), ".git")));
+        Assert.Equal(AgentStates.Live, kit.Harness.OrchestrationStore.ReadAgent(kit.Layout, "a2")!.State);
+    }
+
     /// <summary>Every file a tree holds but git's own, relative to it with forward separators, in ordinal order.</summary>
     private static IReadOnlyList<string> TreeFiles(string tree)
         => [.. Directory.EnumerateFiles(tree, "*", SearchOption.AllDirectories)

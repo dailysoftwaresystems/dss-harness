@@ -237,7 +237,9 @@ Windows alone.
 
 A missing working directory is reported as exactly that. Linux and macOS report it
 with the same error number as a missing executable, which would otherwise surface as
-"git is not installed".
+"git is not installed". It is looked for before the start, and again where a start
+fails: one a deletion took away between the two is said as gone, in the same words,
+never as an interpreter or loader the program needs being missing.
 
 A caller's handler for the lines a child writes is handed no more once it fails, and the
 stream is still read to its end, what the handler raised being raised once the child has
@@ -1036,6 +1038,14 @@ nowhere, so the main checkout's `git worktree list` holds the main checkout alon
 (`harness.mainCheckout`, `harness.agent`, read by `AgentRepositoryMark` from that file alone, never
 through the main checkout's configuration it includes), and which borrows the main checkout's
 objects. It is taken for the agent's worktree only where all three hold at the address it sits at.
+A directory a deletion takes away while git is asked about it is none: another command's deletion,
+a person's, or the engine's own of an agent that only read once its work is over, which runs beside
+the run's next steps - the making of their agents and their legs' look at the trees here among them,
+each listing every tree below the root. Where git could not be started there or could not read it,
+and the directory holds no `.git` of its own any more, it is not listed and every listing goes on
+whole, delete-orchestrator's look below its directory too, which never says it as a directory git
+records nothing at. A failure in one that still holds its `.git` is git's, raised, never read as no
+tree.
 A command run inside one finds the main checkout its mark names, as from inside a linked worktree;
 one whose mark names a checkout that is not there, is bare, is no main checkout of its own, carries
 a mark itself or does not lend it its objects is refused, never taken for a main checkout.
