@@ -107,4 +107,27 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// The side-tasks topic says its agent is pushed nothing of the graph, as a step with the tool is: every message as
+    /// the person typed it, on every client and in a launch held open, the map and each message's pack asked of the tool's
+    /// own operations, named as the tool names them - so a reader never looks for a map or a pack at a message's head.
+    /// </summary>
+    [Fact]
+    public void TheSideTasksTopic_SaysItsAgentIsPushedNothingOfTheGraph_AndPullsTheMapAndThePack()
+    {
+        var prose = Prose.Words(HelpText.Of("side-tasks").StandardOutput);
+
+        Assert.Contains(
+            "and no narrowing of its reads. Pull, not push, as for a step with the tool: nothing of the graph is pushed into its "
+                + "messages - each reaches the agent as the person typed it, on every client, a line posted to a Claude Code launch "
+                + "held open for a chat among them - and the repository map, made once from the base as it stands when it opens, "
+                + "and the context pack made from each message the person types are asked of the tool's "
+                + $"{DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NameOf(DssHarness.Core.Agents.Runtime.GraphOp.Map)} and "
+                + $"{DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NameOf(DssHarness.Core.Agents.Runtime.GraphOp.Pack)}, from page 1, "
+                + $"the last message's pack breaking {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NameOf(DssHarness.Core.Agents.Runtime.GraphOp.Find)}'s "
+                + "ties by its nearness.",
+            prose,
+            StringComparison.Ordinal);
+    }
 }

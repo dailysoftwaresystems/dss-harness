@@ -1919,10 +1919,13 @@ A side-task may use the codebase graph beside all this, unlimited: a graph of it
 (`SideTaskGraph`), held in the one shape every graph's records take, seeded from the newest the repository holds - a
 run's or another side-task's - at its opening, then incremental and synced after each of its agent's writes and
 commands on either client (`AfterWrites`), the tool answering from what each sync leaves; the `graph` tool offered
-among its agent's own with every operation, `edit` among them, on every client, and no narrowing, what it reads and an edit writes asked of the side-task's own policy, the repository map
-(`CodebaseRepositoryMap`) given with its first message and the context pack made from each, a line posted to a launch
-Claude Code holds open for a chat among them (`SideTaskGraph.Front`, the one front either shape takes); `--no-graph`
-turns it off, and a graph that cannot be made takes nothing from the conversation: the side-task says once that it runs
+among its agent's own with every operation, `edit` among them, on every client, and no narrowing, what it reads and an edit writes asked of the side-task's own policy.
+Pull, not push, as for a step at `tools`: nothing of the graph is pushed - every message reaches the agent as the person
+typed it, on every client and in either shape, a line posted to a launch Claude Code holds open for a chat among them -
+and the repository map (`CodebaseRepositoryMap`), made once at its opening, and the context pack made from each message
+(`SideTaskGraph.MakePack`, which either shape calls before the message goes) are the pages the tool's `map` and `pack`
+give from page 1, offered by the steps' one rule (`CodebaseGraphTool.Operations`), the last message's pack's `Near`
+breaking `find`'s ties; `--no-graph` turns it off, and a graph that cannot be made takes nothing from the conversation: the side-task says once that it runs
 without one and why - the chat's first line, or a line beside a one shot's records - and its `graph.jsonl` holds the
 prompt line naming why no pack is given (`GraphPromptLine.Why`).
 

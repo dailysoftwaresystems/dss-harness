@@ -675,7 +675,9 @@ planner and 35% only in the implementer, on three samples; no step asked the map
 two only added to the input, 60% to 98% more of it in those steps. The graph is given only where it saves money and
 time and raises quality, so the tool's `map` and `pack` serve their pages when asked, from page 1, and a
 step that wants its pack pushed says `graphPromptTokens`; a step at `graph: map`, which has no tool, is
-still pushed both, for push is its only way to see the graph. What a graphed step is given never cuts: the repository map of its ground of reads is paged
+still pushed both, for push is its only way to see the graph. A side-task, whose agent has the tool wherever it has its graph, is
+pushed none of it either, on every client: each message reaches the agent as the person typed it, its pack made from it for
+the tool's `pack` and `find`'s ties, and the map made at its opening asked of `map`. What a graphed step is given never cuts: the repository map of its ground of reads is paged
 whole under `codebaseGraph.mapTokens`, made once and read as it is by every step of the ground - page 1
 the header and the whole lines that fit that size, and, where more pages follow, a last line naming
 which page of how many and where the rest is, asked of the tool's `map` - and the pack is paged the same way, under

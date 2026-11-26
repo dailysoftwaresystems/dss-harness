@@ -1011,7 +1011,7 @@ public sealed partial class CodebaseGraphToolTests
     /// <c>map</c> gives a page of the repository map the run keeps, from where the store kept it, from page 1 - the page a
     /// step at map is pushed - each page after it the map's own; a page past the last refused with how many there are; a page the disk will not
     /// give back said with why; a run given no map said; and the operation is not given a step whose operations do not
-    /// hold it.
+    /// hold it - given wherever there is a map, one of a single page among them, and never where there is none.
     /// </summary>
     [Fact]
     public async Task TheMapOp_GivesTheRunsMapPages_AndRefusesAPagePastTheLast()
@@ -1026,7 +1026,7 @@ public sealed partial class CodebaseGraphToolTests
         var (_, kept) = store.MapOnce(layout, reads: null, () => (pages, meta), TestContext.Current.CancellationToken);
         var tool = Tool(tree, await QueriesAsync(tree), map: page => store.MapPage(layout, reads: null, kept, page));
         var given = Tool(tree, await QueriesAsync(tree), map: null);
-        var ops = CodebaseGraphTool.Operations(write: false, narrow: false, map: true);
+        var ops = CodebaseGraphTool.Operations(write: false, narrow: false, mapPages: kept);
 
         var second = await AskAsync(tool, """{"op":"map","page":2}""", ops);
         var first = await AskAsync(tool, """{"op":"map","page":1}""", ops);
@@ -1045,6 +1045,11 @@ public sealed partial class CodebaseGraphToolTests
         Assert.StartsWith($"the repository map's page {pages.Count} could not be read: ", lost.Text, StringComparison.Ordinal);
         Assert.Equal(GraphToolOutcome.Usage, ungiven.Outcome);
         Assert.StartsWith("op 'map' is not one this step may use: find, node, related, outline, around, impact, body", ungiven.Text, StringComparison.Ordinal);
+
+        // Offered wherever there is a map, one of a single page too - nothing given the tool is pushed its page 1 - and
+        // never where there is none.
+        Assert.Contains(GraphOp.Map, CodebaseGraphTool.Operations(write: false, narrow: false, mapPages: 1));
+        Assert.DoesNotContain(GraphOp.Map, CodebaseGraphTool.Operations(write: false, narrow: false, mapPages: 0));
         Assert.Contains("map - a page of the repository map - the tree at a glance: its projects and top directories, then its most central declarations - from page 1, its last line saying where the rest is", CodebaseGraphTool.Description(ops), StringComparison.Ordinal);
         Assert.Contains("\"map\"", CodebaseGraphTool.Schema(ops), StringComparison.Ordinal);
     }

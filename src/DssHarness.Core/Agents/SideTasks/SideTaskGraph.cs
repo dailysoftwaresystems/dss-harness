@@ -14,9 +14,10 @@ namespace DssHarness.Core.Agents.SideTasks;
 /// A side-task's own codebase graph, under its records as a run's is under its own: seeded from
 /// the newest graph of the repository's runs or side-tasks at its opening, then incremental, synced again after each of
 /// its agent's writes and commands on either client (<see cref="AfterWrites"/>). Its agent is given the <c>graph</c> tool
-/// with every operation its client serves and no narrowing, held to the side-task's own policy, the repository map with
-/// its first message, and a context pack made from each message the person types - its page 1 with the message, and its
-/// later pages by the tool's <c>pack</c>.
+/// with every operation its client serves and no narrowing, held to the side-task's own policy, and is pushed nothing of
+/// the graph - pull, not push, as a step at <c>tools</c> is: each message reaches it as the person typed it, and the
+/// repository map made at its opening and the context pack made from each message the person types are the pages the
+/// tool's <c>map</c> and <c>pack</c> give, from page 1.
 /// </summary>
 public sealed class SideTaskGraph
 {
@@ -28,7 +29,6 @@ public sealed class SideTaskGraph
     private readonly TimeProvider clock;
     private readonly CodebaseGraphSync request;
     private readonly SideTaskLayout layout;
-    private readonly string map;
     private readonly Execution.ILineMask? mask;
     private int mapPages;
     private CodebaseGraphQueries? queries;
@@ -64,15 +64,14 @@ public sealed class SideTaskGraph
         this.clock = clock;
         this.layout = layout;
         this.mask = mask;
-        map = layout.MapFile;
         request = new CodebaseGraphSync(repository, layout.AsGraph, CodebaseGraphShape.Default, worktreesRoot, Rebuild: false, $"the side-task '{layout.Name}' opened");
     }
 
     /// <summary>
     /// Opens the graph: the whole first sync, seeded from the newest of the repository, then the repository map made once
-    /// from the base as it stands and kept - read as it is by every message after, a cache, while the pack and the tool
-    /// say what the tree is now - whole, in pages, kept by the one owner of a map's files as a run's is
-    /// (<see cref="OrchestrationStore.MapOnce"/>).
+    /// from the base as it stands and kept - served as it is by the tool's <c>map</c> for the whole side-task, a cache,
+    /// while the pack and the tool's other operations say what the tree is now - whole, in pages, kept by the one owner of
+    /// a map's files as a run's is (<see cref="OrchestrationStore.MapOnce"/>).
     /// </summary>
     /// <param name="cancellationToken">Stops the sync.</param>
     public async Task OpenAsync(CancellationToken cancellationToken)
@@ -105,48 +104,37 @@ public sealed class SideTaskGraph
 
         var tool = Tool(queries, new AgentPolicy(files, platform, ground), Orchestration.Flow.FlowStepGraph.ReadsOf(ground));
 
-        // Every operation its client serves, pack and map among them: each message's pack goes on in pages and the map
-        // with it, the tool held for the whole chat paging the last message's pack and the one map the side-task keeps.
+        // Every operation its client serves, pack and map among them, each from page 1, for nothing of either is pushed:
+        // the tool held for the whole chat pages the last message's pack, and the one map the side-task keeps wherever it
+        // has one, by the rule a step's tool is offered it by.
         return new AgentGraphSupport(
             tool,
             line => store.AppendGraphStepLine(layout.Directory, line),
             (written, cancellationToken) => AfterWriteAsync(tool, written, cancellationToken),
-            CodebaseGraphTool.Operations(write: true, narrow: false, pack: true, map: mapPages > 1));
+            CodebaseGraphTool.Operations(write: true, narrow: false, pack: true, mapPages: mapPages));
     }
 
     /// <summary>
-    /// The person's message as the side-task's agent is given it: the repository map at its head where it is the first,
-    /// the context pack made from the message at the head of each, its page 1 - each part written as every first message's
-    /// parts are (<see cref="AgentPromptParts.Part"/>) - and the pack kept, its nearness for the tool's <c>find</c>, whose
-    /// ties it breaks, and its later pages for the tool's <c>pack</c>.
+    /// Makes the context pack of the person's message - each message, whichever shape its client takes it in - and keeps
+    /// it: its pages, from page 1, for the tool's <c>pack</c>, and its nearness for the tool's <c>find</c>, whose ties it
+    /// breaks, so the tool follows the last message. Nothing of it is pushed: the message reaches the agent as the person
+    /// typed it, and the agent asks the tool for what of the graph it needs. Nothing is made where the side-task's graph
+    /// holds nothing yet.
     /// </summary>
-    /// <param name="message">The person's message, whole.</param>
-    /// <param name="first">Whether it is the side-task's first.</param>
-    public string Front(string message, bool first)
+    /// <param name="message">The person's message, whole, as typed.</param>
+    public void MakePack(string message)
     {
-        var front = string.Empty;
-
-        if (first && files.FileExists(map) && files.ReadAllText(map) is { Length: > 0 } kept)
-        {
-            front += AgentPromptParts.MapPart(kept);
-        }
+        ArgumentNullException.ThrowIfNull(message);
 
         if (queries is { } view)
         {
             var made = CodebaseContextPack.Make(view, new ContextPackRequest(message, _ => true));
             near = made.Near;
             pack = made;
-
-            if (made.Text.Length > 0)
-            {
-                front += AgentPromptParts.Part(AgentPromptParts.CodebaseTag, made.Text);
-            }
         }
-
-        return front + message;
     }
 
-    /// <summary>The context pack of the person's last message, whose later pages the tool's <c>pack</c> gives; null before any.</summary>
+    /// <summary>The context pack of the person's last message, whose pages the tool's <c>pack</c> gives, from page 1; null before any.</summary>
     private ContextPack? pack;
 
     /// <summary>

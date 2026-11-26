@@ -323,18 +323,18 @@ public sealed partial class CodebaseGraphTool(
     }
 
     /// <summary>
-    /// The operations a step is given: the read ones always, <c>edit</c> where it may write, <c>wholeFile</c> where its
-    /// reads are narrowed, <c>pack</c> where its context pack has a page its first message does not hold - every page,
-    /// from page 1, where none was pushed - <c>changes</c> where the codebase changes it is told go on past its
-    /// message's, and <c>map</c> where the repository map has a page its first message does not hold - every page, from
-    /// page 1, where none was pushed.
+    /// The operations a step - or a side-task - is given: the read ones always, <c>edit</c> where it may write,
+    /// <c>wholeFile</c> where its reads are narrowed, <c>pack</c> where its context pack has a page its first message
+    /// does not hold - every page, from page 1, where none was pushed - <c>changes</c> where the codebase changes it is
+    /// told go on past its message's, and <c>map</c> wherever there is a repository map: every page of it, from page 1,
+    /// for nothing given the tool is pushed the map - the one rule of it, the steps' and the side-task's alike.
     /// </summary>
     /// <param name="write">Whether the step has the <c>write</c> capability.</param>
     /// <param name="narrow">Whether the step's reads are narrowed (<c>graphReads: narrow</c>).</param>
     /// <param name="pack">Whether the step's context pack has a page its first message does not hold.</param>
     /// <param name="changes">Whether the codebase changes the step is told have a page after its message's.</param>
-    /// <param name="map">Whether the repository map has a page the step's first message does not hold.</param>
-    public static IReadOnlySet<GraphOp> Operations(bool write, bool narrow, bool pack = false, bool changes = false, bool map = false)
+    /// <param name="mapPages">How many pages the repository map the step's tool serves holds; 0 where there is none.</param>
+    public static IReadOnlySet<GraphOp> Operations(bool write, bool narrow, bool pack = false, bool changes = false, int mapPages = 0)
     {
         var ops = new HashSet<GraphOp>(Read);
 
@@ -358,7 +358,7 @@ public sealed partial class CodebaseGraphTool(
             ops.Add(GraphOp.Changes);
         }
 
-        if (map)
+        if (mapPages > 0)
         {
             ops.Add(GraphOp.Map);
         }

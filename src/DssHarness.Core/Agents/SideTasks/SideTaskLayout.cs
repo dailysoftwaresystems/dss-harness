@@ -63,9 +63,6 @@ public sealed record SideTaskLayout(string Root, string Name)
     /// </summary>
     public string GraphDirectory => AsGraph.GraphDirectory;
 
-    /// <summary>The side-task's repository map, made once at its opening and read as it is by every message after.</summary>
-    public string MapFile => AsGraph.GraphMapFile;
-
     /// <summary>The side-task's layout as the graph service holds it: the one shape every graph's records take.</summary>
     public Orchestration.OrchestratorLayout AsGraph => new(Name, Directory);
 }
