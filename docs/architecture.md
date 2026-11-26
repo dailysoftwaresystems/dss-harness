@@ -5016,12 +5016,15 @@ last turn's only where the client says the run ended at that turn's own result
 nothing waiting as the person leaves), so a launch gone between turns, or in the middle of one, marks
 no finished turn with its failure. The person leaving while a turn runs or a line waits never drops
 that turn: Claude Code interrupts the turn under way with the waiting lines cancelled - unless the
-person's own interrupt is still unanswered - reads on to the cut turn's result within
-`ClaudeCodeClient.InterruptBound`, counts it and ends there, the lines it dropped never counted as
-answered, so what the turn used, cost and spent is kept and a line it never took goes on with the
-chat. `/model` or `/effort` typed while the launch works ends it the same way and carries the lines it
-never took to the new launch (`GoneOnAsync`), each turn written on the entry of the launch that served
-it. One
+person's own interrupt cut it already, answered or not, for a turn cut is never interrupted again -
+reads on to the cut turn's result within `ClaudeCodeClient.InterruptBound`, counts it and ends there,
+the lines it dropped never counted as answered, so what the turn used, cost and spent is kept and a
+line it never took goes on with the chat. A turn begun once the person left - a line Claude Code took
+before the interrupt reached it, or one typed after the person's own interrupt was answered - is cut
+at once and settles nothing: its line is never counted as answered, and goes on with the chat too.
+`/model` or `/effort` typed while the launch works ends it the same way and carries the lines it
+never took, or took only once the person had left, to the new launch (`GoneOnAsync`), each turn
+written on the entry of the launch that served it. One
 request per message where the client stores them, each going on with the stored
 one. A side-task whose last run that worked - one that began a session - ended `ContextExhausted`, a
 chat's or a one shot's, has outgrown its context (`Working.Outgrown`, read from its stream): it keeps

@@ -72,7 +72,8 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "a launch at work gives way as the person leaving does, and the lines it never took go on to the new one;",
+            "a launch at work gives way as the person leaving does, and the lines it never took - or took only once the person "
+                + "had left, its turn cut at once - go on to the new one;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(

@@ -419,8 +419,9 @@ public sealed class ClaudeCodeClient(
         private int _taken;
 
         // How many of the messages taken a turn answered - every one taken before a turn that ended well, or that a chat's
-        // interrupt cut - and how many a chat's interrupts dropped, which the person was told to send again, whenever the
-        // receipt that says so arrives: together, in order, the messages a chat's run settled, the rest its to send again.
+        // interrupt cut, of a turn begun before the person left - and how many a chat's interrupts dropped, which the
+        // person was told to send again, whenever the receipt that says so arrives: together, in order, the messages a
+        // chat's run settled, the rest its to send again.
         private int _answeredTaken;
         private int _dropped;
         private string? _declined;
@@ -447,6 +448,11 @@ public sealed class ClaudeCodeClient(
         // whether its own interrupt for that is still unanswered.
         private bool _leaving;
         private bool _leaveAsked;
+
+        // Whether the turn under way - or the one last ended - began once the person had left: Claude Code took its line
+        // only for an interrupt to cut it on the way out, so its end settles nothing, and the line goes on to the chat's
+        // next launch.
+        private bool _turnAfterLeaving;
 
         // Whether the launch ended at its last turn's own end: its ending read from that turn's result, or nothing after
         // that turn but the messages ending.
@@ -836,7 +842,10 @@ public sealed class ClaudeCodeClient(
                     totals.Exchanges++;
                     await Emit(new TurnStarted(totals.Exchanges)).ConfigureAwait(false);
 
-                    // A turn that began after the person left - a line taken before the interrupt dropped it - is cut too.
+                    // A turn that began after the person left - a line taken before the interrupt dropped it, or once the
+                    // interrupt that cut the turn before was answered - is cut too, and settles nothing.
+                    _turnAfterLeaving = _leaving;
+
                     if (_leaving && !_leaveAsked)
                     {
                         AskToLeave();
@@ -1406,8 +1415,9 @@ public sealed class ClaudeCodeClient(
             _chatCut = false;
 
             // Every message a turn took is answered by its end - a turn that ended well, or one the chat's interrupt cut;
-            // one taken by a turn that ended on an error is not, and a chat sends it again.
-            if (cut || Ending(result) is null)
+            // one taken by a turn that ended on an error is not, nor one taken by a turn that began once the person had
+            // left, cut on the way out, and a chat sends each again.
+            if (!_turnAfterLeaving && (cut || Ending(result) is null))
             {
                 _answeredTaken = _taken;
             }

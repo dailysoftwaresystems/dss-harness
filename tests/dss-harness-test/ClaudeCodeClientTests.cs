@@ -3640,6 +3640,53 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
+    /// A turn begun once the person had left settles nothing. A line they typed once their interrupt was answered is
+    /// written after it, so it dropped nothing, and waits behind the cut turn; leaving then - by <c>/model</c> or
+    /// <c>/effort</c> as by <c>/exit</c> - asks no interrupt of its own, for the turn is cut already; Claude Code takes the
+    /// line once the cut turn's result is in, and the launch cuts that turn at once. No turn answered the line, so the run
+    /// never counts it among the messages it settled, and a chat that goes on gives it to its next launch.
+    /// </summary>
+    [Fact]
+    public async Task ATurnBegunOnceThePersonLeft_SettlesNothing()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["text"] = "first said" }, new JsonObject { ["hang"] = true, ["slowInterrupt"] = 1000 }, new JsonObject { ["hang"] = true }]);
+        var run = kit.Run() with { Chat = true, Interrupt = new AgentTurnInterrupt() };
+        var sink = new Sink(@event =>
+        {
+            if (@event is AssistantMessage { Text: "first said" })
+            {
+                run.Messages.Post("and now?");
+            }
+            else if (@event is TurnStarted { Turn: 2 })
+            {
+                // A message waits behind the turn under way, and the person presses Ctrl+C.
+                run.Messages.Post("and then?");
+                run.Interrupt!.Interrupt();
+            }
+            else if (@event is MessagesDropped)
+            {
+                // Their interrupt answered, the cut turn's result still to come, the person types a line and leaves.
+                run.Messages.Post("typed once the interrupt was answered");
+                run.Messages.Complete();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        // Settled, in order: the prompt, the line the cut turn took, and the one the interrupt dropped - never the line
+        // the turn begun once the person left took.
+        Assert.Equal((AgentRunStatus.Completed, (int?)3, true), (result.Status, result.MessagesAnswered, result.EndedWithItsLastTurn));
+        Assert.Equal([1, 2, 3], sink.Of<TurnStarted>().Select(started => started.Turn));
+        Assert.Single(sink.Of<MessagesDropped>());
+        Assert.Equal(
+            ["chat-interrupt", "chat-leave"],
+            Control(kit)
+                .Where(line => line["type"]?.GetValue<string>() == "control_request" && line["request"]?["subtype"]?.GetValue<string>() == "interrupt")
+                .Select(line => line["request_id"]!.GetValue<string>()));
+    }
+
+    /// <summary>
     /// A launch whose program is gone in the middle of a turn ended anywhere but at its last turn's own end: the turn
     /// before it, which ended at its own result, keeps its own ending.
     /// </summary>
