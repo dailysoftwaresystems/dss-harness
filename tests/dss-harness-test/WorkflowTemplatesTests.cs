@@ -612,7 +612,8 @@ public sealed class WorkflowTemplatesTests
     /// <summary>
     /// The method this build ships plans and reviews by (user, 2026-10-17): a plan's items are sized to one builder's
     /// cycle each, every item - a further round's and a recovery's too - and the plan itself carry a definition of
-    /// done, and the review loop stands while a critical, high or medium finding does: three rounds, three more while
+    /// done, an item's said in statements that hold whatever the run's other work does beside it, and the review loop
+    /// stands while a critical, high or medium finding does: three rounds, three more while
     /// one stands, and what is left then is carried to the end of the run, written down for the person who reads the
     /// pull request, rather than stopping the run. Held on the shipped files that say it, so a change of method is a
     /// change of those files and of this test together.
@@ -636,6 +637,18 @@ public sealed class WorkflowTemplatesTests
         Assert.Contains(item.GetProperty("required").EnumerateArray(), required => required.GetString() == "noClass");
         Assert.Equal("string", item.GetProperty("properties").GetProperty("done").GetProperty("type").GetString());
         Assert.Equal("#/$defs/closureClass", item.GetProperty("properties").GetProperty("classes").GetProperty("items").GetProperty("$ref").GetString());
+
+        // The one description of an item's done every writer of one reads - the planner's, the self-audit's and the
+        // diagnostician's, whose items refer to it - says its statements hold whatever the run's other work, built beside
+        // the item, does to the same files: a remedy pinned to a count of lines its round's own item changed could never
+        // be met (live, 2026-11-26).
+        Assert.Equal(
+            "The item's definition of done: what must hold for the item to be finished, as statements a person or a check can answer one by one - "
+                + "the behaviours built, the test that pins each, and what is true of the tree when the builder reports. Each statement says what "
+                + "this item makes true in a way that holds whatever the run's other work, built beside it, does to the same files: never a count "
+                + "of lines, a line number, a whole output, or a comparison of a whole file or the whole tree with the base, which that other work "
+                + "may change. The builder works to it, the review weighs it and the run's final audit checks it.",
+            item.GetProperty("properties").GetProperty("done").GetProperty("description").GetString());
 
         var piece = schema.GetProperty("properties").GetProperty("scope").GetProperty("items").GetProperty("properties").GetProperty("item");
 
@@ -1245,6 +1258,39 @@ public sealed class WorkflowTemplatesTests
         Assert.Contains($"`onSuccess` says - `{FlowRecover.FailedStep}`, the step that gave the recovery its failure, which runs again from where it stopped", architecture, StringComparison.Ordinal);
         Assert.Contains($"`onFailure` says once its steps' retries are spent: `{FlowRecover.PauseOnFailure}` or `{FlowRecover.StopOnFailure}` - never the recovery again", architecture, StringComparison.Ordinal);
         Assert.Contains("A reasoning step is never recovered, by its own word or a group's", architecture, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The planner is told the issues the run owes its next round wherever it writes the plan - planning it, revising it
+    /// and updating it - as the self-audit is, each to be a work item naming its id in <c>settles</c>: the round's check
+    /// refuses a round that leaves one unsettled, and a plan update the check raises for one adds the item that settles it.
+    /// </summary>
+    [Fact]
+    public void ThePlannersPrompts_ListTheIssuesOwedTheNextRound_EachAWorkItemThatSettlesIt()
+    {
+        const string Listed = "The issues this run owes its next round, each with its id and its size - the files its fix touches, what must be built, and what must be measured first: {run.nextRound}";
+
+        foreach (var prompt in new[] { "prompts/plan.md", "prompts/replan.md", "prompts/plan-update.md", "prompts/self-audit.md" })
+        {
+            Assert.Contains(Listed, Prose.Words(Read(prompt)), StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            "Each issue listed becomes a work item of the plan, which its first round builds before the rest: make it one, with its size and a class - it is a defect too, and the rules of a class below apply to it - and name the issue it settles in `settles`, by its id exactly. The round's check refuses a round whose items leave one unsettled.",
+            Prose.Words(Read("prompts/plan.md")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Each issue listed is a work item of the plan, which its first round builds before the rest, naming the issue it settles in `settles` by its id exactly: keep the one the plan has, or make one, with its size and a class, where it has none.",
+            Prose.Words(Read("prompts/replan.md")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "an issue the check says is owed the next round and settled by no work item is an `added` item that settles it, as below.",
+            Prose.Words(Read("prompts/plan-update.md")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Each issue listed becomes a work item of the round, built before the rest, naming the issue it settles in `settles` by its id exactly: where no item of the plan settles it yet, add one, with its size and a class, as an `added` piece.",
+            Prose.Words(Read("prompts/plan-update.md")),
+            StringComparison.Ordinal);
     }
 
     /// <summary>

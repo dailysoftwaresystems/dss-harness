@@ -13,7 +13,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// that list, so nothing joins a round unchecked. A work item is known by its name across the run, so no item a round
 /// builds but an owed one, and no added piece, takes a name an instance of the work-item group carries already: a round
 /// added to a work-item group with no loop around it builds the owed work alone, and its own items, which the group's
-/// round before built under those names, are held to none.
+/// round before built under those names, are held to none. An item's <c>settles</c> names one of the issues the run
+/// owes its next round whose ids the engine hands the check (<c>settleable</c>), or is refused; and a check that opens a
+/// round, handed those issues whole (<c>next</c>), holds its items to them as well - each settled, the settling items
+/// first.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
@@ -85,20 +88,22 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
             problems.AddRange(validator.Check([.. items], context, place.Run, place.Definition));
         }
 
-        // The issues the run owes its next round, which this check holds the round's items to: each named in an item's
-        // settles, none left unsettled, and the items that settle them ordered first - the run's defects taken from its
-        // own rounds are built before the work that came after them. An item may name only an issue the run owes: a
-        // settles that names another is refused, for a round built on it would settle nothing.
+        // The ids of the issues the run owes its next round, where the engine hands them - to every check whose items a
+        // round opens with: an item may name one of them in settles and no other, for a round built on another would
+        // settle nothing; a check handed none - a recovery's - refuses every settles. And the issues themselves, where
+        // this check opens a round, which it holds the round's items to: each named in an item's settles, none left
+        // unsettled, and the items that settle them ordered first - the run's defects taken from its own rounds are
+        // built before the work that came after them.
+        var settleable = Names(read, "settleable");
         List<JsonObject> owedNext = read.TryGetValue("next", out var owedNow) && !owedNow.IsMissing && owedNow.ToNode() is JsonArray owedList
             ? [.. owedList.Select(issue => issue as JsonObject).OfType<JsonObject>()]
             : [];
-        List<string> owedIds = [.. owedNext.Select(issue => TextOf(issue["id"])).OfType<string>()];
         IReadOnlyList<JsonObject> held = [.. checkedItems.Select(item => item as JsonObject).OfType<JsonObject>()];
         string? Settling(JsonObject item) => TextOf(item["settles"]) is { Length: > 0 } settles ? settles : null;
         List<string> nextProblems =
         [
             .. held
-                .Where(item => Settling(item) is { } names && !owedIds.Contains(names, StringComparer.Ordinal))
+                .Where(item => Settling(item) is { } names && !settleable.Contains(names, StringComparer.Ordinal))
                 .Select(item => FlowWorkItems.NameOf(item) is { } named
                     ? $"the item '{named}' settles '{Settling(item)}', which is not an issue the run owes its next round"
                     : $"an item settles '{Settling(item)}', which is not an issue the run owes its next round"),
@@ -110,7 +115,7 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
 
         // The items that settle an owed issue come first, their own order kept: what the run took from its own rounds
         // is built before the work planned around it, whatever order the round's own list held.
-        if (nextProblems.Count == 0 && owedIds.Count > 0)
+        if (nextProblems.Count == 0 && owedNext.Count > 0)
         {
             checkedItems = new JsonArray(
                 [.. checkedItems

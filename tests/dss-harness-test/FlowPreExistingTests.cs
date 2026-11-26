@@ -2069,4 +2069,219 @@ public sealed class FlowPreExistingTests
 
         Assert.Equal("rounds#2.items[0]", Assert.Single(store.ReadNextRound(layout)!.Issues).SettledBy);
     }
+
+    /// <summary>
+    /// An issue owed the next round before the first round opens - a triage of what the planner met sent it there - is
+    /// settled in that round through the plan update its check raises, and no check of the plan refuses the item that
+    /// settles it: the round's check, handed the issue, finds no item settling it and raises the update; the item the
+    /// update adds names it in settles; the plan's check the update sends the run back to - handed the issues the run
+    /// owes, and holding its items to none - takes it; and the round's check, opened again, passes with the item first,
+    /// which settles the issue once its work lands. Every check is the real one, so a plan check that refused the item as
+    /// owed no round would hold the planning at its loop until a person was asked (live, 2026-11-26).
+    /// </summary>
+    [Fact]
+    public async Task AnIssueOwedBeforeTheFirstRound_IsSettledThroughThePlanUpdateItsCheckRaises_ThePlansCheckTakingTheItem()
+    {
+        var harness = new HarnessFactory();
+        using var repository = new TempDirectory();
+        repository.WriteFile("file.txt", "content\n");
+        await harness.InitializeHarnessAsync(repository.Path, TestContext.Current.CancellationToken);
+        await harness.CommitAllAsync(repository.Path, "initial", TestContext.Current.CancellationToken);
+
+        var definition = Parse("""
+            name: flow
+            inputs:
+              - name: request
+            steps:
+              - name: planning
+                repeat:
+                  until: 'check.ok'
+                  maxIterations: 2
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: planner
+                    resume: plan
+                    prompt: plan.md
+                    outputs: plan.json
+                    onPreExisting: triage
+                  - name: survey
+                    type: reason
+                    agent: surveyor
+                    prompt: survey.md
+                    outputs: out.json
+                    dependsOn: [plan]
+                  - name: check
+                    type: validate-plan
+                    items: 'plan.latest.items'
+                    scope: 'plan.latest.scope'
+                    dependsOn: [survey]
+                  - name: plan-update
+                    type: reason
+                    agent: planner
+                    resume: plan
+                    prompt: plan-update.md
+                    outputs: plan.json
+              - name: rounds
+                dependsOn: [planning]
+                repeat:
+                  until: 'empty(run.nextRound)'
+                  maxIterations: 2
+                steps:
+                  - name: item-check
+                    type: validate-plan
+                    items: 'planning.plan.latest.items'
+                  - name: items
+                    dependsOn: [item-check]
+                    forEach: 'item-check.items'
+                    steps:
+                      - name: build
+                        type: reason
+                        agent: builder
+                        prompt: build.md
+                        outputs: out.json
+                      - name: rebuild
+                        type: reason
+                        agent: builder
+                        prompt: rebuild.md
+                        outputs: out.json
+                      - name: undo
+                        type: reason
+                        agent: builder
+                        prompt: undo.md
+                        outputs: out.json
+                      - name: checkpoint
+                        type: commit
+                        message: checkpoint
+                        dependsOn: [build]
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """) with
+        {
+            Amend = new FlowAmend("request", 5, null, "planning.plan-update", "check", "planning.plan.latest.scope", "rounds.items.build", "rounds.items.rebuild", "rounds.items.undo", null),
+        };
+        var store = harness.OrchestrationStore;
+        var layout = OrchestratorLayout.Of(new HarnessLayout(repository.Path, repository.Path), "r1");
+        var clock = new ManualClock();
+        var check = new PlanCheckRunner(harness.ContextLoader, harness.Platform, new PlanValidator(harness.FileSystem, harness.PathBudget, harness.Platform));
+        var answer = (JsonObject)Course("next", "a broken test").Output!.DeepClone();
+        answer["size"] = new JsonObject { ["files"] = new JsonArray("src/Parser.cs"), ["build"] = "", ["measureFirst"] = new JsonArray() };
+        var settling = WorkItem("fix-the-parser");
+        settling["settles"] = "nx-1";
+        var checks = new List<(string Instance, string? Settleable, bool Ok, string Problems, string Items)>();
+
+        using var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock);
+        var watched = new Watched(records, snapshot => snapshot.Steps.Any(step => step.Step == "triage" && step.State is FlowInstanceState.Done or FlowInstanceState.Failed));
+
+        // Each check is the real one, run where the run's repository is; each says what it was handed and what it found.
+        async Task<FlowStepResult> Checked(FlowStepRun run)
+        {
+            var result = await check.RunAsync(run with { Place = new FlowRunPlace(repository.Path, "r1", null, definition) }, TestContext.Current.CancellationToken);
+            var output = result.Output!;
+
+            lock (checks)
+            {
+                checks.Add((
+                    run.Instance,
+                    run.Read!.TryGetValue("settleable", out var settleable) ? settleable.ToNode()?.ToJsonString() : null,
+                    (bool)output["ok"]!,
+                    string.Join("; ", output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())),
+                    string.Join(",", output["items"]!.AsArray().Select(FlowWorkItems.NameOf))));
+            }
+
+            return result;
+        }
+
+        var runner = new FakeRunner()
+            .On("plan", (FlowStepRun _) => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["items"] = new JsonArray(WorkItem("one")), ["scope"] = new JsonArray() }, preExisting: [Issue("a broken test")]))
+            .On("triage", (FlowStepRun _) => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: answer.DeepClone()))
+
+            // The step before the plan's check waits until the triage has sent the issue to the next round, so every
+            // check starts owing it.
+            .OnAsync("survey", async _ =>
+            {
+                await watched.Seen;
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            })
+            .OnAsync("check", Checked)
+            .OnAsync("item-check", Checked)
+
+            // The update the round's check raises adds the item that settles the issue, beside the plan's own.
+            .On("plan-update", (FlowStepRun _) => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["items"] = new JsonArray(WorkItem("one"), settling.DeepClone()),
+                ["scope"] = new JsonArray(new JsonObject
+                {
+                    ["kind"] = "added",
+                    ["item"] = settling.DeepClone(),
+                    ["changed"] = "the parser's defect the run owes its next round is a work item of the round",
+                    ["keep"] = "",
+                    ["undo"] = "",
+                    ["instead"] = "",
+                }),
+            }))
+            .On("checkpoint", (FlowStepRun _) => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["committed"] = true,
+                ["sha"] = "0123456789abcdef0123456789abcdef01234567",
+                ["paths"] = new JsonArray(),
+                ["ignored"] = new JsonArray(),
+            }));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, inputs: new Dictionary<string, string> { ["request"] = "fix the tool" }, records: watched, updates: () => store.ReadFlowUpdates(layout));
+
+        // Nothing in the run asks a person: each session goes on until the run is done or one is asked.
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        for (var sessions = 1; end.Status != FlowRunStatus.Done && coordinator.OpenQuestions.Count == 0 && sessions < 5; sessions++)
+        {
+            end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }
+
+        Assert.True(FlowRunStatus.Done == end.Status, $"{end.Summary} | asked: {string.Join("; ", coordinator.OpenQuestions.Select(asked => $"{asked.Kind}: {asked.Problem}"))} | checks: {string.Join("; ", checks)}");
+        Assert.Empty(coordinator.OpenQuestions);
+
+        // The round's check found the issue unsettled and raised the update; the plan's check took the item the update
+        // added; the round's check, opened again, passed with the settling item first. No check refused the item, and the
+        // planning never went round again.
+        Assert.Equal(
+            [
+                ("planning#1.check", (string?)"[\"nx-1\"]", true, string.Empty, "one"),
+                ("rounds#1.item-check", "[\"nx-1\"]", false, "the issue 'nx-1' (a broken test) is owed the next round, and no work item settles it", "one"),
+                ("planning#1.check+2", "[\"nx-1\"]", true, string.Empty, "one,fix-the-parser"),
+                ("rounds#1.item-check+2", "[\"nx-1\"]", true, string.Empty, "fix-the-parser,one"),
+            ],
+            checks);
+        Assert.DoesNotContain(store.ReadFlow(layout)!.Steps, step => step.Instance.StartsWith("planning#2", StringComparison.Ordinal));
+
+        var update = Assert.Single(store.ReadFlowUpdates(layout)!.Updates);
+        Assert.Equal((FlowUpdateCauses.PlanCheck, FlowUpdateStates.Done, "rounds#1.item-check"), (update.Cause, update.State, update.Check));
+        Assert.Equal([("added", "fix-the-parser", "done")], update.ThePieces.Select(piece => (piece.Kind, piece.ItemName()!, piece.Ended)));
+
+        // The item that names the issue landed its work, and the run's file says it settled it.
+        var owed = Assert.Single(store.ReadNextRound(layout)!.Issues);
+        Assert.Equal(("nx-1", "rounds#1.items[0]"), (owed.Id, owed.SettledBy));
+    }
+
+    /// <summary>A work item of a plan, shaped as the real plan check reads one, owning paths of its own and reusing the repository's one file.</summary>
+    private static JsonObject WorkItem(string name)
+        => new()
+        {
+            ["name"] = name,
+            ["title"] = $"The {name} item",
+            ["instructions"] = $"Write the {name} item's code.",
+            ["done"] = $"the {name} item ships",
+            ["ownedPaths"] = new JsonArray($"src/{name}/**"),
+            ["forbiddenPaths"] = new JsonArray(),
+            ["reuses"] = new JsonArray(new JsonObject { ["path"] = "file.txt", ["what"] = "the content" }),
+            ["creates"] = new JsonArray(),
+            ["replaces"] = new JsonArray(),
+            ["tests"] = new JsonArray("OneTests"),
+            ["noTests"] = "",
+            ["classes"] = new JsonArray(),
+            ["noClass"] = $"the {name} item decides nothing: it adds a file",
+        };
 }

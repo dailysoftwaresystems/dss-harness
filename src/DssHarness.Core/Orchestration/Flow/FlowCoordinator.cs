@@ -2584,6 +2584,16 @@ public sealed class FlowCoordinator
             : null;
 
     /// <summary>
+    /// Whether <paramref name="check"/> checks the items a round of a work-item group opens with, read of the declarations
+    /// by the one owner of that rule (<see cref="FlowUpdateGates.ChecksTheItemsARoundOpensWith"/>): the check that opens
+    /// the round, and the plan's, which a plan update sends the run back to; never a recovery's.
+    /// </summary>
+    /// <param name="check">The check about to start.</param>
+    private bool ChecksTheItemsARoundOpensWith(FlowInstance check)
+        => check.DeclaredScope is { } scope
+            && FlowUpdateGates.ChecksTheItemsARoundOpensWith(_definition, scope.Parent is null ? null : scope.GroupPath, scope.Group, check.Step);
+
+    /// <summary>
     /// Whether <paramref name="check"/> opens a round of the group plan updates owe their work to - the group of
     /// <c>amend.whenAddScope</c> - and so is handed that work and raises the update its problems ask for.
     /// </summary>
@@ -8157,8 +8167,9 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// The issues the run owes its next round and no work item has settled: what <c>run.nextRound</c> reads, what the
-    /// check that opens a round holds its items to, and what the rounds go on while one is left. What settled each is
+    /// The issues the run owes its next round and no work item has settled: what <c>run.nextRound</c> reads, what an item
+    /// of every check whose items a round opens with may settle, what the check that opens a round holds its items to,
+    /// and what the rounds go on while one is left. What settled each is
     /// the list's own (<see cref="FlowNextIssue.SettledBy"/>, <see cref="SettleTheIssueOf"/>).
     /// </summary>
     private IReadOnlyList<FlowNextIssue> UnsettledNext()
@@ -12583,14 +12594,23 @@ public sealed class FlowCoordinator
             read["commit"] = FlowValue.Of(pushed);
         }
 
-        if (RoundOpenedBy(instance) is not null)
+        if (ChecksTheItemsARoundOpensWith(instance))
         {
-            // The issues the run owes its next round, which the check that opens a round holds its items to - whether a
-            // loop or a plan update opens it: each named in an item's settles, none left unsettled, the settling items
-            // ordered first. Live at the start, as run.nextRound reads it, so a round that opens after one was taken reads
-            // it whatever moved meanwhile. A check of any other list - the plan's, a plan update's, a recovery's remedies
-            // - is given none: no issue is owed it, and an item of it that names one in settles is refused.
-            read["next"] = FlowValue.Of(new JsonArray([.. UnsettledNext().Select(issue => (JsonNode?)issue.Value())]));
+            // The issues the run owes its next round, live at the start, as run.nextRound reads them, so a check that
+            // starts after one was taken reads it whatever moved meanwhile. Every check whose items a round opens with -
+            // the plan's, so the one a plan update sends the run back to, and the round's own - is handed their ids: an
+            // item of its list may settle one of them and no other. Every other check - a recovery's - is handed none,
+            // for no issue is owed it, and an item of it that names one in settles is refused. The check that opens a
+            // round - whether a loop or a plan update opens it - is handed the issues themselves as well, which it alone
+            // holds its items to: each named in an item's settles, none left unsettled, the settling items ordered first.
+            var owed = UnsettledNext();
+
+            read["settleable"] = FlowValue.Of(new JsonArray([.. owed.Select(issue => (JsonNode?)issue.Id)]));
+
+            if (RoundOpenedBy(instance) is not null)
+            {
+                read["next"] = FlowValue.Of(new JsonArray([.. owed.Select(issue => (JsonNode?)issue.Value())]));
+            }
         }
 
         if (step.Type == "validate-plan" && _definition.Amend is { } amend && FlowUpdateGates.ParentOf(amend.WhenAddScope) is { } groupPath)

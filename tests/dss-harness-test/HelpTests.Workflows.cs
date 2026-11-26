@@ -562,9 +562,10 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The workflows topic says which check holds a round's items to the issues the run owes its next round, and what
-    /// settles one - an item that ends done with a commit of its own made, never one a person skipped - and where a
-    /// listed issue is shown.
+    /// The workflows topic says which check holds a round's items to the issues the run owes its next round, which checks
+    /// take an item that settles one - every check whose items a round opens with, the plan's among them, and no
+    /// recovery's - and what settles one - an item that ends done with a commit of its own made, never one a person
+    /// skipped - and where a listed issue is shown.
     /// </summary>
     [Fact]
     public void TheWorkflowsTopic_SaysWhichCheckHoldsTheIssuesOwedTheNextRound_AndWhatSettlesOne()
@@ -574,7 +575,10 @@ public sealed partial class HelpTests
                 + "a validate-plan the forEach beside it expands from, where that group runs in rounds, in an iteration of a repeat or as "
                 + "the group plan updates add a round to with no loop around it, and no other check - holds its "
                 + "items to: each issue named in an item's settles, none left unsettled, the settling items first, and the rounds going on "
-                + "while one is left - never holding the round the issue came from. A forEach item that names an issue in settles settles "
+                + "while one is left - never holding the round the issue came from. Every check whose items a round opens with - that one, "
+                + "and each whose items read what that one's items read: the plan's, so the one a plan update sends the run back to - takes "
+                + "an item that settles one of those issues, and refuses one whose settles names an issue the run does not owe; any other "
+                + "check - a recovery's - refuses every settles. A forEach item that names an issue in settles settles "
                 + "it once it ends done with a commit of its own made, whatever the run takes plan updates by, and next-round.json says "
                 + "which item did; one that ends done with nothing committed - an item a person skipped - settles nothing, and the issue "
                 + "stays owed. It lists the rest, proven, with a title and a description, in the run's pre-existing-issues.json, shown in "

@@ -9,8 +9,21 @@ the scope.
 Where the lines above name a plan check and no change a person made, nobody changed the request: the items of a
 round do not pass the check that opens it, and they are in the list of work below. Fix only what the check found.
 Each fix is a piece: an item you change is `changed`, and joins `items` under the name it has; one you withdraw is
-`removed`; to make two items one, change one and remove the other. Leave the rest of the plan word for word. This
-is asked once for a round: where the items still do not pass, a person is asked whether they are built as they are.
+`removed`; to make two items one, change one and remove the other; an issue the check says is owed the next round
+and settled by no work item is an `added` item that settles it, as below. Leave the rest of the plan word for word.
+This is asked once for a round: where the items still do not pass, a person is asked whether they are built as they
+are.
+
+## What this run owes its next round
+
+The issues this run owes its next round, each with its id and its size - the files its fix touches, what must be
+built, and what must be measured first:
+
+{run.nextRound}
+
+An empty list means none is owed. Each issue listed becomes a work item of the round, built before the rest, naming
+the issue it settles in `settles` by its id exactly: where no item of the plan settles it yet, add one, with its size
+and a class, as an `added` piece. The round's check refuses a round whose items leave one unsettled.
 
 ## The request as it now reads
 

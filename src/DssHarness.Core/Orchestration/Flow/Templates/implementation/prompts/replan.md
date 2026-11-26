@@ -23,6 +23,17 @@ Answer: {previous.approval.answer}. What to change:
 
 Where a line says that a step left no output, that step did not run in the last round and has nothing to say.
 
+## What this run owes its next round
+
+The issues this run owes its next round, each with its id and its size - the files its fix touches, what must be
+built, and what must be measured first:
+
+{run.nextRound}
+
+An empty list means none is owed. Each issue listed is a work item of the plan, which its first round builds before
+the rest, naming the issue it settles in `settles` by its id exactly: keep the one the plan has, or make one, with its
+size and a class, where it has none. The round's check refuses a round whose items leave one unsettled.
+
 ## What to do
 
 Act on every problem, every finding and everything the person asked for; where the person's words and a finding

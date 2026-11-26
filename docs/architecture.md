@@ -3635,9 +3635,16 @@ declared beside it expands from (`FlowUpdateGates.OpeningCheckOf`), where that g
 iteration of a `repeat`, or the group plan updates owe their work to, to which an update adds a round where no loop is
 around it - is decided by one owner (`FlowUpdateGates.RoundOpenedBy`), whichever opens the round: that check is handed
 the owed issues under `next` and, where its group is the one updates owe, their work (`owed`, `owedAlone`) and the plan
-update its problems raise; and `PlanCheckRunner` refuses a round whose items leave one unsettled, refuses an item that names an issue the run does not
-owe, and orders the settling items first; no other check - the plan's, a plan update's, a recovery's - is handed any,
-and an item of one that names an issue is refused. The rounds' `until` reads `empty(run.nextRound)`, so a clean
+update its problems raise; and `PlanCheckRunner` refuses a round whose items leave one unsettled, and orders the
+settling items first - no other check holds its items to them. Which checks take an item that settles one is decided
+by one owner too (`FlowUpdateGates.ChecksTheItemsARoundOpensWith`): every check whose items a round opens with - the
+check that opens it, and each whose `items` read a step the items of such a check read: the plan's, whose plan a
+round opens with, and so the one a plan update sends the run back to. Each is handed the owed issues' ids under
+`settleable`, and `PlanCheckRunner` refuses an item whose `settles` names none of them, so an issue owed while the
+plan is made or updated becomes a work item of it that no check of the plan refuses; every other check - a
+recovery's, whose items the recovery builds and no round does - is handed none, and an item of one that names an
+issue is refused. The planner's prompts and the self-audit's list `{run.nextRound}`, each owed issue to be a work item
+of the round naming its id in `settles`. The rounds' `until` reads `empty(run.nextRound)`, so a clean
 self-audit does not end them while one is left; never holding the round the issue came from, for the triage never holds
 a loop. The value an issue is read as and the schema typing `run.nextRound` are made from one list of its members
 (`FlowNextIssue.Value`, `ValueSchema`).

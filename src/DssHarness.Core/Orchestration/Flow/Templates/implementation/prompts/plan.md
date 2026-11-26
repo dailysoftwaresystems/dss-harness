@@ -45,6 +45,18 @@ holds to it.
 
 Where a line says that a step left no output, that thing was not read or did not run in this run: it is unknown, and never a pass.
 
+## What this run owes its next round
+
+The issues this run owes its next round, each with its id and its size - the files its fix touches, what must be
+built, and what must be measured first:
+
+{run.nextRound}
+
+An empty list means none is owed. Each issue listed becomes a work item of the plan, which its first round builds
+before the rest: make it one, with its size and a class - it is a defect too, and the rules of a class below apply to
+it - and name the issue it settles in `settles`, by its id exactly. The round's check refuses a round whose items
+leave one unsettled.
+
 ## How the tests are run
 
 Each item names the tests its change affects, in tests, one unit to an entry: the test classes that test what the

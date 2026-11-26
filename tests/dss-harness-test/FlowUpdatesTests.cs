@@ -529,6 +529,116 @@ public sealed class FlowUpdatesTests
         Assert.Null(FlowUpdateGates.RoundOpenedBy(looped, "rounds", loop, loop.Steps.Single(step => step.Name == "items")));
     }
 
+    /// <summary>
+    /// One owner says which checks take an item that settles an issue the run owes: every check whose items a round
+    /// opens with - the check that opens it, and each whose items read a step the items of such a check read, the
+    /// iteration before's among them - and never a check of another list, or a recovery's, whatever it reads. The
+    /// shipped flow's plan check - the one a plan update sends the run back to - takes one as the rounds' check does, and
+    /// the recovery's two checks take none; the architecture names the owner.
+    /// </summary>
+    [Fact]
+    public void TheChecksThatTakeAnItemSettlingAnOwedIssue_AreThoseWhoseItemsARoundOpensWith()
+    {
+        var shipped = WorkflowTemplates.ShippedDefinition();
+        var rounds = shipped.Steps.Single(step => step.Name == "rounds");
+        var planning = shipped.Steps.Single(step => step.Name == "planning");
+        var recovery = shipped.Recover!.Declaration;
+
+        Assert.Equal("check", shipped.Amend!.Then);
+        Assert.True(FlowUpdateGates.ChecksTheItemsARoundOpensWith(shipped, "rounds", rounds, rounds.Steps.Single(step => step.Name == "item-check")));
+        Assert.True(FlowUpdateGates.ChecksTheItemsARoundOpensWith(shipped, "planning", planning, planning.Steps.Single(step => step.Name == "check")));
+        Assert.False(FlowUpdateGates.ChecksTheItemsARoundOpensWith(shipped, FlowScope.Recovery, recovery, recovery.Steps.Single(step => step.Name == "remedy-check")));
+        Assert.False(FlowUpdateGates.ChecksTheItemsARoundOpensWith(shipped, FlowScope.Recovery, recovery, recovery.Steps.Single(step => step.Name == "remedy-recheck")));
+
+        var flow = Definition("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: remedy-check
+                  type: validate-plan
+                  items: 'think.items'
+            steps:
+              - name: think
+                type: reason
+                prompt: plan.md
+                outputs: plan.json
+              - name: plan-check
+                type: validate-plan
+                items: 'think.items'
+                dependsOn: [think]
+              - name: other
+                type: reason
+                prompt: other.md
+                outputs: plan.json
+              - name: side
+                type: validate-plan
+                items: 'other.items'
+                dependsOn: [other]
+              - name: rounds
+                dependsOn: [plan-check]
+                repeat:
+                  until: 'false'
+                  maxIterations: 2
+                steps:
+                  - name: item-check
+                    type: validate-plan
+                    items: 'previous.audit.items ?? think.items'
+                  - name: items
+                    forEach: 'item-check.items'
+                    dependsOn: [item-check]
+                    steps:
+                      - name: build
+                        type: orient
+                  - name: audit
+                    type: reason
+                    prompt: audit.md
+                    outputs: plan.json
+                    dependsOn: [items]
+                  - name: audit-check
+                    type: validate-plan
+                    items: 'audit.items'
+                    dependsOn: [audit]
+            """);
+        var top = flow.Steps;
+        var loop = top.Single(step => step.Name == "rounds");
+        var remedy = flow.Recover!.Declaration;
+
+        // The rounds' check opens a round; the plan's check and the audit's read what it reads - the plan, and the audit
+        // of the iteration before - so the items each checks are those a round opens with.
+        Assert.True(FlowUpdateGates.ChecksTheItemsARoundOpensWith(flow, "rounds", loop, loop.Steps.Single(step => step.Name == "item-check")));
+        Assert.True(FlowUpdateGates.ChecksTheItemsARoundOpensWith(flow, null, null, top.Single(step => step.Name == "plan-check")));
+        Assert.True(FlowUpdateGates.ChecksTheItemsARoundOpensWith(flow, "rounds", loop, loop.Steps.Single(step => step.Name == "audit-check")));
+
+        // A check of a list no round opens with takes none, and neither does a recovery's, though it reads the plan.
+        Assert.False(FlowUpdateGates.ChecksTheItemsARoundOpensWith(flow, null, null, top.Single(step => step.Name == "side")));
+        Assert.False(FlowUpdateGates.ChecksTheItemsARoundOpensWith(flow, FlowScope.Recovery, remedy, remedy.Steps.Single(step => step.Name == "remedy-check")));
+
+        // With no round in the flow - no loop and no plan updates - no check takes one.
+        var once = Definition("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: plan.md
+                outputs: plan.json
+              - name: check
+                type: validate-plan
+                items: 'think.items'
+                dependsOn: [think]
+              - name: items
+                forEach: 'check.items'
+                dependsOn: [check]
+                steps:
+                  - name: build
+                    type: orient
+            """);
+
+        Assert.False(FlowUpdateGates.ChecksTheItemsARoundOpensWith(once, null, null, once.Steps.Single(step => step.Name == "check")));
+        Assert.Contains($"(`{nameof(FlowUpdateGates)}.{nameof(FlowUpdateGates.ChecksTheItemsARoundOpensWith)}`)", Prose.Document("docs", "architecture.md"), StringComparison.Ordinal);
+    }
+
     /// <summary>The definition of the gates' tests, parsed from <paramref name="text"/>.</summary>
     private static WorkflowDefinition Definition(string text)
         => WorkflowFileParser.Parse("workflows/flow/flow.yml", text);

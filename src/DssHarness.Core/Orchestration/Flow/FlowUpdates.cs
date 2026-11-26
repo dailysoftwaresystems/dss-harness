@@ -674,10 +674,11 @@ public static class FlowUpdateGates
     /// (<see cref="OpeningCheckOf"/>) and that group runs in rounds: declared in an iteration of a <c>repeat</c>, which
     /// runs it again each round, or the group plan updates owe their work to (the group of <c>amend.whenAddScope</c>), to
     /// which an update adds a round where no loop is around it - whichever opens the round. Never the plan's check, a plan
-    /// update's or a recovery's, whose items are no round's. Where the check opens rounds of two groups, the one plan
+    /// update's or a recovery's, whose items no round opens with. Where the check opens rounds of two groups, the one plan
     /// updates owe their work to is named. The one owner of which check opens a round: the engine hands that check alone
-    /// the issues the run owes its next round, and - where its group is the one updates owe - the work they owe it,
-    /// whether it carries that alone, and the plan update its problems raise.
+    /// the issues the run owes its next round to hold its items to - each settled, the settling items first - and, where
+    /// its group is the one updates owe, the work they owe it, whether it carries that alone, and the plan update its
+    /// problems raise.
     /// </summary>
     /// <param name="definition">The definition: its steps, where the check is declared at the flow's top, and its <c>amend</c> block, which names the group plan updates owe their work to.</param>
     /// <param name="scopePath">The declaration path of the group the check is declared in; null at the flow's top.</param>
@@ -710,6 +711,73 @@ public static class FlowUpdateGates
         }
 
         return looped;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="check"/> checks the items a round of a work-item group opens with: it opens one
+    /// (<see cref="RoundOpenedBy"/>), or its <c>items</c> read a step whose output the <c>items</c> of a check that opens
+    /// one read - the plan's check, whose plan a round opens with, and so the check a plan update sends the run back to.
+    /// Never a recovery's check, whose items the recovery builds and no round does. The one owner of which checks take an
+    /// item that settles an issue the run owes now: the engine hands each of them the ids of those issues and every other
+    /// check none, so an item that names an issue the run does not owe is refused wherever it is checked, and one that
+    /// names an owed issue is refused by no check whose items a round opens with. That a check holds its items to those
+    /// issues - each settled, the settling items first - is <see cref="RoundOpenedBy"/>'s alone.
+    /// </summary>
+    /// <param name="definition">The definition, whose declarations say which checks open a round and what each reads.</param>
+    /// <param name="scopePath">The declaration path of the group the check is declared in; null at the flow's top.</param>
+    /// <param name="scope">The group the check is declared in, whose steps are beside it; null at the flow's top.</param>
+    /// <param name="check">The check's declaration.</param>
+    public static bool ChecksTheItemsARoundOpensWith(WorkflowDefinition definition, string? scopePath, WorkflowStep? scope, WorkflowStep check)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(check);
+
+        if (RoundOpenedBy(definition, scopePath, scope, check) is not null)
+        {
+            return true;
+        }
+
+        // A recovery is known by its reserved name, which no step can take: the flow's own at the root, a used workflow's
+        // under the step that uses it.
+        if (check.Type != "validate-plan"
+            || check.Items is not { } items
+            || (scopePath?.Split('.').Contains(FlowScope.Recovery, StringComparer.Ordinal) ?? false))
+        {
+            return false;
+        }
+
+        var opensWith = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var (path, declared) in FlowScope.Declared(definition))
+        {
+            var around = FlowScope.ScopeOf(path);
+
+            if (declared.Items is { } read
+                && RoundOpenedBy(definition, around, around is null ? null : FlowScope.At(around, definition)?.Step, declared) is not null)
+            {
+                opensWith.UnionWith(StepsRead(definition, around, read));
+            }
+        }
+
+        return StepsRead(definition, scopePath, items).Any(opensWith.Contains);
+    }
+
+    /// <summary>
+    /// The paths of the steps whose output <paramref name="expression"/>, read in the scope at <paramref name="scopePath"/>,
+    /// reads, each found as <see cref="FlowScope.Read"/> finds a read's step: a read of <c>previous</c> by the names after
+    /// it, as the iteration before is read; none for a read of the run's other own names.
+    /// </summary>
+    private static IEnumerable<string> StepsRead(WorkflowDefinition definition, string? scopePath, string expression)
+    {
+        foreach (var read in WorkflowExpressions.ReadsOf(expression))
+        {
+            IReadOnlyList<string> names = read.Root == "previous" ? [.. read.Names.Skip(1)] : WorkflowExpressions.IsRoot(read.Root) ? [] : read.Names;
+
+            if (FlowScope.Read(names, definition, scopePath, out _) is { } found)
+            {
+                yield return found.Step.Path;
+            }
+        }
     }
 
     /// <summary>
