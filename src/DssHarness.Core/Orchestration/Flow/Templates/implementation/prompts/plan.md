@@ -87,9 +87,10 @@ For every defect the plan fixes and every behaviour it changes, write the class 
    literal - across every tier, format, target and file kind, never the file the defect was seen in alone. The
    graph's sites first: it joins every place that decides the data - what defines, calls, uses, makes, references,
    inherits, implements or overrides it, every literal that holds it and every key it names - and its coverage lines
-   say what it searched by text alone, for nothing is assumed of a language with no extractor. Its find, node and related beside it for
-   the names and for what reads and calls them, and text search for what the graph does not see, each such text
-   search said in notCovered.
+   say what it searched by text alone, for nothing is assumed of a language with no extractor. Its find, node and
+   related beside it for the names and for what reads and calls them, its impact for everything a change of a node
+   reaches, its around and its outline - of a file or a directory - to know where a node stands before reading any
+   file whole, and text search for what the graph does not see, each such text search said in notCovered.
 4. Record each search: what was searched, how, the query as it was made, and how many places it found.
 5. Write the universe from the axes the repository declares, and the count of their product: each axis whole, from a
    search of the tree for every cell of its kind - for the legs and the references, every file of every service that
