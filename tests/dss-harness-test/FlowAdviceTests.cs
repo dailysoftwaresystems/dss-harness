@@ -427,7 +427,8 @@ public sealed class FlowAdviceTests
 
         Assert.False(coordinator.TryAnswer(open.Id, "retry", null, out var problem));
         Assert.Equal(
-            "question 'q1' of run 'r1' still owes the recommendation it is answered with, and no advisor seeks one between sessions, so nothing was answered; resume-orchestrator seeks it first, and 'abort' is taken now",
+            "question 'q1' of run 'r1' still owes the recommendation it is answered with, so nothing was answered - no advisor seeks one between sessions, and resume-orchestrator r1 seeks it first; "
+                + "answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now",
             problem);
 
         // Nothing was answered: the question is open as it was, its recommendation still owed.
@@ -694,7 +695,8 @@ public sealed class FlowAdviceTests
 
     /// <summary>
     /// A stop while the advisor runs ends it at once - the session does not wait out the advisor's minutes - and its
-    /// question says the recommendation is sought at the resume, which seeks it again.
+    /// question says the recommendation is sought at the resume, which seeks it again. The stop is in the run's state as
+    /// it is applied, so a reader names the resume once the engine has gone, and the resume's records say none.
     /// </summary>
     [Fact]
     public async Task AStopWhileTheAdvisorRuns_EndsIt_AndTheResumeSeeksItAgain()
@@ -703,16 +705,19 @@ public sealed class FlowAdviceTests
         held.TornDown.SetResult();
         var calls = 0;
         var advisor = new Advisor((_, token) => Interlocked.Increment(ref calls) == 1 ? held.AdviseAsync(token) : Task.FromResult(new FlowAdvice("more", "now", null)));
-        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
+        var records = new Records();
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
 
         var session = coordinator.RunAsync(Token);
         await TestEventuallyAsync(() => advisor.Asked.Count == 1);
+        Assert.Null(records.Last!.StoppingSince);
         coordinator.RequestStop();
 
         var end = await session.WaitAsync(Bound, Token);
         var open = coordinator.OpenQuestions.Single();
 
         Assert.Equal(FlowRunStatus.Stopped, end.Status);
+        Assert.NotNull(records.Last!.StoppingSince);
         Assert.True(advisor.Tokens.Single().IsCancellationRequested);
         Assert.Equal(
             new FlowRecommendation("deferred", Why: "the run was stopped while the advisor ran: the recommendation is sought when the run is resumed with this question still open"),
@@ -721,6 +726,7 @@ public sealed class FlowAdviceTests
         end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
         Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Null(records.Last!.StoppingSince);
         Assert.Equal(2, advisor.Asked.Count);
         Assert.Equal("given", coordinator.OpenQuestions.Single().Recommendation.State);
     }
@@ -874,7 +880,9 @@ public sealed class FlowAdviceTests
     /// <summary>
     /// A stop once a pause is complete starts no advice: a question a machine step the pause left running raised as it
     /// drained, its recommendation deferred, is still deferred when the stop has stopped what ran and nothing runs - the
-    /// session ends paused without an advisor started - and the resume seeks it.
+    /// session ends paused without an advisor started - and the resume seeks it. The stop is in the run's state from the
+    /// moment it is taken - so a reader names the resume once the engine has gone, as the engine's own refusal of an answer
+    /// meanwhile does, never the pause's advice - and it stays there past the session's end, which leaves the run.
     /// </summary>
     [Fact]
     public async Task AStopOnceAPauseIsComplete_StartsNoAdvice_ForAQuestionThePauseDeferred()
@@ -935,14 +943,17 @@ public sealed class FlowAdviceTests
         await TestEventuallyAsync(() => coordinator.OpenQuestions.Any(question => question.Kind == "foldConflicts"));
 
         // The stop stops the build, as --all does. While its runner still ends, an answer to the deferred question is
-        // refused naming the resume, which seeks the recommendation: the pause no longer will.
+        // refused naming the resume once the engine has gone, which seeks the recommendation: the pause no longer will.
+        Assert.Null(records.Last!.StoppingSince);
         coordinator.RequestStop();
         await TestEventuallyAsync(() => records.Saw(FlowChangeKind.StopApplied));
         var deferred = coordinator.OpenQuestions.Single();
 
+        Assert.NotNull(records.Last!.StoppingSince);
         Assert.Equal(FlowHandedOver.Refused, await coordinator.OfferAnswerAsync(deferred.Id, "fail", inbox: "e1").WaitAsync(Bound, Token));
         Assert.Equal(
-            ("e1", "question 'q1' still owes the recommendation it is answered with, and no advisor seeks one between sessions, so nothing was answered; resume-orchestrator seeks it first, and 'abort' is taken now"),
+            ("e1", "question 'q1' still owes the recommendation it is answered with, so nothing was answered - the stop under way seeks none, and resume-orchestrator <run> seeks it first once the engine has gone; "
+                + "answer with answer-orchestrator <run> <answer> --question q1 then, and answer-orchestrator <run> abort --question q1 is taken now"),
             (records.Refused.Single().Inbox, records.Refused.Single().Why));
 
         // Once the build's runner has ended, nothing runs.
@@ -950,6 +961,7 @@ public sealed class FlowAdviceTests
         var end = await session.WaitAsync(Bound, Token);
 
         Assert.Equal((FlowRunStatus.Paused, "command", true), (end.Status, end.Pause!.Cause, end.Pause.All));
+        Assert.Equal((1, true), (records.Count(FlowChangeKind.SessionEnded), records.Last!.StoppingSince is not null));
         Assert.Empty(advisor.Asked);
         Assert.Equal(
             new FlowRecommendation("deferred", Why: "the run is pausing, and no reason step is started before its pause is complete: the recommendation is sought then, or when the run is resumed where a stop came first"),
@@ -957,7 +969,9 @@ public sealed class FlowAdviceTests
 
         end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
+        // The resume is no stop: its records say none.
         Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Null(records.Last!.StoppingSince);
         Assert.Equal(["foldConflicts"], advisor.Asked.Select(call => call.Kind));
         Assert.Equal(new FlowRecommendation("given", "retry", null, "advised for foldConflicts", "advisor", "advisor"), coordinator.OpenQuestions.Single().Recommendation);
     }
@@ -1049,7 +1063,8 @@ public sealed class FlowAdviceTests
             deferred.Recommendation);
         Assert.Equal(FlowHandedOver.Refused, await coordinator.OfferAnswerAsync(deferred.Id, "fail", inbox: "e1").WaitAsync(Bound, Token));
         Assert.Equal(
-            ("e1", "q3", "fail", "question 'q3' of run 'r1' still owes the recommendation it is answered with, which the run seeks once its pause is complete, so nothing was answered; answer it then, and 'abort' is taken now"),
+            ("e1", "q3", "fail", "question 'q3' of run 'r1' still owes the recommendation it is answered with, so nothing was answered - the run seeks it once its pause is complete; "
+                + "answer with answer-orchestrator r1 <answer> --question q3 then, and answer-orchestrator r1 abort --question q3 is taken now"),
             (records.Refused.Single().Inbox, records.Refused.Single().Question, records.Refused.Single().Answer, records.Refused.Single().Why));
         Assert.DoesNotContain(advisor.Asked, call => call.Kind == "foldConflicts");
 

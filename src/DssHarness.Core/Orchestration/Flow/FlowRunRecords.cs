@@ -638,7 +638,8 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             snapshot.Pause,
             snapshot.Redirects,
             snapshot.Hold,
-            _context.InputCopies ? true : null);
+            _context.InputCopies ? true : null,
+            snapshot.StoppingSince);
     }
 
     /// <summary>One step's own record, from the coordinator's snapshot of it.</summary>

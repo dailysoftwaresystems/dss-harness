@@ -65,8 +65,8 @@ public sealed record FlowReportThresholds(
 /// <summary>
 /// The records a report is built from, and nothing else: the run's state in one file, its questions and answers, its
 /// plan updates, its events, the closure ledgers of its item agents, the issues it owed a later round and the
-/// definition it ran - all read from the run's own directory, never asked of a model or a host - and how the reader
-/// asked for it.
+/// definition it ran - all read from the run's own directory, never asked of a model or a host - with what its engine is
+/// doing as the reader read them, and how the reader asked for it.
 /// </summary>
 /// <param name="Layout">The run's own paths, where its records and its handoffs are.</param>
 /// <param name="Flow">The run's state, <c>flow.json</c>.</param>
@@ -85,6 +85,12 @@ public sealed record FlowReportThresholds(
 /// <param name="Steps">The instances whose rows alone the steps table keeps; null for every one.</param>
 /// <param name="NextRound">The issues the run owed a later round, <c>next-round.json</c>, each with the item that settled it; null where the run owed none.</param>
 /// <param name="DefinitionWhy">Why the definition could not be read, where the file is there and does not read; null where it reads or is not there.</param>
+/// <param name="Engine">
+/// What the run's engine is doing as the report is asked for (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout, FlowFile)"/>),
+/// which the next step of each open question is named by (<see cref="FlowAnswerRules.NextStepOf"/>): the read and the
+/// analysis read it as they read the records; none for the report a session's end writes, for that session is leaving
+/// the run - and none where it is left out.
+/// </param>
 public sealed record FlowRunReportSource(
     OrchestratorLayout Layout,
     FlowFile Flow,
@@ -98,13 +104,19 @@ public sealed record FlowRunReportSource(
     string? By = null,
     IReadOnlySet<string>? Steps = null,
     FlowNextRoundFile? NextRound = null,
-    string? DefinitionWhy = null);
+    string? DefinitionWhy = null,
+    FlowEngineState? Engine = null)
+{
+    /// <summary>What the run's engine is doing, none where the source names none.</summary>
+    public FlowEngineState EngineOrNone => Engine ?? FlowEngineState.NoEngine;
+}
 
 /// <summary>
 /// The report of a run, built from its records alone (<see cref="FlowRunReport.Of"/>): what the run was and how it
 /// stands, what it spent, one row per step with its waits and its run, the chain of steps a faster run must shorten,
 /// every failed attempt, every question a person answered, what its reviews converged to and the deterministic flags
-/// a reader starts from. The same records give the same bytes - the steps in the order the run made them, every row of
+/// a reader starts from. The same records give the same bytes, the run's engine doing the same (each open question's next
+/// step reads it, <see cref="FlowRunReportSource.Engine"/>) - the steps in the order the run made them, every row of
 /// a list with an id of its own (<c>id</c>: a step's and a link's its instance, a failed attempt's
 /// <c>&lt;instance&gt;@&lt;attempt&gt;</c>, a signal's <c>&lt;kind&gt;#&lt;n&gt;</c>, a question's its own, a dollars
 /// group's its name, a convergence row's its list, the item, step or agent that said it and what it is of), every number in one fixed form, times as the
@@ -1252,7 +1264,7 @@ public static partial class FlowRunReport
 
     /// <summary>What is left for a person, as the session's end answers it - one line each.</summary>
     private static IReadOnlyList<string> LeftForAPerson(FlowRunReportSource source)
-        => FlowReports.LeftForAPerson(source.Layout, source.Flow, source.Questions, source.Updates).ToList();
+        => FlowReports.LeftForAPerson(source.Layout, source.Flow, source.Questions, source.EngineOrNone, source.Updates).ToList();
 
     /// <summary>What the run has spent of its budget, as every document says it.</summary>
     private static JsonObject SpentOf(FlowBudgetRecord spent)

@@ -186,7 +186,9 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
             steps.Add(own);
         }
 
-        var reconciled = file with { Steps = [.. steps], Next = [] };
+        // The resume takes the run up: a stop the session before was ending with has ended with that session, so a reader
+        // of this session's run never reads it as stopping (FlowFile.StoppingSince).
+        var reconciled = file with { Steps = [.. steps], Next = [], StoppingSince = null };
         var handoffs = HandoffsOf(reconciled);
 
         _store.WriteFlow(_layout, reconciled);

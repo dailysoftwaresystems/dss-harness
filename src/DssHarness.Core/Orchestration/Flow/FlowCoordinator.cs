@@ -618,6 +618,13 @@ public sealed class FlowCoordinator
     /// running are stopped as <c>--all</c> stops them, every advice under way is ended, and no advice is started after it.
     /// </summary>
     private volatile bool _stopPastThePause;
+
+    /// <summary>
+    /// When the stop this session ends with was applied - its hard stop (<see cref="ApplyTheStop"/>), or a stop once its
+    /// pause was complete, as the loop takes it - written into <c>flow.json</c> with every change from then on, so a reader
+    /// of the run tells the engine is stopping (<see cref="FlowFile.StoppingSince"/>); null where no stop was applied.
+    /// </summary>
+    private DateTimeOffset? _stoppingSince;
     private FlowPauseRequest? _pauseRequest;
     private FlowPauseState? _pause;
     private readonly FlowBudgetSpent _spent = new();
@@ -1074,6 +1081,7 @@ public sealed class FlowCoordinator
     private void ApplyTheStop()
     {
         _stopApplied = true;
+        _stoppingSince ??= _clock.GetUtcNow();
         _pausing = false;
         DropPauseRequest();
         DeferAdvice("the run was stopped while the advisor ran");
@@ -1205,6 +1213,7 @@ public sealed class FlowCoordinator
         _pausing = false;
         _pauseComplete = false;
         _stopPastThePause = false;
+        _stoppingSince = null;
         _pauseAllAsked = false;
         _alwaysPhase = false;
         _stopApplied = false;
@@ -1332,6 +1341,21 @@ public sealed class FlowCoordinator
                     // A stop asked while the loop was parked - between two waits, or while the handoff turns ran -
                     // is applied here, by the one who owns the graph.
                     ApplyTheStop();
+                }
+
+                if (_stopPastThePause && _stoppingSince is null)
+                {
+                    // A stop once the pause is complete is recorded as it is taken, before anything it stops is touched,
+                    // as the hard stop is: the run's state says the engine is stopping from here on, so a reader names the
+                    // resume - never the pause's advice, which the stop starts none of - as a question's next step. Where
+                    // the pause did not say all, its record is the stop of the machine steps just below; where it did,
+                    // they are stopped already, and the stop is recorded on its own.
+                    _stoppingSince = _clock.GetUtcNow();
+
+                    if (_pause is { All: true } stopped)
+                    {
+                        Record(FlowChangeKind.StopApplied, detail: $"{stopped.Cause}, past the pause");
+                    }
                 }
 
                 if (_pauseAllAsked && _pause is { All: false })
@@ -2476,16 +2500,18 @@ public sealed class FlowCoordinator
 
         // What an answer may be is the one rule answer-orchestrator holds it to as well, over the question's own record
         // of its answers - and a person answers a question recommended: one still owing its recommendation that no
-        // advisor seeks now, between sessions or while a pause defers it, is refused, abort taken. Only a session that is
-        // pausing seeks it later of itself; between sessions, as one begins and where a stop ends it - a stop once the pause
-        // is complete among them, after which the pause starts no advice - the resume does.
+        // advisor seeks now is refused, abort taken, naming the step that seeks it, in the one wording every document of
+        // the run says it in. The engine knows its own state: only a session that is pausing seeks it later of itself;
+        // between sessions and as one begins the resume does, and where a stop ends the session - a stop once the pause is
+        // complete among them, after which the pause starts no advice - the resume once this engine has gone.
+        var step = !OwesAdvice(asked) || AdviceUnderWay(asked) ? FlowNextStep.Answer
+            : !_inSession || _starting ? FlowNextStep.Resume
+            : _hardStop || _stopPastThePause ? FlowNextStep.ResumeOnceGone
+            : _pausing || _pauseRequest is not null ? FlowNextStep.AfterThePause
+            : FlowNextStep.Resume;
+
         problem = FlowAnswerRules.Problem(question, asked.Held, answer, text)
-            ?? FlowAnswerRules.Unrecommended(
-                _runName,
-                question,
-                answer,
-                OwesAdvice(asked) && !AdviceUnderWay(asked),
-                pausing: _inSession && !_starting && !_hardStop && !_stopPastThePause && (_pausing || _pauseRequest is not null));
+            ?? FlowAnswerRules.Unrecommended(_runName, question, answer, step);
 
         if (problem is not null)
         {
@@ -15335,7 +15361,8 @@ public sealed class FlowCoordinator
                 _tally.Count(entry => StateOf(entry)?.StartsWith("duplicate", StringComparison.Ordinal) == true),
                 _tally.Count(entry => entry.State == "unproven")),
             [.. _issues],
-            NextRound: [.. _nextRound]);
+            NextRound: [.. _nextRound],
+            StoppingSince: _stoppingSince);
     }
 
     /// <summary>One instance, as its records read it, what it waits on as the admission walk said it.</summary>

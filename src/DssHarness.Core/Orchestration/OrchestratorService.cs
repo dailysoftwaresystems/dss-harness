@@ -611,16 +611,17 @@ public sealed class OrchestratorService(
 
     /// <summary>
     /// What a run's engine is doing, as its records and its owner say it: none recorded; running; pausing, its handoffs
-    /// being written; recording the machine steps a completed pause left running; or gone - an owner recorded whose
-    /// process has ended.
+    /// being written; recording the machine steps a completed pause left running; stopping, a stop it applied ending its
+    /// session; or gone - an owner recorded whose process has ended.
     /// </summary>
     private FlowEngineState EngineOf(OrchestratorLayout orchestrator, Flow.FlowFile flow)
         => EngineOf(_store, _owner, orchestrator, flow);
 
     /// <summary>
-    /// The one rule of what a run's engine is doing, as <c>list-orchestrator</c> and a run's own facts read it: no owner
-    /// recorded; a live one running the run; pausing, its handoffs being written; recording the machine steps a completed
-    /// pause left running; or gone - an owner recorded whose process has ended.
+    /// The one rule of what a run's engine is doing, as <c>list-orchestrator</c>, a run's own facts and its report read it:
+    /// no owner recorded; a live one running the run; pausing, its handoffs being written; recording the machine steps a
+    /// completed pause left running; stopping, a stop it applied - its hard stop, or a stop once its pause was complete -
+    /// ending its session (<see cref="Flow.FlowFile.StoppingSince"/>); or gone - an owner recorded whose process has ended.
     /// </summary>
     /// <param name="store">Reads the run's owner.</param>
     /// <param name="owner">Tells whether a recorded owner still stands.</param>
@@ -635,7 +636,7 @@ public sealed class OrchestratorService(
 
         if (store.ReadOwner(orchestrator) is not { } held)
         {
-            return new FlowEngineState(FlowEngineState.None, null, []);
+            return FlowEngineState.NoEngine;
         }
 
         if (!owner.Stands(held))
@@ -643,8 +644,14 @@ public sealed class OrchestratorService(
             return new FlowEngineState(FlowEngineState.Gone, owner.Named(held), []);
         }
 
-        // Once the pause is complete, what its record still holds as running is what the pause left to finish: the
-        // machine steps, the only ones a pause lets run on.
+        // A stop the live engine applied is what it does from then on, whatever pause the run is under: it ends its
+        // session with it. Once a pause is complete, what its record still holds as running is what the pause left to
+        // finish: the machine steps, the only ones a pause lets run on.
+        if (flow.StoppingSince is not null)
+        {
+            return new FlowEngineState(FlowEngineState.Stopping, owner.Named(held), []);
+        }
+
         return flow.Pause switch
         {
             { CompletedAt: null } => new FlowEngineState(FlowEngineState.Pausing, owner.Named(held), []),
@@ -781,13 +788,16 @@ public sealed record FlowRunInventory(Flow.FlowFile Flow, Flow.FlowQuestionsFile
 }
 
 /// <summary>What a run's engine is doing, as <c>list-orchestrator</c> says it.</summary>
-/// <param name="State">One of <see cref="None"/>, <see cref="Running"/>, <see cref="Pausing"/>, <see cref="Recording"/> and <see cref="Gone"/>.</param>
+/// <param name="State">One of <see cref="None"/>, <see cref="Running"/>, <see cref="Pausing"/>, <see cref="Recording"/>, <see cref="Stopping"/> and <see cref="Gone"/>.</param>
 /// <param name="Process">The engine's process as a line names it; null where none is recorded.</param>
 /// <param name="LeftRunning">The machine steps a completed pause left running, which the engine stays to record; empty in every other state.</param>
 public sealed record FlowEngineState(string State, string? Process, IReadOnlyList<string> LeftRunning)
 {
     /// <summary>No engine is recorded: the run is between sessions.</summary>
     public const string None = "none";
+
+    /// <summary>No engine recorded, as a command that found none running the run names it.</summary>
+    public static FlowEngineState NoEngine { get; } = new(None, null, []);
 
     /// <summary>A live engine drives the run.</summary>
     public const string Running = "running";
@@ -797,6 +807,13 @@ public sealed record FlowEngineState(string State, string? Process, IReadOnlyLis
 
     /// <summary>The pause is complete, and the live engine stays only to record the machine steps it left running.</summary>
     public const string Recording = "recording";
+
+    /// <summary>
+    /// The live engine applied a stop - the run's hard stop, or a stop once its pause was complete - and ends its session
+    /// with it: what is in flight stopped, every advice ended and none started, so the resume goes on with the run once
+    /// the engine has gone.
+    /// </summary>
+    public const string Stopping = "stopping";
 
     /// <summary>An engine is recorded whose process has ended: what a crash or <c>stop-orchestrator --now</c> leaves, reclaimed by the next session.</summary>
     public const string Gone = "gone";

@@ -211,7 +211,7 @@ public sealed class FlowStatusTests
             """
             run 'r1' (workflow 'flow'), as of 10:10:00Z: paused, for 10m00s; no engine
             running   nothing is running
-            waits     question q1 (ask) since 10:02:00Z: 'dssharness answer-orchestrator r1 <answer> --question q1'
+            waits     question q1 (ask) since 10:02:00Z: answer with 'dssharness answer-orchestrator r1 <answer> --question q1'
                       plan update u1 under way: the run is held while 'plan+2' plans it
                       plan update u2 is recorded and waits for the run to be gone on with
                       hold waits for a claim
@@ -223,13 +223,15 @@ public sealed class FlowStatusTests
     }
 
     /// <summary>
-    /// A question a stop or a crash left owing the recommendation it is answered with waits on the resume, which seeks it
-    /// first, where no engine runs the run - the answer command refuses any answer but abort until then - and on its
-    /// answer where an engine runs it, for the engine weighs an answer handed to it itself; a question recommended waits on
-    /// its answer either way.
+    /// What an open question waits on is its next step, by the one rule of it over what the engine is doing: a question
+    /// still owing the recommendation it is answered with waits on the resume, which seeks it first, where no engine runs
+    /// the run or a gone one - the answer command refuses any answer but abort until then; on its answer, taken now and
+    /// ending the asking, where a live engine's advisor seeks it now; on the pause's advice, then its answer, where a live
+    /// engine's pause defers it; and on the resume once the engine has gone where the live engine is stopping. A question
+    /// recommended waits on its answer whatever the engine does.
     /// </summary>
     [Fact]
-    public void AQuestionOwingItsRecommendation_WaitsOnTheResume_WhereNoEngineRunsTheRun()
+    public void AnOpenQuestion_WaitsOnItsNextStep_ByWhatTheEngineIsDoing()
     {
         var definition = Definition("""
             name: flow
@@ -239,7 +241,7 @@ public sealed class FlowStatusTests
                 question: what now?
                 options: [stay, go]
             """);
-        var flow = File(nameof(FlowRunStatus.Stopped), [Step("gate", nameof(FlowInstanceState.Paused), "pause", started: At(10, 2))]);
+        var flow = File(nameof(FlowRunStatus.Paused), [Step("gate", nameof(FlowInstanceState.Paused), "pause", started: At(10, 2))]);
         FlowQuestionEntry Open(string id, FlowRecommendation recommendation)
             => new(id, "open", "pause", At(10, 2), [], [new FlowQuestionOption("stay", "it stays"), new FlowQuestionOption("go", "it goes")], [], Recommendation: recommendation);
         var questions = new FlowQuestionsFile(
@@ -247,24 +249,38 @@ public sealed class FlowStatusTests
             "r1",
             AsOf,
             [
-                Open("q1", new FlowRecommendation("deferred", Why: "the run was stopped while the advisor ran: the recommendation is sought when the run is resumed with this question still open")),
+                Open("q1", new FlowRecommendation("deferred", Why: "the run is pausing, and no reason step is started before its pause is complete: the recommendation is sought then, or when the run is resumed where a stop came first")),
                 Open("q2", new FlowRecommendation("given", "go", Why: "it is ready", By: "advisor", Agent: "advisor")),
+                Open("q3", new FlowRecommendation("sought", Why: "a recommendation is being sought from the advisor")),
             ]);
-        string[] Waits(FlowEngineState engine)
-            => [.. FlowStatus.Facts(definition, flow, questions, updates: null, engine, AsOf).Where(fact => fact.StartsWith("waits", StringComparison.Ordinal) || fact.StartsWith("          question", StringComparison.Ordinal))];
+        string[] Waits(string engine)
+            => [.. FlowStatus.Facts(definition, flow, questions, updates: null, new FlowEngineState(engine, engine == FlowEngineState.None ? null : "pid 7 on this machine", []), AsOf)
+                .Where(fact => fact.StartsWith("waits", StringComparison.Ordinal) || fact.StartsWith("          question", StringComparison.Ordinal))];
 
-        Assert.Equal(
-            [
-                "waits     question q1 (pause) since 10:02:00Z: its recommendation is still owed - 'dssharness resume-orchestrator r1' seeks it first, and 'dssharness answer-orchestrator r1 abort --question q1' is taken now",
-                "          question q2 (pause) since 10:02:00Z: 'dssharness answer-orchestrator r1 <answer> --question q2'",
-            ],
-            Waits(NoEngine));
-        Assert.Equal(
-            [
-                "waits     question q1 (pause) since 10:02:00Z: 'dssharness answer-orchestrator r1 <answer> --question q1'",
-                "          question q2 (pause) since 10:02:00Z: 'dssharness answer-orchestrator r1 <answer> --question q2'",
-            ],
-            Waits(new FlowEngineState(FlowEngineState.Running, "pid 7 on this machine", [])));
+        const string Answer = "          question q2 (pause) since 10:02:00Z: answer with 'dssharness answer-orchestrator r1 <answer> --question q2'";
+        string Resume(string id, string start)
+            => $"{start}question {id} (pause) since 10:02:00Z: its recommendation is still owed - no advisor seeks one between sessions, and 'dssharness resume-orchestrator r1' seeks it first; "
+                + $"answer with 'dssharness answer-orchestrator r1 <answer> --question {id}' then, and 'dssharness answer-orchestrator r1 abort --question {id}' is taken now";
+
+        foreach (var between in new[] { FlowEngineState.None, FlowEngineState.Gone })
+        {
+            Assert.Equal([Resume("q1", "waits     "), Answer, Resume("q3", "          ")], Waits(between));
+        }
+
+        const string PauseQ1 = "waits     question q1 (pause) since 10:02:00Z: its recommendation is still owed - the run seeks it once its pause is complete; "
+            + "answer with 'dssharness answer-orchestrator r1 <answer> --question q1' then, and 'dssharness answer-orchestrator r1 abort --question q1' is taken now";
+        const string AdvisedQ3 = "          question q3 (pause) since 10:02:00Z: its recommendation is being sought: answer with 'dssharness answer-orchestrator r1 <answer> --question q3', taken now and ending the asking";
+
+        foreach (var live in new[] { FlowEngineState.Running, FlowEngineState.Pausing, FlowEngineState.Recording })
+        {
+            Assert.Equal([PauseQ1, Answer, AdvisedQ3], Waits(live));
+        }
+
+        string OnceGone(string id, string start)
+            => $"{start}question {id} (pause) since 10:02:00Z: its recommendation is still owed - the stop under way seeks none, and 'dssharness resume-orchestrator r1' seeks it first once the engine has gone; "
+                + $"answer with 'dssharness answer-orchestrator r1 <answer> --question {id}' then, and 'dssharness answer-orchestrator r1 abort --question {id}' is taken now";
+
+        Assert.Equal([OnceGone("q1", "waits     "), Answer, OnceGone("q3", "          ")], Waits(FlowEngineState.Stopping));
     }
 
     /// <summary>

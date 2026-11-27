@@ -121,7 +121,7 @@ internal static class ReadOrchestratorReportCommand
 
     internal static Command Create()
     {
-        var command = new Command(Name, "A run's report, built from its records alone - the same bytes for the same records, never a model's words: what the run was and how it stands, what it spent, one row per step with its waits and its run, the chain of steps a faster run must shorten, every failed attempt, every question a person answered, what its reviews converged to, and the deterministic flags a reader starts from. A run still going is said so at the time of its last record, marked partial. Reads only: nothing of the run is written.");
+        var command = new Command(Name, "A run's report, built from its records alone - the same bytes for the same records and the same state of its engine, never a model's words: what the run was and how it stands, what it spent, one row per step with its waits and its run, the chain of steps a faster run must shorten, every failed attempt, every question a person answered, what its reviews converged to, and the deterministic flags a reader starts from. A run still going is said so at the time of its last record, marked partial. Reads only: nothing of the run is written.");
         command.Arguments.Add(RunArgument);
         command.Options.Add(StepsOption);
         command.Options.Add(ByOption);

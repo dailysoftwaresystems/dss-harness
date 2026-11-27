@@ -637,6 +637,14 @@ public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnly
 /// every run this build makes - which its steps read for those inputs in every session (<see cref="FlowRunContext.InputCopies"/>);
 /// left out by a run an older build made, which kept none, and whose steps read each file input as it was given.
 /// </param>
+/// <param name="StoppingSince">
+/// When a stop was applied that the session which applied it ends with - the run's hard stop, or a stop once its pause
+/// was complete - every step in flight stopped, every advice under way ended and none started after it: written as the
+/// stop is applied, before anything it stops is touched, and kept by the session's end, so a reader of a live engine's
+/// run tells a stop under way from a pause whose advice is still to come (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout, FlowFile)"/>);
+/// left out where no stop was applied, and from the next session's first write on - the resume taking the run up writes
+/// it out (<see cref="FlowResume.Load"/>).
+/// </param>
 public sealed record FlowFile(
     int Schema,
     string Run,
@@ -654,7 +662,8 @@ public sealed record FlowFile(
     FlowPauseRecord? Pause = null,
     IReadOnlyList<FlowRedirectRecord>? Redirects = null,
     FlowHoldRecord? Hold = null,
-    bool? InputCopies = null)
+    bool? InputCopies = null,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? StoppingSince = null)
 {
     /// <summary>
     /// The steps the file holds running that are no group's own record, by instance: once a pause is complete, the
@@ -1455,9 +1464,10 @@ public enum FlowChangeKind
     PauseCompleted,
 
     /// <summary>
-    /// A stop of the steps in flight was applied - the run's hard stop, or a safe pause's <c>all</c> asked once the pause
-    /// had begun: recorded as it is applied, before any step it stops is touched, so the run's state says it from then
-    /// on, whatever a runner its drain waits for still does.
+    /// A stop of the steps in flight was applied - the run's hard stop, a safe pause's <c>all</c> asked once the pause
+    /// had begun, or a stop once the pause was complete, which a pause that said all already records on its own: recorded
+    /// as it is applied, before any step it stops is touched, so the run's state says it from then on, whatever a runner
+    /// its drain waits for still does.
     /// </summary>
     StopApplied,
 
@@ -1501,6 +1511,7 @@ public enum FlowChangeKind
 /// Every issue the run owes its next round, whole, where the change holds them: the records write the run's file of
 /// them as they write its listed issues; null where the change says nothing of them.
 /// </param>
+/// <param name="StoppingSince">When the stop the session ends with was applied - its hard stop, or a stop once its pause was complete; null where none was (<see cref="FlowFile.StoppingSince"/>).</param>
 public sealed record FlowSnapshot(
     FlowRunStatus Status,
     DateTimeOffset? EndedAt,
@@ -1514,7 +1525,8 @@ public sealed record FlowSnapshot(
     FlowHoldRecord? Hold = null,
     WorkflowPreExisting? PreExisting = null,
     IReadOnlyList<PreExistingIssue>? Issues = null,
-    IReadOnlyList<FlowNextIssue>? NextRound = null);
+    IReadOnlyList<FlowNextIssue>? NextRound = null,
+    DateTimeOffset? StoppingSince = null);
 
 /// <summary>One step instance as the snapshot holds it: everything its own record and the index say of it.</summary>
 /// <param name="Instance">The instance's id.</param>
