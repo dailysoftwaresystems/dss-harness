@@ -2763,15 +2763,24 @@ public sealed class FlowCoordinator
     /// round opens two work items of one name.
     /// </summary>
     private IReadOnlyList<JsonNode?> OwedItems()
+        => [.. OwedPieces().Select(piece => piece.Item?.DeepClone())];
+
+    /// <summary>
+    /// The pieces plan updates owe the round that opens next, whose items <see cref="OwedItems"/> are: each piece of an
+    /// update done that is owed still, in the order the updates were done, the newest piece a name has superseding every
+    /// older one owed it. The one owner of which piece a round is owed for a name, which the owed items and their kinds
+    /// are read of.
+    /// </summary>
+    private IReadOnlyList<FlowUpdatePiece> OwedPieces()
     {
-        var owed = new Dictionary<string, JsonNode?>(StringComparer.Ordinal);
+        var owed = new Dictionary<string, FlowUpdatePiece>(StringComparer.Ordinal);
 
         foreach (var piece in _updates.Updates
             .Where(update => update.State == FlowUpdateStates.Done)
             .SelectMany(update => update.ThePieces)
             .Where(piece => piece.IsOwed))
         {
-            owed[piece.ItemName() ?? $"piece without a name::{piece.GetHashCode()}"] = piece.Item?.DeepClone();
+            owed[piece.ItemName() ?? $"piece without a name::{piece.GetHashCode()}"] = piece;
         }
 
         return [.. owed.Values];
@@ -4389,7 +4398,8 @@ public sealed class FlowCoordinator
     /// <c>changed</c> and <c>removed</c> against the instance that carries their work item - given the piece's item in
     /// the place of its own where it waits, brought to rest and visited again in its place with its agent where it has
     /// begun, one more work item of the group where it has ended - and nothing where nothing was built: a
-    /// <c>changed</c> piece as an added one, a <c>removed</c> one recorded as needing no step. A <c>told</c> piece
+    /// <c>changed</c> piece as an added one, a <c>removed</c> one recorded as needing no step, the work an earlier update
+    /// owes a round under its name withdrawn with it (<see cref="WithdrawWhatIsOwed"/>). A <c>told</c> piece
     /// carries nothing out. Where the round it joins has not opened, the piece is owed to it, and joins at the check
     /// that opens the round; where the round has ended, it is owed to the loop's next iteration. Each piece is
     /// returned as it was placed, for the update's entry. Placing is made once from the entry, however often it is
@@ -4420,6 +4430,7 @@ public sealed class FlowCoordinator
 
             if (instance is null && piece.Kind == FlowUpdatePieceKinds.Removed)
             {
+                WithdrawWhatIsOwed(update, piece.ItemName()!);
                 placed.Add(piece with { Ended = "nothing was built and nothing is undone" });
                 Record(FlowChangeKind.Answer, detail: $"update {update.Id} withdraws '{piece.ItemName()}', which no instance of the run carries: nothing was built and nothing is undone");
                 continue;
@@ -4516,6 +4527,26 @@ public sealed class FlowCoordinator
 
     /// <summary>How a <c>removed</c> piece against an instance that had not begun ended: withdrawn before it began.</summary>
     private const string WithdrawnEnded = "withdrawn before it began";
+
+    /// <summary>
+    /// Ends, in their own updates' entries, the pieces earlier updates owe a round that has not opened for the work item
+    /// named <paramref name="name"/>, which a <c>removed</c> piece of <paramref name="update"/> withdraws where no instance
+    /// carries it: no round builds it, and each piece says the update that withdrew it - left owed, it would join the
+    /// next round and be built though the plan took it back. A piece whose end is said already keeps what was said, so a
+    /// session that places the update again after a crash ends nothing twice.
+    /// </summary>
+    /// <param name="update">The update whose removed piece withdraws the work.</param>
+    /// <param name="name">The withdrawn work item's name.</param>
+    private void WithdrawWhatIsOwed(FlowUpdateEntry update, string name)
+    {
+        foreach (var owing in _updates.Updates
+            .Where(entry => entry.Id != update.Id && entry.State == FlowUpdateStates.Done && entry.ThePieces.Any(piece => piece.IsOwed && string.Equals(piece.ItemName(), name, StringComparison.Ordinal)))
+            .Select(entry => entry.Id)
+            .ToList())
+        {
+            PutUpdatePiece(owing, name, owed => owed.IsOwed ? owed with { Ended = $"withdrawn by update {update.Id} before it was built" } : owed);
+        }
+    }
 
     /// <summary>Why an instance a <c>removed</c> piece of <paramref name="update"/> withdrew before it began is skipped.</summary>
     private static string WithdrawnBy(string update) => $"withdrawn by update {update} before it began";
@@ -14077,8 +14108,10 @@ public sealed class FlowCoordinator
             // opened; else the round the run reached, where it has one - and the names of the work items the plan had,
             // which a piece that changes or withdraws one names, those of that list among them; the names every instance
             // of the work-item group carries, over every round, which no work item a round builds or an added piece
-            // makes may take, for the run knows a work item by its name alone; and, where this check opens the round, the
-            // items updates owe it, which join its own as one list, and whether the round carries them alone.
+            // makes may take, for the run knows a work item by its name alone; the names of the work items an opened round
+            // holds that nothing owed is to build again, which the rules that read the main tree as it now is pass over;
+            // and, where this check opens the round, the items updates owe it, which join its own as one list, and whether
+            // the round carries them alone.
             var opening = OpeningUnderWay();
 
             if (opening is { Items: var joins })
@@ -14102,8 +14135,22 @@ public sealed class FlowCoordinator
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
 
+            // The items an opened round holds were checked as their round opened, or as the update that placed one in it
+            // was, against the tree of that moment, and are built as they were: a check passes them over where it reads
+            // the main tree as it now is. Never the list the check that raised the update under way was opening its round
+            // with - that round has not opened, no instance carries it, and the check has just found it wanting against
+            // the tree as it now is - nor an item owed to the round that opens next that adds or changes one: that round
+            // builds it as the owed piece has it, so it is held to the tree as every item to be built is. An owed removed
+            // piece builds nothing, and its item is passed over as every removed piece's is.
+            var rebuilt = OwedPieces()
+                .Where(piece => piece.Kind is FlowUpdatePieceKinds.Added or FlowUpdatePieceKinds.Changed)
+                .Select(piece => piece.ItemName())
+                .OfType<string>()
+                .ToHashSet(StringComparer.Ordinal);
+
             read["known"] = FlowValue.Of(new JsonArray([.. known.Select(name => (JsonNode?)name)]));
             read["carried"] = FlowValue.Of(new JsonArray([.. carried.Select(name => (JsonNode?)name)]));
+            read["opened"] = FlowValue.Of(new JsonArray([.. carried.Where(name => !rebuilt.Contains(name)).Select(name => (JsonNode?)name)]));
 
             if (string.Equals(RoundOpenedBy(check, declaredIn), groupPath, StringComparison.Ordinal))
             {

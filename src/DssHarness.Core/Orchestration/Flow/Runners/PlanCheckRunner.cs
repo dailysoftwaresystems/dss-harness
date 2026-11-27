@@ -9,8 +9,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// The <c>validate-plan</c> step: the work items its <c>items</c> yields, checked by <see cref="PlanValidator"/>; its
 /// answer is an output - <c>ok</c>, each problem as a line, and the items it checked - never a failure. The pieces of a
 /// plan update its <c>scope</c> yields are checked with them, and with the items of the round they join, the main tree as
-/// it now is asked of no item a round of the run already holds that the pieces leave as it was
-/// (<see cref="PlanValidator.CheckedBefore"/>); where it opens
+/// it now is asked of every item still to be built and of none an opened round holds that nothing is to build again,
+/// whose names the engine hands the check (<c>opened</c>), nor any a removed piece takes back
+/// (<see cref="PlanValidator.CheckedBefore"/>) - an item of the list the check that opens a round was opening it with,
+/// which raised the update, is held as it is, for that round has not opened; where it opens
 /// a round, it checks one list - its own items and every work item plan updates owe it - and its output <c>items</c> is
 /// that list, so nothing joins a round unchecked. A work item is known by its name across the run, so no item a round
 /// builds but an owed one, and no added piece, takes a name an instance of the work-item group carries already: a round
@@ -103,6 +105,11 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
         // added piece takes one.
         var carried = Names(read, "carried");
 
+        // The names of the work items opened rounds hold that nothing owed is to build again: each was checked as its round
+        // opened, against the tree of that moment, and is passed over where the check reads the main tree as it now is. An
+        // item of a round that has not opened is never among them, whatever list the check is handed it in.
+        var opened = Names(read, "opened");
+
         // The items plan updates owe the round this check opens, where it opens one: they join its own as one list,
         // checked together, and the group expands from what was checked. An owed work item replaces the one of its
         // name the round's own list holds - that list was written before the update that owes this one, and what the
@@ -146,27 +153,31 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
 
             // An owed item may bear the name of one an earlier round carries: a changed or a removed piece names the item
             // it changes or takes back. The round's own items may not, where the round builds them: a round that carries
-            // the owed work alone builds none of them, for the round before built them under those very names.
+            // the owed work alone builds none of them, for the round before built them under those very names. Where it
+            // reads the main tree as it now is, the check holds every item the round builds - its own new items, and the
+            // owed ones that add or change one - and passes over those an opened round holds that it builds not again: an
+            // owed removed piece's, and the own items of a round that carries the owed work alone.
             problems.AddRange(validator.Check(
                 [.. checkedItems],
                 context,
                 place.Run,
                 place.Definition,
                 place.Directories,
-                carried: owedAlone ? [] : [.. carried.Where(name => !owedNames.Contains(name, StringComparer.Ordinal))]));
+                carried: owedAlone ? [] : [.. carried.Where(name => !owedNames.Contains(name, StringComparer.Ordinal))],
+                checkedBefore: PlanValidator.CheckedBefore([.. pieces as JsonArray ?? []], opened)));
         }
         else
         {
-            // An update's check passes over, where it reads the main tree as it now is, every item of the plan's list a
-            // round of the run already holds that its pieces leave as it was: each was checked when its round opened,
-            // against the tree of that moment, and what a fold has made of the tree since is no breach of it.
+            // An update's check passes over, where it reads the main tree as it now is, every item of the plan's list an
+            // opened round holds that nothing is to build again: each was checked when its round opened, against the tree
+            // of that moment, and what a fold has made of the tree since is no breach of it.
             problems.AddRange(validator.Check(
                 [.. items],
                 context,
                 place.Run,
                 place.Definition,
                 place.Directories,
-                checkedBefore: updating ? PlanValidator.CheckedBefore([.. pieces as JsonArray ?? []], round, carried) : null));
+                checkedBefore: updating ? PlanValidator.CheckedBefore([.. pieces as JsonArray ?? []], opened) : null));
         }
 
         IReadOnlyList<JsonNode?>? joinedRound = null;
@@ -175,7 +186,7 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
         {
             if (pieces is JsonArray { Count: > 0 } placed)
             {
-                problems.AddRange(validator.CheckPieces([.. placed], [.. items], round, Names(read, "known"), context, place.Run, place.Definition, place.Directories, out var joined, carried));
+                problems.AddRange(validator.CheckPieces([.. placed], [.. items], round, Names(read, "known"), context, place.Run, place.Definition, place.Directories, out var joined, carried, opened));
                 joinedRound = round is null ? null : joined;
             }
             else
