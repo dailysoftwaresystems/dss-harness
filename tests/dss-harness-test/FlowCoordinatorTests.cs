@@ -2721,7 +2721,7 @@ public sealed class FlowCoordinatorTests
                 + "disarmed as its runner answers) - and never while the step waits on a question; a reason step's handoff turn at a pause is "
                 + "bounded by the workflow's top-level `handoffSeconds`, not by it, and its run at the resume counts anew, while a machine step a "
                 + "pause leaves running keeps its count. Past it the step is stopped as a stop stops one - its runner cancelled, a reason step's minutes "
-                + "counted - and, once its runner has answered, ends `Failed` with 21 whatever it answered, its error saying "
+                + "counted, up to the moment the limit passed however late the loop comes to it (`CountMinutes`) - and, once its runner has answered, ends `Failed` with 21 whatever it answered, its error saying "
                 + "`passed its timeoutMinutes (<n>)`: a machine or leg step runs again by the retry table's row for 21, a reasoning step goes to "
                 + "its handlers and its `onFailure`. A runner that does not end within `PointOfNoReturn.SafePauseDrain` of that stop fails the "
                 + "step all the same, saying so; it goes to its handlers and its `onFailure` and is not retried - of a step of `others`, the "

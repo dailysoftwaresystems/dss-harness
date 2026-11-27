@@ -288,8 +288,9 @@ public static partial class HelpTopics
         builder.AppendLine("of them stopped running again. One that joined while a visit of that fix was diagnosing takes a");
         builder.AppendLine("visit of its own once that visit has fixed it, and one joined to an issue fixed already takes");
         builder.AppendLine("one at once, each reading what that fix did as source.joinedTo; and where the issue it joined");
-        builder.AppendLine("ends without a fix, it is triaged again on its own. Each visit counts");
-        builder.AppendLine("against the run's limits as every step does.");
+        builder.AppendLine("ends without a fix, it is triaged again on its own - as a duplicate is where the triage of the");
+        builder.AppendLine("issue it repeats ends without a decision, its failure passed over, so neither is lost. Each");
+        builder.AppendLine("visit counts against the run's limits as every step does.");
         builder.AppendLine();
         builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");
         builder.AppendLine("may run on, or a map giving each its own - all for the rest, a model's code for one, so a");

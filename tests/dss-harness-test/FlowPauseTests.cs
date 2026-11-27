@@ -2380,8 +2380,9 @@ public sealed class FlowPauseTests
     }
 
     /// <summary>
-    /// A reasoning step's minutes are counted once, at its time limit: the wait for its runner after the stop spends none
-    /// of the run's budget, whatever the runner answers then.
+    /// A reasoning step's minutes are counted once, at its time limit: up to the moment the limit passed, though the clock
+    /// moved a minute past it before the loop took the limit's message, and the wait for its runner after the stop spends
+    /// none of the run's budget, whatever the runner answers then.
     /// </summary>
     [Fact]
     public async Task AReasonStepPastItsTimeLimit_CountsItsMinutesOnce_AtTheLimit()
@@ -2410,7 +2411,10 @@ public sealed class FlowPauseTests
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
-        clock.Advance(TimeSpan.FromMinutes(5));
+
+        // One move past the limit: the clock reads six minutes before the limit's timer fires, so wherever the loop
+        // takes its message, the step's own five are all its minutes.
+        clock.Advance(TimeSpan.FromMinutes(6));
         await limitStopped.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
         clock.Advance(TimeSpan.FromSeconds(60));
         thinking.Done(output: Output("""{"plan": "late"}"""));
