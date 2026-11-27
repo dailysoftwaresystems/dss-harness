@@ -1263,6 +1263,62 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
+    /// A fix that waits for a visit at work on the same issue waits through that visit's failure until what the failure
+    /// does is answered: a visit that ended failed and asks is still at work, so no second visit of the issue is made
+    /// beside it. Answered retry, the issue's next visit is the one waited for, and the waiting fix is taken once that
+    /// one is done - one visit of the issue at a time, three in all, each step its fix was for running again after.
+    /// </summary>
+    [Fact]
+    public async Task AFixWaitingForAVisitWhoseFailureIsAsked_IsTakenOnlyOnceTheAnswerLetsItGo_OneVisitOfTheIssueAtATime()
+    {
+        var definition = Parse(TwoReporters);
+        FlowStepResult Blocked(int asked)
+            => asked == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser", blocks: true)])
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        var mending = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("first", Blocked)
+            .On("second", Blocked)
+            .On("triage", run => Course("fix", run.Issue!.Title))
+            .OnAsync("mend", run => run.Instance == "recover.mend" ? mending.Task : Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)));
+        var said = new Said();
+        var watched = new Watched(said, snapshot => BothTriaged(snapshot)
+            && snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var cancel = TestContext.Current.CancellationToken;
+
+        var session = coordinator.RunAsync(cancel);
+        await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+        Assert.Contains(("triage+2", "the issue 'a hole in the parser' waits for 'recover' to end, which fixes it already for another step it stopped"), said.Details);
+
+        // The first visit's remedy fails: the visit ends failed and asks, and the run pauses on that question alone.
+        _ = mending.TrySetResult(FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the remedy stayed red"));
+        var paused = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, paused.Status);
+        var asked = coordinator.OpenQuestions.Single(question => question.Kind == "failure");
+        Assert.Equal("recover", asked.Instance);
+        Assert.False(coordinator.Instances.ContainsKey("recover+2"));
+        Assert.False(coordinator.Instances.ContainsKey("second+2"));
+        Assert.Equal([("first", null), ("second", null), ("triage", "a hole in the parser"), ("triage+2", "a hole in the parser"), ("recover.mend", null)], runner.Started);
+
+        Assert.True(coordinator.TryAnswer(asked.Id, "retry", out _));
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The retry is the issue's second visit, for the step it was first sent for; the waiting fix the third, after it.
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(
+            [("triage", 2), ("triage+2", 1)],
+            new[] { "recover+2", "recover+3" }.Select(visit => (coordinator.Instances[visit].RaisedBy!.Id, coordinator.Instances[visit].Visit)));
+        Assert.False(coordinator.Instances.ContainsKey("recover+4"));
+        Assert.Equal(["recover.mend", "recover+2.mend", "recover+3.mend"], runner.Started.Select(started => started.Instance).Where(started => started.EndsWith(".mend", StringComparison.Ordinal)));
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["first+2"].State);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["second+2"].State);
+    }
+
+    /// <summary>
     /// A step two issues stop runs again once, after every visit for an issue that stops it has ended: never while one
     /// of them still works, and never a second time when the second ends.
     /// </summary>

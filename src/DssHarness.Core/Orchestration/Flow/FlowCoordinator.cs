@@ -1586,8 +1586,9 @@ public sealed class FlowCoordinator
 
         // An issue a triage answered fix for whose recovery was never raised - it waited for a visit at work, or a crash
         // came between the triage's end and the raise - is given to the recovery now, beside every visit at work, save
-        // one that waits still for a visit the records say is at work.
-        DrainPendingFixes();
+        // one that waits still for a visit the records say is at work: before the session's first admit, which a resume
+        // that finds nothing else to run is refused at, as every pass after it does (Progress).
+        _ = DrainPendingFixes();
 
         // What an update done owes the loop around the round, or the work-item group with no loop around it, is carried
         // from its entry, as the update's end carries it: a crash between the update's done entry and its carry leaves
@@ -3866,9 +3867,9 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Everything the coordinator decides between two events, until nothing more follows: instantiate what its
-    /// dependencies freed, end what its members finished, carry failures to their policies, a stopping run's reach and
-    /// the joins a fix went on without (<see cref="SettleJoins"/>) - and then draw what it all freed and the pass ends
-    /// (<see cref="DrawFreed"/>).
+    /// dependencies freed, end what its members finished, carry failures to their policies, a stopping run's reach, the
+    /// joins a fix went on without (<see cref="SettleJoins"/>) and the fixes that waited for a visit no longer at work
+    /// (<see cref="DrainPendingFixes"/>) - and then draw what it all freed and the pass ends (<see cref="DrawFreed"/>).
     /// </summary>
     private void Progress()
     {
@@ -3887,6 +3888,7 @@ public sealed class FlowCoordinator
             changed |= CarryTheStop();
             changed |= SettleUpdates();
             changed |= SettleJoins();
+            changed |= DrainPendingFixes();
         }
 
         DrawFreed();
@@ -11092,20 +11094,28 @@ public sealed class FlowCoordinator
                 }
             }
         }
-
-        if (IsRecovery(instance) && state is FlowInstanceState.Done or FlowInstanceState.Failed or FlowInstanceState.Skipped or FlowInstanceState.NotRun)
-        {
-            DrainPendingFixes();
-        }
     }
 
     /// <summary>
     /// Gives the recovery each issue a triage answered fix for that waited for a visit at work, once nothing it waits for
     /// is at work any more (<see cref="FixWaitsFor"/>): each in the order its triage ended, beside every visit at work,
-    /// and one that would meet a visit this drain made waits again, for that one.
+    /// and one that would meet a visit this drain made waits again, for that one. A step of every pass
+    /// (<see cref="Progress"/>), read from the run's state alone and never from the event that ended a visit: a visit that
+    /// ended failed is at work until what its failure does is decided (<see cref="FixAtWork"/>) - its question asked and
+    /// not answered, or answered retry, whose next visit is the one waited for - so no issue is given a second visit while
+    /// the first still may go on, and one a visit's answer freed is taken in the pass the answer is. Nothing is given while
+    /// the run pauses or stops: what waits stays the triage's, which the next session reads from its record.
     /// </summary>
-    private void DrainPendingFixes()
+    /// <returns>Whether it gave the recovery any.</returns>
+    private bool DrainPendingFixes()
     {
+        if (_pendingFixes.Count == 0 || _pausing || _stopping || _hardStop)
+        {
+            return false;
+        }
+
+        var taken = false;
+
         foreach (var waiting in _pendingFixes.ToList())
         {
             if (waiting.State != FlowInstanceState.Done)
@@ -11122,7 +11132,10 @@ public sealed class FlowCoordinator
             // Counted being fixed when it ended; now given to the recovery.
             _ = _pendingFixes.Remove(waiting);
             TakeRecoveryOf(waiting);
+            taken = true;
         }
+
+        return taken;
     }
 
     /// <summary>The declaration a scope holds under a name, and one around it where none does.</summary>

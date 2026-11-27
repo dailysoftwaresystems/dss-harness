@@ -264,8 +264,10 @@ public static partial class HelpTopics
         builder.AppendLine("An issue sent to fix is the recovery's at once, its visit beside any other at work - save one a");
         builder.AppendLine("step of a visit of the recovery reported, which waits for that visit to end, for the recovery");
         builder.AppendLine("never calls itself, and one a visit at work fixes already for another step it stopped, which");
-        builder.AppendLine("waits for that visit; a step two issues stop runs again once, after both are settled. From the");
-        builder.AppendLine("moment it is sent to fix until its visit ends, the issue holds the files its triage's where");
+        builder.AppendLine("waits for that visit, or for the one it joined to - so one defect has one fix at a time: a visit");
+        builder.AppendLine("that ended failed is at work until what its failure does is answered, and answered retry, the");
+        builder.AppendLine("fix waits for its next visit; a step two issues stop runs again once, after both are settled.");
+        builder.AppendLine("From the moment it is sent to fix until its visit ends, the issue holds the files its triage's where");
         builder.AppendLine("names - each a path from the repository's root, never a command - and, once a check of its");
         builder.AppendLine("visit has read the remedy items its diagnosis gives, the paths those items own: an instance of");
         builder.AppendLine("the work-item group that has not begun and owns one of them starts once that visit has ended,");

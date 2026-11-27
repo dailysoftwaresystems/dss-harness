@@ -1273,10 +1273,10 @@ public sealed class WorkflowTemplatesTests
 
     /// <summary>
     /// The help, the README and the architecture say when the recovery takes an issue sent to fix - at once, beside any
-    /// other fix at work, save one a step of a visit reported or one a visit at work fixes already - that a step two issues
-    /// stop runs again once, and what an issue being fixed holds: its triage's paths and its remedies', which a work item
-    /// that has not begun waits on, every other going on; and the orchestrators topic says such a wait among what a run
-    /// waits for.
+    /// other fix at work, save one a step of a visit reported or one a visit at work fixes already, which waits through
+    /// that visit's failure until it is answered, one defect one fix at a time - that a step two issues stop runs again
+    /// once, and what an issue being fixed holds: its triage's paths and its remedies', which a work item that has not
+    /// begun waits on, every other going on; and the orchestrators topic says such a wait among what a run waits for.
     /// </summary>
     [Fact]
     public void TheHelpTheReadmeAndTheArchitecture_SayWhenTheRecoveryTakesAnIssue_AndWhatItsFixHolds()
@@ -1286,7 +1286,7 @@ public sealed class WorkflowTemplatesTests
         var architecture = Prose.Document("docs", "architecture.md");
 
         Assert.Contains(
-            "An issue sent to fix is the recovery's at once, its visit beside any other at work - save one a step of a visit of the recovery reported, which waits for that visit to end, for the recovery never calls itself, and one a visit at work fixes already for another step it stopped, which waits for that visit; a step two issues stop runs again once, after both are settled. "
+            "An issue sent to fix is the recovery's at once, its visit beside any other at work - save one a step of a visit of the recovery reported, which waits for that visit to end, for the recovery never calls itself, and one a visit at work fixes already for another step it stopped, which waits for that visit, or for the one it joined to - so one defect has one fix at a time: a visit that ended failed is at work until what its failure does is answered, and answered retry, the fix waits for its next visit; a step two issues stop runs again once, after both are settled. "
                 + "From the moment it is sent to fix until its visit ends, the issue holds the files its triage's where names - each a path from the repository's root, never a command - and, once a check of its visit has read the remedy items its diagnosis gives, the paths those items own: an instance of the work-item group that has not begun and owns one of them starts once that visit has ended, building on the tree the fix leaves,",
             help,
             StringComparison.Ordinal);
@@ -1295,7 +1295,7 @@ public sealed class WorkflowTemplatesTests
             Prose.Words(DssHarness.Core.Help.HelpTopics.Render("orchestrators")),
             StringComparison.Ordinal);
         Assert.Contains(
-            "An issue sent to fix is the recovery's at once, its fix beside any other at work - save one that a step of the recovery itself reported, which waits for that visit to end, and one a fix at work already mends for another step, which waits for that fix; a step two issues stop runs again once, after both are settled.",
+            "An issue sent to fix is the recovery's at once, its fix beside any other at work - save one that a step of the recovery itself reported, which waits for that visit to end, and one a fix at work already mends for another step, which waits for that fix, as one joined to that fix's issue does: one defect has one fix at a time, and a fix whose failure is put to a person is at work until it is answered - on retry, the waiting one waits for its next visit; a step two issues stop runs again once, after both are settled.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1304,6 +1304,10 @@ public sealed class WorkflowTemplatesTests
             StringComparison.Ordinal);
         Assert.Contains(
             "only one that a step of a visit reported waits, for that visit to end - the recovery never calls itself (V50) - and one a visit at work fixes already, for another step it stopped, waits for that visit,",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a waiting fix is taken in the pass that frees it - a step of every pass, read from the run's state and never from the event that ended a visit (`DrainPendingFixes`), held while the run pauses or stops - so it waits through a failure's question, is taken once that is answered otherwise than retry, and on retry waits for the issue's next visit: never two visits of one issue side by side.",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(

@@ -2588,7 +2588,12 @@ triaged after it and names it where it repeats it, and the pair resolves to the 
 An issue a triage sends to fix is the recovery's at once, its visit beside any other at work (`FlowCoordinator.FixOf`):
 only one that a step of a visit reported waits, for that visit to end - the recovery never calls itself (V50) - and one
 a visit at work fixes already, for another step it stopped, waits for that visit, so one defect has one fix at a time and
-the next is diagnosed on the tree the first left (`FixWaitsFor`, the triage's record saying which it waits for). A step
+the next is diagnosed on the tree the first left (`FixWaitsFor`, the triage's record saying which it waits for). A visit
+is at work until it ends, and past a failed end while a person is asked what its failure does (`FixAtWork`); a waiting
+fix is taken in the pass that frees it - a step of every pass, read from the run's state and never from the event that
+ended a visit (`DrainPendingFixes`), held while the run pauses or stops - so it waits through a failure's question, is
+taken once that is answered otherwise than retry, and on retry waits for the issue's next visit: never two visits of
+one issue side by side. A step
 two issues stop runs again once (`RunTheReporterAgain`): after every issue that stops it is settled - no triage of one
 still to answer, no fix of one waiting or at work - where a visit fixed one, sent back by the visit that ended last;
 never while a fix of another still works, and never twice. `{run.preExisting}` says each issue in the place it was taken,

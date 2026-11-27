@@ -719,7 +719,9 @@ together the later names the earlier, and neither is lost.
 
 An issue sent to fix is the recovery's at once, its fix beside any other at work - save one that a step of the
 recovery itself reported, which waits for that visit to end, and one a fix at work already mends for another step,
-which waits for that fix; a step two issues stop runs again once, after both are settled. While it is being fixed, the
+which waits for that fix, as one joined to that fix's issue does: one defect has one fix at a time, and a fix whose
+failure is put to a person is at work until it is answered - on retry, the waiting one waits for its next visit; a
+step two issues stop runs again once, after both are settled. While it is being fixed, the
 issue holds the files its triage names (never a command it names) and, once its diagnosis is checked, the files its
 remedy items own: a work item that has not begun and owns one of them starts once that fix is done, building on the
 tree it leaves, and `ask-orchestrator-status` says what it waits for; every other item goes on at once. The planner
