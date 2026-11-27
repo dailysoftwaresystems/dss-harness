@@ -8,9 +8,12 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// "Pre-existing issues"). From the moment a triage sends an issue to fix until the recovery's visit for it ends, the
 /// issue holds the files its triage's <c>where</c> names - each entry that is a path from the repository's root, never
 /// the command an issue may be in instead - and, once a check of that visit has read the remedy items its diagnosis gives,
-/// every path those items own. A work item that owns any of them, or that names the issue among those whose fix it needs
-/// (<c>needs</c>), and has not begun starts once that visit has ended, so it builds on the tree the fix leaves and never
-/// writes the fix's lines beside it; every other goes on at once. Every path is read from the repository's root, as the
+/// every path those items own. An issue joined to one still being triaged holds no file yet - the issue it joined holds
+/// none before its triage sends it to fix - and is held under that triage. A work item that owns any of the files, or
+/// that names the issue among those whose fix it needs (<c>needs</c>), and has not begun starts once that visit has ended
+/// - one that needs an issue joined to another still being triaged once that triage has ended, and then the visit of the
+/// fix it goes with - so it builds on the tree the fix leaves and never writes the fix's lines beside it; every other
+/// goes on at once. Every path is read from the repository's root, as the
 /// plan's check reads an item's (<see cref="GlobPattern.FromRoot"/>): a root-level file a fix holds meets the item that
 /// owns that file, and no other. The engine says which issues are being fixed and when an item has begun; this says
 /// what each holds and what an item meets.
@@ -42,7 +45,7 @@ public sealed class FlowIssueHold
     /// <summary>The issue's title, as its triage gave it: what a step held for it says it waits for.</summary>
     public string Title { get; }
 
-    /// <summary>The id of what fixes it: the recovery's visit at work on it, or the triage that sent it while that visit waits to be made.</summary>
+    /// <summary>The id of what fixes it: the recovery's visit at work on it, the triage that sent it while that visit waits to be made, or - for an issue joined to one still being triaged - that one's triage.</summary>
     public string Fixer { get; }
 
     /// <summary>Every path it holds, as written: each path of its triage's <c>where</c>, then each pattern a remedy item of its visit owns.</summary>
@@ -57,7 +60,7 @@ public sealed class FlowIssueHold
     /// <param name="issue">The issue's id.</param>
     /// <param name="title">The issue's title.</param>
     /// <param name="fixer">The id of what fixes it.</param>
-    /// <param name="where">The triage's <c>where</c>: a list of texts, or one text; anything else names nothing.</param>
+    /// <param name="where">The triage's <c>where</c>: a list of texts, or one text; anything else names nothing - null for an issue joined to one still being triaged, which holds no file yet.</param>
     /// <param name="remedies">The remedy items the checks of its visit read; none before its diagnosis is checked.</param>
     /// <param name="directories">
     /// Whether a path from the repository's root names a directory of the main tree (<see cref="GlobPattern.DirectoriesIn"/>):

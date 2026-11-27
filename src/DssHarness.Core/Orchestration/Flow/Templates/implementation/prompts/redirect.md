@@ -10,7 +10,8 @@ give settles them too - each with its id, title, description, where and proof; e
 
 - **fix**, where their answer leads to a change the run makes: the work items, at most four, each sized to one
   builder's cycle, with the paths it owns, the tests that show the failure is gone - or, where no test can, why in
-  noTests - and its definition of done, of which the first statement is that `{source.step}` would now pass. Each item
+  noTests - and its definition of done, by the rule for a definition of done below, the run's base commit being
+  `{orient.startCommit}`, of which the first statement is that `{source.step}` would now pass. Each item
   that changes a decision gives its class - its one home, its sites, its searches, its universe, which answers every
   axis with its values or why it does not apply - and one that decides none says why in noClass. A machine check reads
   the items as you give them, before any is built, and tells you here what it refuses, to settle in the answer you give
@@ -27,6 +28,10 @@ Never weaken what found the failure to make it pass.
 
 The course; a summary that says what the person decided and what follows; the cause; the evidence; the work items
 where the course is fix, empty otherwise; the choices where the course is person, empty otherwise.
+
+## A definition of done
+
+{text.done}
 
 ## Issues that were there before
 

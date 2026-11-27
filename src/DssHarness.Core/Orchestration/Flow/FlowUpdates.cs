@@ -71,8 +71,9 @@ public static class FlowWorkItems
     /// <summary>
     /// The ids of the issues whose fix the work item <paramref name="item"/> needs, as its <c>needs</c> names them - each
     /// as <c>{run.preExisting}</c> words an issue, each once, in its order; none where it names none. The one reading of
-    /// the member, which the plan's check holds to the issues the run is fixing or fixed and the engine holds the item
-    /// by until each fix has ended (<see cref="FlowIssueHold.NeededBy"/>); an entry that is not a text that is not blank
+    /// the member, which the plan's check holds to the issues the recovery takes - being fixed or fixed, or joined to one
+    /// still being triaged - and the engine holds the item by until each fix has ended (<see cref="FlowIssueHold.NeededBy"/>);
+    /// an entry that is not a text that is not blank
     /// reads as none.
     /// </summary>
     /// <param name="item">The work item, as a plan, a piece or an instance of the work-item group holds it.</param>

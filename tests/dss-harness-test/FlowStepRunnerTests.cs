@@ -832,10 +832,11 @@ public sealed class FlowStepRunnerTests : IDisposable
     }
 
     /// <summary>
-    /// The plan check holds an item's <c>needs</c> to the issues the recovery is fixing or fixed whose ids the engine hands
-    /// it (<c>fixes</c>): an item that needs one of them passes, its items kept as they were; one that names an issue the
-    /// recovery takes no fix of is refused, for the engine would hold it for no fix; and a check handed none - a
-    /// recovery's - refuses every need.
+    /// The plan check holds an item's <c>needs</c> to the issues the recovery takes whose ids the engine hands it
+    /// (<c>fixes</c>): an item that needs one of them passes, its items kept as they were; one that names an issue the
+    /// recovery takes no fix of is refused, for the engine would hold it for no fix - where the engine hands no issue as
+    /// well; and a check handed none at all - a recovery's - refuses every need with the true reason, that its items are
+    /// never held for a fix, never that the issue is not one the run is fixing.
     /// </summary>
     [Fact]
     public async Task ThePlanCheck_HoldsAnItemsNeedsToTheIssuesTheRecoveryFixes()
@@ -866,18 +867,22 @@ public sealed class FlowStepRunnerTests : IDisposable
 
         Assert.Empty(await ProblemsAsync(new JsonArray(Item("around"), needing.DeepClone()), new JsonArray("triage", "triage+2")));
         Assert.Equal(
-            ["the item 'build-on-what-is-not-fixed' needs the fix of 'pe-1', which is not an issue the run is fixing or has fixed"],
+            ["the item 'build-on-what-is-not-fixed' needs the fix of 'pe-1', which is not an issue the run is fixing or has fixed, nor one joined to an issue it is still triaging"],
             await ProblemsAsync(new JsonArray(needing.DeepClone(), stranger.DeepClone()), new JsonArray("triage+2")));
         Assert.Equal(
-            ["the item 'build-on-the-fix' needs the fix of 'triage+2', which is not an issue the run is fixing or has fixed"],
+            ["the item 'build-on-the-fix' needs the fix of 'triage+2', which is not an issue the run is fixing or has fixed, nor one joined to an issue it is still triaging"],
+            await ProblemsAsync(new JsonArray(needing.DeepClone()), []));
+        Assert.Equal(
+            ["the item 'build-on-the-fix' needs the fix of 'triage+2', and the items this check reads need no fix: only an item a round opens with is held for one, and a recovery's remedy never is"],
             await ProblemsAsync(new JsonArray(needing.DeepClone()), null));
     }
 
     /// <summary>
     /// A check handed the issues the run owes its next round and the round a plan update's pieces join holds the list that
-    /// round opens with to them - the round's own items, less the one a changed piece names, with the pieces' items - and
-    /// not the plan's own list: an issue an item of the round settles is settled though no item of the plan names it, and
-    /// one only the plan's list settles is not, for the round would open without it.
+    /// round opens with to them - the round's own items, less the one a changed piece names, with the pieces' items, or
+    /// the round's own items alone where the update answers no piece - and not the plan's own list: an issue an item of
+    /// the round settles is settled though no item of the plan names it, and one only the plan's list settles is not, for
+    /// the round would open without it, whether the update gives a piece or none.
     /// </summary>
     [Fact]
     public async Task ACheckHandedTheRoundAnUpdateJoins_HoldsThatRoundsListToTheOwedIssues()
@@ -889,13 +894,13 @@ public sealed class FlowStepRunnerTests : IDisposable
         settling["settles"] = "nx-1";
         var moved = Item("two", "src/moved/**");
 
-        async Task<IReadOnlyList<string>> ProblemsAsync(JsonArray items, JsonArray round)
+        async Task<IReadOnlyList<string>> ProblemsAsync(JsonArray items, JsonArray round, bool pieces = true)
         {
             var result = await runner.RunAsync(
                 Run(step, repository.Path, new Dictionary<string, FlowValue>
                 {
                     ["items"] = FlowValue.Of(items),
-                    ["scope"] = FlowValue.Of(new JsonArray(Piece("changed", (JsonObject)moved.DeepClone()))),
+                    ["scope"] = FlowValue.Of(pieces ? new JsonArray(Piece("changed", (JsonObject)moved.DeepClone())) : new JsonArray()),
                     ["round"] = FlowValue.Of(round),
                     ["known"] = FlowValue.Of(new JsonArray("one", "two", "settle-the-parser")),
                     ["settleable"] = FlowValue.Of(new JsonArray("nx-1")),
@@ -914,14 +919,22 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.Equal(
             ["the issue 'nx-1' (a defect in the parser) is owed the next round, and no work item settles it"],
             await ProblemsAsync(new JsonArray(settling.DeepClone(), moved.DeepClone()), new JsonArray(Item("two", "src/two/**"))));
+
+        // An update that answers no piece leaves the round's own list as it opens: the round's item settles the issue, and
+        // an item of the plan alone does not.
+        Assert.Empty(await ProblemsAsync(new JsonArray(Item("one")), new JsonArray(settling.DeepClone(), Item("two", "src/two/**")), pieces: false));
+        Assert.Equal(
+            ["the issue 'nx-1' (a defect in the parser) is owed the next round, and no work item settles it"],
+            await ProblemsAsync(new JsonArray(settling.DeepClone(), Item("one")), new JsonArray(Item("two", "src/two/**")), pieces: false));
     }
 
     /// <summary>
     /// A plan check handed the ids of the issues the run owes and not the issues to hold its items to - the plan's, once
     /// the round its plan opens is no longer the next - takes an item that settles one, refuses one that names an issue
     /// the run does not owe, and demands nothing: an owed issue no item of it settles is no problem of its, and its items
-    /// keep their order, for the round's own check holds the round to them. A check handed neither - a recovery's -
-    /// refuses every settles.
+    /// keep their order, for the round's own check holds the round to them. A check handed an empty list refuses every
+    /// settles as naming no owed issue; one handed neither - a recovery's - refuses every settles with the true reason,
+    /// that its items settle no issue.
     /// </summary>
     [Fact]
     public async Task APlanCheckHandedTheOwedIds_TakesAnItemThatSettlesOne_AndDemandsNothing()
@@ -961,6 +974,17 @@ public sealed class FlowStepRunnerTests : IDisposable
             ["the item 'settle-what-it-owes-not' settles 'nx-9', which is not an issue the run owes its next round"],
             [.. refused.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
 
+        var owingNone = await runner.RunAsync(
+            Run(step, repository.Path, new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(new JsonArray(Item("around"), settling.DeepClone())), ["settleable"] = FlowValue.Of(new JsonArray()) }),
+            Token);
+
+        Assert.True(owingNone.Passed, owingNone.Error);
+        Assert.False((bool)owingNone.Output!["ok"]!);
+        Assert.Equal(
+            ["the item 'settle-the-parser' settles 'nx-1', which is not an issue the run owes its next round"],
+            [.. owingNone.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+
+        // A check handed no ids at all - a recovery's - says the true reason: its items settle no issue.
         var unowed = await runner.RunAsync(
             Run(step, repository.Path, new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(new JsonArray(Item("around"), settling.DeepClone())) }),
             Token);
@@ -968,7 +992,7 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.True(unowed.Passed, unowed.Error);
         Assert.False((bool)unowed.Output!["ok"]!);
         Assert.Equal(
-            ["the item 'settle-the-parser' settles 'nx-1', which is not an issue the run owes its next round"],
+            ["the item 'settle-the-parser' settles 'nx-1', and the items this check reads settle no issue: only an item a round opens with settles one the run owes its next round, and a recovery's remedy never does"],
             [.. unowed.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
     }
 

@@ -723,7 +723,9 @@ reasoning step that names one is told, at the end of its prompt, every issue the
 each one's id, what became of it, its title and where it is - and reports one again only where it stops its own work;
 the triage is told those taken before its own, and names by its id the issue its own repeats or whose root cause it
 shares - never one taken after it, which is triaged after it and names it where it repeats it, so of two raised
-together the later names the earlier, and neither is lost.
+together the later names the earlier, and neither is lost. A duplicate is settled by what becomes of the issue it
+repeats - a step it stops runs again once that issue is settled - save one met after its fix was done: the fix did not
+hold, the triage is told so, and its issue is fixed again.
 
 An issue sent to fix is the recovery's at once, its fix beside any other at work - save one that a step of the
 recovery itself reported, which waits for that visit to end, and one a fix at work already mends for another step,
@@ -739,7 +741,9 @@ what is beneath it only where it names a directory - one the tree holds, or one 
 anchored there too, `**` for any depth, so a root-level file such as `Makefile` or `pyproject.toml` meets no other
 path and keeps only the item that owns it waiting. The planner and the self-audit are told the same, once, by the
 workflow's text `fixes` (`fixes.md`): no work item fixes an issue being fixed, or rewrites its lines, and an item that
-needs its fix names it; the plan's check refuses a `needs` that names no issue the recovery is fixing or fixed.
+needs its fix names it; the plan's check refuses a `needs` that names no issue the recovery is fixing or fixed, nor
+one joined to an issue still being triaged - an item that needs one of those waits for that triage, and then for the
+fix it goes with - and a recovery's check refuses every `needs`, for its remedies are never held for a fix.
 
 Issues of one root cause take one fix: a triage that finds its issue's cause is that of an issue taken before it,
 being triaged, being fixed or fixed, answers `join` with that issue's id. Joined to one being triaged or being fixed,

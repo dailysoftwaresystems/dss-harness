@@ -70,12 +70,15 @@ public sealed record FlowPreExistingReport(string Title, string Description, str
     /// repeat worded differently raises no triage of its own. A triage is given those it may name - each taken before its
     /// own - with the ids of those it may join - being triaged, being fixed or fixed already - so it names the issue its
     /// own repeats in <c>duplicates</c>, or the one whose root cause its own shares in <c>joins</c>, by its id, and never
-    /// one its answer would be refused for. Null where the run holds none it may be told, and the prompt is as its
-    /// template fills.
+    /// one its answer would be refused for: told, as the engine settles it, that what becomes of the issue it repeats
+    /// settles its own - its reporter running again once that issue's fix ends - and which of them were fixed before its
+    /// issue was met, a fix that did not hold, whose repeat is fixed again rather than a duplicate. Null where the run
+    /// holds none it may be told, and the prompt is as its template fills.
     /// </summary>
     /// <param name="held">Each issue the step may be told, as <c>{run.preExisting}</c> words it: its id, what became of it, then its title and where it is.</param>
     /// <param name="joinable">For a triage, the ids of the issues it may join; null for a step that reports issues.</param>
-    public static string? Known(IReadOnlyList<string> held, IReadOnlyList<string>? joinable = null)
+    /// <param name="fixedBefore">For a triage, the ids of the issues among those it is told whose fix was done before its issue was met; none for a step that reports issues.</param>
+    public static string? Known(IReadOnlyList<string> held, IReadOnlyList<string>? joinable = null, IReadOnlyList<string>? fixedBefore = null)
         => held.Count == 0
             ? null
             : joinable is null
@@ -84,7 +87,10 @@ public sealed record FlowPreExistingReport(string Title, string Description, str
                     + $"\nReport none of these again under preExisting, however you would word it, unless it stops your own work: a step of the run holds each one already.\n</{KnownTag}>\n"
                 : $"\n\n<{KnownTag}>\nThe issues that were there before this run which it took before yours, each with its id, what became of it, its title and where it is - one taken after yours is triaged after it, and names yours where it repeats it:\n\n"
                     + string.Concat(held.Select(line => $"- {line}\n"))
-                    + "\nWhere yours is one of these, the course is duplicate, and duplicates names its id. "
+                    + "\nWhere yours is one of these, the course is duplicate, and duplicates names its id: what that one's triage decides settles yours, and where it fixes it, a step yours stops runs again once that fix has ended. "
+                    + (fixedBefore is not { Count: > 0 }
+                        ? string.Empty
+                        : $"The fix of {string.Join(", ", fixedBefore)} was done before yours was met: where yours is one of those, that fix did not hold, and the course is fix, never duplicate - the run fixes it again. ")
                     + (joinable.Count == 0
                         ? "No issue taken before yours is being triaged, being fixed or fixed, so yours joins none."
                         : $"Where yours is another issue whose root cause is that of one taken before it that is being triaged, being fixed or fixed - {string.Join(", ", joinable)} - the course is join, and joins names that one's id: its fix is that issue's, which settles both; where that fix is done already, yours is given a fix of its own, told what that one did.")

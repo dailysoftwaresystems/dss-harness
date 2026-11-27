@@ -29,7 +29,7 @@ public static class WorkflowKeys
         new("priority", $"the run's priority in the machine's dispatch queue, which multiplies its share of the machine, a whole number from {Execution.DispatchOrder.LeastPriority}; absent, {Execution.DispatchOrder.LeastPriority}"),
         new("budget", "what a whole run's reasoning may cost, and the reserve that pauses the run first") { Keys = Budget },
         new("recommendations", "the file holding the repository's bar for recommendations, in this directory"),
-        new("texts", "the workflow's texts: each name a markdown file in this directory, read in a prompt as {text.<name>}; the shipped flow declares its recommendations, its closure, its rule for a definition of done and what a step does with an issue that was there before the run here"),
+        new("texts", $"the workflow's texts: each name a markdown file in this directory, read in a prompt as {{text.<name>}}; the shipped flow declares {ShippedTextsSaid} here"),
         new("advisor", "the agent that recommends an answer to a question the engine raises itself") { Keys = Advisor },
         new("reporter", "the agent that words what a run is doing for a person who asks") { Keys = Reporter },
         new("amend", "everything the workflow says about a request amended, or an answer changed, while a run works") { Keys = Amend },
@@ -41,6 +41,19 @@ public static class WorkflowKeys
         new("recover", "the steps a step gives its failure to where it says onFailure: recover: they find what went wrong and put it right") { Keys = Recover },
         new("codebaseGraph", "the shape of the run's one codebase graph, which every graphify-codebase step syncs; absent, every default") { Keys = CodebaseGraph },
     ];
+
+    /// <summary>
+    /// Every text the shipped flow declares, as the <c>texts</c> key's help names them - each name with its file, read
+    /// from the shipped definition itself (<see cref="WorkflowTemplates.ShippedTexts"/>), so a text added there is one
+    /// help names, and none it no longer declares is named.
+    /// </summary>
+    private static string ShippedTextsSaid
+        => WorkflowTemplates.ShippedTexts.Select(text => $"{text.Name} ({text.File})").ToArray() switch
+        {
+            [] => "none",
+            [var one] => one,
+            var all => $"{string.Join(", ", all[..^1])} and {all[^1]}",
+        };
 
     /// <summary>What the <c>codebaseGraph</c> section takes.</summary>
     public static IReadOnlyList<KeyDescription> CodebaseGraph =>

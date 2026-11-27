@@ -18,9 +18,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="HandledBy">The handler that took its failure, where one did.</param>
 /// <param name="EndedAt">When it ended; null while it has not.</param>
 /// <param name="Work">
-/// What it checks where its id alone does not say: within a visit of the recovery, the failure or the issue that visit
-/// takes - visits for different issues hold steps of one id but for the visit - so a later visit's green stands for this
-/// check only where it checks the same; null outside every visit.
+/// What it checks where its id alone does not say: within a visit of the recovery, what that visit puts right - the
+/// failure, or the issue, whichever step reported it and whatever visit of it this is, by the one reading of the thread a
+/// diagnostician's work goes on in - for visits for different issues hold steps of one id but for the visit, so a later
+/// visit's green stands for this check only where it checks the same; null outside every visit.
 /// </param>
 public sealed record FlowCheck(
     string Instance,

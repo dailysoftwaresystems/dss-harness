@@ -23,8 +23,9 @@ built, and what must be measured first:
 
 An empty list means none is owed. Each issue listed becomes a work item of the round, listed and started first, built
 beside the rest - no other item may need its result - naming the issue it settles in `settles` by its id exactly:
-where no item of the plan settles it yet, add one as an `added` piece, built to the issue's size, with its class or,
-where its fix decides nothing, why in noClass. The round's check refuses a round whose items leave one unsettled.
+where no item of the round's list settles it yet - the list the round opens with, in the work below, and the plan's
+items while no round has opened - add one as an `added` piece, built to the issue's size, with its class or, where its
+fix decides nothing, why in noClass. The round's check refuses a round whose items leave one unsettled.
 
 ## The request as it now reads
 
@@ -97,10 +98,16 @@ where; empty where none is:
 
 The whole plan, in the form of every plan of this run: its summary, which now also says in a sentence what the change
 was and what it did to the plan; its definition of done, changed where the change reaches it; its source and its
-departures as before; the items as they now are, each with its definition of done; and `scope`.
+departures as before; the items as they now are, each with its definition of done; and `scope`. Every statement of a
+definition of done you add or change - the plan's, an item's, a piece's - is written by the rule for a definition of
+done below, the run's base commit being `{orient.startCommit}`.
 
 The plan is checked, audited and put to approval again before anything of it is carried out or anyone is told.
 Until then the work under way goes on with the plan as it was.
+
+## A definition of done
+
+{text.done}
 
 ## Issues that were there before
 
