@@ -983,7 +983,8 @@ public sealed class FlowResumeTests
     /// <summary>
     /// The help, the README and the architecture say what a resume compares, as the rule does: what the repository's
     /// entry and the run's frozen definition say, each as this build reads it - a run an earlier release began no change,
-    /// a key retired since read and ignored, and the digest <c>flow.json</c> holds kept as the record of what it began with.
+    /// a key retired since read and ignored, a key reshaped since read as this build reads the same words, and the digest
+    /// <c>flow.json</c> holds kept as the record of what it began with.
     /// </summary>
     [Fact]
     public void TheHelpTheReadmeAndTheArchitecture_SayAResumeComparesWhatEachDefinitionSays()
@@ -994,7 +995,8 @@ public sealed class FlowResumeTests
 
         Assert.Contains(
             $"the entry and the run's frozen {OrchestratorLayout.DefinitionFileName} are compared each as this build reads it, so a run an earlier release began, which wrote its definition its own way, "
-                + "is no change, a key retired since that it froze is read and ignored, and the digest its flow.json holds stays the record of what it began with",
+                + "is no change, a key retired since that it froze is read and ignored, a key reshaped since is read in the shape it froze as this build reads the same words, "
+                + "and the digest its flow.json holds stays the record of what it began with",
             help,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1003,6 +1005,7 @@ public sealed class FlowResumeTests
             StringComparison.Ordinal);
         Assert.Contains($"(`{nameof(FlowResume)}.{nameof(FlowResume.RefuseAChangedDefinition)}` over `{nameof(FlowRunContext)}.{nameof(FlowRunContext.DigestOf)}`)", architecture, StringComparison.Ordinal);
         Assert.Contains($"(`{nameof(FrozenDefinition)}.{nameof(FrozenDefinition.Retired)}`: the advisor's `kinds`, the codebase graph's `maxFileBytes`)", architecture, StringComparison.Ordinal);
+        Assert.Contains($"(`{nameof(FrozenDefinition)}.{nameof(FrozenDefinition.Reshaped)}`: a sweep's `arms`, a test step's `filter`)", architecture, StringComparison.Ordinal);
         Assert.Contains($"compared there (`{nameof(FlowResume)}.{nameof(FlowResume.Said)}`)", architecture, StringComparison.Ordinal);
     }
 

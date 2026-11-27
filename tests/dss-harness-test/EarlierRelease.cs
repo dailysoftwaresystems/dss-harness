@@ -71,6 +71,62 @@ internal static class EarlierRelease
     }
 
     /// <summary>
+    /// <paramref name="frozen"/> with every step's <c>arms</c> in the shape an earlier release wrote it in: a list of the
+    /// arm ids, written on every step after its <c>inputs</c> - empty on each that named none - where this build writes the
+    /// list a step names as a list key's value and leaves out the arms of one that names none.
+    /// </summary>
+    /// <param name="frozen">The definition as this build froze it.</param>
+    public static JsonObject WithArmsListed(JsonObject frozen)
+    {
+        var earlier = frozen.DeepClone().AsObject();
+        var listed = 0;
+
+        foreach (var step in Steps(earlier).ToList())
+        {
+            if (step["arms"] is JsonObject arms)
+            {
+                // That release wrote the ids out; an expression yielding them is this build's alone.
+                Assert.Null(arms["expression"]);
+                step["arms"] = arms["written"]!.DeepClone();
+                listed++;
+            }
+            else
+            {
+                step.Insert(step.IndexOf("inputs") + 1, "arms", new JsonArray());
+            }
+        }
+
+        // A form that changed nothing would let a test pass over the definition it meant to change.
+        Assert.NotEqual(0, listed);
+        return earlier;
+    }
+
+    /// <summary>
+    /// <paramref name="frozen"/> with every test step's <c>filter</c> in the shape an earlier release wrote it in: the one
+    /// text the file gave, where this build writes the expression a scalar filter is as a list key's value.
+    /// </summary>
+    /// <param name="frozen">The definition as this build froze it.</param>
+    public static JsonObject WithFilterText(JsonObject frozen)
+    {
+        var earlier = frozen.DeepClone().AsObject();
+        var texts = 0;
+
+        foreach (var step in Steps(earlier).Where(step => step["filter"] is not null).ToList())
+        {
+            var filter = step["filter"]!.AsObject();
+
+            // That release's filter was one text; a list written out is this build's alone.
+            Assert.Empty(filter["written"]!.AsArray());
+            step["filter"] = filter["expression"]!.DeepClone();
+            texts++;
+        }
+
+        // A form that changed nothing would let a test pass over the definition it meant to change.
+        Assert.NotEqual(0, texts);
+        return earlier;
+    }
+
+    /// <summary>
     /// Writes <paramref name="earlier"/> as the run's <c>definition.json</c>, and in its <c>flow.json</c> the digest the
     /// earlier release recorded of it - the SHA-256 of the definition as that release wrote it, its path left empty.
     /// </summary>
@@ -91,6 +147,13 @@ internal static class EarlierRelease
 
         return digest;
     }
+
+    /// <summary>
+    /// Every step in <paramref name="frozen"/>, at any depth: each item of a <c>steps</c> list - the flow's, a group's, a
+    /// recovery's, a use's recovery's.
+    /// </summary>
+    private static IEnumerable<JsonObject> Steps(JsonObject frozen)
+        => Objects(frozen).SelectMany(owner => owner["steps"] is JsonArray steps ? steps.OfType<JsonObject>() : []);
 
     /// <summary>Every object in <paramref name="node"/>, itself first, at any depth.</summary>
     private static IEnumerable<JsonObject> Objects(JsonNode? node)

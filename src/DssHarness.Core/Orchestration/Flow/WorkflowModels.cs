@@ -1064,7 +1064,8 @@ public sealed record WorkflowStep
     /// <summary>
     /// The test units a test step runs - each a value its legs' runner's filter option takes - written out, or an
     /// expression that yields them, read where the step starts: the tests any of them names run, and a filter that reads
-    /// none runs no test. Absent, every test of its legs runs.
+    /// none runs no test. Absent, every test of its legs runs. The one text a frozen definition of an earlier release
+    /// holds is read there as the expression that scalar is (<see cref="FrozenDefinition.Reshaped"/>).
     /// </summary>
     public FlowList? Filter { get; init; } = null;
 
@@ -1108,7 +1109,11 @@ public sealed record WorkflowStep
     /// <summary>The values a <c>run</c> step hands its runner's inputs, each a template.</summary>
     public IReadOnlyDictionary<string, string> Inputs { get; init; } = NoInputValues;
 
-    /// <summary>The arms a sweep runs, by id, written out or as an expression yielding them - the item's own, for its sweep; every arm where the file says nothing.</summary>
+    /// <summary>
+    /// The arms a sweep runs, by id, written out or as an expression yielding them - the item's own, for its sweep; every
+    /// arm where the file says nothing. The list of ids a frozen definition of an earlier release holds on every step is
+    /// read there as the arms it lists, and as none where it is empty (<see cref="FrozenDefinition.Reshaped"/>).
+    /// </summary>
     public FlowList? Arms { get; init; } = null;
 
     /// <summary>Whether a sweep drives only the arms with no recorded <c>passed</c> that still holds.</summary>

@@ -126,7 +126,9 @@ the real client and intercept one call.
   retired `config.json` key is refused like any unknown key, with a message naming what took its place
   (`MisplacedKeys`): a key that loads is a key that is read. A key retired from a workflow file is refused by its
   reader, and a run's frozen `definition.json` that holds it is read by `FrozenDefinition` - the member in its old
-  shape, then ignored (`FrozenDefinition.Retired`) - never by a member kept on the model; what a resume compares is
+  shape, then ignored (`FrozenDefinition.Retired`) - never by a member kept on the model. A member whose shape changes
+  is read there in the shape each earlier release wrote it in, as the parser reads the same words
+  (`FrozenDefinition.Reshaped`), and `EarlierRelease` in the tests writes a run's files in that shape; what a resume compares is
   what each definition says as this build reads it (`FlowResume.RefuseAChangedDefinition`), never a digest an older
   build made.
 

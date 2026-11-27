@@ -4307,7 +4307,8 @@ public sealed class FlowServiceTests
     /// The workflow of the runs an earlier release began: a question to wait at and a step after it whose failure goes to
     /// the recovery, holding every member an earlier release wrote of a definition its own way - the advisor every run
     /// names, its model the configuration's tier and its tier, model, effort and client null, written with no kinds; a
-    /// recovery naming no maxVisits; an input and a param naming no description.
+    /// recovery naming no maxVisits; an input and a param naming no description; and, in the recovery, a sweep listing its
+    /// arms beside one naming none and a test step whose filter is one text.
     /// </summary>
     private const string FrozenEarlier = """
         name: flow
@@ -4332,18 +4333,32 @@ public sealed class FlowServiceTests
           steps:
             - name: diagnose
               type: orient
+            - name: swept
+              type: check-mutations
+              arms: [arm-1, arm-2]
+              dependsOn: [diagnose]
+            - name: every-arm
+              type: check-mutations
+              dependsOn: [diagnose]
+            - name: tested
+              type: test
+              filter: run.affectedTests
+              dependsOn: [diagnose]
         """;
 
     /// <summary>
     /// A definition is changed only by what it says: a run whose definition an earlier release froze - its advisor's
-    /// kinds written empty, as each release that read an advisor wrote them, or every null left out, as each release wrote
-    /// before this build wrote such members null or not - is resumed and answered under its repository's entry
+    /// kinds written empty, as each release that read an advisor wrote them; every null left out, as each release wrote
+    /// before this build wrote such members null or not; every step's arms a list, empty where it named none, beside those
+    /// kinds; or a test step's filter one text beside those arms - is resumed and answered under its repository's entry
     /// unchanged, though the digest its <c>flow.json</c> records is that release's of its own form; an entry whose words
     /// changed is still refused; and the run's records of what it began with stay as that release wrote them.
     /// </summary>
     [Theory]
     [InlineData("kinds")]
     [InlineData("nulls")]
+    [InlineData("arms")]
+    [InlineData("filter")]
     public async Task ARunWhoseDefinitionAnEarlierReleaseFroze_IsResumedAndAnsweredUnderItsEntryUnchanged_AndAChangedEntryIsStillRefused(string written)
     {
         var (repository, service, runner) = await ServiceAsync(FrozenEarlier);
@@ -4354,7 +4369,13 @@ public sealed class FlowServiceTests
         var run = RunOf(repository);
         var began = repository.Harness.OrchestrationStore.ReadFlow(run)!.DefinitionDigest;
         var frozen = EarlierRelease.Frozen(run);
-        var digest = EarlierRelease.Freeze(run, written == "kinds" ? EarlierRelease.WithKinds(frozen) : EarlierRelease.WithoutNulls(frozen));
+        var digest = EarlierRelease.Freeze(run, written switch
+        {
+            "kinds" => EarlierRelease.WithKinds(frozen),
+            "nulls" => EarlierRelease.WithoutNulls(frozen),
+            "arms" => EarlierRelease.WithArmsListed(EarlierRelease.WithKinds(frozen)),
+            _ => EarlierRelease.WithFilterText(EarlierRelease.WithArmsListed(EarlierRelease.WithKinds(frozen))),
+        });
         var earlier = File.ReadAllText(run.DefinitionFile);
 
         // The earlier release's digest is not the one this build recorded of the same definition as it began the run: a
