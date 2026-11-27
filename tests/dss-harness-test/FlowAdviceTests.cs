@@ -801,6 +801,77 @@ public sealed class FlowAdviceTests
     }
 
     /// <summary>
+    /// A stop once the budget's pause is complete, while a machine step the pause left running still runs, raises the
+    /// budget's question all the same once nothing runs - the pause owes it - but starts no advice for it: its
+    /// recommendation says the stop left it to the resume, which seeks it.
+    /// </summary>
+    [Fact]
+    public async Task AStopOnceABudgetsPauseIsComplete_RaisesItsQuestion_AndLeavesItsRecommendationToTheResume()
+    {
+        var definition = Parse("""
+            name: flow
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            budget:
+              usd: 50
+            steps:
+              - name: other
+                type: create-agent
+                agent: worker.md
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: slow
+                type: build
+                in: other
+                dependsOn: [other]
+            """);
+        var slowStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slow = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .OnAsync("think", async run =>
+            {
+                // The run is spent past its reserve of 45.00 USD while the build runs, so the budget's pause leaves it running.
+                await slowStarted.Task;
+                run.Events.Used(new FlowTurnSpend(new DssHarness.Core.Agents.AgentUsage(1_000, 0, 0, 0, 0, 0), 45.10));
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            })
+            .OnAsync("slow", async _ =>
+            {
+                slowStarted.TrySetResult();
+                await slow.Task;
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        var advisor = new Advisor(call => Task.FromResult(new FlowAdvice(call.Answers[0].Answer, $"advised for {call.Kind}", null)));
+        var records = new Records();
+
+        // A clock that never passes the drain's bound on its own: the stopped build's runner ends when the test lets it.
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), records: records, advisor: advisor);
+
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => records.Saw(FlowChangeKind.PauseCompleted));
+        coordinator.RequestStop();
+        await TestEventuallyAsync(() => records.Saw(FlowChangeKind.StopApplied));
+        slow.SetResult();
+        var end = await session.WaitAsync(Bound, Token);
+
+        Assert.Equal((FlowRunStatus.Paused, "budget", true), (end.Status, end.Pause!.Cause, end.Pause.All));
+        Assert.Empty(advisor.Asked);
+        Assert.Equal(
+            ("runBudget", new FlowRecommendation("deferred", Why: "the run was stopped once its pause was complete: the recommendation is sought when the run is resumed with this question still open")),
+            (coordinator.OpenQuestions.Single().Kind, coordinator.OpenQuestions.Single().Recommendation));
+
+        end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+        Assert.Equal((FlowRunStatus.Paused, "budget"), (end.Status, end.Pause!.Cause));
+        Assert.Equal(["runBudget"], advisor.Asked.Select(call => call.Kind));
+        Assert.Equal(new FlowRecommendation("given", "more", null, "advised for runBudget", "advisor", "advisor"), coordinator.OpenQuestions.Single().Recommendation);
+    }
+
+    /// <summary>
     /// A stop once a pause is complete starts no advice: a question a machine step the pause left running raised as it
     /// drained, its recommendation deferred, is still deferred when the stop has stopped what ran and nothing runs - the
     /// session ends paused without an advisor started - and the resume seeks it.
