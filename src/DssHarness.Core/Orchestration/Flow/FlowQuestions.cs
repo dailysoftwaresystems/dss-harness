@@ -401,7 +401,8 @@ public static class FlowQuestions
         {
             "foldConflicts" => $"{step} was refused: paths both trees changed conflict in their three-way merge: {string.Join(", ", question.Named)}"
                 + (dry.Lines.Count > 0 ? $"\n{string.Join("\n", dry.Lines)}" : string.Empty),
-            FoldOutside => $"{step}: the fold of '{dry.Agent}' would write {named}, which {(question.Named.Count == 1 ? "is" : "are")} outside the paths its within names",
+            FoldOutside => $"{step}: the fold of '{dry.Agent}' would write {named}, which {(question.Named.Count == 1 ? "is" : "are")} outside the paths its within names"
+                + (dry.OutsideSaid is { } said ? $"; {said}" : string.Empty),
             _ => $"{step} was not applied: it lacks what nobody gave ({question.Kind}) for {named}: {dry.Summary}",
         };
     }

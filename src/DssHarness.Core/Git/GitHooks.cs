@@ -80,23 +80,9 @@ public static class GitHooks
 
     /// <summary>
     /// Where among <paramref name="arguments"/> the subcommand they run is: the first word past git's own options, each
-    /// <c>-c</c> and <c>-C</c> with its value; -1 where there is none.
+    /// that takes the next word with its value, read by their one grammar (<see cref="GitGlobalOptions.SubcommandAt"/>); -1
+    /// where there is none.
     /// </summary>
     /// <param name="arguments">The command's arguments.</param>
-    internal static int SubcommandAt(IReadOnlyList<string> arguments)
-    {
-        for (var at = 0; at < arguments.Count; at++)
-        {
-            if (arguments[at] is "-c" or "-C")
-            {
-                at++;
-            }
-            else if (!arguments[at].StartsWith('-'))
-            {
-                return at;
-            }
-        }
-
-        return -1;
-    }
+    internal static int SubcommandAt(IReadOnlyList<string> arguments) => GitGlobalOptions.SubcommandAt(arguments);
 }

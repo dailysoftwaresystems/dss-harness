@@ -1733,6 +1733,23 @@ public sealed partial class GitClient(
             .Where(entry => entry.IsFile)
             .Select(entry => entry.Name)];
 
+    public async Task<IReadOnlyList<GitName>> ListDirectoriesAtCommitAsync(
+        string directory,
+        string commit,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commit);
+
+        // With -t every tree on the way is listed beside what it holds, an empty one among them, so each directory is its
+        // own entry, never only a parent read off a file's path.
+        var result = await RunForBytesAsync(directory, ["ls-tree", "-r", "-t", "-z", "--full-tree", commit], cancellationToken)
+            .ConfigureAwait(false);
+
+        Ensure(result, $"list the directories at {commit}");
+
+        return [.. TreeEntries(result.StandardOutput).Where(entry => !entry.IsFile).Select(entry => entry.Name)];
+    }
+
     public async Task<IReadOnlyList<GitName>> ListNamesAsync(
         string directory,
         IReadOnlyList<string> arguments,

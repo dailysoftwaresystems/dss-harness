@@ -411,15 +411,13 @@ public sealed class GlobPatternTests
 
     /// <summary>
     /// A path read from the root names that one path, and holds what is beneath it only where it names a directory - one
-    /// the tree holds, or one written with a trailing separator, which names what is beneath it alone; a link names none,
-    /// and neither does a path the tree does not hold. A pattern keeps its meaning: a directory it matches covers what is
-    /// beneath it.
+    /// the tree holds, or one written with a trailing separator, which names what is beneath it alone; a path the tree does
+    /// not hold names none. A pattern keeps its meaning: a directory it matches covers what is beneath it.
     /// </summary>
     [Fact]
     public void APathReadFromTheRoot_HoldsWhatIsBeneathIt_OnlyWhereItNamesADirectory()
     {
-        using var tree = LiveTree();
-        var directories = GlobPattern.DirectoriesIn(FileSystem, tree.Path);
+        Func<string, bool> directories = LiveTree.Writing;
         var file = GlobPattern.FromRoot("calc.c", directories);
         var directory = GlobPattern.FromRoot("src/click", directories);
         var notThere = GlobPattern.FromRoot("src/new", directories);
@@ -437,14 +435,6 @@ public sealed class GlobPatternTests
         Assert.True(directories("src/click"));
         Assert.False(directories("calc.c"));
         Assert.False(directories("src/new"));
-
-        // A name no file system can hold is no directory, never a failure of the reading.
-        Assert.False(directories("a\0b"));
-
-        // A link to a directory is no directory of the tree: what is written through it lands where it leads.
-        TestLinks.DirectoryLink(Path.Combine(tree.Path, "linked"), Path.Combine(tree.Path, "src"));
-        Assert.False(directories("linked"));
-        Assert.False(GlobPattern.FromRoot("linked", directories).Matches("linked/click/testing.py"));
     }
 
     /// <summary>
@@ -480,8 +470,7 @@ public sealed class GlobPatternTests
     [InlineData("src/**", "Makefile", false)]
     public void TwoEntriesReadFromTheRoot_OverlapWhereSomePathATreeCanHoldMatchesBoth(string left, string right, bool overlap)
     {
-        using var tree = LiveTree();
-        var directories = GlobPattern.DirectoriesIn(FileSystem, tree.Path);
+        Func<string, bool> directories = LiveTree.Meeting;
 
         Assert.Equal(overlap, GlobPattern.FromRoot(left, directories).Overlaps(GlobPattern.FromRoot(right, directories)));
         Assert.Equal(overlap, GlobPattern.FromRoot(right, directories).Overlaps(GlobPattern.FromRoot(left, directories)));
@@ -494,8 +483,7 @@ public sealed class GlobPatternTests
     [Fact]
     public void TwoEntriesReadFromTheRootThatMatchOnePath_Overlap()
     {
-        using var tree = LiveTree();
-        var directories = GlobPattern.DirectoriesIn(FileSystem, tree.Path);
+        Func<string, bool> directories = LiveTree.Meeting;
         string[] entries =
         [
             "calc.c", "Makefile", "src", "src/", "src/click", "src/click/testing.py", "src/*", "src/**", "**/*.py", "*.c",
@@ -523,20 +511,49 @@ public sealed class GlobPatternTests
 
     /// <summary>A tree that reads no path as a directory.</summary>
     private static bool NoDirectories(string path) => false;
-
-    /// <summary>The file system the tests' trees are on.</summary>
-    private static readonly PhysicalFileSystem FileSystem = new(FilePermissionsFactory.Create());
+    /// <summary>The directories of a tree laid out as the live runs' were: files at its root - a C program's and a Python package's - and a package beneath, src/click.</summary>
 
     /// <summary>A tree laid out as the live runs' were: files at its root - a C program's and a Python package's - and a package beneath.</summary>
-    private static TempDirectory LiveTree()
+    private static readonly TreeDirectories LiveTree = TreeDirectories.Of("live", ["src", "src/click"]);
+
+    /// <summary>
+    /// The one wording of a changed meaning: a path beneath an entry that names a file is told a directory to be made is
+    /// written with a trailing separator; one at a depth an entry of one name - a wildcard or a name - no longer reaches is
+    /// told '**/' reaches any depth; a path the entry matches, or one it would not have reached before either, is told
+    /// nothing; and a list says each sentence once, joined.
+    /// </summary>
+    [Fact]
+    public void AnEntryWhoseMeaningTheReadingFromTheRootChanged_SaysHowToWriteWhatItMeant()
     {
-        var tree = new TempDirectory();
+        Assert.Equal(
+            "'docs/generated' names a file: a directory to be made is written 'docs/generated/'",
+            GlobPattern.FromRoot("docs/generated", NoDirectories).WrittenFor("docs/generated", "docs/generated/index.md"));
+        Assert.Equal(
+            @"'.harness-config\skills\new' names a file: a directory to be made is written '.harness-config/skills/new/'",
+            GlobPattern.FromRoot(@".harness-config\skills\new", NoDirectories).WrittenFor(@".harness-config\skills\new", ".harness-config/skills/new/SKILL.md"));
+        Assert.Equal("'*.md' names the root's own: '**/*.md' names any depth", GlobPattern.FromRoot("*.md", NoDirectories).WrittenFor("*.md", "docs/a.md"));
+        Assert.Equal("'Makefile' names the root's own: '**/Makefile' names any depth", GlobPattern.FromRoot("Makefile", NoDirectories).WrittenFor("Makefile", "lib/Makefile"));
+        Assert.Equal("'notes' names a file: a directory to be made is written 'notes/'", GlobPattern.FromRoot("notes", NoDirectories).WrittenFor("notes", "notes/a.md"));
+        Assert.Equal("'notes' names the root's own: '**/notes' names any depth", GlobPattern.FromRoot("notes", NoDirectories).WrittenFor("notes", "x/notes/a.md"));
+        Assert.Equal("'build/' names the root's own: '**/build/' names any depth", GlobPattern.FromRoot("build/", NoDirectories).WrittenFor("build/", "src/build/out.o"));
 
-        foreach (var file in new[] { "Makefile", "calc.c", "calc.h", "main.c", "pyproject.toml", "uv.lock", "README.md", "src/click/testing.py", "src/click/types.py" })
-        {
-            tree.WriteFile(file, "content\n");
-        }
+        Assert.Null(GlobPattern.FromRoot("*.md", NoDirectories).WrittenFor("*.md", "a.md"));
+        Assert.Null(GlobPattern.FromRoot("docs/generated", LiveDocs).WrittenFor("docs/generated", "docs/generated/index.md"));
+        Assert.Null(GlobPattern.FromRoot("docs/*.md", NoDirectories).WrittenFor("docs/*.md", "docs/deep/a.md"));
+        Assert.Null(GlobPattern.FromRoot("src/a.py", NoDirectories).WrittenFor("src/a.py", "lib/src/a.py"));
+        Assert.Null(GlobPattern.FromRoot("calc.c", NoDirectories).WrittenFor("calc.c", "main.c"));
 
-        return tree;
+        Assert.Equal(
+            "'docs' names a file: a directory to be made is written 'docs/'; '*.md' names the root's own: '**/*.md' names any depth",
+            GlobPattern.WrittenFor([(GlobPattern.FromRoot("docs", NoDirectories), "docs"), (GlobPattern.FromRoot("*.md", NoDirectories), "*.md"), (GlobPattern.FromRoot("src/**", NoDirectories), "src/**")], ["docs/a.md"]));
+        Assert.Null(GlobPattern.WrittenFor([(GlobPattern.FromRoot("src/**", NoDirectories), "src/**")], ["docs/a.md"]));
+
+        // Of many paths, each sentence once.
+        Assert.Equal(
+            "'docs' names a file: a directory to be made is written 'docs/'",
+            GlobPattern.WrittenFor([(GlobPattern.FromRoot("docs", NoDirectories), "docs")], ["docs/a.md", "docs/b.md", "src/c.md"]));
     }
+
+    /// <summary>A tree that holds the directory docs/generated.</summary>
+    private static bool LiveDocs(string path) => path is "docs" or "docs/generated";
 }

@@ -63,8 +63,9 @@ public sealed class FlowIssueHold
     /// <param name="where">The triage's <c>where</c>: a list of texts, or one text; anything else names nothing - null for an issue joined to one still being triaged, which holds no file yet.</param>
     /// <param name="remedies">The remedy items the checks of its visit read; none before its diagnosis is checked.</param>
     /// <param name="directories">
-    /// Whether a path from the repository's root names a directory of the main tree (<see cref="GlobPattern.DirectoriesIn"/>):
-    /// a path this holds, and one an item owns, holds what is beneath it only where it does.
+    /// Whether a path from the repository's root names a directory of the run's start tree, where the question is whether
+    /// two entries meet (<see cref="TreeDirectories.Meeting"/>): a path this holds, and one an item owns, holds what is
+    /// beneath it only where it does.
     /// </param>
     public static FlowIssueHold Of(string issue, string title, string fixer, JsonNode? where, IEnumerable<JsonNode?> remedies, Func<string, bool> directories)
     {

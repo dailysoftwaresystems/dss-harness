@@ -41,6 +41,24 @@ public sealed class FlowOutputLogsTests
             dependsOn: [ask]
         """;
 
+    /// <summary>A workflow that pauses on q1 while its other branch runs a step a test holds, slow.</summary>
+    private const string Holding = """
+        name: flow
+        steps:
+          - name: holding
+            type: pause
+            question: what now?
+            options: [stay, go]
+          - name: after
+            type: orient
+            dependsOn: [holding]
+          - name: warm
+            type: orient
+          - name: slow
+            type: orient
+            dependsOn: [warm]
+        """;
+
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
@@ -348,9 +366,11 @@ public sealed class FlowOutputLogsTests
 
     /// <summary>
     /// Where no mask of the session's records stands for the zip - the session could not build the mask of the secrets its
-    /// configuration appoints, or the command began no session at all - every place of the run that holds files as they
-    /// came is left out whole, each named with why, and the records the run's masks were applied to are kept: never an
-    /// unmasked copy of a transcript, a handed file or an agent's own work.
+    /// configuration appoints, or the command began no session at all - every place the run's layout marks as kept as it
+    /// came is left out whole, each named with why - an agent's evidence and its conversations, a red leg's and a red CI
+    /// job's logs, what a step's agent was handed, a side agent's work, the continuation record - and the records the run's
+    /// masks were applied to are kept beside them: never an unmasked copy of a transcript, a handed file, an agent's own
+    /// work or a log of what its commands printed.
     /// </summary>
     [Theory]
     [InlineData(true)]
@@ -360,8 +380,17 @@ public sealed class FlowOutputLogsTests
         using var scene = await PausedAsync();
         using var outside = new TempDirectory();
         var zip = outside.Combine("logs.zip");
+        var continuation = Path.GetFileName(DssHarness.Core.Agents.AgentCallRecords.ResultFile(".", DssHarness.Core.Agents.Runtime.KeptResults.ContinuationId));
 
-        foreach (var file in new[] { "logs/a1/session.jsonl", "agents/a1/shared/0123", "agents/a1/rows/r.json", "work/a1/scratch.txt", "plans/a1/plan.md", "inputs/spec/spec.md", "notes/kept.txt" })
+        foreach (var file in new[]
+        {
+            "logs/a1/session.jsonl", "agents/a1/shared/0123", "agents/a1/rows/r.json", "work/a1/scratch.txt", "plans/a1/plan.md", "inputs/spec/spec.md", "notes/kept.txt",
+            "remote-workflows/blobs/ab", "agents/a1/evidence/r1/TestResults/env.txt", "agents/a1/sessions/s1/conversation.jsonl",
+            "steps/ci/logs/build.log", "steps/ci/step.json", "agents/a1/steps/fix/logs/a.build.log", "agents/a1/steps/fix/measures/m1/logs/a.test.log",
+            "agents/a1/steps/fix/measures/m1/ledger.json", "agents/a1/steps/fix/handed/skills/s/SKILL.md", $"agents/a1/steps/fix/tool-results/{continuation}",
+            "agents/a1/steps/fix/tool-results/call-other.txt", "agents/a1/steps/fix/ledger.json", "agents/a1/steps/fix/advice/1/work/x.txt",
+            "agents/a1/steps/fix/advice/1/stream.jsonl", "asks/s1/sessions/c1/conversation.jsonl", "asks/s1/ask.json", "analysis/s1/work/y.txt",
+        })
         {
             Write(scene.Run, file, "anything\n");
         }
@@ -387,12 +416,23 @@ public sealed class FlowOutputLogsTests
 
         Assert.Equal(
             [
+                ("run/agents/a1/evidence", unmasked),
                 ("run/agents/a1/rows", unmasked),
+                ("run/agents/a1/sessions", unmasked),
                 ("run/agents/a1/shared", unmasked),
+                ("run/agents/a1/steps/fix/advice/1/work", unmasked),
+                ("run/agents/a1/steps/fix/handed", unmasked),
+                ("run/agents/a1/steps/fix/logs", unmasked),
+                ("run/agents/a1/steps/fix/measures/m1/logs", unmasked),
+                ($"run/agents/a1/steps/fix/tool-results/{continuation}", unmasked),
+                ("run/analysis/s1/work", unmasked),
                 ("run/artifacts", unmasked),
+                ("run/asks/s1/sessions", unmasked),
                 ("run/inputs", unmasked),
                 ("run/logs/a1", unmasked),
                 ("run/plans", unmasked),
+                ("run/remote-workflows", unmasked),
+                ("run/steps/ci/logs", unmasked),
                 ("run/temp", FlowOutputLogs.TempWhy),
                 ("run/work", unmasked),
             ],
@@ -402,9 +442,61 @@ public sealed class FlowOutputLogsTests
 
         var names = Entries(zip).Select(entry => entry.Name).ToList();
         Assert.DoesNotContain(names, name => leftOut.Any(left => name == left.Item1 || name.StartsWith(left.Item1 + "/", StringComparison.Ordinal)));
-        Assert.Contains("run/notes/kept.txt", names);
-        Assert.Contains("run/logs/r1.log", names);
-        Assert.Contains("run/flow.json", names);
+
+        // The records beside them, which the run's masks were applied to as they were written, are kept.
+        foreach (var kept in new[]
+        {
+            "run/notes/kept.txt", "run/logs/r1.log", "run/flow.json", "run/steps/ci/step.json", "run/agents/a1/steps/fix/ledger.json",
+            "run/agents/a1/steps/fix/measures/m1/ledger.json", "run/agents/a1/steps/fix/tool-results/call-other.txt", "run/agents/a1/steps/fix/advice/1/stream.jsonl",
+            "run/asks/s1/ask.json",
+        })
+        {
+            Assert.Contains(kept, names);
+        }
+    }
+
+    /// <summary>
+    /// An answer handed to the engine that runs the run in another session begins no session of its own, so no mask of the
+    /// run's records stands for its zip: a key an agent's test run wrote into its kept evidence is in no entry of the zip,
+    /// for the evidence is left out whole and named with why - never copied unmasked as the configuration's mask would
+    /// have masked it, had a session been begun.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerHandedToAnEngineRunningElsewhere_LeavesTheKeptEvidenceOut_ItsKeyInNoEntry()
+    {
+        const string Key = "test-anthropic-value-in-the-evidence-5150";
+        var (repository, runner) = await FlowServiceTests.RepositoryAsync(Holding);
+        using var disposed = repository;
+        using var outside = new TempDirectory();
+        var zip = outside.Combine("logs.zip");
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        runner.Holds("slow", release.Task);
+
+        // The engine runs the run in a session of its own, holding a step while its question is open.
+        var driving = FlowServiceTests.Service(repository.Harness, runner).RunAsync(repository.Path, FlowServiceTests.Workflow, run: "r1", inputs: null, json: false, cancellationToken: Token);
+        await runner.WaitStartedAsync("slow");
+
+        var run = FlowServiceTests.RunOf(repository);
+        Write(run, "agents/a1/evidence/r1/TestResults/env.txt", $"ANTHROPIC_API_KEY={Key}\n");
+
+        var answered = await SessionAsync(
+            Options(FlowService.AnswerCommand, repository.Path, zip, json: false),
+            (scope, token) => scope.Use<IFlowService>().AnswerAsync(scope.Directory, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: token));
+
+        release.SetResult();
+        _ = await driving.WaitAsync(FlowServiceTests.Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, answered.Completion.ExitCode);
+
+        var why = "the command began no session of a run, so no mask of a run's records was built";
+        var manifest = Manifest(zip);
+        var leftOut = manifest["leftOut"]!.AsArray().Select(left => (left!["path"]!.GetValue<string>(), left["why"]!.GetValue<string>())).ToList();
+
+        Assert.Contains(("run/agents/a1/evidence", $"kept in the run as it came, and no mask of the run's records stands for the zip: {why}"), leftOut);
+        Assert.Equal(["secrets", "whyNone"], manifest["mask"]!.AsObject().Select(member => member.Key));
+        Assert.Equal((0, why), (manifest["mask"]!["secrets"]!.GetValue<int>(), manifest["mask"]!["whyNone"]!.GetValue<string>()));
+        Assert.DoesNotContain(Entries(zip), entry => entry.Bytes.AsSpan().IndexOf(Encoding.UTF8.GetBytes(Key)) >= 0);
+        Assert.Contains("run/flow.json", Entries(zip).Select(entry => entry.Name));
     }
 
     /// <summary>
@@ -496,9 +588,11 @@ public sealed class FlowOutputLogsTests
     }
 
     /// <summary>
-    /// A path inside a work tree that does not ignore it is refused before anything runs - the zip would be one of the
-    /// tree's uncommitted files, handed to every agent a run of it makes - whether it is there yet or not, its directory
-    /// made or not, and where the tree tracks it, though its ignore rules match it; one the tree ignores is the zip's.
+    /// A path inside the repository's main checkout or one of its agents' trees, where that tree does not ignore it, is
+    /// refused before anything runs - the zip would be one of the tree's uncommitted files, handed to every agent a run of
+    /// it makes - whether it is there yet or not, its directory made or not, and where the tree tracks it, though its ignore
+    /// rules match it; one the tree ignores is the zip's, and so is one in a work tree of another repository, which no run
+    /// of this one hands or folds from.
     /// </summary>
     [Fact]
     public async Task APathInAWorkTreeThatDoesNotIgnoreIt_IsRefused_SayingNothingWasStarted()
@@ -512,19 +606,29 @@ public sealed class FlowOutputLogsTests
         await repository.Harness.CommitAllAsync(tree, "ignore zips", Token);
         var root = await repository.Harness.GitClient.GetRepositoryRootAsync(tree, Token);
 
-        foreach (var refused in new[] { Path.Combine(tree, "r1.log"), Path.Combine(tree, "not", "made", "yet.log"), Path.Combine(tree, "tracked.zip") })
+        // An agent's tree: a repository of its own, which names the main checkout as its own.
+        var agent = Path.Combine(new HarnessLayout(root!, root!).WorktreesDirectoryUnder(OrchestrationKit.Settings.Root), "r1", "a1");
+        Directory.CreateDirectory(Path.GetDirectoryName(agent)!);
+        Assert.Null((await new DssHarness.Core.Worktrees.AgentRepositories(repository.Harness.GitClient, repository.Harness.FileSystem, repository.Harness.Platform)
+            .MakeAsync(root!, DssHarness.Core.Worktrees.WorktreeAddress.Nested("r1", "a1"), agent, Token)).Failure);
+
+        foreach (var (refused, inTree) in new[] { (Path.Combine(tree, "r1.log"), root), (Path.Combine(tree, "not", "made", "yet.log"), root), (Path.Combine(tree, "tracked.zip"), root), (Path.Combine(agent, "r1.log"), agent) })
         {
             var logs = Logs(repository.Harness);
 
             Assert.Equal(
-                $"--output-logs names '{refused}', inside the work tree '{root}', which does not ignore it: it would be handed to the run's agents as uncommitted state; name a path outside the tree or one git ignores. Nothing was started.",
+                $"--output-logs names '{refused}', inside the work tree '{inTree}' of the repository's main checkout or an agent's, which does not ignore it: it would be handed to the run's agents as uncommitted state; name a path outside the tree or one git ignores. Nothing was started.",
                 await logs.CheckAsync(refused, ["dssharness"], tree, Token));
             Assert.Null(logs.Target);
         }
 
         Assert.False(Directory.Exists(Path.Combine(tree, "not")));
 
-        foreach (var kept in new[] { Path.Combine(tree, "r1.zip"), Path.Combine(tree, "ignored", "deep", "r1.log") })
+        // Another repository's work tree - dotfiles kept at the home, another project's checkout - is none of the run's.
+        using var other = new TempDirectory();
+        await repository.Harness.InitializeGitRepositoryAsync(other.Path, Token);
+
+        foreach (var kept in new[] { Path.Combine(tree, "r1.zip"), Path.Combine(tree, "ignored", "deep", "r1.log"), Path.Combine(other.Path, "Downloads", "r1.log") })
         {
             var logs = Logs(repository.Harness);
 

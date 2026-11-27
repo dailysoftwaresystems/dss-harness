@@ -13,8 +13,8 @@ namespace DssHarness.Core.Git;
 /// characters reached as any other is (<see cref="LongPaths"/>); and, in a tree whose git directories were pinned before
 /// an agent's launch or an execution over its work (<see cref="GitDirectoryPins"/>) - a main checkout's as well as a
 /// linked worktree's - those directories, whatever the tree's own files say of them now; and git's messages untranslated
-/// but where the command is one git runs the repository's hooks for, which keeps the person's locale
-/// (<see cref="Untranslated"/>).
+/// but where the command runs the repository's hooks on purpose or is one git runs them for, which keeps the person's
+/// locale (<see cref="Untranslated"/>).
 /// </summary>
 /// <remarks>
 /// A submodule's repository is configuration of its own, and where it sits in a tree an isolated agent writes - a
@@ -38,19 +38,21 @@ public static class GitOwnSettings
 
     /// <summary>
     /// Sets in <paramref name="environment"/> the locale the git <paramref name="arguments"/> run starts under - the one place
-    /// it is set, for every git of the tool's: <see cref="Locale"/>, but where the command is one git runs the repository's
-    /// hooks for (<see cref="GitHooks.MayRun"/>), which is left the person's own, so a hook it runs - a JVM's, Ruby's, a
-    /// shell's, and each program they start, a server's over ssh among them - behaves as it does in their shell, and the
-    /// person reads git's words of it in their language. Its words are matched nowhere: only questions' are.
+    /// it is set, for every git of the tool's: <see cref="Locale"/>, but where the command runs the repository's hooks on
+    /// purpose (<paramref name="hooksRun"/>), whatever its words, or is one git runs the hooks for
+    /// (<see cref="GitHooks.MayRun"/>), which is left the person's own, so a hook it runs - a JVM's, Ruby's, a shell's, and
+    /// each program they start, a server's over ssh among them - behaves as it does in their shell, and the person reads
+    /// git's words of it in their language. Its words are matched nowhere: only questions' are.
     /// </summary>
     /// <param name="environment">The command's environment.</param>
     /// <param name="arguments">The command's arguments.</param>
-    public static void Untranslated(IDictionary<string, string?> environment, IReadOnlyList<string> arguments)
+    /// <param name="hooksRun">Whether the command runs the repository's hooks on purpose.</param>
+    public static void Untranslated(IDictionary<string, string?> environment, IReadOnlyList<string> arguments, bool hooksRun)
     {
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentNullException.ThrowIfNull(arguments);
 
-        if (!GitHooks.MayRun(arguments))
+        if (!hooksRun && !GitHooks.MayRun(arguments))
         {
             environment[LocaleVariable] = Locale;
         }
@@ -131,8 +133,8 @@ public static class GitOwnSettings
     /// command <paramref name="arguments"/> run - no file-system monitor and no object replaced; where <paramref name="hooksRun"/> is
     /// false, no recursion into a submodule, and no hook where the command is no question (<see cref="GitHooks.Off"/>), while a
     /// command that runs the hooks, inside the isolation, runs as the user's configuration says; on Windows, long paths
-    /// (<see cref="LongPaths"/>), whether it runs the hooks or not; the untranslated locale but for a command git runs the
-    /// hooks for (<see cref="Untranslated"/>) - and the git directories pinned for
+    /// (<see cref="LongPaths"/>), whether it runs the hooks or not; the untranslated locale but for a command that runs the
+    /// hooks or that git runs them for (<see cref="Untranslated"/>) - and the git directories pinned for
     /// <paramref name="directory"/>, where it is the root of a tree an isolated agent works over: its own git directory,
     /// its common one and its work tree.
     /// </summary>
@@ -159,7 +161,7 @@ public static class GitOwnSettings
         // Each as git itself writes one there: in single quotes, which hold every other character as it is.
         environment[ParametersVariable] = string.Join(' ', settings.Select(setting => $"'{setting}'"));
         environment[NoReplaceVariable] = "1";
-        Untranslated(environment, arguments);
+        Untranslated(environment, arguments, hooksRun);
 
         if (pins?.Of(directory) is { } pin)
         {

@@ -2101,19 +2101,23 @@ public sealed class FlowPreExistingTests
     /// root-level file its where names, or its remedy owns, holds the item that owns that file and no other - an item
     /// owning the root's calc.c, calc.h and main.c starts at once beside a fix of the Makefile, and one owning src/click's
     /// types.py beside a fix whose remedy owns pyproject.toml, as the live runs' items did not - while a path the main tree
-    /// holds as a directory holds what is beneath it, a pattern reaching there among it.
+    /// holds as a directory - in the tree of the commit the run started from - holds what is beneath it, a pattern reaching
+    /// there among it.
     /// </summary>
     [Fact]
-    public void WhatAnIssueBeingFixedHolds_IsReadFromTheRoot_SoARootLevelFileHoldsOnlyTheItemOwningIt()
+    public async Task WhatAnIssueBeingFixedHolds_IsReadFromTheRoot_SoARootLevelFileHoldsOnlyTheItemOwningIt()
     {
         using var tree = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(tree.Path, TestContext.Current.CancellationToken);
 
         foreach (var file in new[] { "Makefile", "calc.c", "calc.h", "main.c", "pyproject.toml", "src/click/testing.py", "src/click/types.py" })
         {
             tree.WriteFile(file, "content\n");
         }
 
-        var directories = DssHarness.Core.Repository.GlobPattern.DirectoriesIn(new HarnessFactory().FileSystem, tree.Path);
+        await harness.CommitAllAsync(tree.Path, "the tree", TestContext.Current.CancellationToken);
+        Func<string, bool> directories = (await harness.StartTreeAsync(tree.Path, TestContext.Current.CancellationToken)).Meeting;
         var makefile = FlowIssueHold.Of("triage", "the Makefile builds no mul", "recover", new JsonArray("Makefile"), [], directories);
         var testing = FlowIssueHold.Of("triage+2", "the runner leaks a stream", "recover", new JsonArray("src/click/testing.py"), [WorkItem("bump", "pyproject.toml")], directories);
         var package = FlowIssueHold.Of("triage+3", "the package imports itself", "recover", new JsonArray("src/click"), [], directories);

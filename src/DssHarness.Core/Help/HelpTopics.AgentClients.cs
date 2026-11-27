@@ -361,8 +361,11 @@ public static partial class HelpTopics
         builder.AppendLine("the reporter's reads are narrowed to the run's directory alone, with no command, no write");
         builder.AppendLine("and no web at all. A step's writes are read from its worktree's root, as a work item's");
         builder.AppendLine("ownedPaths are ('help workflows'): a name with no separator is the root's own, and a path");
-        builder.AppendLine("names what is beneath it only where it names a directory, one the worktree holds or one");
-        builder.AppendLine("ending in a separator. For Claude Code the same policy is rendered, never re-decided, into");
+        builder.AppendLine("names what is beneath it only where it names a directory, one the run's start tree holds -");
+        builder.AppendLine("the tree of the commit the run started from, which no fold changes - or one ending in a");
+        builder.AppendLine("separator; a write refused beneath an entry that names a file says a directory to be made");
+        builder.AppendLine("is written with a trailing separator, and one at a depth an entry of one name no longer");
+        builder.AppendLine("reaches says '**/' reaches any depth. For Claude Code the same policy is rendered, never re-decided, into");
         builder.AppendLine("the launch's settings: an");
         builder.AppendLine("ask rule for every tool the launch has, and the restriction rules as deny rules, absolute");
         builder.AppendLine("once for each root in the POSIX form Claude Code matches (//c/x for C:\\x), a Write rule as");

@@ -32,19 +32,27 @@ public sealed class FlowEventLog : IDisposable
 
     private int _seq;
 
-    private FlowEventLog(AppendLog log, int seq)
+    private FlowEventLog(AppendLog log, int seq, string? setAside)
     {
         _log = log;
         _seq = seq;
+        SetAside = setAside;
     }
 
     /// <summary>The log's path.</summary>
     public string File => _log.FilePath;
 
     /// <summary>
+    /// What the open took back, in the reader's words (<see cref="Read"/>): the half of a torn line a killed engine left,
+    /// or what a power loss left of the pass it cut off; null where the log was whole.
+    /// </summary>
+    public string? SetAside { get; }
+
+    /// <summary>
     /// Opens the run's event log for appending, taking back the half of a torn line a killed engine left and what a power
-    /// loss left of the pass it cut off, from the first NUL on - read strictly first, the lines it takes back set aside, so
-    /// a log refused is left as it was. Its last whole line's seq is where the run's events go on.
+    /// loss left of the pass it cut off, from the first NUL on - read strictly first, the lines it takes back set aside and
+    /// said (<see cref="SetAside"/>), so a log refused is left as it was. Its last whole line's seq is where the run's
+    /// events go on.
     /// </summary>
     /// <param name="fileSystem">Writes the lines.</param>
     /// <param name="file">The log's path, its directory already there.</param>
@@ -54,8 +62,8 @@ public sealed class FlowEventLog : IDisposable
         ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentException.ThrowIfNullOrWhiteSpace(file);
 
-        var (events, _) = Read(fileSystem, file);
-        return new FlowEventLog(AppendLog.Open(fileSystem, file, batched: true), events.Count > 0 ? events[^1].Seq : 0);
+        var (events, setAside) = Read(fileSystem, file);
+        return new FlowEventLog(AppendLog.Open(fileSystem, file, batched: true), events.Count > 0 ? events[^1].Seq : 0, setAside);
     }
 
     /// <summary>
@@ -112,7 +120,10 @@ public sealed class FlowEventLog : IDisposable
     /// </summary>
     /// <param name="fileSystem">Reads the log.</param>
     /// <param name="file">The log's path.</param>
-    /// <returns>Each event the log holds, and why its last line was set aside where it was.</returns>
+    /// <returns>
+    /// Each event the log holds, and what was set aside where anything was - a torn last line, or the lines from the first
+    /// that holds a NUL on - in the words every reader says it in.
+    /// </returns>
     /// <exception cref="HarnessException">A whole line is not an event, or not the one after the line before it (<see cref="HarnessExit.Refused"/>).</exception>
     public static (IReadOnlyList<FlowEvent> Events, string? Torn) Read(IFileSystem fileSystem, string file)
     {

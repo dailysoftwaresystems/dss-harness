@@ -471,6 +471,12 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         var starts = _fileSystem.KindOf(_layout.FlowFile) == PathKind.None;
         _events = FlowEventLog.Open(_fileSystem, _layout.EventsFile);
 
+        if (_events.SetAside is { } setAside)
+        {
+            // What the open took back is said, never cut silently: the events go on after the last whole one.
+            _warn?.Invoke($"'{_layout.EventsFile}' was not whole as the session opened it: {setAside}; the run's events go on after the last whole one");
+        }
+
         if (!starts)
         {
             // A resume's first change writes the run's issues only where its list differs from the file's.

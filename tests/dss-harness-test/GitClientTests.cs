@@ -3432,7 +3432,9 @@ public sealed class GitClientProtocolTests
 
     /// <summary>
     /// The commands git's documentation of its hooks names as running them keep the person's locale, each by its
-    /// subcommand after git's own options - and a worktree's or git-p4's by the one command of theirs that runs them - and
+    /// subcommand after git's own options, read by their one grammar - an option that takes the next word as its value,
+    /// <c>--git-dir</c> and <c>--config-env</c> among them, takes it with it - and a worktree's or git-p4's by the one
+    /// command of theirs that runs them; so does every command that runs the hooks on purpose, whatever its words; and
     /// every other command runs under C: a hook is the person's code, and behaves as in their shell only in their locale.
     /// </summary>
     [Theory]
@@ -3453,6 +3455,11 @@ public sealed class GitClientProtocolTests
     [InlineData(null, "gc", "--auto")]
     [InlineData(null, "p4", "submit")]
     [InlineData(null, "-C", "/r", "-c", "a=b", "commit")]
+    [InlineData(null, "-c", "x=y", "commit")]
+    [InlineData(null, "--git-dir", "/r/.git", "commit", "-m", "x")]
+    [InlineData(null, "--config-env", "core.x=E", "commit")]
+    [InlineData(null, "--work-tree", "/w", "--namespace", "n", "push", "origin")]
+    [InlineData("C", "--git-dir", "/r/.git", "status")]
     [InlineData("C", "status", "--porcelain")]
     [InlineData("C", "fetch", "origin")]
     [InlineData("C", "worktree", "remove", "dir")]
@@ -3471,8 +3478,27 @@ public sealed class GitClientProtocolTests
             var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
             GitOwnSettings.Apply(environment, PlatformId.Linux, arguments, hooksRun, "/r", pins: null);
 
-            Assert.Equal(locale, environment.GetValueOrDefault(GitOwnSettings.LocaleVariable));
+            // A command that runs the hooks on purpose keeps the person's locale whatever its words: its hooks run.
+            Assert.Equal(hooksRun ? null : locale, environment.GetValueOrDefault(GitOwnSettings.LocaleVariable));
         }
+    }
+
+    /// <summary>
+    /// Whether a command's hooks are set to run nowhere reads its subcommand by the same grammar: a question behind an
+    /// option that takes the next word as its value is still the question, and answers where the hooks are as git runs them
+    /// for everyone else, while a command git runs hooks for behind one runs none of them.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "--git-dir", "/r/.git", "rev-parse", "--git-path", "hooks")]
+    [InlineData(true, "--config-env", "core.x=E", "config", "core.hooksPath")]
+    [InlineData(true, "-c", "x=y", "ls-files")]
+    [InlineData(false, "--git-dir", "/r/.git", "commit", "-m", "x")]
+    [InlineData(false, "--config-env", "core.x=E", "commit")]
+    [InlineData(false, "-c", "x=y", "commit")]
+    public void TheHooksOff_ReadTheSubcommandPastEveryOptionThatTakesTheNextWord(bool question, params string[] arguments)
+    {
+        Assert.Equal(question ? null : $"{GitHooks.PathKey}=/dev/null", GitHooks.Off(PlatformId.Linux, arguments));
+        Assert.Equal(!question, GitHooks.MayRun(arguments));
     }
 
     /// <summary>The settings a git command that is no question runs with on <paramref name="system"/>.</summary>

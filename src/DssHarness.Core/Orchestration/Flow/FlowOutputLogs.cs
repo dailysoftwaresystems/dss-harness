@@ -49,8 +49,10 @@ public sealed record OutputLogsEnd(
 /// through a file beside the target that then replaces it (<see cref="IFileSystem.WriteAtomic"/>), so a crash never leaves
 /// half a zip and a resumed run's zip holds the whole run. Where it is, is named in the command's text and in its
 /// <c>--json</c> document (<see cref="IDocumentFacts"/>) as every record of a run is, on every end; a path the zip cannot
-/// be written at is refused before anything runs (<see cref="CheckAsync"/>), and so is one inside a work tree that does not
-/// ignore it, which would be handed to the run's agents as the tree's uncommitted state.
+/// be written at is refused before anything runs (<see cref="CheckAsync"/>), and so is one inside the repository's main
+/// checkout or one of its agents' trees where that tree does not ignore it, which would be handed to the run's agents as the
+/// tree's uncommitted state. A path in any other work tree - another project's checkout, a repository of dotfiles at the
+/// home - is no tree a run hands or folds from, and the zip is written there.
 /// </para>
 /// <para>
 /// The run's directory is read as the tool reads a place an isolated process writes (<see cref="IFileSystem.Hold"/>): a
@@ -61,19 +63,23 @@ public sealed record OutputLogsEnd(
 /// said so.
 /// </para>
 /// <para>
-/// No secret value lands in the zip: every byte of it is held to the mask the command's sessions kept their records
-/// through (<see cref="FlowRunReached.Masks"/>, <see cref="SessionMasks"/>) - every secret the configuration appoints that
-/// the key slot answers, as each session began, every form each web-search key a step was given is sent in, and every gh
-/// login token a step came to hold - never built again at the end, read byte for byte
-/// (<see cref="ActionValues.ReadByteForByte"/>: as Latin-1, as UTF-8 and as UTF-16 in either byte order), the
-/// configuration, the command line and the command's output among it. Where no session built that mask - none began, or
-/// none could build it - the files the run keeps as they came, which no record's mask was ever applied to
-/// (<see cref="KeptAsTheyCame"/>), are left out, each named with why: never an unmasked copy of them.
+/// Every byte of the zip is held to the mask the command's own sessions kept their records through
+/// (<see cref="FlowRunReached.Masks"/>, <see cref="SessionMasks"/>) - every secret the configuration appoints that the key
+/// slot answers, as each session began, every form each web-search key a step was given is sent in, and every gh login
+/// token a step came to hold - never built again at the end, read byte for byte (<see cref="ActionValues.ReadByteForByte"/>:
+/// as Latin-1, as UTF-8 and as UTF-16 in either byte order), the configuration, the command line and the command's output
+/// among it. That is the mask of this command's sessions, not of every session whose records the run holds: an earlier
+/// session's records were masked as they were written, and a file it kept as it came may hold a secret this command's
+/// sessions no longer hold - a key since rotated out of the slot, a provider taken out of the configuration - for nothing
+/// derived from a secret is kept across sessions. Where no session of the command built a mask - none began, as where an
+/// answer is handed to an engine running elsewhere or a resume is refused, or none could build it - every place the run's
+/// layout marks as kept as it came (<see cref="OrchestratorLayout.IsKeptAsItCame"/>), which no record's mask was ever
+/// applied to, is left out, each named with why: never an unmasked copy of it.
 /// </para>
 /// </remarks>
 /// <param name="fileSystem">Reads the run and writes the zip.</param>
 /// <param name="repositories">Finds the repository the command acted in, where it reached no run.</param>
-/// <param name="git">Says whether a work tree the zip would be written in ignores it.</param>
+/// <param name="git">Finds the work tree the zip would be written in, and says whether it ignores it.</param>
 /// <param name="store">Reads the run's state, its questions and its agents' records, for the manifest.</param>
 /// <param name="platform">Which system this is, and how its paths compare.</param>
 /// <param name="process">The directory a relative path is read from.</param>
@@ -123,23 +129,6 @@ public sealed class FlowOutputLogs(
     /// <summary>Why a cache of the run's codebase graph is left out.</summary>
     public const string GraphCacheWhy = "a cache of the run's codebase graph, made again from the tree";
 
-    /// <summary>
-    /// The places of a run's directory that hold files as they came - copied in, or written by an agent, never through a
-    /// record's mask - each a directory below the run's, a <c>*</c> standing for any one name: each agent's Claude
-    /// transcripts, copied as they are; the bytes of each file an agent was handed from the main tree, and the anchor rows
-    /// it files; each agent's scratch and task files, and its plans; the files the run's file inputs were given; and the
-    /// run's artifacts. Left out of a zip no mask of the sessions' records stands for, each named with why.
-    /// </summary>
-    public static IReadOnlyList<string> KeptAsTheyCame { get; } =
-    [
-        $"{OrchestratorLayout.LogsDirectoryName}/*",
-        $"{OrchestratorLayout.AgentsDirectoryName}/*/{OrchestratorLayout.SharedDirectoryName}",
-        $"{OrchestratorLayout.AgentsDirectoryName}/*/{OrchestratorLayout.RowsDirectoryName}",
-        OrchestratorLayout.WorkDirectoryName,
-        OrchestratorLayout.PlansDirectoryName,
-        HarnessLayout.OrchestratorInputsDirectoryName,
-        HarnessLayout.OrchestratorArtifactsDirectoryName,
-    ];
 
     /// <summary>The commands that take <see cref="Option"/>: the three that drive a session of a run.</summary>
     public static IReadOnlyList<string> Commands { get; } = [FlowService.RunCommand, FlowService.ResumeCommand, FlowService.AnswerCommand];
@@ -236,9 +225,10 @@ public sealed class FlowOutputLogs(
     /// Holds <paramref name="path"/> to one the zip can be written at, before anything of the command
     /// runs: whole, read from the directory the process stands in where it is relative; not a directory; outside the
     /// repository's orchestrators, where every run keeps its own records - a run started without <c>--run</c> is named
-    /// only as it starts; outside every work tree that does not ignore it, as git reads it - a zip such a tree does not
-    /// ignore is one of its uncommitted files, handed to every agent a run of it makes, and so into the next zip once for
-    /// each; and in a directory that is there or can be made, which is made now.
+    /// only as it starts; outside the repository's main checkout and its agents' trees wherever such a tree does not ignore
+    /// it, as git reads it - a zip such a tree does not ignore is one of its uncommitted files, handed to every agent a run
+    /// of it makes, and so into the next zip once for each - while any other work tree is none of the run's, and takes it;
+    /// and in a directory that is there or can be made, which is made now.
     /// </summary>
     /// <param name="path">Where the zip is asked to be written, as the front end was given it.</param>
     /// <param name="commandLine">The command line as it was typed, the tool's name first, for the manifest.</param>
@@ -273,14 +263,15 @@ public sealed class FlowOutputLogs(
             return $"{Option} names '{target}', which could not be looked at: {Why(ex)}; name a file that can be written. Nothing was started.";
         }
 
-        if (directory is not null && await LocateAsync(directory, cancellationToken).ConfigureAwait(false) is { } repository
-            && PathContainment.IsInsideOrSame(Resolved(repository.OrchestratorsDirectory), Resolved(target), platform.PathComparison))
+        var repository = directory is null ? null : await LocateAsync(directory, cancellationToken).ConfigureAwait(false);
+
+        if (repository is not null && PathContainment.IsInsideOrSame(Resolved(repository.OrchestratorsDirectory), Resolved(target), platform.PathComparison))
         {
             return $"{Option} names '{target}', inside '{repository.OrchestratorsDirectory}', where every run keeps its own records; "
                 + "name a file outside it. Nothing was started.";
         }
 
-        if (await UnignoredInAsync(target, cancellationToken).ConfigureAwait(false) is { } unignored)
+        if (repository is not null && await UnignoredInAsync(target, repository, cancellationToken).ConfigureAwait(false) is { } unignored)
         {
             return unignored;
         }
@@ -401,12 +392,14 @@ public sealed class FlowOutputLogs(
     }
 
     /// <summary>
-    /// Why <paramref name="target"/> is refused as a place in a work tree that does not ignore it - as git reads it, a path
-    /// the tree tracks never ignored - or that git could not be asked about; null where it is in no work tree, or one that
-    /// ignores it. Asked from the nearest directory on its way that is there, its links followed, for the zip's own may not
-    /// be made yet.
+    /// Why <paramref name="target"/> is refused as a place in a tree of <paramref name="repository"/>'s - its main checkout,
+    /// or a tree of its own that names that checkout as its main one, an agent's among them, as the one locator of a tree's
+    /// repository reads it (<see cref="IRepositoryLocator"/>) - that does not ignore it, as git reads it, a path the tree
+    /// tracks never ignored; or that git could not be asked about; null where it is in no work tree, in one of another
+    /// repository, which no run of this one hands or folds from, or in one that ignores it. Asked from the nearest directory
+    /// on its way that is there, its links followed, for the zip's own may not be made yet.
     /// </summary>
-    private async Task<string?> UnignoredInAsync(string target, CancellationToken cancellationToken)
+    private async Task<string?> UnignoredInAsync(string target, HarnessLayout repository, CancellationToken cancellationToken)
     {
         var there = Path.GetDirectoryName(target)!;
         var below = new Stack<string>();
@@ -424,6 +417,13 @@ public sealed class FlowOutputLogs(
                 return null;
             }
 
+            // Only a tree the run hands its agents or folds from: the main checkout, or a tree that names it as its own.
+            if (await repositories.LocateAsync(tree, cancellationToken).ConfigureAwait(false) is not { } held
+                || !PathContainment.AreSame(Resolved(held.MainCheckoutRoot), Resolved(repository.MainCheckoutRoot), platform.PathComparison))
+            {
+                return null;
+            }
+
             var relative = Path.GetRelativePath(tree, Path.Combine([Resolved(there), .. below, Path.GetFileName(target)])).Replace('\\', '/');
 
             if (await git.IsIgnoredAsync(tree, relative, cancellationToken, asTheIndexHolds: true).ConfigureAwait(false))
@@ -431,8 +431,9 @@ public sealed class FlowOutputLogs(
                 return null;
             }
 
-            return $"{Option} names '{target}', inside the work tree '{tree}', which does not ignore it: it would be handed to the "
-                + "run's agents as uncommitted state; name a path outside the tree or one git ignores. Nothing was started.";
+            return $"{Option} names '{target}', inside the work tree '{tree}' of the repository's main checkout or an agent's, which "
+                + "does not ignore it: it would be handed to the run's agents as uncommitted state; name a path outside the tree or "
+                + "one git ignores. Nothing was started.";
         }
         catch (Exception ex) when (ex is HarnessException or ProgramStartException or IOException or UnauthorizedAccessException)
         {
@@ -470,7 +471,8 @@ public sealed class FlowOutputLogs(
     /// <summary>
     /// The mask the zip is held to - the one the command's sessions kept their records through
     /// (<see cref="FlowRunReached.Masks"/>), never built again here - with how many secrets it masks, or why there is none;
-    /// and, where no session built it, why the files the run keeps as they came are left out (<see cref="KeptAsTheyCame"/>).
+    /// and, where no session built it, why the places the run keeps as they came are left out
+    /// (<see cref="OrchestratorLayout.IsKeptAsItCame"/>).
     /// </summary>
     private (ActionValues? Mask, JsonObject Said, string? Unmasked) MaskOf(HarnessLayout? repository)
     {
@@ -618,8 +620,9 @@ public sealed class FlowOutputLogs(
     }
 
     /// <summary>
-    /// Why the entry at <paramref name="relative"/>, in the run's directory, is left out; null where it is kept. A place of
-    /// <see cref="KeptAsTheyCame"/> is left out whole where <paramref name="unmasked"/> says why no mask stands for it.
+    /// Why the entry at <paramref name="relative"/>, in the run's directory, is left out; null where it is kept. A place the
+    /// run's layout marks as kept as it came (<see cref="OrchestratorLayout.IsKeptAsItCame"/>) is left out whole where
+    /// <paramref name="unmasked"/> says why no mask stands for it.
     /// </summary>
     private static string? LeftOutBecause(string relative, HeldName entry, IReadOnlySet<string> handed, string? unmasked)
     {
@@ -628,7 +631,7 @@ public sealed class FlowOutputLogs(
             return KeyStoreWhy;
         }
 
-        if (unmasked is not null && entry.Kind == PathKind.Directory && KeptAsTheyCame.Any(place => Matches(place, relative)))
+        if (unmasked is not null && entry.Kind is PathKind.Directory or PathKind.File && OrchestratorLayout.IsKeptAsItCame(relative, entry.Kind == PathKind.Directory))
         {
             return unmasked;
         }
@@ -645,14 +648,6 @@ public sealed class FlowOutputLogs(
             : null;
     }
 
-    /// <summary>Whether <paramref name="relative"/> is the place <paramref name="place"/> names, name by name, a <c>*</c> standing for any one.</summary>
-    private static bool Matches(string place, string relative)
-    {
-        var names = place.Split('/');
-        var path = relative.Split('/');
-
-        return names.Length == path.Length && names.Zip(path).All(pair => pair.First == "*" || string.Equals(pair.First, pair.Second, StringComparison.Ordinal));
-    }
 
     /// <summary>
     /// The shared copy of each file an agent was handed whose path is a key store or a dotenv file, as its seed names it:

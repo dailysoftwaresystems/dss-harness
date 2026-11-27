@@ -1105,7 +1105,7 @@ public sealed class FlowService(
             LedgersOf(layout, flow),
             definition,
             thresholds,
-            EventsTorn: torn is not null,
+            EventsSetAside: torn,
             By: by,
             Steps: steps,
             NextRound: _store.ReadNextRound(layout),
@@ -1769,6 +1769,11 @@ public sealed class FlowService(
 
             using var records = new FlowRunRecords(_fileSystem, _store, layout, runContext, _clock, line => _output.Warn(command, line));
 
+            // The one tree the run's lists of paths are read against for its whole life - the tree of the commit it started
+            // from, which no fold of the run changes - read once for the session: the plan's check, the holds, a step's
+            // writes and a fold's within ask it alike.
+            var startTree = await TreeDirectories.AtAsync(_gitClient, context.Layout.MainCheckoutRoot, runContext.StartCommit, _platform.PathComparison, cancellationToken).ConfigureAwait(false);
+
             // Every step is handed the run it belongs to, and each create-agent step the model its agent is made for,
             // resolved from the configuration as the definition's check resolves it; a run step claims its tree as the
             // configuration's runners say a run of it writes there. The inputs are what the run's steps read - a file
@@ -1783,7 +1788,7 @@ public sealed class FlowService(
                 records,
                 resume,
                 layout.Name,
-                new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, runContext.StartCommit, definition, runContext.Branch),
+                new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, runContext.StartCommit, definition, runContext.Branch) { StartTree = startTree },
                 Agents.AgentProviders.Resolve(context.Config).Providers is { } providers
                     ? WorkflowValidator.AgentModels(
                         definition,
@@ -1831,7 +1836,7 @@ public sealed class FlowService(
                 workflowFileIfThere: named => WorkflowNamedFiles.OfRun(_fileSystem, _platform.PathComparison, layout).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"),
                 runFacts: (instance, fact) => RunFactOf(context, layout, instance, fact),
                 agentLive: agent => _store.ReadAgent(layout, agent) is { State: Orchestration.AgentStates.Live },
-                mainTreeDirectories: GlobPattern.DirectoriesIn(_fileSystem, context.Layout.MainCheckoutRoot));
+                startTreeDirectories: startTree.Meeting);
             var before = _store.ReadFlowQuestions(layout);
 
             // What a session before this one recorded and left queued - an amendment given while no engine ran - is

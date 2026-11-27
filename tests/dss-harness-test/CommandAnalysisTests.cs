@@ -636,6 +636,19 @@ public sealed class CommandAnalysisTests
         Assert.Equal([["git", "commit", "-m", "x"]], CommandAnalysis.ForRules(["git", "-c", "user.email=a@b", "commit", "-m", "x"]));
     }
 
+    /// <summary>
+    /// git's own options are read by their one grammar (<see cref="DssHarness.Core.Git.GitGlobalOptions"/>) wherever the
+    /// policy looks for git's subcommand: a <c>-C</c> after an option that takes the next word as its value -
+    /// <c>--config-env</c>, <c>--git-dir</c> - is still git's own move, never read as past the subcommand.
+    /// </summary>
+    [Fact]
+    public void MoveWords_AGitCAfterAnOptionThatTakesTheNextWord_IsStillAMove()
+    {
+        Assert.Equal([4], CommandAnalysis.MoveWords(["git", "--config-env", "core.x=E", "-C", "sub", "status"]));
+        Assert.Equal([4], CommandAnalysis.MoveWords(["git", "--git-dir", "/r/.git", "-C", "sub", "status"]));
+        Assert.Equal([2], CommandAnalysis.MoveWords(["git", "-C", "sub", "--config-env", "core.x=E", "status"]));
+    }
+
     [Fact]
     public void ForRules_AGitCThatNamesAnAliasOrAProgramGitRuns_IsTheGitConfigItIs()
     {

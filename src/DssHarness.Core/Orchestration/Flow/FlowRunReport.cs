@@ -76,7 +76,11 @@ public sealed record FlowReportThresholds(
 /// <param name="Ledgers">Each item agent's closure ledger, by its agent; empty where the run holds none.</param>
 /// <param name="Definition">The definition the run ran, frozen as it began; null where it cannot be read - the report then names no critical path, and says why.</param>
 /// <param name="Thresholds">The thresholds its signals are computed by (<see cref="FlowReportThresholds.Of"/>).</param>
-/// <param name="EventsTorn">Whether the events file's last line was torn - a writer killed mid-line - and set aside.</param>
+/// <param name="EventsSetAside">
+/// What the events file's reader set aside, in its own words (<see cref="FlowEventLog.Read"/>): a torn last line - a writer
+/// killed mid-line - or the lines from the first that holds a NUL on, what a power loss left of a pass; null where the file
+/// was read whole.
+/// </param>
 /// <param name="By">What the dollars are grouped by: <c>model</c> (where null), <c>provider</c>, <c>step</c>, <c>agent</c> or <c>type</c>.</param>
 /// <param name="Steps">The instances whose rows alone the steps table keeps; null for every one.</param>
 /// <param name="NextRound">The issues the run owed a later round, <c>next-round.json</c>, each with the item that settled it; null where the run owed none.</param>
@@ -90,7 +94,7 @@ public sealed record FlowRunReportSource(
     IReadOnlyList<(string Agent, FlowClosureLedgerFile Ledger)>? Ledgers = null,
     WorkflowDefinition? Definition = null,
     FlowReportThresholds? Thresholds = null,
-    bool EventsTorn = false,
+    string? EventsSetAside = null,
     string? By = null,
     IReadOnlySet<string>? Steps = null,
     FlowNextRoundFile? NextRound = null,
@@ -128,9 +132,9 @@ public static partial class FlowRunReport
         var partial = source.Flow.Status is "Running";
         var notes = new JsonArray();
 
-        if (source.EventsTorn)
+        if (source.EventsSetAside is { } setAside)
         {
-            notes.Add($"the last line of '{source.Layout.EventsFile}' was torn - a writer stopped mid-line - and is not read: the report is as of the event before it");
+            notes.Add($"'{source.Layout.EventsFile}' was not read whole: {setAside}; the report is as of the event before it");
         }
 
         if (source.Definition is null)

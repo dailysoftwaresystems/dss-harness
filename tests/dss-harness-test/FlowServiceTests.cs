@@ -949,6 +949,43 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
+    /// Every step of a run is handed the one tree its lists of paths are read against, read once for the session: the
+    /// tree of the commit the run started from, whose directories name directories to every step alike, while one the
+    /// run's own work makes in the main tree meanwhile - what an earlier fold leaves - names none.
+    /// </summary>
+    [Fact]
+    public async Task EveryStep_IsHandedTheTreeOfTheCommitTheRunStartedFrom_WhateverTheMainTreeHoldsMeanwhile()
+    {
+        var (repository, runner) = await RepositoryAsync("""
+            name: flow
+            steps:
+              - name: first
+                type: orient
+              - name: second
+                type: orient
+                dependsOn: [first]
+            """);
+        using var disposed = repository;
+        repository.Tree.WriteFile("src/click/types.py", "types\n");
+        await repository.Harness.CommitAllAsync(repository.Path, "a directory", Token);
+        var head = (await repository.Harness.RunGitAsync(repository.Path, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
+        runner.OnStart("first", () => repository.Tree.WriteFile("docs/api/index.md", "folded\n"));
+
+        var outcome = await Service(repository.Harness, runner).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(["first", "second"], runner.Started);
+
+        var trees = runner.Asked.Select(run => run.Place!.Directories).ToList();
+
+        Assert.Same(trees[0], trees[1]);
+        Assert.Equal((head, (string?)null), (trees[0].Commit, trees[0].Unread));
+        Assert.True(trees[0].Writing("src/click"));
+        Assert.False(trees[0].Writing("docs/api"));
+        Assert.False(trees[0].Meeting("docs/api"));
+    }
+
+    /// <summary>
     /// The branch a run's start holds the checkout to is its pull request's base, filled from the run's inputs, where its
     /// pull-request step names one: refused on it, started off it.
     /// </summary>

@@ -235,6 +235,14 @@ public sealed record AgentPolicyGround(
     /// </summary>
     public AgentStepStart? StepStart { get; init; }
 
+    /// <summary>
+    /// The directories of the tree the step's <see cref="Writes"/> are read against: the run's start tree, the one every
+    /// reader of the run's lists of paths asks (<see cref="Orchestration.Flow.FlowRunPlace.Directories"/>), asked what the
+    /// step may write beneath an entry (<see cref="Repository.TreeDirectories.Writing"/>) - never the worktree, which the
+    /// run's own folds rewrite. Null for a ground that names no writes; a ground that names some names it too.
+    /// </summary>
+    public Repository.TreeDirectories? WritesTree { get; init; }
+
     /// <summary>Every capability, in the order a definition names them.</summary>
     public static IReadOnlyList<AgentCapability> EveryCapability { get; } = [AgentCapability.Read, AgentCapability.Write, AgentCapability.Run, AgentCapability.Web];
 

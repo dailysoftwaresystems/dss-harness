@@ -535,7 +535,7 @@ public sealed class FlowStepRunnerTests : IDisposable
         };
 
     private static async Task<IReadOnlyList<string>> CheckAsync(HarnessFactory harness, TempDirectory repository, params JsonNode?[] items)
-        => Validator(harness).Check(items, await harness.ContextLoader.LoadAsync(repository.Path, Token), "r1", Flow);
+        => Validator(harness).Check(items, await harness.ContextLoader.LoadAsync(repository.Path, Token), "r1", Flow, await harness.StartTreeAsync(repository.Path, Token));
 
     /// <summary>A plan whose items each own their own paths, reuse what is there and name what they create passes.</summary>
     [Fact]
@@ -660,10 +660,11 @@ public sealed class FlowStepRunnerTests : IDisposable
         var limited = context with { Config = new HarnessConfig { BuildConfigs = context.Config.BuildConfigs, Legs = context.Config.Legs, Worktrees = new WorktreeSettings { PathLimit = inCopy, PathBudgetReserve = 100 } } };
 
         Assert.True(FlowRunPaths.AtStart(harness.PathBudget, limited, "r1", built, platform.PlatformKey).Result.IsWithinBudget, "the copy and its build alone fit");
-        Assert.Empty(Validator(harness).Check([Item("deep", $"src/{deep}/**")], limited, "r1", Flow));
-        Assert.Empty(Validator(harness).Check([Item("shallow", "src/a/**")], limited, "r1", built));
+        var tree = await harness.StartTreeAsync(repository.Path, Token);
+        Assert.Empty(Validator(harness).Check([Item("deep", $"src/{deep}/**")], limited, "r1", Flow, tree));
+        Assert.Empty(Validator(harness).Check([Item("shallow", "src/a/**")], limited, "r1", built, tree));
 
-        var problem = Assert.Single(Validator(harness).Check([Item("deep", $"src/{deep}/**")], limited, "r1", built));
+        var problem = Assert.Single(Validator(harness).Check([Item("deep", $"src/{deep}/**")], limited, "r1", built, tree));
         Assert.StartsWith("work item 'deep' would work in paths too long for this machine - ", problem, StringComparison.Ordinal);
     }
 

@@ -299,7 +299,7 @@ public sealed partial class IsolationPlatform(
         {
             IReadOnlyList<string> version = ["--version"];
             var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
-            Git.GitOwnSettings.Untranslated(environment, version);
+            Git.GitOwnSettings.Untranslated(environment, version, hooksRun: false);
 
             yield return ("git", git, version, environment);
         }

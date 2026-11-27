@@ -1771,6 +1771,12 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
         CancellationToken cancellationToken = default)
         => Call(() => inner.ListFilesAtCommitAsync(directory, commit, Token(cancellationToken)));
 
+    public Task<IReadOnlyList<GitName>> ListDirectoriesAtCommitAsync(
+        string directory,
+        string commit,
+        CancellationToken cancellationToken = default)
+        => Call(() => inner.ListDirectoriesAtCommitAsync(directory, commit, Token(cancellationToken)));
+
     public Task<IReadOnlyList<GitName>> ListNamesAsync(
         string directory,
         IReadOnlyList<string> arguments,

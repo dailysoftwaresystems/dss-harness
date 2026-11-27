@@ -169,12 +169,19 @@ what was left out and why. It is rewritten whole at every end - done, failed, pa
 reached or after, a failure the command caught - through a file beside it, so a resumed run's zip holds the whole run,
 and it is named in the text (`outputLogs: <file>`) and in `--json` (`records.outputLogs`). Links and junctions, never
 followed, key stores and dotenv files, the run's `temp/`, the codebase graph's caches and each agent's worktree are left
-out, and no secret the run's records were masked of lands in it: every byte is held to the mask the command's sessions
-kept them through - the configuration's secrets the key slot answers, each web-search key a step was given in every form
-it is sent in, and each gh login token a step came to hold - never built again at the end, each secret masked as itself
-and as its UTF-8 and UTF-16 bytes; where no session built that mask, the places that hold files as they came (each
-agent's transcripts, the files it was handed and its rows, `work/`, `plans/`, `inputs/`, `artifacts/`) are left out,
-each named. A path that is a directory, inside `.orchestrators/`, inside a work tree that does not ignore it - it would be
+out, and every byte is held to the mask this command's own sessions kept the run's records through - the configuration's
+secrets the key slot answers, each web-search key a step was given in every form it is sent in, and each gh login token a
+step came to hold - never built again at the end, each secret masked as itself and as its UTF-8 and UTF-16 bytes. A
+resumed run's zip is masked by this command's sessions alone: an earlier session's records were masked as they were
+written, but a file it kept as it came - an agent's transcript, say - may hold a secret since rotated out of the slot or
+taken out of the configuration, for nothing derived from a secret is kept from one session to the next. Where no session
+of the command built a mask - an answer handed to an engine running elsewhere, a resume refused - every place the run's
+layout marks as holding files as they came is left out, each named: `logs/*/` (each agent's transcripts), `work/`,
+`plans/`, `inputs/`, `artifacts/`, `remote-workflows/`, each agent's `shared/`, `rows/`, `evidence/` and `sessions/`,
+and in each step's directory, each advice's, ask's and analysis's, the red legs' and CI jobs' `logs/`, a measure call's
+`logs/`, `handed/`, a side agent's `work/` and `sessions/`, and the continuation record in `tool-results/`. A path that
+is a directory, inside `.orchestrators/`, inside the repository's main checkout or one of its agents'
+trees where that tree does not ignore it - it would be
 handed to the run's agents as uncommitted state - or in a directory that cannot be made is refused (13) before anything
 runs.
 
@@ -737,7 +744,8 @@ remedy items own: a work item that has not begun and owns one of them, or names 
 builds on - starts once that fix is done, building on the tree it leaves, and `ask-orchestrator-status` says what it
 waits for; every other item goes on at once. Both are read from the repository's root, as the plan's check reads every
 path a work item owns or must not touch, its agent's writes and its fold's within: a path names that one path, and
-what is beneath it only where it names a directory - one the tree holds, or one ending in `/` - and a pattern is
+what is beneath it only where it names a directory - one the run's start tree holds, the commit it started from,
+which no fold of the run changes, or one ending in `/` - and a pattern is
 anchored there too, `**` for any depth, so a root-level file such as `Makefile` or `pyproject.toml` meets no other
 path and keeps only the item that owns it waiting. The planner and the self-audit are told the same, once, by the
 workflow's text `fixes` (`fixes.md`): no work item fixes an issue being fixed, or rewrites its lines, and an item that
@@ -1314,7 +1322,10 @@ source, while a path git tracks or ignores, or one that was there, stays narrowe
 write over the step's own making, which leaves a path standing outside them; a refusal of such a
 delete says so. Its entries are read from the worktree's root, as a work item's owned paths are: a
 name with no `/` is the root's own, and a path names what is beneath it only where it names a
-directory - one the worktree holds, or one ending in `/`. The reporter's reads are narrowed to the
+directory - one the run's start tree holds, or one ending in `/`. An entry whose meaning that
+reading changed says so where it refuses: a write beneath `docs/generated`, which names a file,
+is told a directory to be made is written `docs/generated/`, and one of `notes/a.md` under
+`*.md`, which names the root's own, that `**/*.md` names any depth. The reporter's reads are narrowed to the
 run's directory alone, with no command, no write and no web at all. For Claude Code the same policy is rendered, never re-decided, into the launch's
 settings: an ask rule for every tool, and the restrictions as deny rules, absolute once for each
 root in the POSIX form Claude Code matches (`//c/x` for `C:\x`), a `Write` rule as the `Edit` rule
@@ -1681,8 +1692,8 @@ and fails there, as does one signed with an ssh key under MXC. One signed with a
 key itself (`key::` and its line) and keep the private key in the agent. A commit's and a push's hooks run in
 the person's own locale, as in their shell: each git command git runs hooks for - a commit, a merge, a rebase,
 a cherry-pick, a revert, a checkout or switch, a clone, a worktree added, a push, `am`, a pull - keeps the locale
-the tool was started with, whether it runs them or not, and every other git of the tool's runs untranslated
-(`LC_ALL=C`). Every git command of this tool's but a commit step's commit and a push
+the tool was started with, whether it runs them or not, whatever git options stand before the command
+(`git --git-dir <dir> commit` is a commit), and every other git of the tool's runs untranslated (`LC_ALL=C`). Every git command of this tool's but a commit step's commit and a push
 runs none of the repository's hooks - `core.hooksPath` pointed at the null device (`GitHooks`),
 set as every git of the tool's sets its own settings, through `GIT_CONFIG_PARAMETERS` - so a fold, a
 refresh, a rebase, a sync or a question of the tool's never runs the agents' work as a side effect of

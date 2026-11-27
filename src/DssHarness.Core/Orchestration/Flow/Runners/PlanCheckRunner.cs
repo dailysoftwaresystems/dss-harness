@@ -136,11 +136,12 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
                 context,
                 place.Run,
                 place.Definition,
+                place.Directories,
                 carried: owedAlone ? [] : [.. carried.Where(name => !owedNames.Contains(name, StringComparer.Ordinal))]));
         }
         else
         {
-            problems.AddRange(validator.Check([.. items], context, place.Run, place.Definition));
+            problems.AddRange(validator.Check([.. items], context, place.Run, place.Definition, place.Directories));
         }
 
         // The pieces of a plan update, checked with the items where the step names them: Missing, null or an empty
@@ -157,7 +158,7 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
             switch (scope.ToNode())
             {
                 case JsonArray { Count: > 0 } pieces:
-                    problems.AddRange(validator.CheckPieces([.. pieces], [.. items], round, Names(read, "known"), context, place.Run, place.Definition, out var joined, carried));
+                    problems.AddRange(validator.CheckPieces([.. pieces], [.. items], round, Names(read, "known"), context, place.Run, place.Definition, place.Directories, out var joined, carried));
                     joinedRound = round is null ? null : joined;
                     break;
                 case JsonArray or null:

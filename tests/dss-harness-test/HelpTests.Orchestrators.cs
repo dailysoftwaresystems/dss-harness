@@ -96,9 +96,10 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("the last line naming them (outputLogs: <file>) and records.outputLogs in --json.", prose, StringComparison.Ordinal);
         Assert.Contains(
-            "A path that is a directory, inside .orchestrators/, inside a work tree that does not ignore it - git's ignore rules read as a status reads them, a path "
-                + "the tree tracks never ignored: the zip would be one of the tree's uncommitted files, handed to every agent a run of it makes - or in a directory "
-                + "that cannot be made is refused (13) before anything runs, nothing started.",
+            "A path that is a directory, inside .orchestrators/, inside the repository's main checkout or one of its agents' trees where that tree does not "
+                + "ignore it - git's ignore rules read as a status reads them, a path the tree tracks never ignored: the zip would be one of the tree's "
+                + "uncommitted files, handed to every agent a run of it makes - or in a directory that cannot be made is refused (13) before anything runs, "
+                + "nothing started; any other work tree, another project's or a repository at the home, is none a run hands or folds from, and takes the zip.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("The zip holds run/ - the run's whole directory, its folders kept - config.json, the configuration the run was read with, and manifest.json,", prose, StringComparison.Ordinal);
@@ -108,14 +109,36 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "No secret value lands in it: every byte of it is held to the mask the command's sessions kept the run's records through, never built again at "
-                + "the end - every secret the configuration appoints that the key slot answers, as each session began; every form each web-search key a step "
-                + "was given is sent in; and every gh login token a step came to hold - each masked as itself and as its bytes in UTF-8 and in UTF-16 of either "
-                + "byte order, the configuration, the command line and the output among it. Where no session built that mask - none began, or none could build "
-                + "it - the places of the run that hold files as they came, which no record's mask was applied to, are left out whole, each named with why: "
-                + $"{string.Join(", ", FlowOutputLogs.KeptAsTheyCame.Select(place => place + "/"))}.",
+            "Every byte of it is held to the mask this command's own sessions kept the run's records through, never built again at the end - every secret "
+                + "the configuration appoints that the key slot answers, as each session began; every form each web-search key a step was given is sent in; "
+                + "and every gh login token a step came to hold - each masked as itself and as its bytes in UTF-8 and in UTF-16 of either byte order, the "
+                + "configuration, the command line and the output among it. A resumed run's zip is masked by this command's sessions alone: an earlier "
+                + "session's records were masked as they were written, but a file it kept as it came may hold a secret since rotated out of the slot or "
+                + "taken out of the configuration, for nothing derived from a secret is kept from one session to the next. Where no session of the command "
+                + "built a mask - none began, as where an answer is handed to an engine running elsewhere or a resume is refused, or none could build it - "
+                + "every place the run's layout marks as holding files as they came, which no record's mask was applied to, is left out whole, each named "
+                + "with why: logs/*/ (each agent's Claude transcripts, copied as they are), work/ (each agent's scratch and task files), plans/ (the plans, "
+                + "the orchestrator's and each agent's), inputs/ (the files the run's file inputs were given, copied), artifacts/ (the run's artifacts), "
+                + "remote-workflows/ (the remote workflows' files, as they were fetched), agents/*/shared/ (the bytes of each file an agent was handed from "
+                + "the main tree), agents/*/rows/ (the anchor rows an agent files), agents/*/evidence/ (what an agent's worktree's evidence roots held, "
+                + "copied), agents/*/sessions/ (an agent's conversations with an API client, the provider's messages as they came); and in each attempt's "
+                + "directory (steps/*/, agents/*/steps/*/, steps/*/advice/*/, agents/*/steps/*/advice/*/, asks/*/, analysis/*/): logs/ (each red leg's "
+                + "phase log and each red CI job's log, copied), measures/*/logs/ (each red leg's phase log a measure call kept), handed/ (what the "
+                + "attempt's agent was handed to read: its skills, and the copies its continuation record names), work/ (a side agent's work directory), "
+                + "sessions/ (a side agent's conversations with an API client, the provider's messages as they came), "
+                + $"{Path.GetRelativePath(".", DssHarness.Core.Agents.AgentCallRecords.ResultFile(".", DssHarness.Core.Agents.Runtime.KeptResults.ContinuationId)).Replace('\\', '/')} "
+                + "(the continuation record, which quotes red legs' lines as they came).",
             prose,
             StringComparison.Ordinal);
+
+        // Every place the layout marks is named where the README lists them: the help and the README say the one set.
+        foreach (var place in OrchestratorLayout.RunPlacesKeptAsTheyCame.Concat(OrchestratorLayout.AttemptPlacesKeptAsTheyCame))
+        {
+            var names = place.Path.Split('/');
+            var said = place.IsFile ? $"`{names[0]}/`" : names[^1] == "*" ? $"`{place.Path}/`" : $"`{names[^1]}/`";
+
+            Assert.Contains(said, readme, StringComparison.Ordinal);
+        }
         Assert.Contains(
             "A zip that could not be written is said in its place and named nowhere, and the command's code stands - save a defect of this "
                 + "tool's, which ends it as one does (70). A command line the parser refuses writes none, for no command began.",
@@ -144,8 +167,9 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains($"it is named in the text (`{FlowOutputLogs.Record}: <file>`) and in `--json` (`{FlowReports.RecordsMember}.{FlowOutputLogs.Record}`).", readme, StringComparison.Ordinal);
         Assert.Contains(
-            $"A path that is a directory, inside `{HarnessLayout.OrchestratorsDirectoryName}/`, inside a work tree that does not ignore it - it would be handed "
-                + $"to the run's agents as uncommitted state - or in a directory that cannot be made is refused ({HarnessExit.Refused}) before anything runs.",
+            $"A path that is a directory, inside `{HarnessLayout.OrchestratorsDirectoryName}/`, inside the repository's main checkout or one of its agents' "
+                + $"trees where that tree does not ignore it - it would be handed to the run's agents as uncommitted state - or in a directory that cannot be "
+                + $"made is refused ({HarnessExit.Refused}) before anything runs.",
             readme,
             StringComparison.Ordinal);
 
@@ -165,7 +189,11 @@ public sealed partial class HelpTests
             $"(`{nameof(SessionMasks)}`, an owner of the engine's session)",
             $"`{nameof(FlowRunReached)}`, whose `{nameof(FlowRunReached.Masks)}` the zip reads",
             $"(`{nameof(GrowingMask)}`)",
-            $"(`{nameof(FlowOutputLogs)}.{nameof(FlowOutputLogs.KeptAsTheyCame)}`:",
+            $"(`{nameof(OrchestratorLayout)}.{nameof(OrchestratorLayout.IsKeptAsItCame)}`)",
+            $"(`{nameof(OrchestratorLayout)}.{nameof(OrchestratorLayout.RunPlacesKeptAsTheyCame)}`",
+            $"(`{nameof(OrchestratorLayout)}.{nameof(OrchestratorLayout.AttemptDirectories)}`:",
+            $"`{nameof(OrchestratorLayout)}.{nameof(OrchestratorLayout.AttemptPlacesKeptAsTheyCame)}`",
+            "this command's sessions alone: a resumed run's zip holds the records of earlier sessions too",
             $"(`{nameof(IGitClient)}.{nameof(IGitClient.IsIgnoredAsync)}`)",
             $"`{nameof(ActionValues)}.{nameof(ActionValues.ReadByteForByte)}`",
             $"(`{nameof(ILineMask)}.{nameof(ILineMask.Cut)}`)",

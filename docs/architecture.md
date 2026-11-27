@@ -679,17 +679,22 @@ git's messages are matched in two places only: telling "not a repository" apart 
 "git could not look", and "not a gitdir" apart from the same when a directory among a
 worktree's submodule repositories is examined - both questions - and a workflow source's fetch
 or listing telling "not there" from "not reached". Every git the tool starts runs with
-`LC_ALL=C` but one git runs a repository's hooks for, set at the one place for every git start
-(`GitOwnSettings.Untranslated`) - the client's (`GitOwnSettings.Apply`), the question that names
-the variables every git is started without (`GitLocalVariables`), and the isolation probe's
-`git --version` alike - never by a caller: a question is answered in the words being matched.
-The commands git runs hooks for keep the person's locale, whether a hook runs or not, so a hook
+`LC_ALL=C` but one that runs a repository's hooks on purpose (a commit step's commit, a push) and
+one git runs them for, set at the one place for every git start (`GitOwnSettings.Untranslated`) -
+the client's (`GitOwnSettings.Apply`), the question that names the variables every git is started
+without (`GitLocalVariables`), and the isolation probe's `git --version` alike - never by a caller:
+a question is answered in the words being matched. Those commands keep the person's locale, the
+ones git runs hooks for whether a hook runs or not, so a hook
 behaves as in their shell - a JVM tool's file names, Ruby's default encoding, a shell's
 character classes and lengths, a server's hooks over ssh that `SendEnv LC_*` would forward to -
 and their messages reach the person in their language: each command `githooks(5)` names as
 running one (`GitHooks.Runners` - `am`, `commit`, `merge`, `pull`, `rebase`, `cherry-pick`,
 `revert`, `checkout`, `switch`, `clone`, `worktree add`, `push`, `receive-pack`, `send-email`,
-`gc`, `p4 submit`), by its subcommand after git's own options (`GitHooks.MayRun`). The two hooks
+`gc`, `p4 submit`), by its subcommand after git's own options (`GitHooks.MayRun`), read by the one
+grammar of them the agents' policy reads too (`GitGlobalOptions.SubcommandAt`): each option that
+takes the next word as its value - `-C`, `-c`, `--config-env`, `--git-dir`, `--work-tree`,
+`--namespace` and the other long ones that name a place or a list - is passed over with it, so
+`git --git-dir /r/.git commit` is a commit, never a command named `/r/.git`. The two hooks
 it names no command for - reference-transaction, which any command that moves a ref runs, and
 post-index-change, which any that writes the index runs - make no command one of them: every
 command that writes would be, and no git of the tool's runs a hook but where it runs them on
@@ -2645,7 +2650,8 @@ path from the repository's root and never the command it may name instead (`Flow
 its visit has read the remedy items its diagnosis gives, every path those items own: `FlowIssueHold`, the one owner of
 what an issue holds and which of it a work item owns, over `FlowCoordinator.IssueHolds`, which reads the issues being
 fixed from the run's state - every path it holds, and each one an item owns, read from the repository's root as the
-plan's check reads an item's (`GlobPattern.FromRoot`, whether a path names a directory asked of the main tree), so a
+plan's check reads an item's (`GlobPattern.FromRoot`, whether a path names a directory asked of the run's start tree,
+`TreeDirectories.Meeting`), so a
 root-level file a fix holds keeps only the item that owns that file waiting. A work item - an instance of the
 work-item group - that has not begun and owns any of those paths, or names the issue among those whose fix it needs -
 its `needs`, read by `FlowWorkItems.NeedsOf` alone and met by `FlowIssueHold.NeededBy`, the issue's id
@@ -3965,13 +3971,26 @@ not read refuses the attempt that goes on with it.
 
 A list of a tree's own paths has one reading, `GlobPattern.FromRoot`: a work item's `ownedPaths` and `forbiddenPaths`
 (`PlanValidator`), the files an issue being fixed holds (`FlowIssueHold`), a reason step's `writes` (`AgentPolicy`,
-against its worktree) and a fold's `within` (`FoldWithin`, against the main tree) - the plan's `ownedPaths` flow into
-the last two, so what the plan's check found no two items to share is exactly what each item's agent may write and its
-fold carry. Every entry is anchored at the tree's root, so a name with no separator is the root's own, never one at any
+in its worktree) and a fold's `within` (`FoldWithin`, in the main tree) - the plan's `ownedPaths` flow into the last
+two. Every entry is anchored at the tree's root, so a name with no separator is the root's own, never one at any
 depth, as the rules' gitignore reading (`GlobPattern.Parse`) takes it. A path - an entry with no wildcard - names that
-one path, and what is beneath it only where it names a directory: one the tree holds (`GlobPattern.DirectoriesIn`; a
-link, or a path that cannot be asked of, names none) or one ending in a separator, which names what is beneath it
-alone. A pattern keeps its meaning, anchored at the root: a directory it matches covers what is beneath it. Two entries
+one path, and what is beneath it only where it names a directory: one ending in a separator, which names what is
+beneath it alone, or one the run's start tree holds. That tree is asked by every reader alike for the whole run - the
+tree of the commit the run started from (`orient`'s `startCommit`), its directories listed once a session through git
+(`TreeDirectories`, `IGitClient.ListDirectoriesAtCommitAsync`: every tree and every submodule's entry, never a link,
+which git keeps as a file) and handed to every step in the run's place (`FlowRunPlace.Directories`) - never a working
+tree the run's own folds rewrite: so what the plan's check found no two items to share is exactly what each item's
+agent may write and its fold carry, whatever order the folds come in, for an entry that named no directory when the
+plan was checked names none when it is written or folded. A tree that cannot be read - a run that names no start
+commit, a commit git cannot list - answers by the question: where it is whether two entries meet (the check's
+overlaps, the holds; `TreeDirectories.Meeting`) every path counts as a directory, the wide reading; where it is what a
+step may write or a fold carry (`TreeDirectories.Writing`), and what an item owns, none does, the narrow one. An entry
+whose meaning the reading changed - one name that once matched at any depth, a path that once named a directory still
+to be made - is told how to write what it meant at every refusal the reading causes, by its one owner
+(`GlobPattern.WrittenFor`): a step's writes denied, a fold's `foldOutside`, and the plan's check of a class's home and
+sites (P-C3, P-C4) - `'docs/generated' names a file: a directory to be made is written 'docs/generated/'`, and
+`'*.md' names the root's own: '**/*.md' names any depth`. A pattern keeps its meaning, anchored at the root: a
+directory it matches covers what is beneath it. Two entries
 meet (`GlobPattern.Overlaps`) only where some path a tree can hold matches both: a path naming no directory holds
 nothing beneath it, unless the other names only paths beneath it by its own names - `src/new` and `src/new/a.py` -
 which are real only where it is a directory. So the root's `Makefile`, `calc.c` and `pyproject.toml` meet no other
@@ -4424,8 +4443,9 @@ run's order (the instance order of `flow.json`), every row of a list with an id 
 `<instance>@<attempt>`, a signal `<kind>#<n>`, a convergence row its list, the item, step or agent that said it and
 what it is of), every number in one fixed form (durations to one decimal, dollars to four with the currency, times as the records keep them) and never a word
 of now: a run still going is said so at the time of its last record, marked partial. What the records cannot give is
-said in its `notes` - an events file whose last line was torn (the report is as of the event before it), a definition
-that is not there, or one that does not read with why it does not (`OrchestrationStore.ReadDefinitionOrWhy`; no
+said in its `notes` - an events file not read whole, in its reader's own words (`FlowEventLog.Read`): a torn last line,
+or the lines from the first that holds a NUL on, what a power loss left of a pass (the report is as of the event before
+it) - a definition that is not there, or one that does not read with why it does not (`OrchestrationStore.ReadDefinitionOrWhy`; no
 critical path is named). Its sections are the run (its sessions, its wall time, its active
 time - the union of every attempt's runs, two steps at once counted once - its pauses between sessions, its waits for a
 person, each question's to its first answer or, still open, to the last record, and its budget), the totals (tokens by
@@ -5025,7 +5045,8 @@ warning (`FlowRunRecords.Dispose`), and a session that ends in order heard it at
 read back strictly: a value the engine does not name, a nested record that
 does not hold, a time in any but the one form (`yyyy-MM-dd HH:mm:ss`, UTC; one not yet come is
 written `null`), a log line out of sequence or corrupt is refused by its number, and only a torn last
-line, or the lines from the first that holds a NUL, are set aside, said. A resume reconciles `flow.json` against every step's own record, taking the
+line, or the lines from the first that holds a NUL, are set aside, said - by the report's notes, and as a warning by the
+session that opens the log for append and takes them back (`FlowEventLog.SetAside`). A resume reconciles `flow.json` against every step's own record, taking the
 step's own whole wherever there is one, keeping the index's order and adopting what only a step's
 directory holds at the end. The graph is rebuilt in that order, never sorted again - `build+10` after
 `build+2`, `rounds#10` after `rounds#2`, a loop's later visit (`rounds+2`) and its items as their own,
@@ -5423,11 +5444,14 @@ as typed) - the command line by `--output-logs <file>` on `run-orchestrator`, `r
 `answer-orchestrator` alone, with no configuration key and no default: no flag, no zip. The lifecycle
 every command shares (`CommandSession`) holds the path before anything is weighed - whole, read from
 the directory the process stands in; a directory, a path inside `.orchestrators/` (where every run
-keeps its own records, and a start names its run only as it starts), one inside a work tree that does
-not ignore it - asked of git from the nearest directory on its way that is there, `check-ignore` read
+keeps its own records, and a start names its run only as it starts), one inside the repository's main
+checkout or one of its agents' trees where that tree does not ignore it - the tree found by git from the
+nearest directory on its way that is there, and held to be the run's where the one locator of a tree's
+repository (`IRepositoryLocator`) names the command's main checkout as its own; `check-ignore` read
 against the index (`IGitClient.IsIgnoredAsync`), so a path the tree tracks is never ignored: such a zip
 is one of the tree's uncommitted files, which every agent a run of it makes is handed with its seed, and
-the next zip would hold it once for each - or one whose directory cannot be
+the next zip would hold it once for each; any other work tree, another project's checkout or a
+repository of dotfiles at the home, is none a run hands or folds from, and takes the zip - or one whose directory cannot be
 made is refused with 13, nothing started - and at every end - the body's answer, a directory refused,
 a failure it caught - writes the zip before it says how the command ended, the operation's own end and
 the ends handed to it run first, with `--json` or without, so the manifest holds the lines they say and
@@ -5456,16 +5480,30 @@ appoints that the key slot answers, and holds every mask the one builder of a la
 it runs (`ReasonLaunch.Mask`) - a step's web-search keys in every form they are sent in among them - and
 every mask that comes to hold the gh login read again (`GrowingMask`), read as it holds its tokens at
 the end; the sessions are told to `FlowRunReached`, whose `Masks` the zip reads. So a configuration
-edited or a slot changed since a session began masks nothing its records were not masked of. The mask
+edited or a slot changed since a session began masks nothing its records were not masked of. Those are
+this command's sessions alone: a resumed run's zip holds the records of earlier sessions too, which were
+masked as they were written, but a file an earlier session kept as it came may hold a secret this
+command's sessions no longer hold - a key since rotated out of the slot, a provider taken out of the
+configuration - for nothing derived from a secret (a digest, a length) is kept from one session to the
+next. The mask
 is read byte for byte - Latin-1, which keeps every byte - by `ActionValues.ReadByteForByte`, which masks
 each secret's bytes in UTF-8 and in UTF-16 of either byte order read so beside the secret itself, a
 piece at a time cut where no secret parts (`ILineMask.Cut`); the manifest's strings are masked as text.
-Where no session built the mask - the command began none, or none could build the configuration's
-(its providers do not resolve, the slot could not be read) - the places of the run that hold files as
-they came, which no record's mask was applied to (`FlowOutputLogs.KeptAsTheyCame`: each agent's
-transcripts under `logs/`, the files an agent was handed and the rows it files, `work/`, `plans/`,
-`inputs/`, `artifacts/`), are left out whole, each named with why: never an unmasked copy. A command
-line the parser refuses writes none: no command began.
+Where no session built the mask - the command began none, as an answer handed to an engine running
+elsewhere (`FlowService.AnswerAsync` waiting on its inbox entry) and a refused resume begin none, or
+none could build the configuration's (its providers do not resolve, the slot could not be read) - every
+place the run's layout marks as one whose writer keeps bytes as they came, which no record's mask was
+applied to, is left out whole, each named with why: never an unmasked copy. The layout that spells every
+place is the one owner of the mark (`OrchestratorLayout.IsKeptAsItCame`), read by the zip and by the
+help that lists it: the run's own (`OrchestratorLayout.RunPlacesKeptAsTheyCame` - each agent's
+transcripts under `logs/`, `work/`, `plans/`, `inputs/`, `artifacts/`, `remote-workflows/`, and each
+agent's `shared/`, `rows/`, `evidence/` (`AgentEvidence`'s copies of its worktree's evidence roots) and
+`sessions/` (the provider's messages as they came)), and in each attempt's directory
+(`OrchestratorLayout.AttemptDirectories`: every step's, each advice's, ask's and analysis's), what
+`OrchestratorLayout.AttemptPlacesKeptAsTheyCame` names - the red legs' and red CI jobs' `logs/`, which
+the runner's values alone masked, a measure call's `logs/`, `handed/`, a side agent's `work/` and
+`sessions/`, and the continuation record, which quotes red legs' lines as they came. A command line the
+parser refuses writes none: no command began.
 
 ### The codebase graph
 

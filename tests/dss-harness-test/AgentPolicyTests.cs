@@ -742,16 +742,18 @@ public sealed class AgentPolicyTests
 
     /// <summary>
     /// A step's writes are read from its worktree's root, as the plan's check read the work item's owned paths that flow
-    /// into them: the root's Makefile is no Makefile beneath it, a path the worktree holds as a directory opens what is in
-    /// it, and one it does not hold - a file the step is to make - opens itself alone. So what the check found no two items
-    /// to share is what each item's agent may write.
+    /// into them, and against the same tree - the run's start tree, never the worktree: the root's Makefile is no Makefile
+    /// beneath it, a path the start tree holds as a directory opens what is in it, and one it does not hold - a file the
+    /// step is to make - opens itself alone, though another item's fold has since made it a directory in the worktree. So
+    /// what the check found no two items to share is what each item's agent may write, whatever order the folds come in.
     /// </summary>
     [Fact]
     public void AStepsWrites_AreReadFromItsWorktreesRoot()
     {
         using var ground = Ground();
         Directory.CreateDirectory(Path.Combine(ground.Worktree, "src", "click"));
-        var policy = ground.Policy(writes: ["Makefile", "src/click", "src/new"]);
+        Directory.CreateDirectory(Path.Combine(ground.Worktree, "src", "new"));
+        var policy = ground.Policy(writes: ["Makefile", "src/click", "src/new"], writesTree: TreeDirectories.Of("start", ["src", "src/click"]));
 
         Assert.True(policy.StepWrites("Makefile"));
         Assert.False(policy.StepWrites("lib/Makefile"));
@@ -762,6 +764,34 @@ public sealed class AgentPolicyTests
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Write(Path.Combine(ground.Worktree, "src", "click", "types.py")));
         Assert.Equal("the step's writes", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(Path.Combine(ground.Worktree, "lib", "Makefile"))).Rule);
         Assert.Equal("the step's writes", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(Path.Combine(ground.Worktree, "src", "new", "a.py"))).Rule);
+
+        // A ground that names writes names the tree they are read against.
+        Assert.Equal(
+            "the ground names writes and no tree they are read against (Parameter 'ground')",
+            Assert.Throws<ArgumentException>(() => new AgentPolicy(new PhysicalFileSystem(FilePermissionsFactory.Create()), HostDoubles.Platform(), PolicyGrounds.Of(ground.Worktree, [], [ground.Worktree], [], [], [], writes: ["Makefile"]) with { WritesTree = null })).Message);
+    }
+
+    /// <summary>
+    /// A write the step's writes refuse says how to write what an entry meant where the reading from the root changed it:
+    /// beneath a path that names a file - a directory still to be made - a directory to be made is written with a trailing
+    /// separator, and a wildcard of one name that once matched at any depth is written with '**/' for any depth.
+    /// </summary>
+    [Fact]
+    public void AWriteTheStepsWritesRefuse_SaysHowToWriteWhatAnEntryMeant()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy(writes: ["docs/generated", "*.md"]);
+        var generated = Path.Combine(ground.Worktree, "docs", "generated", "index.html");
+        var notes = Path.Combine(ground.Worktree, "docs", "notes.md");
+
+        Assert.Equal(
+            $"'{generated}' is outside the paths this step may write: docs/generated, *.md; 'docs/generated' names a file: a directory to be made is written 'docs/generated/'",
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(generated)).Reason);
+        Assert.Equal(
+            $"'{notes}' is outside the paths this step may write: docs/generated, *.md; '*.md' names the root's own: '**/*.md' names any depth",
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(notes)).Reason);
+        Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(writes: ["docs/generated/", "**/*.md"]).Write(generated));
+        Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(writes: ["docs/generated/", "**/*.md"]).Write(notes));
     }
 
     /// <summary>The shipped protected-path list, pinned word for word: a change in it is a change someone made.</summary>
@@ -3462,7 +3492,8 @@ public sealed class AgentPolicyTests
             string? worktree = null,
             string? workDirectory = null,
             IReadOnlyList<HiddenPlace>? credentialPlaces = null,
-            AgentStepStart? stepStart = null)
+            AgentStepStart? stepStart = null,
+            TreeDirectories? writesTree = null)
             => new(
                 new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())),
                 HostDoubles.Platform(platform, home: home),
@@ -3480,7 +3511,8 @@ public sealed class AgentPolicyTests
                     worktreeRules: worktreeRules,
                     protectedPaths: protectedPaths,
                     stateDirectories: stateDirectories,
-                    credentialPlaces: credentialPlaces) with { StepStart = stepStart });
+                    credentialPlaces: credentialPlaces,
+                    writesTree: writesTree) with { StepStart = stepStart });
 
         public void Dispose()
         {

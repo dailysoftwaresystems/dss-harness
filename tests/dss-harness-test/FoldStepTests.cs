@@ -286,7 +286,7 @@ public sealed class FoldStepTests
         var output = Substitute.For<DssHarness.Core.Output.IHarnessOutput>();
         var failing = new FlowGraphSyncs(graph, store, Ledger(kit), kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, output, TimeProvider.System);
 
-        var folded = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, store, kit.Harness.AgentService, Ledger(kit), failing).RunAsync(Run(kit, Fold()), Token);
+        var folded = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, store, kit.Harness.AgentService, Ledger(kit), failing).RunAsync(Run(kit, Fold()), Token);
 
         var blob = (await kit.Harness.RunGitAsync(kit.Main, ["hash-object", "b.txt"], Token)).StandardOutput.Trim();
         Assert.True(folded.Passed, folded.Error);
@@ -304,7 +304,7 @@ public sealed class FoldStepTests
         OrchestrationKit.Write(worktree, "c.txt", "three\n");
         var lines = File.ReadAllLines(kit.Layout.GraphSyncFile).Length;
 
-        var next = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, store, kit.Harness.AgentService, Ledger(kit), taking).RunAsync(Run(kit, Fold(), attempt: 2), Token);
+        var next = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, store, kit.Harness.AgentService, Ledger(kit), taking).RunAsync(Run(kit, Fold(), attempt: 2), Token);
 
         Assert.True(next.Passed, next.Error);
         Assert.Equal([null, null], store.ReadFolds(kit.Layout)!.Folds.Select(fold => fold.Graphed));
@@ -339,7 +339,7 @@ public sealed class FoldStepTests
         var output = Substitute.For<DssHarness.Core.Output.IHarnessOutput>();
         var failing = new FlowGraphSyncs(graph, store, Ledger(kit), kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, output, TimeProvider.System);
 
-        var deleted = await new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, store, kit.Harness.AgentService, Ledger(kit), failing).RunAsync(Run(kit, Delete()), Token);
+        var deleted = await new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, store, kit.Harness.AgentService, Ledger(kit), failing).RunAsync(Run(kit, Delete()), Token);
 
         Assert.True(deleted.Passed, deleted.Error);
         Assert.Equal([Agent], store.GraphViews(kit.Layout));
@@ -373,7 +373,7 @@ public sealed class FoldStepTests
         OrchestrationKit.Write(kit.Main, "c.txt", "three\n");
         await kit.Harness.CommitAllAsync(kit.Main, "a file the agent's base lacks", Token);
 
-        var rebased = await new RebaseStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, store, kit.Harness.AgentService, kit.Harness.GraphSyncs)
+        var rebased = await new RebaseStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, store, kit.Harness.AgentService, kit.Harness.GraphSyncs)
             .RunAsync(Run(kit, new WorkflowStep { Name = "rebase", Type = "rebase", Of = "made" }), Token);
         var line = JsonNode.Parse(File.ReadLines(kit.Layout.GraphSyncFile).Last())!;
 
@@ -439,7 +439,7 @@ public sealed class FoldStepTests
         await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
         var step = new WorkflowStep { Name = "rebase", Type = "rebase", Of = "made" };
 
-        var asked = await new RebaseStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, kit.Harness.AgentService, kit.Harness.GraphSyncs).RunAsync(Run(kit, step), Token);
+        var asked = await new RebaseStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService, kit.Harness.GraphSyncs).RunAsync(Run(kit, step), Token);
 
         Assert.Equal("foldConflicts", FlowQuestions.FoldQuestionOf(asked.DryRun!)!.Kind);
         Assert.Equal(["b.txt"], asked.DryRun!.Conflicting);
@@ -461,7 +461,7 @@ public sealed class FoldStepTests
 
         var refreshed = await Refreshing(kit).RunAsync(Run(kit, others, worksIn: null, target: Agent), Token);
         var none = Substitute.For<IAgentService>();
-        var nothing = await new RefreshStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, none, kit.Harness.GraphSyncs).RunAsync(
+        var nothing = await new RefreshStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, none, kit.Harness.GraphSyncs).RunAsync(
             Run(kit, others with { Paths = new FlowList([], "steps.find.output.paths") }, worksIn: null, target: Agent, read: Names("paths")),
             Token);
 
@@ -504,7 +504,7 @@ public sealed class FoldStepTests
         var dry = Answer(dryCode, "the dry run", standing, needs, refusals, dryCause);
         var agents = Scripted(dry, Answer(HarnessExit.Success, "folded", RequestStanding.Sound, [], []));
 
-        var result = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs).RunAsync(Run(kit, Fold()), Token);
+        var result = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs).RunAsync(Run(kit, Fold()), Token);
 
         switch (does)
         {
@@ -612,7 +612,7 @@ public sealed class FoldStepTests
 
     /// <summary>The fold step over <paramref name="agents"/> and the run's ledger of its folds.</summary>
     private static FoldStepRunner Folding(OrchestrationKit kit, IAgentService agents)
-        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs);
+        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs);
 
     /// <summary>
     /// The ledger settles each fold as it ended: an apply that stopped (21) stopped, with what it recorded it left - each
@@ -630,7 +630,7 @@ public sealed class FoldStepTests
         var throwing = Substitute.For<IAgentService>();
         throwing.FoldAsync(Arg.Any<FoldAgentRequest>(), Arg.Any<CancellationToken>())
             .Returns(call => call.Arg<FoldAgentRequest>().Apply ? Task.FromException<UseCaseResult<AgentVerbFacts>>(new IOException("the disk went away")) : Task.FromResult(sound));
-        FoldStepRunner Folding(IAgentService agents) => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs);
+        FoldStepRunner Folding(IAgentService agents) => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs);
 
         var stopped = await Folding(Scripted(sound, Answer(HarnessExit.Incomplete, "stopped part way", null, [], []))).RunAsync(Run(kit, Fold()), Token);
         var thrown = await Assert.ThrowsAsync<IOException>(() => Folding(throwing).RunAsync(Run(kit, Fold(), attempt: 2), Token));
@@ -669,7 +669,7 @@ public sealed class FoldStepTests
         agents.FoldAsync(Arg.Any<FoldAgentRequest>(), Arg.Any<CancellationToken>())
             .Returns(call => Task.FromResult(call.Arg<FoldAgentRequest>().Apply ? Answer(HarnessExit.Success, "folded", RequestStanding.Sound, [], [])
                 : call.Arg<FoldAgentRequest>().Allowances.New.Count > 0 ? Answer(HarnessExit.Success, "would fold", RequestStanding.Sound, [], []) : drys.Dequeue()));
-        var runner = new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs);
+        var runner = new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs);
         var answered = new[] { new FlowAnswerGiven("q1", "allow") };
 
         var asked = await runner.RunAsync(Run(kit, Fold()), Token);
@@ -713,7 +713,7 @@ public sealed class FoldStepTests
         OrchestrationKit.Write(kit.Main, "b.txt", "two\nwritten by the fold that crashed\n");
         await OrchestrationKit.WrittenAsync(Ledger(kit), kit.Layout, kit.Main, crashed);
 
-        var deleted = await new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs).RunAsync(Run(kit, step, attempt: 2), Token);
+        var deleted = await new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs).RunAsync(Run(kit, step, attempt: 2), Token);
 
         Assert.True(deleted.Passed, deleted.Error);
         Assert.Equal(
@@ -793,7 +793,7 @@ public sealed class FoldStepTests
                 await OrchestrationKit.WritingAsync(request.Intent!.Ledger, request.Intent.Layout, request.StartDirectory, request.Intent.Id);
                 throw new IOException("the disk went away");
             });
-        FoldStepRunner Folding() => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, agents, ledger, kit.Harness.GraphSyncs);
+        FoldStepRunner Folding() => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, ledger, kit.Harness.GraphSyncs);
 
         var thrown = await Assert.ThrowsAsync<IOException>(() => Folding().RunAsync(Run(kit, Fold()), Token));
 
@@ -826,7 +826,7 @@ public sealed class FoldStepTests
 
         var deleted = await Deleting(kit).RunAsync(Run(kit, Delete()), Token);
         var agents = Substitute.For<IAgentService>();
-        var again = await new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs)
+        var again = await new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs)
             .RunAsync(Run(kit, Delete(), attempt: 2), Token);
 
         Assert.True(deleted.Passed, deleted.Error);
@@ -860,19 +860,57 @@ public sealed class FoldStepTests
     /// A fold's within is read from the main tree's root, as the plan's check read the work item's owned paths that flow
     /// into it: the root's calc.c carries no calc.c beneath another directory, a path the main tree holds as a directory
     /// carries what is in it, and one it does not hold carries itself alone - so a fold carries only what the check found
-    /// the item alone to own.
+    /// the item alone to own. Whether a path names a directory is asked of the tree of the commit the run started from.
     /// </summary>
     [Fact]
-    public void AFoldsWithin_IsReadFromTheMainTreesRoot()
+    public async Task AFoldsWithin_IsReadFromTheMainTreesRoot()
     {
         using var main = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(main.Path, Token);
         main.WriteFile("calc.c", "int calc;\n");
         main.WriteFile("src/click/types.py", "types\n");
-        var directories = DssHarness.Core.Repository.GlobPattern.DirectoriesIn(new HarnessFactory().FileSystem, main.Path);
+        await harness.CommitAllAsync(main.Path, "the tree", Token);
+        Func<string, bool> directories = (await harness.StartTreeAsync(main.Path, Token)).Writing;
 
         Assert.Equal(
             ["lib/calc.c", "src/new/a.py"],
             FoldWithin.Outside(["calc.c", "lib/calc.c", "src/click/types.py", "src/click/testing.py", "src/new", "src/new/a.py"], ["calc.c", "src/click", "src/new"], directories, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A fold's within is read against the tree of the commit the run started from, never the main tree as the run's own
+    /// folds left it: an entry that named no directory there - a file to be made - names that path alone though another
+    /// item's fold, before this one, has since made it a directory in the main tree; so the order folds come in never
+    /// widens what a fold carries, and the question it asks says how to write the directory it may have meant.
+    /// </summary>
+    [Fact]
+    public async Task AFoldsWithin_IsReadAgainstTheRunsStartTree_NeverTheMainTreeAnEarlierFoldChanged()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var start = await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, "docs/api/index.md", "the agent's page\n");
+
+        // Another item's fold, before this one, made docs/api a directory in the main tree.
+        OrchestrationKit.Write(kit.Main, "docs/api/other.md", "another item's page\n");
+
+        var place = new FlowRunPlace(kit.Main, OrchestrationKit.Orchestrator, start, Definition)
+        {
+            StartTree = await TreeDirectories.AtAsync(kit.Harness.GitClient, kit.Main, start, kit.Harness.Platform.PathComparison, Token),
+        };
+        var step = Fold() with { Within = new FlowList(["docs/api"], null) };
+
+        var asked = await Runner(kit).RunAsync(Run(kit, step) with { Place = place }, Token);
+
+        // A fold that found nothing outside its within would have applied, holding no dry run.
+        Assert.NotNull(asked.DryRun);
+        Assert.Equal(["docs/api/index.md"], asked.DryRun.Outside);
+        Assert.Equal(
+            "'fold': the fold of 'ag' would write 'docs/api/index.md', which is outside the paths its within names; 'docs/api' names a file: a directory to be made is written 'docs/api/'",
+            FlowQuestions.FoldProblemOf("fold", asked.DryRun, FlowQuestions.FoldQuestionOf(asked.DryRun)!));
+        Assert.False(File.Exists(Path.Combine(kit.Main, "docs", "api", "index.md")));
     }
 
     /// <summary>
@@ -1150,8 +1188,8 @@ public sealed class FoldStepTests
         var sideTask = new SideTaskWrite(kit.Main, "b.txt", "two\na side-task's edit\n");
         var ledger = new FoldLedger(kit.Harness.OrchestrationStore, new SideTaskFirst(kit.Harness.FileSystem, Path.Combine(kit.Main, "b.txt"), "two\nagent edit\n", sideTask), TimeProvider.System);
         var (runner, step) = type == "fold"
-            ? ((IFlowStepTypeRunner)new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, kit.Harness.AgentService, ledger, kit.Harness.GraphSyncs), Fold())
-            : (new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, kit.Harness.AgentService, ledger, kit.Harness.GraphSyncs), Delete());
+            ? ((IFlowStepTypeRunner)new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService, ledger, kit.Harness.GraphSyncs), Fold())
+            : (new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService, ledger, kit.Harness.GraphSyncs), Delete());
         var head = await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token);
 
         var ended = await runner.RunAsync(Run(kit, step), Token);
@@ -1253,7 +1291,7 @@ public sealed class FoldStepTests
             },
         };
         var agents = kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git);
-        var runner = new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs);
+        var runner = new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs);
         var head = await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token);
 
         var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => runner.RunAsync(Run(kit, Delete()), Token));
@@ -1281,7 +1319,7 @@ public sealed class FoldStepTests
     private static WorkflowStep Rebase() => new() { Name = "rebase", Type = "rebase", Of = "made" };
 
     private static RebaseStepRunner Rebasing(OrchestrationKit kit)
-        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, kit.Harness.AgentService, kit.Harness.GraphSyncs);
+        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService, kit.Harness.GraphSyncs);
 
     private static WorkflowStep Fold() => new() { Name = "fold", Type = "fold", Of = "made" };
 
@@ -1304,13 +1342,13 @@ public sealed class FoldStepTests
             new TestIsolation());
 
     private static FoldStepRunner Runner(OrchestrationKit kit)
-        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, kit.Harness.AgentService, Ledger(kit), kit.Harness.GraphSyncs);
+        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService, Ledger(kit), kit.Harness.GraphSyncs);
 
     private static DeleteAgentStepRunner Deleting(OrchestrationKit kit)
-        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, kit.Harness.AgentService, Ledger(kit), kit.Harness.GraphSyncs);
+        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService, Ledger(kit), kit.Harness.GraphSyncs);
 
     private static RefreshStepRunner Refreshing(OrchestrationKit kit)
-        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, kit.Harness.OrchestrationStore, kit.Harness.AgentService, kit.Harness.GraphSyncs);
+        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService, kit.Harness.GraphSyncs);
 
     /// <summary>One run of <paramref name="step"/> on <paramref name="kit"/>'s orchestrator, working in <paramref name="worksIn"/> - or on <paramref name="target"/>.</summary>
     private static FlowStepRun Run(

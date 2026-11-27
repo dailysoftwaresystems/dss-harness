@@ -379,22 +379,39 @@ public sealed class FlowRunReportTests
     }
 
     /// <summary>
-    /// The report's notes say what its records could not give it: an events file whose last line was torn - the report
-    /// as of the event before it - and a definition that is not there, or is there and does not read with why said, so
-    /// no critical path is named.
+    /// The report's notes say what its records could not give it: an events file not read whole, in its reader's own
+    /// words - a torn last line, and apart from it the lines a power loss left from the first that holds a NUL on - the
+    /// report as of the event before it; and a definition that is not there, or is there and does not read with why said,
+    /// so no critical path is named.
     /// </summary>
     [Fact]
-    public void TheNotes_SayATornEventsLine_AndADefinitionThatIsNotThereOrDoesNotRead()
+    public void TheNotes_SayAnEventsFileNotReadWhole_AndADefinitionThatIsNotThereOrDoesNotRead()
     {
         var source = Source();
+        using var temp = new TempDirectory();
+        var files = new HarnessFactory().FileSystem;
+        var torn = temp.Combine("torn.jsonl");
+        var cut = temp.Combine("cut.jsonl");
+
+        foreach (var file in new[] { torn, cut })
+        {
+            using var log = FlowEventLog.Open(files, file);
+            _ = log.Append(Began, FlowChangeKind.SessionBegan);
+        }
+
+        File.AppendAllText(torn, """{"seq": 2, "at""");
+        File.WriteAllBytes(cut, [.. File.ReadAllBytes(cut), .. new byte[5], .. System.Text.Encoding.UTF8.GetBytes("2}\n")]);
 
         Assert.Empty(FlowRunReport.Of(source)["notes"]!.AsArray());
         Assert.Equal(
             [
-                $"the last line of '{source.Layout.EventsFile}' was torn - a writer stopped mid-line - and is not read: the report is as of the event before it",
+                $$"""'{{source.Layout.EventsFile}}' was not read whole: the log's last line has no newline and was set aside: '{"seq": 2, "at'; the report is as of the event before it""",
                 $"'{source.Layout.DefinitionFile}' is not there, so the report names no critical path: the steps' dependencies are the definition's",
             ],
-            FlowRunReport.Of(source with { EventsTorn = true, Definition = null })["notes"]!.AsArray().Select(note => note!.GetValue<string>()));
+            FlowRunReport.Of(source with { EventsSetAside = FlowEventLog.Read(files, torn).Torn, Definition = null })["notes"]!.AsArray().Select(note => note!.GetValue<string>()));
+        Assert.Equal(
+            [$"'{source.Layout.EventsFile}' was not read whole: the log's lines from the one after event 1 on hold a NUL, what a power loss left of a pass never put on the disk, and were set aside: ''; the report is as of the event before it"],
+            FlowRunReport.Of(source with { EventsSetAside = FlowEventLog.Read(files, cut).Torn })["notes"]!.AsArray().Select(note => note!.GetValue<string>()));
         Assert.Equal(
             [$"'{source.Layout.DefinitionFile}' does not read: it holds null - so the report names no critical path: the steps' dependencies are the definition's"],
             FlowRunReport.Of(source with { Definition = null, DefinitionWhy = "it holds null" })["notes"]!.AsArray().Select(note => note!.GetValue<string>()));
@@ -485,7 +502,9 @@ public sealed class FlowRunReportTests
         var torn = JsonNode.Parse((await CliRunner.RunAsync([FlowService.ReadReportCommand, "o1", "--json", "-C", kit.Main], TestContext.Current.CancellationToken)).StandardOutput)!["report"]!;
 
         Assert.Equal(FlowTimeConverter.Written(Began), torn["at"]!.GetValue<string>());
-        Assert.Contains($"the last line of '{layout.EventsFile}' was torn", torn["notes"]![0]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal(
+            $"'{layout.EventsFile}' was not read whole: the log's last line has no newline and was set aside: '{{\"seq\":2,\"at\":\"2026-'; the report is as of the event before it",
+            torn["notes"]![0]!.GetValue<string>());
     }
 
     /// <summary>

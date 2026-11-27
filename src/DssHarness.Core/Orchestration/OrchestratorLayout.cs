@@ -762,4 +762,100 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <param name="agent">The agent's name.</param>
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
     public string AgentStepRecordFile(string agent, string instance) => Path.Combine(AgentStepDirectory(agent, Flow.FlowInstanceId.DirectoryOf(instance)), StepRecordFileName);
+
+    /// <summary>
+    /// The places of a run's own directory, and of each agent's in it, whose writers keep bytes as they came - copied in,
+    /// or written by an agent, its commands or a provider - never through the mask a session keeps the run's records
+    /// through: each agent's Claude transcripts, its scratch and task files, the plans, the files the run's file inputs
+    /// were given, the run's artifacts, the remote workflows' files as they were fetched; and of each agent the bytes of
+    /// each file it was handed from the main tree, the anchor rows it files, what its worktree's evidence roots held, and
+    /// its conversations with an API client, whose messages are the provider's own bytes. The one owner of the set, beside
+    /// the places it is of (<see cref="AttemptPlacesKeptAsTheyCame"/> for the places of an attempt's directory).
+    /// </summary>
+    public static IReadOnlyList<RunPlace> RunPlacesKeptAsTheyCame { get; } =
+    [
+        new($"{LogsDirectoryName}/*", "each agent's Claude transcripts, copied as they are"),
+        new(WorkDirectoryName, "each agent's scratch and task files"),
+        new(PlansDirectoryName, "the plans, the orchestrator's and each agent's"),
+        new(HarnessLayout.OrchestratorInputsDirectoryName, "the files the run's file inputs were given, copied"),
+        new(HarnessLayout.OrchestratorArtifactsDirectoryName, "the run's artifacts"),
+        new(RemoteWorkflowsDirectoryName, "the remote workflows' files, as they were fetched"),
+        new($"{AgentsDirectoryName}/*/{SharedDirectoryName}", "the bytes of each file an agent was handed from the main tree"),
+        new($"{AgentsDirectoryName}/*/{RowsDirectoryName}", "the anchor rows an agent files"),
+        new($"{AgentsDirectoryName}/*/{EvidenceDirectoryName}", "what an agent's worktree's evidence roots held, copied"),
+        new($"{AgentsDirectoryName}/*/{SessionsDirectoryName}", "an agent's conversations with an API client, the provider's messages as they came"),
+    ];
+
+    /// <summary>
+    /// The directories of a run that each hold one attempt of an agent's or of the engine's work: every step's own
+    /// directory - the run's, and each agent's - each advice of an asking step, and each call of <c>ask-orchestrator</c>
+    /// and of <c>analyze-orchestrator-report</c>, each named below the run's directory, a <c>*</c> standing for any one
+    /// name. What each holds as it came is <see cref="AttemptPlacesKeptAsTheyCame"/>.
+    /// </summary>
+    public static IReadOnlyList<string> AttemptDirectories { get; } =
+    [
+        $"{StepsDirectoryName}/*",
+        $"{AgentsDirectoryName}/*/{StepsDirectoryName}/*",
+        $"{StepsDirectoryName}/*/{Flow.AdvisorRunner.AdviceDirectoryName}/*",
+        $"{AgentsDirectoryName}/*/{StepsDirectoryName}/*/{Flow.AdvisorRunner.AdviceDirectoryName}/*",
+        $"{AsksDirectoryName}/*",
+        $"{AnalysisDirectoryName}/*",
+    ];
+
+    /// <summary>
+    /// The places of an attempt's directory (<see cref="AttemptDirectories"/>) whose writers keep bytes as they came: each
+    /// red leg's phase log and each red CI job's log, copied - masked, where at all, by the runner's values alone, never by
+    /// the session's - and each red leg's log a measure call kept; what the attempt's agent was handed to read, its skills
+    /// and the copies its continuation record names, red legs' logs among them; a side agent's work directory and its
+    /// conversations with an API client; and the continuation record itself, which quotes red legs' lines as they came.
+    /// </summary>
+    public static IReadOnlyList<RunPlace> AttemptPlacesKeptAsTheyCame { get; } =
+    [
+        new(StepLogsDirectoryName, "each red leg's phase log and each red CI job's log, copied"),
+        new($"{Agents.AgentMeasureSupport.RecordsDirectoryName}/*/{StepLogsDirectoryName}", "each red leg's phase log a measure call kept"),
+        new(HandedDirectoryName, "what the attempt's agent was handed to read: its skills, and the copies its continuation record names"),
+        new(WorkDirectoryName, "a side agent's work directory"),
+        new(SessionsDirectoryName, "a side agent's conversations with an API client, the provider's messages as they came"),
+        new(
+            $"{Agents.AgentCallRecords.ToolResultsDirectoryName}/{Path.GetFileName(Agents.AgentCallRecords.ResultFile(string.Empty, Agents.Runtime.KeptResults.ContinuationId))}",
+            "the continuation record, which quotes red legs' lines as they came",
+            IsFile: true),
+    ];
+
+    /// <summary>
+    /// Whether <paramref name="relative"/>, a path below a run's directory spelled with forward separators, is a place whose
+    /// writer keeps bytes as they came - one of <see cref="RunPlacesKeptAsTheyCame"/>, or one of
+    /// <see cref="AttemptPlacesKeptAsTheyCame"/> in one of <see cref="AttemptDirectories"/> - a directory whole, or the one
+    /// file a place names: the one question every reader of the run's directory that holds no session's mask asks.
+    /// </summary>
+    /// <param name="relative">The path below the run's directory.</param>
+    /// <param name="isDirectory">Whether the path is a directory.</param>
+    public static bool IsKeptAsItCame(string relative, bool isDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(relative);
+
+        return RunPlacesKeptAsTheyCame.Any(place => place.IsFile != isDirectory && RunPlace.Names(place.Path, relative))
+            || AttemptDirectories.Any(attempt => AttemptPlacesKeptAsTheyCame.Any(place => place.IsFile != isDirectory && RunPlace.Names($"{attempt}/{place.Path}", relative)));
+    }
+}
+
+/// <summary>A place of a run's directory, as <see cref="OrchestratorLayout"/> marks it.</summary>
+/// <param name="Path">The place, name by name, joined by <c>/</c>, a <c>*</c> standing for any one name.</param>
+/// <param name="Holds">What it holds, as a sentence says it.</param>
+/// <param name="IsFile">Whether the place is one file; a directory, with all it holds, where it is not.</param>
+public sealed record RunPlace(string Path, string Holds, bool IsFile = false)
+{
+    /// <summary>Whether <paramref name="relative"/> is the place <paramref name="place"/> names, name by name, a <c>*</c> standing for any one.</summary>
+    /// <param name="place">The place's pattern.</param>
+    /// <param name="relative">A path, spelled with forward separators.</param>
+    public static bool Names(string place, string relative)
+    {
+        ArgumentNullException.ThrowIfNull(place);
+        ArgumentNullException.ThrowIfNull(relative);
+
+        var names = place.Split('/');
+        var path = relative.Split('/');
+
+        return names.Length == path.Length && names.Zip(path).All(pair => pair.First == "*" || string.Equals(pair.First, pair.Second, StringComparison.Ordinal));
+    }
 }
