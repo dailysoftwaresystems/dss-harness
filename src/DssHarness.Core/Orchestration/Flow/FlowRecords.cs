@@ -240,6 +240,11 @@ public sealed record FlowEvent(
 /// one count, so a resume ranks what waits by the pass that freed it as the session before did; null until the engine
 /// draws it, or where a record written before the order was kept says none.
 /// </param>
+/// <param name="Counted">
+/// The record of a repeat a plan update was planned in: where its own bound counts from (<see cref="FlowLoopCount"/>),
+/// so every session holds the loop to the same count; null for every other record, and for a loop no update was
+/// planned in, whose bound counts every iteration.
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -293,7 +298,8 @@ public sealed record FlowStepRecord(
     JsonObject? Inputs = null,
     FlowLoopDecision? Decided = null,
     FlowStepMeasure? Measure = null,
-    long? DrawnIn = null)
+    long? DrawnIn = null,
+    FlowLoopCount? Counted = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -347,7 +353,40 @@ public sealed record FlowStepRecord(
                 ? "a skill it was given names no name, place, file, digest or folder"
             : (Inputs is not null || Decided is not null) && !Group ? "it holds what only a group's own record holds: a use's inputs, or a loop's decision"
             : Decided?.Problem() is { } decided ? $"its loop's decision: {decided}"
+            : Counted is not null && !Group ? "it holds where a loop's bound counts from, and only a loop's own record does"
+            : Counted?.Problem() is { } counted ? $"where its bound counts from: {counted}"
             : Measure?.Problem() is { } measure ? $"its measure: {measure}"
+            : null;
+}
+
+/// <summary>
+/// Where a repeat's own bound counts from, once a plan update was planned in one of its iterations: the update opens a
+/// count of its own, so the loop's bound - its <c>maxIterations</c>, or its rounds and the further ones blocking holds
+/// for - is held to the iterations from the one the update was planned in, and to the iterations granted past it since,
+/// never to what the loop spent before. A late update in a long run is held to the loop's own bound from where its
+/// planning began, and refused by no iteration the plan spent before it; nothing is added to the bound and nothing taken
+/// from it. Kept in the loop's own record; the one owner of what a loop's bound counts, for the engine and the run's
+/// facts alike (<see cref="Made"/>, <see cref="Given"/>).
+/// </summary>
+/// <param name="Update">The plan update whose planning began the count, by its id.</param>
+/// <param name="Before">The iterations the loop had made before the one the update was planned in, which the count leaves out.</param>
+/// <param name="Granted">The iterations its answers and updates had granted past its bound by then, which the count leaves out too.</param>
+public sealed record FlowLoopCount(string Update, int Before, int Granted)
+{
+    /// <summary>The iterations of <paramref name="made"/> a loop has made that its bound counts: every one, where <paramref name="count"/> is none; else those from the one its update was planned in.</summary>
+    /// <param name="made">The iterations the loop has made.</param>
+    /// <param name="count">Where its bound counts from; null where every iteration counts.</param>
+    public static int Made(int made, FlowLoopCount? count) => made - (count?.Before ?? 0);
+
+    /// <summary>The iterations of <paramref name="granted"/> granted past a loop's bound that its count holds: every one, where <paramref name="count"/> is none; else those granted since it began.</summary>
+    /// <param name="granted">The iterations its answers and updates have granted past its bound.</param>
+    /// <param name="count">Where its bound counts from; null where every iteration counts.</param>
+    public static int Given(int granted, FlowLoopCount? count) => granted - (count?.Granted ?? 0);
+
+    /// <summary>What is wrong with this count; null when nothing is.</summary>
+    public string? Problem()
+        => !FlowUpdateIds.IsId(Update) ? $"'{Update}' is not an update's id"
+            : Before < 0 || Granted < 0 ? "it counts fewer than no iterations"
             : null;
 }
 
@@ -1447,6 +1486,7 @@ public sealed record FlowSnapshot(
 /// <param name="Decided">An iteration's of a repeat that says decideAfter: the decision read at its deciding step (<see cref="FlowStepRecord.Decided"/>); null for every other.</param>
 /// <param name="Measure">What the instance's work measured (<see cref="FlowStepRecord.Measure"/>); null until the engine draws it.</param>
 /// <param name="DrawnIn">Where the pass that drew it stands in the run's own order (<see cref="FlowStepRecord.DrawnIn"/>); null until the engine draws it.</param>
+/// <param name="Counted">A repeat's that a plan update was planned in: where its bound counts from (<see cref="FlowStepRecord.Counted"/>); null for every other.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -1500,4 +1540,5 @@ public sealed record FlowSnapshotStep(
     JsonObject? Inputs = null,
     FlowLoopDecision? Decided = null,
     FlowStepMeasure? Measure = null,
-    long? DrawnIn = null);
+    long? DrawnIn = null,
+    FlowLoopCount? Counted = null);

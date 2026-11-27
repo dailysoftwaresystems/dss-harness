@@ -446,7 +446,7 @@ public static class FlowUpdateGates
             definition,
             flow.Run,
             flow.Status,
-            [.. flow.Steps.Select(step => new FlowStepAt(step.Step, step.State, step.Group, step.Iteration, step.Index, step.Visit, step.Instance))],
+            [.. flow.Steps.Select(step => new FlowStepAt(step.Step, step.State, step.Group, step.Iteration, step.Index, step.Visit, step.Instance, step.Counted))],
             updates?.Updates ?? [],
             cause);
 
@@ -529,11 +529,14 @@ public static class FlowUpdateGates
             return null;
         }
 
+        // The loop's rounds counted as the engine counts its bound: from the iteration a plan update was planned in, where
+        // one was (FlowLoopCount).
         var rounds = steps.Where(step => step.Group && step.Step == group).ToList();
         var last = rounds.Max(step => step.Iteration) ?? 0;
+        var counted = steps.LastOrDefault(step => step.Group && step.Step == loopPath && step.Iteration is null).Counted;
         var allowed = bound + amend.AddedIterationsAllowed;
 
-        if (last < allowed || rounds.Any(step => step.Iteration == last && step.State is not (nameof(FlowInstanceState.Done) or nameof(FlowInstanceState.Failed) or nameof(FlowInstanceState.Skipped))))
+        if (FlowLoopCount.Made(last, counted) < allowed || rounds.Any(step => step.Iteration == last && step.State is not (nameof(FlowInstanceState.Done) or nameof(FlowInstanceState.Failed) or nameof(FlowInstanceState.Skipped))))
         {
             return null;
         }
@@ -888,4 +891,5 @@ public static class FlowUpdateGates
 /// <param name="Index">The index of the work item an instance of a <c>forEach</c> group carries; null for the group's own visit and for every other step.</param>
 /// <param name="Visit">Which visit of its step in its scope the instance is, from 1: a group run again for a plan update is its next visit.</param>
 /// <param name="Instance">The instance's id: what tells a visit an update's entry names from one the run holds.</param>
-public readonly record struct FlowStepAt(string Step, string State, bool Group, int? Iteration, int? Index = null, int Visit = 1, string? Instance = null);
+/// <param name="Counted">A repeat's own: where its bound counts from, once a plan update was planned in it (<see cref="FlowLoopCount"/>); null for every other.</param>
+public readonly record struct FlowStepAt(string Step, string State, bool Group, int? Iteration, int? Index = null, int Visit = 1, string? Instance = null, FlowLoopCount? Counted = null);

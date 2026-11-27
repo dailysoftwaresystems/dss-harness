@@ -399,8 +399,9 @@ internal sealed class FlowComing
         if (step.Repeat is { } repeat && !IsIteration(group.Instance))
         {
             // A repeat instance not ended is a loop of its own, beside the iterations it made: its bound widened by what
-            // was granted it, past the iterations it has made.
-            var bound = repeat.Bound(FlowGrants.IterationsOf(group.Instance, questions, updates));
+            // was granted it, past the iterations it has made - each counted as the engine counts them, from the
+            // iteration a plan update was planned in where its record says one was (FlowLoopCount).
+            var bound = repeat.Bound(FlowLoopCount.Given(FlowGrants.IterationsOf(group.Instance, questions, updates), group.Counted));
 
             if (bound == int.MaxValue)
             {
@@ -408,7 +409,7 @@ internal sealed class FlowComing
                 return;
             }
 
-            var made = _flow.Steps.Count(held => IterationOf(group.Instance, held.Instance));
+            var made = FlowLoopCount.Made(_flow.Steps.Count(held => IterationOf(group.Instance, held.Instance)), group.Counted);
 
             if (bound - made > 0)
             {

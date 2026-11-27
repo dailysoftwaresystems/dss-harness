@@ -2600,4 +2600,78 @@ public sealed class FlowPlanPiecesTests
             .Order(StringComparer.Ordinal);
         Assert.Equal(["rounds.items.build three src/shared/**", "rounds.items.rebuild four src/four/**"], built);
     }
+
+    /// <summary>
+    /// A planning loop counts its own bound from the iteration a plan update is planned in: the update a round's check
+    /// raised after the plan spent every iteration its loop allows is held to that bound from where its planning
+    /// begins - the iteration it reopens and the one after it - never refused by the iterations the plan spent before it;
+    /// at the bound of its own count the loop asks, saying what it counted since the update, and a person's more is one
+    /// more of that count. The count is the loop's own record's, so a session that takes the run up counts it alike.
+    /// </summary>
+    [Fact]
+    public async Task APlanningLoopAPlanUpdateReopens_CountsItsBoundFromTheIterationTheUpdateIsPlannedIn()
+    {
+        using var temp = new TempDirectory();
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", AuditedRounds) with
+        {
+            Amend = new FlowAmend("request", 5, null, "planning.plan-update", "check", "planning.plan.latest.scope", "rounds.items.build", "rounds.items.rebuild", "rounds.items.undo", null),
+        };
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        // The plan passes its check at the loop's second iteration, its bound; the check of the update the round's check
+        // raises refuses the updated plan, and so does the iteration after - the last of the update's own count - and
+        // the one a person's more gives passes.
+        FlowStepResult Checked(FlowStepRun run, bool ok)
+            => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = ok,
+                ["problems"] = ok ? new JsonArray() : new JsonArray($"'{run.Instance}' found what does not pass"),
+                ["items"] = UnionOf(run),
+            });
+
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"))))
+            .On("plan-update", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"))))
+            .On("check", run => Checked(run, run.Instance is "planning#2.check" or "planning#4.check"))
+            .On("item-check", run => Checked(run, run.Instance != "rounds#1.item-check"))
+            .On("audit", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["clean"] = true, ["items"] = new JsonArray() }));
+
+        FlowQuestion asked;
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+            var paused = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.True(FlowRunStatus.Paused == paused.Status, paused.Summary);
+            asked = coordinator.OpenQuestions.Single();
+        }
+
+        // The update reopened the loop's second iteration and drew a third: two of its own count, the bound the loop
+        // says - and only then was a person asked.
+        Assert.Equal(("loopBound", "planning"), (asked.Kind, asked.Instance));
+        Assert.Equal("'planning' has run 2 iterations since plan update u1 was planned in it and its until still reads false; at most 2 are allowed (maxIterations)", asked.Problem);
+        Assert.Equal(
+            ["planning#1.check", "planning#2.check", "planning#2.check+2", "planning#3.check"],
+            runner.Started.Where(started => started.EndsWith(".check", StringComparison.Ordinal) || started.Contains(".check+", StringComparison.Ordinal)).Where(started => started.StartsWith("planning", StringComparison.Ordinal)));
+        Assert.Equal(new FlowLoopCount("u1", 1, 0), harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "planning").Counted);
+
+        // A session that takes the run up counts the loop as the one before did: the person's more is one more of the
+        // update's count, and the plan it draws passes.
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = CoordinatorOf(definition, runner, again, harness, layout, ResumeOf(harness, layout, definition));
+
+            Assert.True(resumed.TryAnswer(asked.Id, "more", null, out var refused), refused);
+            var end = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.True(FlowRunStatus.Done == end.Status, $"{end.Summary} | asked: {string.Join("; ", resumed.OpenQuestions.Select(open => open.Problem))}");
+        }
+
+        Assert.Contains("planning#4.check", runner.Started);
+        Assert.DoesNotContain(runner.Started, started => started.StartsWith("planning#5", StringComparison.Ordinal));
+        Assert.Equal(FlowUpdateStates.Done, UpdatesOf(harness, layout).Updates.Single().State);
+    }
 }

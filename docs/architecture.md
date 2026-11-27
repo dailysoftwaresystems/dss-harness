@@ -4562,7 +4562,12 @@ The planning of a plan update: where the run has begun the scope its plan update
 (the group its `amend.step` is directly in), a taken change is not refused but planned - the step the block names is
 raised by the update alone as a handler is raised by an ending (`FlowCoordinator.RaisePlanner`: a new visit of it in
 the newest instance of that scope, `FlowInstance.RaisedByUpdate` in its record, a group around it that had ended in
-progress again), never drawn by the ordinary schedule (`FlowCoordinator.Instantiate`), and admitted ahead of
+progress again, and every `repeat` around it counting its own bound from the iteration the update is planned in -
+`FlowLoopCount`, in the loop's own record: the iterations from that one, and those granted past the bound since,
+`FlowLoopCount.Made` and `Given` the one count the engine, the run's facts and the gates read, so the planning of a
+late update in a long run is held to the loop's own bound from where it begins, never refused by the iterations the
+plan spent before it, the bound's question saying what it counted since that update), never drawn by the ordinary
+schedule (`FlowCoordinator.Instantiate`), and admitted ahead of
 everything else (`AdmissionWalk`, which walks every other waiting step in the order it first became ready - the pass
 that drew it, `FlowInstance.DrawnIn` in the run's own order, never a clock - the fixed order breaking ties among what
 one pass freed: a step blocked on a claim reserves it, so a fold or an

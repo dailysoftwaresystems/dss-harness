@@ -345,6 +345,13 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     internal int ExtraIterations;
 
     /// <summary>
+    /// A repeat's: where its own bound counts from, once a plan update was planned in one of its iterations
+    /// (<see cref="FlowLoopCount"/>) - kept in its record, so every session counts it alike; null where none was, and the
+    /// bound counts every iteration.
+    /// </summary>
+    internal FlowLoopCount? Counted;
+
+    /// <summary>
     /// The updates that owe this loop work - each one's id, added where a piece it places finds the work-item group's
     /// round ended, so the work is owed to the loop's next iteration: the loop then runs again whatever its
     /// <c>until</c> says, and where it is at its bound one iteration is added for the update.
@@ -2426,15 +2433,22 @@ public sealed class FlowCoordinator
 
         for (var at = scope; at is not null; at = at.Parent)
         {
-            // Every repeat that had ended around the planning step's scope is in progress again with it: once the
-            // raised visit and what the amend block's then set going have ended, the loop reads its until again, over
-            // the plan as the update left it, and where that plan does not pass what the flow has it pass - the check
-            // the block's then names returning its problems - the loop's next iteration is the settling, drawn before
-            // anything of the update is placed or anyone is told. A loop that had not ended is not touched, and a
-            // failed one is left as its failure left it.
-            if (at.LoopOf is { Step.Repeat: not null } loop && loop.State == FlowInstanceState.Done)
+            // Every repeat around the planning step's scope counts its bound from the iteration the update is planned
+            // in: the planning of the update is work of its own, held to the loop's own bound from where it begins and
+            // never refused by iterations the plan spent before it. One that had ended is in progress again with it:
+            // once the raised visit and what the amend block's then set going have ended, the loop reads its until
+            // again, over the plan as the update left it, and where that plan does not pass what the flow has it pass -
+            // the check the block's then names returning its problems - the loop's next iteration is the settling,
+            // drawn before anything of the update is placed or anyone is told. A failed one is left as its failure left
+            // it.
+            if (at.LoopOf is { Step.Repeat: not null, State: not FlowInstanceState.Failed } loop)
             {
-                InProgressAgain(loop, $"in progress again for update {update.Id}");
+                CountFrom(loop, at, update);
+
+                if (loop.State == FlowInstanceState.Done)
+                {
+                    InProgressAgain(loop, $"in progress again for update {update.Id}");
+                }
             }
         }
 
@@ -2863,7 +2877,7 @@ public sealed class FlowCoordinator
 
     /// <summary>Every step instance the run holds, as the gates read one: what the gates and the rule of whether a work-item group runs a round more read of this engine's own state.</summary>
     private IReadOnlyList<FlowStepAt> StepsAt()
-        => [.. _created.Select(instance => new FlowStepAt(instance.Path, instance.State.ToString(), instance.Step.IsGroup, instance.Iteration, instance.Index, instance.Visit, instance.Id))];
+        => [.. _created.Select(instance => new FlowStepAt(instance.Path, instance.State.ToString(), instance.Step.IsGroup, instance.Iteration, instance.Index, instance.Visit, instance.Id, instance.Counted))];
 
     /// <summary>
     /// Takes an amendment of the run's request - a person's, handed over through the inbox to this engine or read with
@@ -5844,11 +5858,45 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>The iterations a repeat's own bound allows: its maxIterations, or its rounds and the further ones its blocking holds for.</summary>
+    /// <summary>
+    /// The iterations a repeat's own bound allows: its maxIterations, or its rounds and the further ones its blocking
+    /// holds for, with those granted past it that its count holds (<see cref="FlowLoopCount.Given"/>) - every one, or,
+    /// where a plan update was planned in it, those granted since.
+    /// </summary>
     private static int BoundOf(WorkflowStep declaration, FlowInstance instance)
     {
         // blockersLimitRounds: false is no bound but the budget: no count of iterations ever reaches it.
-        return declaration.Repeat!.Bound(instance.ExtraIterations);
+        return declaration.Repeat!.Bound(FlowLoopCount.Given(instance.ExtraIterations, instance.Counted));
+    }
+
+    /// <summary>
+    /// The iterations of <paramref name="loop"/> its own bound counts (<see cref="FlowLoopCount.Made"/>): every one it
+    /// has made, or, where a plan update was planned in it, those from the iteration that update was planned in - the
+    /// one count every reading of the loop's bound makes.
+    /// </summary>
+    private static int IterationsCounted(FlowInstance loop)
+        => FlowLoopCount.Made(loop.Children.Count, loop.Counted);
+
+    /// <summary>The iterations of <paramref name="loop"/> its bound counts, as its question says them: since the update that began the count, where one did.</summary>
+    private static string IterationsSaid(FlowInstance loop)
+        => $"{IterationsCounted(loop).ToString(System.Globalization.CultureInfo.InvariantCulture)} iterations{(loop.Counted is { } counted ? $" since plan update {counted.Update} was planned in it" : string.Empty)}";
+
+    /// <summary>
+    /// Begins the count of <paramref name="loop"/>'s bound at <paramref name="iteration"/>, the iteration the plan update
+    /// <paramref name="update"/> is planned in (<see cref="FlowLoopCount"/>): its bound counts the iterations from that
+    /// one, and the iterations granted past it from now, so the planning of a late update is held to the loop's own
+    /// bound from where it begins, never refused by iterations the plan spent before it. Kept in the loop's record at
+    /// once. An update whose count began already - a session that takes its entry again - begins none.
+    /// </summary>
+    private void CountFrom(FlowInstance loop, Scope iteration, FlowUpdateEntry update)
+    {
+        if (loop.Counted?.Update == update.Id || loop.Children.IndexOf(iteration) is not (>= 0 and var before))
+        {
+            return;
+        }
+
+        loop.Counted = new FlowLoopCount(update.Id, before, loop.ExtraIterations);
+        WriteStepRecordOf(loop);
     }
 
     /// <summary>Makes the repeat group's next iteration where its bound allows one, and asks at its bound where it does not.</summary>
@@ -5859,9 +5907,9 @@ public sealed class FlowCoordinator
 
         // The loop's own bound is said first: at it the run asks, and only an iteration the loop may have is held to
         // the instance bound.
-        if (iteration > bound)
+        if (IterationsCounted(instance) + 1 > bound)
         {
-            AskAtTheBound(instance, $"'{instance.Id}' has run {iteration - 1} iterations and its until still reads false");
+            AskAtTheBound(instance, $"'{instance.Id}' has run {IterationsSaid(instance)} and its until still reads false");
             return false;
         }
 
@@ -5902,7 +5950,7 @@ public sealed class FlowCoordinator
         _ = Ask(
             instance,
             "loopBound",
-            $"{stood}; {said}{(instance.ExtraIterations > 0 ? $", and {instance.ExtraIterations.ToString(System.Globalization.CultureInfo.InvariantCulture)} more were given by its answers" : string.Empty)}",
+            $"{stood}; {said}{(FlowLoopCount.Given(instance.ExtraIterations, instance.Counted) is > 0 and var given ? $", and {given.ToString(System.Globalization.CultureInfo.InvariantCulture)} more were given by its answers" : string.Empty)}",
             WorkflowValidator.AnswersOf["loopBound"]);
 
         // The work plan updates owe the loop is the question's to carry from here: each owing entry says so once the
@@ -5973,7 +6021,7 @@ public sealed class FlowCoordinator
         var owed = IterationOwed(instance);
         var to = until && !owed ? FlowLoopDecision.Ends : null;
 
-        if (to is null && repeat.Rounds is { } rounds && instance.Children.Count >= rounds)
+        if (to is null && repeat.Rounds is { } rounds && IterationsCounted(instance) >= rounds)
         {
             var blocking = Holds(repeat.Blocking!, body, out var unreadable);
 
@@ -6036,7 +6084,7 @@ public sealed class FlowCoordinator
 
     /// <summary>Whether <paramref name="loop"/>'s next iteration would pass its own bound: where it asks, at an iteration's end or at its deciding step.</summary>
     private static bool AtItsBound(FlowInstance loop)
-        => loop.Children.Count + 1 > BoundOf(loop.Step, loop);
+        => IterationsCounted(loop) + 1 > BoundOf(loop.Step, loop);
 
     /// <summary>
     /// Makes what follows from <paramref name="decision"/>, the decision the current iteration of a repeat that decides at
@@ -6062,7 +6110,7 @@ public sealed class FlowCoordinator
             case FlowLoopDecision.Asks:
                 AskAtTheBound(
                     instance,
-                    $"'{instance.Id}' has run {instance.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} iterations, its '{instance.Step.Repeat!.DecideAfter}' ended among them, and its until still reads false");
+                    $"'{instance.Id}' has run {IterationsSaid(instance)}, its '{instance.Step.Repeat!.DecideAfter}' ended among them, and its until still reads false");
                 return true;
             case FlowLoopDecision.Ends or FlowLoopDecision.EndsLeaving:
                 return EndAtTheDecision(instance, body);
@@ -6377,7 +6425,7 @@ public sealed class FlowCoordinator
             return true;
         }
 
-        if (!decided && instance.Step.Repeat!.Rounds is { } rounds && instance.Children.Count >= rounds)
+        if (!decided && instance.Step.Repeat!.Rounds is { } rounds && IterationsCounted(instance) >= rounds)
         {
             // Past the rounds another iteration is created only while blocking holds: whether what is left has to be
             // dealt with before the loop may end, worked out by the engine from what the body's steps answered.
@@ -6716,7 +6764,7 @@ public sealed class FlowCoordinator
     {
         var allowed = _definition.Amend!.AddedIterationsAllowed;
 
-        if (loop.Children.Count < BoundOf(loop.Step, loop)
+        if (IterationsCounted(loop) < BoundOf(loop.Step, loop)
             || _updates.Updates.FirstOrDefault(update => update.AddedIteration is null && IterationOwedBy(update.Id, loop)) is not { } update)
         {
             // The loop has an iteration of its own still - the owed work joins it, and nothing is added - or nothing is
@@ -14268,7 +14316,8 @@ public sealed class FlowCoordinator
             OwnScopeOf(instance)?.UseInputs?.DeepClone().AsObject(),
             instance.ScopeOf?.Decision,
             instance.Measure,
-            instance.DrawnIn == 0 ? null : instance.DrawnIn);
+            instance.DrawnIn == 0 ? null : instance.DrawnIn,
+            instance.Counted);
     }
 
     /// <summary>
@@ -15228,6 +15277,7 @@ public sealed class FlowCoordinator
             instance.Targets = record.Targets;
             instance.FromResume = true;
             instance.Measure = record.Measure;
+            instance.Counted = record.Counted;
 
             if (OwnScopeOf(instance) is { } own)
             {
