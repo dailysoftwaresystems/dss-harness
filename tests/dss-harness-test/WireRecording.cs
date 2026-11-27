@@ -10,15 +10,33 @@ namespace DssHarness.Tests;
 /// </summary>
 internal sealed class WireRecording(HttpMessageHandler inner, string directory) : DelegatingHandler(inner)
 {
+    private const string Request = "-request.json";
+
     private int _sent;
+
+    /// <summary>
+    /// The streamed answer kept beside <paramref name="request"/> - a request's file as this recording names it - in the
+    /// directory it is in: the one name of each pair's answer the readers of a recording use.
+    /// </summary>
+    public static string AnswerOf(string request)
+    {
+        var name = Path.GetFileName(request);
+
+        if (!name.EndsWith(Request, StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"'{name}' is no request this recording kept", nameof(request));
+        }
+
+        return Path.Combine(Path.GetDirectoryName(request)!, $"{name[..^Request.Length]}-answer.sse");
+    }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var at = Path.Combine(Directory.CreateDirectory(directory).FullName, Interlocked.Increment(ref _sent).ToString("D2", CultureInfo.InvariantCulture));
-        await File.WriteAllBytesAsync($"{at}-request.json", await request.Content!.ReadAsByteArrayAsync(cancellationToken), cancellationToken);
+        await File.WriteAllBytesAsync($"{at}{Request}", await request.Content!.ReadAsByteArrayAsync(cancellationToken), cancellationToken);
 
         var response = await base.SendAsync(request, cancellationToken);
-        var answer = new StreamContent(new Tee(await response.Content.ReadAsStreamAsync(cancellationToken), File.Create($"{at}-answer.{(response.IsSuccessStatusCode ? "sse" : "json")}")));
+        var answer = new StreamContent(new Tee(await response.Content.ReadAsStreamAsync(cancellationToken), File.Create(response.IsSuccessStatusCode ? AnswerOf($"{at}{Request}") : $"{at}-answer.json")));
 
         foreach (var header in response.Content.Headers)
         {
