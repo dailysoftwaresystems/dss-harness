@@ -1878,7 +1878,9 @@ public sealed class FlowService(
                 // id by the one owner of an entry weighed once: taken or refused, the run's records hold it under that
                 // id, so the inbox's pass below never weighs it a second time, and the poller empties it as settled. The
                 // command met it unweighed once it held the run - one a session before weighed is the command's to
-                // answer, before any session (AnswerOfWeighed) - so this session weighs it first.
+                // answer, before any session (AnswerOfWeighed) - so this session weighs it first. One to a question owing
+                // the recommendation this session's start seeks - it was handed to a live engine, which takes it as it
+                // seeks that - waits for the advice, and the session goes on.
                 string? problem;
                 bool taken;
 
@@ -1888,9 +1890,9 @@ public sealed class FlowService(
                 }
                 else if (given.Inbox is { } entry)
                 {
-                    var handed = coordinator.AnswerHandedOver(given.Question, given.Answer, given.Text, out problem, AnswerCommand, entry);
-                    offered[entry] = Task.FromResult(handed);
-                    taken = handed != FlowHandedOver.Refused;
+                    var handed = coordinator.WeighHandedOver(given.Question, given.Answer, given.Text, out problem, AnswerCommand, entry);
+                    offered[entry] = handed;
+                    taken = handed is not { IsCompletedSuccessfully: true, Result: FlowHandedOver.Refused };
                 }
                 else
                 {
@@ -1903,9 +1905,11 @@ public sealed class FlowService(
                 }
             }
 
-            // What was handed to an engine whose session ended before it took it is this session's to take - and what
-            // cannot be read of it is said and left for the next session: the command's own answer, recorded above,
-            // stands, and the run is driven on. What it takes, the poller empties from the inbox at its first read.
+            // What was handed to an engine whose session ended before it took it is this session's to take - an answer to
+            // a question owing the recommendation this session's start seeks waiting for that advice, as one handed to a
+            // live engine's start does - and what cannot be read of it is said and left for the next session: the
+            // command's own answer, recorded above, stands, and the run is driven on. What it takes, the poller empties
+            // from the inbox at its first read.
             inbox |= Guarded("handed to the engine as its session began", said, () => TakeInbox(layout, coordinator, offered, said)).Seen > 0;
 
             FlowSessionEnd end;
@@ -2345,7 +2349,8 @@ public sealed class FlowService(
     /// <summary>
     /// Takes everything in the inbox the session does not hold - never offered to the loop, or handed back by it -
     /// between two drives: each answer weighed by the engine under its entry's id
-    /// (<see cref="FlowCoordinator.AnswerHandedOver(string, string, string?, out string?, string?, string?, bool, DateTimeOffset?)"/>) - and each amendment of
+    /// (<see cref="FlowCoordinator.WeighHandedOver"/>) - one handed over as the session begins to a question owing the
+    /// recommendation its start seeks waiting for that advice, said so, and settled as the start weighs it - and each amendment of
     /// the request weighed against the same gates
     /// (<see cref="FlowCoordinator.AmendmentHandedOver(string, string, out string?, string?, DateTimeOffset?, string?)"/>) -
     /// applied as a person's through <c>answer-orchestrator</c> or <c>amend-orchestrator-request</c>; or - where the
@@ -2371,10 +2376,10 @@ public sealed class FlowService(
             }
 
             seen++;
-            var handed = coordinator.AnswerHandedOver(entry.Question, entry.Answer, entry.Text, out var problem, AnswerCommand, entry.Id, entry.Again, entry.At);
+            var handed = coordinator.WeighHandedOver(entry.Question, entry.Answer, entry.Text, out var problem, AnswerCommand, entry.Id, entry.Again, entry.At);
             var about = $"the answer '{entry.Answer}' handed over for question '{entry.Question}'";
 
-            switch (handed)
+            switch (handed is { IsCompletedSuccessfully: true } weighed ? weighed.Result : (FlowHandedOver?)null)
             {
                 case FlowHandedOver.Taken:
                     taken++;
@@ -2383,12 +2388,15 @@ public sealed class FlowService(
                 case FlowHandedOver.Refused:
                     said.Add($"{about} was not taken: {problem}");
                     break;
-                default:
+                case FlowHandedOver.RecordedAlready:
                     said.Add($"{about} was recorded by the run already, so it is only emptied from the inbox");
+                    break;
+                default:
+                    said.Add($"{about} waits for the recommendation its question owes, which this session seeks first, and is weighed once it is sought");
                     break;
             }
 
-            offered[entry.Id] = Task.FromResult(handed);
+            offered[entry.Id] = handed;
         }
 
         foreach (var entry in held?.Amendments ?? [])

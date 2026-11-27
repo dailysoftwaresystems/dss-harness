@@ -66,7 +66,8 @@ public sealed partial class HelpTests
         Assert.Contains("which it reads every 2 s", prose, StringComparison.Ordinal);
         Assert.Contains(
             "what it waits for - each open question with since when and its next step - its answer; its answer taken now, ending the asking, where a live "
-                + "engine's advisor seeks its recommendation; or, where it still owes its recommendation, the pause's advice where a live engine's pause defers it, "
+                + "engine's advisor seeks its recommendation or a live engine is starting, which seeks every one the run owes; or, where it still owes its "
+                + "recommendation, the pause's advice where a live engine's pause defers it, "
                 + "the resume, which seeks it first, where no engine runs the run, and the resume once the engine has gone where it is stopping - a plan update "
                 + "under way or queued",
             prose,

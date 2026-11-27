@@ -633,6 +633,91 @@ public sealed class FlowSessionsTests
     }
 
     /// <summary>
+    /// A session's claim marks the run's state as its engine's start before it writes the owner, once no live owner holds
+    /// the run: what the session before left the state saying of its engine - the stop it ended with, the pause it was
+    /// left under - stands as written, the run's record of where it stood, and a reader that finds the owner live reads its
+    /// engine as starting - never stopping, nor recording what a pause left - so a question still owing its recommendation
+    /// is named with the start's own step, its answer taken as the start seeks it. A claim a live owner refuses marks
+    /// nothing, and a claim let go before its session wrote anything takes its mark back, leaving the state as it found it.
+    /// </summary>
+    [Fact]
+    public async Task ASessionsClaim_MarksTheRunStartingBeforeItsOwner_AndItsReleaseTakesTheMarkBack()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var files = new WriteOrder(harness.FileSystem);
+        var store = new OrchestrationStore(files, harness.Output);
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var sessions = new FlowSessions(store, files, harness.Identity, harness.GitClient, harness.Platform);
+        var definition = Definition();
+        var (run, context) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, InputGround(layout), cancellationToken: Token);
+        var owner = new FlowRunOwner(store, harness.Identity);
+        owner.Release(run);
+
+        using (var records = new FlowRunRecords(files, store, run, context))
+        {
+            _ = await TestAdvice.Coordinator(definition, new Runner(), new Facts(), records: records).RunAsync(Token);
+        }
+
+        // The state as a session that stopped once its pause was complete leaves it.
+        var at = DateTimeOffset.UnixEpoch;
+        var left = store.ReadFlow(run)! with { Status = "Paused", Pause = new FlowPauseRecord("command", true, at, [], at), StoppingSince = at };
+        store.WriteFlow(run, left);
+        var before = File.ReadAllText(run.FlowFile);
+
+        // A live owner refuses the claim, and nothing is marked.
+        _ = owner.Claim(run);
+        files.Written.Clear();
+
+        _ = await Assert.ThrowsAsync<HarnessException>(() => sessions.ClaimAsync(layout, run, () => ChildSweep.None, FlowService.ResumeCommand, Token));
+        Assert.Empty(files.Written);
+
+        owner.Release(run);
+        Assert.Equal(before, File.ReadAllText(run.FlowFile));
+        files.Written.Clear();
+
+        Assert.Null(await sessions.ClaimAsync(layout, run, () => ChildSweep.None, FlowService.ResumeCommand, Token));
+
+        var marked = store.ReadFlow(run)!;
+        var engine = OrchestratorService.EngineOf(store, owner, run, marked);
+        var deferred = new FlowQuestionEntry(
+            "q1",
+            "open",
+            "pause",
+            at,
+            [],
+            [new FlowQuestionOption("stay", "it stays"), new FlowQuestionOption("go", "it goes")],
+            [],
+            Recommendation: new FlowRecommendation("deferred", Why: "the run was stopped once its pause was complete: the recommendation is sought when the run is resumed with this question still open"));
+
+        Assert.Equal(
+            System.Text.Json.JsonSerializer.Serialize(left with { Starting = true }, DssHarness.Core.FileSystem.JsonStateFile.Options),
+            System.Text.Json.JsonSerializer.Serialize(marked, DssHarness.Core.FileSystem.JsonStateFile.Options));
+        Assert.Equal([Path.GetFullPath(run.FlowFile), Path.GetFullPath(run.OwnerFile)], files.Written);
+        Assert.Equal((FlowEngineState.Starting, $"its engine (process {Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}) is starting"), (engine.State, engine.Said));
+        Assert.Equal(FlowNextStep.AnswerWhileAdvised, FlowAnswerRules.NextStepOf(deferred, engine));
+
+        // The session never wrote: its release takes the mark back, and the state is as the claim found it.
+        owner.Release(run);
+
+        Assert.Equal(before, File.ReadAllText(run.FlowFile));
+        Assert.Null(store.ReadOwner(run));
+    }
+
+    /// <summary>A file system that keeps, in order, every file written whole.</summary>
+    private sealed class WriteOrder(DssHarness.Core.FileSystem.IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        /// <summary>Every file written whole, by its full path, in the order written.</summary>
+        public List<string> Written { get; } = [];
+
+        public override void WriteAtomic(string path, Action<Stream> write)
+        {
+            base.WriteAtomic(path, write);
+            Written.Add(Path.GetFullPath(path));
+        }
+    }
+
+    /// <summary>
     /// What another run holds that cannot be told - an agent whose record does not read - refuses a session as work in
     /// the tree does, by a sentence that says so: it is never read as nothing.
     /// </summary>

@@ -640,10 +640,24 @@ public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnly
 /// <param name="StoppingSince">
 /// When a stop was applied that the session which applied it ends with - the run's hard stop, or a stop once its pause
 /// was complete - every step in flight stopped, every advice under way ended and none started after it: written as the
-/// stop is applied, before anything it stops is touched, and kept by the session's end, so a reader of a live engine's
-/// run tells a stop under way from a pause whose advice is still to come (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout, FlowFile)"/>);
-/// left out where no stop was applied, and from the next session's first write on - the resume taking the run up writes
-/// it out (<see cref="FlowResume.Load"/>).
+/// stop is applied, before anything it stops is touched - one asked as a session starts, by an abort the start takes, as
+/// it is taken, for the start applies it before anything else - and kept by the session's end, so a reader of a live
+/// engine's run tells a stop under way from a pause whose advice is still to come (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout, FlowFile)"/>);
+/// left out where no stop was applied, and from the next session's first write on. Between, the next session's claim
+/// marks the run <see cref="Starting"/>, which no reader takes a stop the session before ended with for.
+/// </param>
+/// <param name="Starting">
+/// True while the live engine is taking the run up: written by its session's claim, before the owner is
+/// (<see cref="FlowRunOwner.Claim"/>), and by every write its start makes, until the start has written what it held and
+/// sought every recommendation the run owes - or a stop asked as it starts is in force, which <see cref="StoppingSince"/>
+/// says from then on; left out by every write after it, by the release of a session that ended before its own writes
+/// said what its engine did (<see cref="FlowRunOwner.Release"/>), and by a run an older build wrote. A reader of a live
+/// engine's run takes nothing else this file says of what its engine is doing for that engine's while it is true - a stop
+/// the session before it ended with, the pause it was left under, which stays the run's record of where it stood - and
+/// names the start's own step for a question owing its recommendation: the start seeks it and takes an answer then
+/// (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout, FlowFile)"/>,
+/// <see cref="FlowAnswerRules.NextStepOf"/>). Like <see cref="StoppingSince"/>, it is read only beside a live owner: one a
+/// crash left says nothing of a run no engine holds.
 /// </param>
 public sealed record FlowFile(
     int Schema,
@@ -663,7 +677,8 @@ public sealed record FlowFile(
     IReadOnlyList<FlowRedirectRecord>? Redirects = null,
     FlowHoldRecord? Hold = null,
     bool? InputCopies = null,
-    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? StoppingSince = null)
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? StoppingSince = null,
+    bool? Starting = null)
 {
     /// <summary>
     /// The steps the file holds running that are no group's own record, by instance: once a pause is complete, the
@@ -1516,6 +1531,7 @@ public enum FlowChangeKind
 /// them as they write its listed issues; null where the change says nothing of them.
 /// </param>
 /// <param name="StoppingSince">When the stop the session ends with was applied - its hard stop, or a stop once its pause was complete; null where none was (<see cref="FlowFile.StoppingSince"/>).</param>
+/// <param name="Starting">Whether the change was taken while the engine's start was under way, no stop in force (<see cref="FlowFile.Starting"/>).</param>
 public sealed record FlowSnapshot(
     FlowRunStatus Status,
     DateTimeOffset? EndedAt,
@@ -1530,7 +1546,8 @@ public sealed record FlowSnapshot(
     WorkflowPreExisting? PreExisting = null,
     IReadOnlyList<PreExistingIssue>? Issues = null,
     IReadOnlyList<FlowNextIssue>? NextRound = null,
-    DateTimeOffset? StoppingSince = null);
+    DateTimeOffset? StoppingSince = null,
+    bool Starting = false);
 
 /// <summary>One step instance as the snapshot holds it: everything its own record and the index say of it.</summary>
 /// <param name="Instance">The instance's id.</param>

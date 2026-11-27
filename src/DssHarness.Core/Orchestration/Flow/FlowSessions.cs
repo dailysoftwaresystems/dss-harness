@@ -238,7 +238,10 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// session of the run inside it would be ended with it by the next command run from outside, which ends what the
     /// record names. Swept there, what it keeps is never older than the claim - an owner seen gone inside the section
     /// cannot come back, and a live one is never claimed - so an owner the command saw standing - one an answer was handed
-    /// to and waited on - and gone since is swept with the rest.
+    /// to and waited on - and gone since is swept with the rest. The claim marks the run's state as this engine's start
+    /// before it writes the owner (<see cref="FlowRunOwner.Claim"/>), so no reader of the run, finding its owner live,
+    /// takes what the session before left the state saying for this engine's; a claim let go before its session wrote
+    /// anything takes the mark back with it.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="run">The run the session is for.</param>
@@ -248,8 +251,9 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <returns>What is said of a dead owner reclaimed; null where none was recorded.</returns>
     /// <exception cref="HarnessException">
     /// The run is gone, another run of the repository is unfinished, a live engine owns the run, or the sweep keeps a record
-    /// whose session holds this very process (<see cref="HarnessExit.Refused"/>); or a request left for an engine that ended
-    /// cannot be taken, the claim this process made let go first. The sweep's refusal comes before the claim is made.
+    /// whose session holds this very process (<see cref="HarnessExit.Refused"/>); the run's state does not read, so its start
+    /// cannot be marked (<see cref="FlowRunOwner.Claim"/>); or a request left for an engine that ended cannot be taken, the
+    /// claim this process made let go first. The sweep's refusal and the state's come before the owner is written.
     /// </exception>
     public async Task<string?> ClaimAsync(HarnessLayout layout, OrchestratorLayout run, Func<ChildSweep> sweep, string command, CancellationToken cancellationToken = default)
     {

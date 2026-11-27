@@ -121,6 +121,18 @@ public sealed class FlowReportsTests
                 ],
                 Steps(pausing));
         }
+
+        // A starting engine seeks every recommendation the run owes - one a stop deferred, one a crash left sought, one no
+        // advisor was asked of yet - and takes an answer as it does: what the session before left says nothing of it.
+        Assert.Equal(
+            [
+                "its recommendation is being sought: answer with answer-orchestrator r1 <answer> --question q1, taken now and ending the asking",
+                AnswerQ2,
+                AnswerQ3,
+                AdvisedQ4,
+                "its recommendation is being sought: answer with answer-orchestrator r1 <answer> --question q6, taken now and ending the asking",
+            ],
+            Steps(FlowEngineState.Starting));
     }
 
     /// <summary>

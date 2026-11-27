@@ -186,9 +186,10 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
             steps.Add(own);
         }
 
-        // The resume takes the run up: a stop the session before was ending with has ended with that session, so a reader
-        // of this session's run never reads it as stopping (FlowFile.StoppingSince).
-        var reconciled = file with { Steps = [.. steps], Next = [], StoppingSince = null };
+        // What the session before left the state saying of its engine - a stop it ended with, the pause it was left under -
+        // stands as written: the claim that began this session marked the run starting (FlowFile.Starting), which no reader
+        // takes any of it for this engine's, and this session's own first write says what its engine is doing.
+        var reconciled = file with { Steps = [.. steps], Next = [] };
         var handoffs = HandoffsOf(reconciled);
 
         _store.WriteFlow(_layout, reconciled);
@@ -353,6 +354,8 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
 {
     private readonly ProcessOwner _owner = new(store ?? throw new ArgumentNullException(nameof(store)), identity ?? throw new ArgumentNullException(nameof(identity)), clock);
 
+    private readonly OrchestrationStore _store = store;
+
     private readonly IProcessIdentity _identity = identity;
 
     /// <summary>
@@ -433,12 +436,18 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
     /// is still recording the machine steps the pause left running is a live owner like any other - and a dead one is
     /// reclaimed and said. Called inside the repository's one section, so two sessions can never both claim one run.
     /// Once the owner is found gone, or none is recorded, and before this process takes the run, <paramref name="taking"/>
-    /// decides what the claim still waits on - a refusal it throws leaves the owner file as it was.
+    /// decides what the claim still waits on - a refusal it throws leaves the owner file as it was. Then, before the owner
+    /// is written, the run's state is marked as this engine's start (<see cref="FlowFile.Starting"/>): the one owner of when
+    /// what the session before left the state saying of its engine - a stop it ended with, the pause it was left under -
+    /// stops being read as the live owner's, so from the moment a reader finds the owner live it reads the engine as
+    /// starting until the start's own writes say otherwise. Everything else the state says stands as written, and a run
+    /// whose state is not there yet - one no session has written - is left so; a state that does not read refuses the
+    /// claim, the owner file left as it was.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
     /// <param name="taking">What is decided at the claim itself, once no live owner holds the run; null where nothing is.</param>
     /// <returns>What is said of a dead owner's record reclaimed; null where none was recorded.</returns>
-    /// <exception cref="HarnessException">A live owner holds the run, or <paramref name="taking"/> refuses it (<see cref="HarnessExit.Refused"/>).</exception>
+    /// <exception cref="HarnessException">A live owner holds the run, <paramref name="taking"/> refuses it (<see cref="HarnessExit.Refused"/>), or the run's state does not read.</exception>
     public string? Claim(OrchestratorLayout layout, Action? taking = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
@@ -448,17 +457,45 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
             OrchestrationStore.OwnerKind,
             $"run '{layout.Name}'",
             held => $"run '{layout.Name}' is owned by a live engine ({held}); stop-orchestrator {layout.Name} ends it, or wait for the engine to leave it. Nothing was changed.",
-            taking);
+            () =>
+            {
+                taking?.Invoke();
+
+                if (_store.ReadFlow(layout) is { Starting: not true } left)
+                {
+                    _store.WriteFlow(layout, left with { Starting = true });
+                }
+            });
     }
 
     /// <summary>
-    /// Releases the run where this process holds it: its owner removed, so the next session claims it afresh. An owner
-    /// that names another process - one that reclaimed the run after this one was taken for gone - is left as it is.
+    /// Releases the run where this process holds it: its owner removed, so the next session claims it afresh - and the
+    /// mark of its start taken back first where the run's state still holds it (<see cref="FlowFile.Starting"/>), so a
+    /// session that ended before its own writes said what its engine did - refused at its start, or let go at its claim -
+    /// leaves the state as it found it. A state that cannot be read or written now keeps the mark, which says nothing
+    /// beside no live owner; the owner is released all the same. An owner that names another process - one that reclaimed
+    /// the run after this one was taken for gone - is left as it is, with its mark.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
     public void Release(OrchestratorLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
+
+        if (Holds(layout))
+        {
+            try
+            {
+                if (_store.ReadFlow(layout) is { Starting: true } marked)
+                {
+                    _store.WriteFlow(layout, marked with { Starting = null });
+                }
+            }
+            catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+            {
+                // The mark stays: read only beside a live owner, it says nothing once this one is let go.
+            }
+        }
+
         _owner.Release(layout.OwnerFile, OrchestrationStore.OwnerKind);
     }
 
