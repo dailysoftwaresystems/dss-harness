@@ -1247,6 +1247,10 @@ public sealed class FlowCoordinator
         _pause = null;
         _endedAt = null;
         _drawing = null;
+
+        // The last session's end says how that session stood, never this one: from its first write the run's standing is
+        // read from what this session does (Status).
+        _last = null;
         _sessions++;
 
         // What the session's start writes is held until it is known the session goes on: a resume that can run nothing

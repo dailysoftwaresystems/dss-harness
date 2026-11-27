@@ -1020,6 +1020,71 @@ public sealed class FlowPauseTests
     }
 
     /// <summary>
+    /// A session driven after one a pause ended, on the same engine with nothing answered between, says how it stands
+    /// itself - running while its step runs, in its status and in every record it writes - never how the session before it
+    /// ended, for the last session's end says that session only.
+    /// </summary>
+    [Fact]
+    public async Task ASessionAfterOneAPauseEnded_SaysItsOwnStanding_NeverTheLastSessionsEnd()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+              - name: report
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                always: true
+                dependsOn: [gate]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var gate = runner.Hold("gate");
+        var said = new List<FlowRunStatus>();
+        var second = false;
+        var records = new RecordsWatch((kind, snapshot, instance, to) =>
+        {
+            if (Volatile.Read(ref second) && kind == FlowChangeKind.Step && instance == "report" && to == "Running")
+            {
+                lock (said)
+                {
+                    said.Add(snapshot.Status);
+                }
+            }
+        });
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("interrupt");
+        gate.Done();
+
+        var paused = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, paused.Status);
+        Assert.Equal(FlowRunStatus.Paused, coordinator.Status);
+        Assert.Empty(coordinator.OpenQuestions);
+
+        var report = runner.Hold("report");
+        Volatile.Write(ref second, true);
+        var resumed = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("report").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Running, coordinator.Status);
+        lock (said)
+        {
+            Assert.Equal([FlowRunStatus.Running], said);
+        }
+
+        report.Done();
+
+        Assert.Equal(FlowRunStatus.Done, (await resumed.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+        Assert.Equal(FlowRunStatus.Done, coordinator.Status);
+    }
+
+    /// <summary>
     /// An always step a pause stopped in one session's always phase waits for the next session's always phase: the
     /// work the answer freed runs first, and the always step runs after it, once - never at the session's start.
     /// </summary>
