@@ -241,7 +241,10 @@ public enum FlowNextStep
     /// <summary>It owes nothing: <c>answer-orchestrator</c> answers it.</summary>
     Answer,
 
-    /// <summary>Its advisor seeks the recommendation now: an answer is taken at once, and ends the asking.</summary>
+    /// <summary>
+    /// Its advisor seeks the recommendation now - or a live engine's start does, which seeks every one the run owes before
+    /// it weighs an answer to a question owing one: an answer is taken at once, or as the start seeks it, and ends the asking.
+    /// </summary>
     AnswerWhileAdvised,
 
     /// <summary>A live engine's pause defers its recommendation, which the pause seeks once complete: it is answered then, and <c>abort</c> is taken now.</summary>
@@ -343,12 +346,15 @@ public static class FlowAnswerRules
     /// recommendation it is answered with (<see cref="OwesRecommendation"/>) is, with no engine running the run or a gone
     /// one, the resume's, which seeks it first - no advisor seeks one between sessions (<see cref="FlowNextStep.Resume"/>);
     /// with an engine that is stopping, the resume's once the engine has gone, for a stop starts no advice and ends every
-    /// one under way (<see cref="FlowNextStep.ResumeOnceGone"/>); with a live engine whose advisor seeks it now
-    /// (<c>sought</c>), answered at once, the answer ending the asking - and so with a running engine whose record does not
-    /// say it deferred, for a running engine seeks a recommendation as it raises the question
-    /// (<see cref="FlowNextStep.AnswerWhileAdvised"/>); and with a live engine that is pausing or recording what its complete
-    /// pause left running - or running, its recommendation deferred, which only a pause asked does - answered once the
-    /// pause's advice is given, which a complete pause seeks before its session ends (<see cref="FlowNextStep.AfterThePause"/>).
+    /// one under way (<see cref="FlowNextStep.ResumeOnceGone"/>); with a live engine that is starting - whatever the session
+    /// before it left the question saying, sought, deferred or never sought - answered as its start seeks it, for the start
+    /// seeks every recommendation the run owes and weighs an answer to a question owing one only then, which takes it and
+    /// ends the asking; with a live engine whose advisor seeks it now (<c>sought</c>), answered at once, the answer ending the
+    /// asking - and so with a running engine whose record does not say it deferred, for a running engine seeks a
+    /// recommendation as it raises the question (<see cref="FlowNextStep.AnswerWhileAdvised"/>); and with a live engine that
+    /// is pausing or recording what its complete pause left running - or running, its recommendation deferred, which only a
+    /// pause asked does - answered once the pause's advice is given, which a complete pause seeks before its session ends
+    /// (<see cref="FlowNextStep.AfterThePause"/>).
     /// <c>abort</c> is taken now wherever a recommendation is owed. The engine names the step it refuses an answer with from
     /// its own state, which it knows (<see cref="Unrecommended"/>), and every step is said in one wording (<see cref="NextStepSaid"/>).
     /// </summary>
@@ -370,6 +376,7 @@ public static class FlowAnswerRules
         {
             FlowEngineState.None or FlowEngineState.Gone => FlowNextStep.Resume,
             FlowEngineState.Stopping => FlowNextStep.ResumeOnceGone,
+            FlowEngineState.Starting => FlowNextStep.AnswerWhileAdvised,
             _ when recommendation.State == "sought" => FlowNextStep.AnswerWhileAdvised,
             FlowEngineState.Pausing or FlowEngineState.Recording => FlowNextStep.AfterThePause,
             _ when recommendation.State == "deferred" => FlowNextStep.AfterThePause,
@@ -406,10 +413,11 @@ public static class FlowAnswerRules
     /// <summary>
     /// Why a person's answer to the open question <paramref name="question"/> is not taken while it owes its recommendation
     /// and no advisor is seeking it now; null where it is taken. Every question is answered recommended: an answer given
-    /// while the advisor works is taken, and ends the asking, but one given while nothing seeks the recommendation is
-    /// refused, nothing answered, naming the step that seeks it first - the resume between sessions and as a session
-    /// begins, the resume once the engine has gone where a stop ends the session - a stop once the pause is complete among
-    /// them, after which the pause seeks none - and the pause once it is complete while a pause under way defers it - in
+    /// while the advisor works is taken, and ends the asking - one handed over as a session starts waits for the advice the
+    /// start seeks, and is taken then - but one given while nothing seeks the recommendation is refused, nothing answered,
+    /// naming the step that seeks it first - the resume between sessions, the resume once the engine has gone where a stop
+    /// ends the session - a stop once the pause is complete among them, after which the pause seeks none, and one asked as
+    /// the session starts, which then seeks none - and the pause once it is complete while a pause under way defers it - in
     /// the one wording every document says the step in (<see cref="NextStepSaid"/>). <c>abort</c> is taken whatever the
     /// recommendation's state: it settles nothing of the question, which stays open with its recommendation owed. The
     /// command, before anything of the run is touched, and the engine, as it weighs a person's answer, hold an answer to

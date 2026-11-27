@@ -1764,6 +1764,196 @@ public sealed class FlowServiceTests
             await NextStepAsync());
     }
 
+    /// <summary>A question waited at, and a step after it that its answer lets run.</summary>
+    private const string WaitedAt = """
+        name: flow
+        steps:
+          - name: holding
+            type: pause
+            question: what now?
+            options: [stay, go]
+          - name: after
+            type: orient
+            dependsOn: [holding]
+        """;
+
+    /// <summary>What the step said for an open question <c>q1</c> is next - in the report, then in the status - and the status's own first line, read as they read the run's records now.</summary>
+    private static async Task<(string Report, string Status, string Header)> NextStepOfQ1Async(FlowService service, Repository repository)
+    {
+        var read = await service.ReadReportAsync(repository.Path, "r1", json: true, cancellationToken: Token).WaitAsync(Bound, Token);
+        var left = JsonNode.Parse(Assert.Single(read.Data))!["report"]!["leftForAPerson"]!.AsArray().Select(line => line!.GetValue<string>()).Single(line => line.StartsWith("question q1 ", StringComparison.Ordinal));
+        var status = await service.AskStatusAsync(repository.Path, "r1", json: false, Token).WaitAsync(Bound, Token);
+        var waits = (status.Details ?? []).Single(line => line.StartsWith("waits ", StringComparison.Ordinal));
+
+        return (left[(left.IndexOf(" - ", StringComparison.Ordinal) + 3)..], waits[(waits.IndexOf("Z: ", StringComparison.Ordinal) + 3)..], status.Message);
+    }
+
+    /// <summary>The next step a question owing its recommendation is said to take where the engine seeks it now, and an answer is taken then, ending the asking: the report's wording and the status's.</summary>
+    private static readonly (string Report, string Status) TakenAsSought = (
+        "its recommendation is being sought: answer with answer-orchestrator r1 <answer> --question q1, taken now and ending the asking",
+        "its recommendation is being sought: answer with 'dssharness answer-orchestrator r1 <answer> --question q1', taken now and ending the asking");
+
+    /// <summary>
+    /// The scenario of an engine that crashed while its advisor sought a question's recommendation: the questions say it is
+    /// sought, and the owner recorded has gone. A resume reclaims the run; while it starts - its owner live, nothing of its
+    /// own written yet - the status and the report name the question's next step as the answer, taken as the advice is
+    /// sought and ending the asking, and an answer handed over then, which its poller offers to the start, is taken: the
+    /// start seeks the recommendation the run owes first, and the answer meets that advice under way and ends it - never
+    /// refused naming the resume this very session is.
+    /// </summary>
+    [Fact]
+    public async Task AResumeOfAnEngineThatCrashedWhileItsAdvisorSought_NamesTheAnswer_AndTakesOneHandedOverAsItStarts_EndingTheAsking()
+    {
+        var (repository, runner) = await RepositoryAsync(WaitedAt);
+        using var disposed = repository;
+
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, fileSystem: files);
+        var store = repository.Harness.OrchestrationStore;
+        var identity = repository.Harness.Identity;
+
+        Assert.Equal(FlowExit.Paused, (await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
+
+        // Engine A crashes while its advisor seeks q1: the question says it is sought, and A's owner record outlives it.
+        var run = RunOf(repository);
+        var questions = store.ReadFlowQuestions(run)!;
+        store.WriteFlowQuestions(run, questions with { Questions = [questions.Questions[0] with { Recommendation = new FlowRecommendation("sought", Why: "a recommendation is being sought from the advisor") }] });
+        store.WriteOwner(run, new RunOwner(identity.CurrentMachine, Engines.Engine, DateTimeOffset.UtcNow, "its start"));
+
+        // The resume looks at the inbox as it begins - its owner claimed, its state taken up, nothing of its own written -
+        // and finds none; the status is read there, and an answer is handed over just after, which its poller offers.
+        var entry = new FlowInboxAnswer(FlowInboxAnswer.NewId(), "q1", "go", DateTimeOffset.UtcNow);
+        (string Report, string Status, string Header)? meanwhile = null;
+        int? owner = null;
+
+        files.AfterLookingAt(run.InboxFile, () =>
+        {
+            owner = store.ReadOwner(run)?.ProcessId;
+            meanwhile = NextStepOfQ1Async(service, repository).GetAwaiter().GetResult();
+            store.AddToInbox(run, entry);
+        });
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var answered = store.ReadFlowQuestions(run)!;
+        var q1 = answered.Of("q1")!;
+
+        Assert.Equal(identity.CurrentId, owner);
+        Assert.Equal(TakenAsSought, (meanwhile!.Value.Report, meanwhile.Value.Status));
+        Assert.EndsWith($"; its engine (process {identity.CurrentId.ToString(CultureInfo.InvariantCulture)}) is starting", meanwhile.Value.Header, StringComparison.Ordinal);
+
+        // The answer was taken under its entry, ending the asking, and the run went on with it to its end.
+        Assert.Equal(HarnessExit.Success, resumed.ExitCode);
+        Assert.Equal(("answered", "go", entry.Id), (q1.State, Assert.Single(q1.Answers).Answer, q1.Answers[0].By!.Inbox));
+        Assert.Equal(new FlowRecommendation("cancelled", Why: "no recommendation: the question was answered by a person while the advisor ran, and its asking was ended"), q1.Recommendation);
+        Assert.Null(answered.Refused);
+        Assert.Equal(["after"], runner.Started);
+        Assert.False(File.Exists(run.InboxFile));
+    }
+
+    /// <summary>
+    /// What the session before left the run's state saying of its engine - a stop once its pause was complete, kept past its
+    /// end, and that pause - is never read as a starting engine's: from the resume's claim, before its state is taken up and
+    /// after, the status and the report name the deferred question's next step as the answer, taken as the start seeks the
+    /// recommendation - never the stop's resume once the engine has gone, nor the pause's advice - and an answer handed over
+    /// as the session starts is taken, ending the asking.
+    /// </summary>
+    [Fact]
+    public async Task APastSessionsStopAndPause_AreNotReadAsAStartingEnginesOwn_AndAnAnswerHandedOverAsItStartsIsTaken()
+    {
+        var (repository, runner) = await RepositoryAsync(WaitedAt);
+        using var disposed = repository;
+
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, fileSystem: files);
+        var store = repository.Harness.OrchestrationStore;
+        var identity = repository.Harness.Identity;
+
+        Assert.Equal(FlowExit.Paused, (await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
+
+        // The run as a session that stopped once its pause was complete leaves it: the stop and the pause kept in its state,
+        // and the question's recommendation deferred to the resume.
+        var run = RunOf(repository);
+        var at = DateTimeOffset.UtcNow;
+        store.WriteFlow(run, store.ReadFlow(run)! with { Pause = new FlowPauseRecord("command", true, at, [], at), StoppingSince = at });
+        var questions = store.ReadFlowQuestions(run)!;
+        store.WriteFlowQuestions(run, questions with { Questions = [questions.Questions[0] with { Recommendation = new FlowRecommendation("deferred", Why: "the run was stopped once its pause was complete: the recommendation is sought when the run is resumed with this question still open") }] });
+
+        // Read once the resume holds the run and before it takes the run's state up - as it reads the run's issues - and
+        // once it has, as it looks at the inbox, where an answer is handed over just after.
+        var entry = new FlowInboxAnswer(FlowInboxAnswer.NewId(), "q1", "go", DateTimeOffset.UtcNow);
+        var seen = new List<(int? Owner, (string Report, string Status, string Header) Next)>();
+
+        files.AfterLookingAt(run.PreExistingIssuesFile, () => seen.Add((store.ReadOwner(run)?.ProcessId, NextStepOfQ1Async(service, repository).GetAwaiter().GetResult())));
+        files.AfterLookingAt(run.InboxFile, () =>
+        {
+            seen.Add((store.ReadOwner(run)?.ProcessId, NextStepOfQ1Async(service, repository).GetAwaiter().GetResult()));
+            store.AddToInbox(run, entry);
+        });
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var answered = store.ReadFlowQuestions(run)!;
+        var q1 = answered.Of("q1")!;
+        var starting = $"; its engine (process {identity.CurrentId.ToString(CultureInfo.InvariantCulture)}) is starting";
+
+        Assert.Equal(2, seen.Count);
+        Assert.All(seen, read =>
+        {
+            Assert.Equal(identity.CurrentId, read.Owner);
+            Assert.Equal(TakenAsSought, (read.Next.Report, read.Next.Status));
+            Assert.EndsWith(starting, read.Next.Header, StringComparison.Ordinal);
+        });
+
+        Assert.Equal(HarnessExit.Success, resumed.ExitCode);
+        Assert.Equal(("answered", "go", entry.Id), (q1.State, Assert.Single(q1.Answers).Answer, q1.Answers[0].By!.Inbox));
+        Assert.Equal(new FlowRecommendation("cancelled", Why: "no recommendation: the question was answered by a person while the advisor ran, and its asking was ended"), q1.Recommendation);
+        Assert.Null(answered.Refused);
+        Assert.Equal(["after"], runner.Started);
+
+        // The session's own writes say what its engine did, the past session's stop and pause gone with them.
+        var flow = store.ReadFlow(run)!;
+        Assert.Equal(((DateTimeOffset?)null, (FlowPauseRecord?)null), (flow.StoppingSince, flow.Pause));
+    }
+
+    /// <summary>
+    /// An answer a past engine left in the inbox, to a question a crash left with its recommendation sought, is met by the
+    /// next person's resume as the session begins: it waits for the recommendation the start seeks first - said so - and
+    /// is taken once that is under way, ending the asking, never refused naming the resume the session itself is.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerAPastEngineLeftInTheInbox_WaitsForTheAdviceTheResumeSeeks_AndIsTaken()
+    {
+        var (repository, runner) = await RepositoryAsync(WaitedAt);
+        using var disposed = repository;
+
+        var service = Service(repository.Harness, runner);
+        var store = repository.Harness.OrchestrationStore;
+        var identity = repository.Harness.Identity;
+
+        Assert.Equal(FlowExit.Paused, (await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
+
+        // The engine an answer was handed to crashed while its advisor sought q1, before its poller read the inbox.
+        var run = RunOf(repository);
+        var questions = store.ReadFlowQuestions(run)!;
+        store.WriteFlowQuestions(run, questions with { Questions = [questions.Questions[0] with { Recommendation = new FlowRecommendation("sought", Why: "a recommendation is being sought from the advisor") }] });
+        store.WriteOwner(run, new RunOwner(identity.CurrentMachine, Engines.Engine, DateTimeOffset.UtcNow, "its start"));
+        var entry = new FlowInboxAnswer(FlowInboxAnswer.NewId(), "q1", "go", DateTimeOffset.UtcNow);
+        store.AddToInbox(run, entry);
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var answered = store.ReadFlowQuestions(run)!;
+        var q1 = answered.Of("q1")!;
+
+        Assert.Equal(HarnessExit.Success, resumed.ExitCode);
+        Assert.Equal(
+            ["the answer 'go' handed over for question 'q1' waits for the recommendation its question owes, which this session seeks first, and is weighed once it is sought"],
+            (resumed.Details ?? []).Where(line => line.StartsWith("the answer ", StringComparison.Ordinal)));
+        Assert.Equal(("answered", "go", entry.Id), (q1.State, Assert.Single(q1.Answers).Answer, q1.Answers[0].By!.Inbox));
+        Assert.Equal(new FlowRecommendation("cancelled", Why: "no recommendation: the question was answered by a person while the advisor ran, and its asking was ended"), q1.Recommendation);
+        Assert.Null(answered.Refused);
+        Assert.Equal(["after"], runner.Started);
+        Assert.False(File.Exists(run.InboxFile));
+    }
+
     /// <summary>An answer's text file is read relative to the directory the command acts on; one that is not there, and a text given two ways, are usage errors.</summary>
     [Fact]
     public async Task AnAnswersTextFile_IsReadFromTheCommandsDirectory_AndOneMissingIsAUsageError()

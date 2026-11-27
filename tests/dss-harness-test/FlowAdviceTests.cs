@@ -124,13 +124,35 @@ public sealed class FlowAdviceTests
         public bool WritesTree(string runner) => false;
     }
 
-    /// <summary>The run's records as a test reads them: the last snapshot written, the kind of every change, and the answers refused as last written.</summary>
+    /// <summary>
+    /// The run's records as a test reads them: the last snapshot written, every change in order with what its record said
+    /// and when the run's state said it began stopping, the answers refused as last written, and a signal for the first
+    /// change of a kind.
+    /// </summary>
     private sealed class Records : IFlowRecords
     {
         private readonly List<FlowChangeKind> _kinds = [];
+        private readonly List<(FlowChangeKind Kind, string? Detail, DateTimeOffset? StoppingSince)> _writes = [];
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<FlowChangeKind, TaskCompletionSource> _seen = new();
 
         /// <summary>The run as the last change wrote it.</summary>
         public FlowSnapshot? Last { get; private set; }
+
+        /// <summary>Every change written, in order: its kind, what its record said, and the stop its state said was in force.</summary>
+        public IReadOnlyList<(FlowChangeKind Kind, string? Detail, DateTimeOffset? StoppingSince)> Writes
+        {
+            get
+            {
+                lock (_kinds)
+                {
+                    return [.. _writes];
+                }
+            }
+        }
+
+        /// <summary>Completes once a change of <paramref name="kind"/> is written.</summary>
+        public Task Written(FlowChangeKind kind)
+            => _seen.GetOrAdd(kind, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
 
         /// <summary>Every answer handed over that the run refused, as the questions were last written.</summary>
         public IReadOnlyList<FlowRefusedAnswer> Refused { get; private set; } = [];
@@ -152,9 +174,11 @@ public sealed class FlowAdviceTests
             lock (_kinds)
             {
                 _kinds.Add(kind);
+                _writes.Add((kind, detail, snapshot.StoppingSince));
             }
 
             Last = snapshot;
+            _ = _seen.GetOrAdd(kind, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).TrySetResult();
         }
 
         public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
@@ -855,6 +879,48 @@ public sealed class FlowAdviceTests
         Assert.Equal(FlowRunStatus.Paused, end.Status);
         Assert.Equal(2, advisor.Asked.Count);
         Assert.Equal("given", coordinator.OpenQuestions.Single().Recommendation.State);
+    }
+
+    /// <summary>
+    /// A stop once a pause that said all is complete - every machine step stopped already, an advice still under way - is
+    /// recorded on its own as the loop takes it, before the advice it ends is touched: one stop-applied record naming the
+    /// pause's cause past the pause, and its own write is the first that says the engine is stopping, so a reader names the
+    /// resume once the engine has gone from that write on - never the pause's advice, which the stop starts none of.
+    /// </summary>
+    [Fact]
+    public async Task AStopOnceAPauseThatSaidAllIsComplete_IsRecordedOnItsOwn_ItsRecordTheFirstToSayStopping()
+    {
+        var held = new HeldAdvisor();
+        held.TornDown.SetResult();
+        var asking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var advisor = new Advisor((_, token) =>
+        {
+            asking.TrySetResult();
+            return held.AdviseAsync(token);
+        });
+        var records = new Records();
+
+        // A clock that never passes the bound on the advice's runner on its own: the runner, its token ended, answers
+        // within it, so the session takes what it spent.
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new TimerClock(), records: records, advisor: advisor);
+
+        var session = coordinator.RunAsync(Token);
+        await asking.Task.WaitAsync(Bound, Token);
+        coordinator.RequestPause("command", all: true);
+        await records.Written(FlowChangeKind.PauseCompleted).WaitAsync(Bound, Token);
+        coordinator.RequestStop();
+
+        var end = await session.WaitAsync(Bound, Token);
+        var writes = records.Writes.ToList();
+        var stop = writes.FindIndex(write => write.Kind == FlowChangeKind.StopApplied);
+
+        Assert.Equal((FlowRunStatus.Paused, "command", true), (end.Status, end.Pause!.Cause, end.Pause.All));
+        Assert.Equal(["command, past the pause"], writes.Where(write => write.Kind == FlowChangeKind.StopApplied).Select(write => write.Detail));
+        Assert.NotNull(writes[stop].StoppingSince);
+
+        // No write before it says a stop: the stop enters the run's state with its own record.
+        Assert.All(writes.Take(stop), write => Assert.Null(write.StoppingSince));
+        Assert.True(advisor.Tokens.Single().IsCancellationRequested);
     }
 
     /// <summary>

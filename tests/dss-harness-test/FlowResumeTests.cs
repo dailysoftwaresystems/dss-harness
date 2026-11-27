@@ -406,12 +406,13 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
-    /// A stop the session before was ending with has ended with that session: the resume that takes the run up writes it
-    /// out of the run's state at once, before its own session's first write, so a reader of the resumed run - its owner
-    /// this session's - never reads its engine as stopping; everything else the state says stands.
+    /// The resume that takes the run up writes its state reconciled - nothing starting now - and leaves everything else as
+    /// the session before and the claim left it: a stop the session before ended with, its pause, and the claim's mark of
+    /// this engine's start, which alone tells a reader none of the rest is this engine's (<see cref="FlowFile.Starting"/>),
+    /// until this session's own first write says what its engine does.
     /// </summary>
     [Fact]
-    public async Task AStopTheSessionBeforeWasEndingWith_IsWrittenOutByTheResume_AsItTakesTheRunUp()
+    public async Task TheResume_TakesTheRunUp_LeavingWhatTheSessionBeforeLeftOfItsEngine_AndTheClaimsMarkAsWritten()
     {
         using var temp = new TempDirectory();
         var definition = Parse("""
@@ -431,18 +432,152 @@ public sealed class FlowResumeTests
             Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
 
-        // The state as a stop once the run's pause was complete leaves it: the stop kept past the session's end.
-        var left = harness.OrchestrationStore.ReadFlow(layout)! with { StoppingSince = DateTimeOffset.UnixEpoch };
+        // The state as a stop once the run's pause was complete leaves it - the stop and the pause kept past the session's
+        // end - and as the next session's claim marks it.
+        var at = DateTimeOffset.UnixEpoch;
+        var left = harness.OrchestrationStore.ReadFlow(layout)! with { Pause = new FlowPauseRecord("command", true, at, [], at), StoppingSince = at, Starting = true };
         harness.OrchestrationStore.WriteFlow(layout, left);
 
         var taken = TakeUp(harness, layout, definition);
         var written = harness.OrchestrationStore.ReadFlow(layout)!;
+        var reconciled = JsonSerializer.Serialize(left with { Next = [] }, JsonStateFile.Options);
 
-        Assert.Null(taken.File.StoppingSince);
-        Assert.Null(written.StoppingSince);
+        Assert.Equal(reconciled, JsonSerializer.Serialize(written, JsonStateFile.Options));
+        Assert.Equal(reconciled, JsonSerializer.Serialize(taken.File, JsonStateFile.Options));
+    }
+
+    /// <summary>
+    /// Every write of a start says the engine is starting - an answer weighed before its first drive, which is written at
+    /// once, and the writes its start held alike - over what the session before left of its engine, here a complete pause
+    /// and its stop, so a reader never takes those for this engine's own: <c>flow.json</c> says the start the whole while,
+    /// and the first write once the start is over says what the engine does then.
+    /// </summary>
+    [Fact]
+    public async Task EveryWriteOfAStart_SaysTheEngineIsStarting_OverWhatTheSessionBeforeLeft_UntilTheStartIsOver()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: pause
+                question: what now?
+                options: [stay, go]
+              - name: after
+                type: orient
+                dependsOn: [gate]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records);
+
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        // The session before ended with a complete pause and a stop once it was complete, both kept past its end.
+        var at = DateTimeOffset.UnixEpoch;
+        var left = harness.OrchestrationStore.ReadFlow(layout)! with { Pause = new FlowPauseRecord("command", true, at, [], at), StoppingSince = at };
+        harness.OrchestrationStore.WriteFlow(layout, left);
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var written = new List<(FlowChangeKind Kind, bool Starting)>();
+        bool? markedBeforeTheDrive;
+
+        using (again)
+        {
+            var told = new Intercepted(again, (kind, _, _, snapshot) => written.Add((kind, snapshot.Starting)));
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: told, resume: TakeUp(harness, layout, definition), runName: "r1");
+
+            // The pause step's question owes nothing: its answer is weighed, and written, before the session is driven.
+            Assert.True(coordinator.TryAnswer("q1", "go", null, out var problem), problem);
+            Assert.NotEmpty(written);
+            markedBeforeTheDrive = harness.OrchestrationStore.ReadFlow(layout)!.Starting;
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var resumedAt = written.FindIndex(write => write.Kind == FlowChangeKind.SessionBegan);
+
+        Assert.True(markedBeforeTheDrive);
+        Assert.InRange(resumedAt, 1, written.Count - 2);
+        Assert.All(written[..(resumedAt + 1)], write => Assert.True(write.Starting));
+        Assert.All(written[(resumedAt + 1)..], write => Assert.False(write.Starting));
+        Assert.Null(harness.OrchestrationStore.ReadFlow(layout)!.Starting);
+    }
+
+    /// <summary>
+    /// An abort a session's start takes - the command's own answer, given as the session begins - is the stop that start
+    /// applies before anything else, and it seeks no advice after it: the run's state says the engine is stopping from the
+    /// abort's own record on, at the moment it was taken, never that it is starting, and an answer handed to the start
+    /// meanwhile, to the question still owing its recommendation, is refused naming the resume once the engine has gone -
+    /// the step that state names - never the resume this session itself is. No advisor is started.
+    /// </summary>
+    [Fact]
+    public async Task AnAbortAStartTakes_SaysStoppingFromItsOwnRecord_AndAnAnswerHandedMeanwhileIsRefusedNamingTheResumeOnceGone()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            steps:
+              - name: asker
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var first = new HeldAdvisor();
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, new Runner().On("asker", _ => FlowStepResult.AtLimit("turns", "12 turns")), new RunnerFacts(), records: records, advisor: first);
+            _ = coordinator.RunAsync(Token);
+            await first.Begun.Task.WaitAsync(Bound, Token);
+
+            // The crash, while the advisor runs: the question is written marked sought.
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var clock = new ManualClock();
+        var abortedAt = clock.GetUtcNow();
+        var resumed = new HeldAdvisor();
+        var written = new List<(FlowChangeKind Kind, DateTimeOffset? StoppingSince, bool Starting)>();
+        FlowHandedOver handed;
+
+        using (again)
+        {
+            var told = new Intercepted(again, (kind, _, _, snapshot) => written.Add((kind, snapshot.StoppingSince, snapshot.Starting)));
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, records: told, resume: TakeUp(harness, layout, definition), runName: "r1", advisor: resumed);
+
+            Assert.True(coordinator.TryAnswer("q1", "abort", null, out var none));
+            Assert.Null(none);
+
+            // The session is driven a while after: the stop it applies is the one taken then.
+            clock.Advance(TimeSpan.FromMinutes(1));
+            var offered = coordinator.OfferAnswerAsync("q1", "retry", inbox: "e1");
+
+            Assert.Equal(FlowRunStatus.Stopped, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            handed = await offered.WaitAsync(Bound, Token);
+        }
+
+        var refused = Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Refused!);
+
+        Assert.Equal(FlowHandedOver.Refused, handed);
         Assert.Equal(
-            JsonSerializer.Serialize(left with { StoppingSince = null, Next = [] }, JsonStateFile.Options),
-            JsonSerializer.Serialize(written, JsonStateFile.Options));
+            ("e1", "question 'q1' of run 'r1' still owes the recommendation it is answered with, so nothing was answered - the stop under way seeks none, and resume-orchestrator r1 seeks it first once the engine has gone; "
+                + "answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now"),
+            (refused.Inbox, refused.Why));
+
+        // Every write of the session - the abort's own first - says the one stop, taken with the abort, and none says the
+        // engine is starting.
+        Assert.Contains(written, write => write.Kind == FlowChangeKind.StopApplied);
+        Assert.All(written, write => Assert.Equal(((DateTimeOffset?)abortedAt, false), (write.StoppingSince, write.Starting)));
+        Assert.Empty(resumed.Asked);
     }
 
     /// <summary>

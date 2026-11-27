@@ -226,9 +226,11 @@ public sealed class FlowStatusTests
     /// What an open question waits on is its next step, by the one rule of it over what the engine is doing: a question
     /// still owing the recommendation it is answered with waits on the resume, which seeks it first, where no engine runs
     /// the run or a gone one - the answer command refuses any answer but abort until then; on its answer, taken now and
-    /// ending the asking, where a live engine's advisor seeks it now; on the pause's advice, then its answer, where a live
-    /// engine's pause defers it; and on the resume once the engine has gone where the live engine is stopping. A question
-    /// recommended waits on its answer whatever the engine does.
+    /// ending the asking, where a live engine's advisor seeks it now - and wherever a live engine is starting, whatever the
+    /// session before it left the question saying, for the start seeks every recommendation the run owes and takes an
+    /// answer then; on the pause's advice, then its answer, where a live engine's pause defers it; and on the resume once
+    /// the engine has gone where the live engine is stopping. A question recommended waits on its answer whatever the
+    /// engine does.
     /// </summary>
     [Fact]
     public void AnOpenQuestion_WaitsOnItsNextStep_ByWhatTheEngineIsDoing()
@@ -275,6 +277,10 @@ public sealed class FlowStatusTests
         {
             Assert.Equal([PauseQ1, Answer, AdvisedQ3], Waits(live));
         }
+
+        const string AdvisedQ1 = "waits     question q1 (pause) since 10:02:00Z: its recommendation is being sought: answer with 'dssharness answer-orchestrator r1 <answer> --question q1', taken now and ending the asking";
+
+        Assert.Equal([AdvisedQ1, Answer, AdvisedQ3], Waits(FlowEngineState.Starting));
 
         string OnceGone(string id, string start)
             => $"{start}question {id} (pause) since 10:02:00Z: its recommendation is still owed - the stop under way seeks none, and 'dssharness resume-orchestrator r1' seeks it first once the engine has gone; "
