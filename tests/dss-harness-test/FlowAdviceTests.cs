@@ -732,6 +732,54 @@ public sealed class FlowAdviceTests
     }
 
     /// <summary>
+    /// An advice a stop ends that returns its recommendation all the same - its run had the answer as its token was ended -
+    /// gives it to its question, what it spent counted: a recommendation obtained is never paid for again, so the resume
+    /// seeks none and the session it begins ends paused on the question, recommended.
+    /// </summary>
+    [Fact]
+    public async Task AnAdviceAStopEnds_ThatReturnsItsRecommendation_GivesIt_AndTheResumeSeeksNoneAgain()
+    {
+        var asked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var advisor = new Advisor(async (_, token) =>
+        {
+            asked.TrySetResult();
+
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Ended: it answers with what it holds.
+            }
+
+            return new FlowAdvice("more", "the step was nearly done", null, Model: "claude-opus-5-5", Directory: "steps/think/advice/1", Usd: 0.02, Tokens: 1500);
+        });
+        var records = new Records();
+
+        // A clock that never passes the bound on the advice's runner on its own: the runner, its token ended, answers
+        // within it, so the session takes what it answered and never lets it go.
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new TimerClock(), records: records, advisor: advisor);
+
+        var session = coordinator.RunAsync(Token);
+        await asked.Task.WaitAsync(Bound, Token);
+        coordinator.RequestStop();
+
+        var end = await session.WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowRunStatus.Stopped, end.Status);
+        Assert.Equal(
+            new FlowRecommendation("given", "more", null, "the step was nearly done", "advisor", "advisor", "claude-opus-5-5", "steps/think/advice/1"),
+            coordinator.OpenQuestions.Single().Recommendation);
+        Assert.Equal((0.02, 1500L), (records.Last!.Spent.Usd, records.Last.Spent.Tokens));
+
+        end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Single(advisor.Asked);
+    }
+
+    /// <summary>
     /// A safe pause while the advisor runs never ends it: the advice finishes as a machine step the pause leaves running
     /// does - its token never ended, the session waiting for it past the pause's completion - and its recommendation is
     /// kept, so the question the pause leaves to a person is recommended before the session ends, and the person's

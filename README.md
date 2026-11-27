@@ -967,7 +967,13 @@ question raised while the run is pausing says its recommendation is deferred, an
 complete, whatever asked for it, every open question still owing its recommendation is advised before
 the session ends. A stop ends a running advice - one once the pause is complete among them, which
 starts no advice after it either, so the stop never waits on an advisor - its question saying the
-recommendation is sought at the resume, which seeks it - as it does one a crash left sought. A person answers a question
+recommendation is sought at the resume, which seeks it - as it does one a crash left sought - unless
+the advice it ended still returns its recommendation, which the question keeps, so the resume never
+pays for it again. A session its cancellation token ends - a front end driving the engine in process;
+the run verbs' own interrupts and termination are the pause and the stop - ends its advice the same
+way, waits for each runner as a stop's drain does, and writes what it charged and holds all the same:
+what each advice answered, and its last record with every spend among it, saying it was cancelled and
+what it left running. A person answers a question
 recommended: `answer-orchestrator` to a question still owing its recommendation that no advisor seeks
 now - between sessions, or while a pause defers it - is refused (13), nothing answered, and `abort` is
 taken; `resume-orchestrator` seeks it first. The run's report, `ask-orchestrator-status` and every refusal of an
@@ -981,7 +987,9 @@ records under `steps/run/advice/<n>/`, `{question.step}` reading `run`, `{questi
 run's facts as `ask-orchestrator-status` gives them - held, as every advice is, to its own
 definition's bounds alone, and what it spends is the run's own, kept in `flow.json`'s `spent.advice`
 and counted in the run's spend. What every advice spent is counted against the run's budget, an ended
-one's among them, as it is taken - a step's question's on that step's measure (`measure.advice`): an
+one's among them, as it is taken - a step's question's on that step's measure (`measure.advice`),
+written to the step's own record as it is taken, for a resume sums the run's spend from the steps' own
+records: an
 advice that spends the run to its reserve pauses it at once, and one taken while the run pauses
 already asks no second pause. Where none was obtained - an advisor
 that failed past its retries, a bar that could not be read among the reasons - the question says

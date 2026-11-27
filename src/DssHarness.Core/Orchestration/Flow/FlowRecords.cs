@@ -1471,13 +1471,17 @@ public enum FlowChangeKind
     /// </summary>
     StopApplied,
 
-    /// <summary>A session ended, however it ended.</summary>
+    /// <summary>A session ended, however it ended: in order, or by its cancellation token once it went on.</summary>
     SessionEnded,
 
     /// <summary>An answer was given from outside the session - taken from the inbox, or refused where its question was no longer open.</summary>
     Answer,
 
-    /// <summary>The run's advisor answered an open question with a recommendation, or left it without one.</summary>
+    /// <summary>
+    /// The run's advisor answered an open question with a recommendation or left it without one, or an asking of it ended
+    /// while it ran was taken, what it spent counted, or let go of: about the step that asked, whose own record is written
+    /// with it, for what the advice spent is that step's measure's - and about the run where its own question asked.
+    /// </summary>
     Advised,
 
     /// <summary>An iteration was added to a loop at its bound, for a plan update that owes it work.</summary>
