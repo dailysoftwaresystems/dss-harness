@@ -2618,7 +2618,10 @@ changes meet. The planner's prompts and the self-audit say the same: an issue `{
 the recovery's, and no work item fixes it or rewrites its lines.
 
 An issue whose triage answers `join` takes no visit of its own: it goes with the fix of the issue it joined, read from
-the run's state alone (`FlowCoordinator.JoiningOf`, over the joins `_joined` keeps in the order they ended), through
+the run's state alone (`FlowCoordinator.JoiningOf`, over the joins the run's records hold, in the order they ended:
+`Joins`, each triage ended done with the course `join` by its `endedIn`, kept in no list of its own, so a resume reads
+every join before it counts a visit of the recovery - whose key reads what each visit fixed - and no rebuild has an
+order to keep), through
 that one's own join where it joined another in its turn and has no fix of its own (`RootOf`). Where the issue it joined
 is still being triaged it waits for that triage, and goes with its fix should it send one; with a visit of that fix
 whose diagnosis - its first step to begin - began after the join ended, in the run's own order, or has not begun

@@ -695,13 +695,6 @@ public sealed class FlowCoordinator
     /// <param name="Next">The id of the issue the run owes its next round, where it was sent there; its state is then <c>fixed in a later round</c> once a work item settled it.</param>
     private sealed record PreExistingTally(string Id, string State, string Line, FlowInstance? Triage = null, string? Next = null);
 
-    /// <summary>
-    /// Every triage that ended done joining its issue to another's - the root cause the same as that of one taken before
-    /// it, being triaged or being fixed (<see cref="JoiningOf"/>) - in the order they ended; read for what each joined
-    /// fix settles, and settled by <see cref="SettleJoins"/> where the fix it joined ends without it.
-    /// </summary>
-    private readonly List<FlowInstance> _joined = [];
-
     /// <summary>One ending whose handlers are raised and not all settled: the source, and what each handler did.</summary>
     /// <param name="Source">The step whose ending raised them.</param>
     /// <param name="Failed">Whether the ending was a failure.</param>
@@ -8201,7 +8194,6 @@ public sealed class FlowCoordinator
                 break;
             case JoinCourse:
                 _tally.Add(new PreExistingTally(instance.Id, JoinedState, $"{TitleOf(instance)} ({WhereOf(instance)})", instance));
-                _joined.Add(instance);
                 break;
             case "list":
                 ListIssue(instance);
@@ -8687,8 +8679,21 @@ public sealed class FlowCoordinator
     /// <summary>Every triage joined to the fix <paramref name="visit"/>'s source sent that goes with that visit (<see cref="IsWith"/>), in the order they joined.</summary>
     private IEnumerable<FlowInstance> JoinedWith(FlowInstance visit)
         => visit.RaisedBy is { } source
-            ? _joined.Where(joined => joined.State == FlowInstanceState.Done && !OwnFix(joined) && ReferenceEquals(RootOf(joined), source) && IsWith(joined, visit))
+            ? Joins().Where(joined => !OwnFix(joined) && ReferenceEquals(RootOf(joined), source) && IsWith(joined, visit))
             : [];
+
+    /// <summary>
+    /// Every triage that ended done joining its issue to another's - the root cause the same as that of one taken before
+    /// it (<see cref="JoiningOf"/>) - in the order they ended, by where each ended in the run's own order (one a record
+    /// written before the order was kept says none of ended before every one that does, in the order the run made them).
+    /// Read from the run's state alone, the triages' own records, and kept in no list of its own: so a resume reads every
+    /// join as the session before did from the moment its records are placed - before it counts a single visit of the
+    /// recovery, whose key reads what each visit fixed (<see cref="RecoveryOf"/>) - and no rebuild has an order to keep.
+    /// </summary>
+    private IEnumerable<FlowInstance> Joins()
+        => _created
+            .Where(created => IsTriage(created) && created.State == FlowInstanceState.Done && CourseOf(created) == JoinCourse)
+            .OrderBy(created => created.EndedIn);
 
     /// <summary>
     /// Every visit of the recovery that fixes the issue <paramref name="triage"/> holds: those it raised, and - for one
@@ -8721,14 +8726,14 @@ public sealed class FlowCoordinator
     /// <returns>Whether it raised anything.</returns>
     private bool SettleJoins()
     {
-        if (_joined.Count == 0 || _pausing || _stopping || _hardStop)
+        if (_pausing || _stopping || _hardStop)
         {
             return false;
         }
 
         var raised = false;
 
-        foreach (var joined in _joined.Where(joined => joined.State == FlowInstanceState.Done).ToList())
+        foreach (var joined in Joins().ToList())
         {
             switch (JoiningOf(joined))
             {
@@ -14772,6 +14777,9 @@ public sealed class FlowCoordinator
 
             foreach (var visit in _created.Where(created => IsRecovery(created) && created.RaisedBy is not null))
             {
+                // Each visit counted under the key it was taken under, read from the records alone - what each visit fixed,
+                // the issues joined to it among it (Joins) - so a visit of an issue met again after its fix is counted
+                // against that issue's bound here as it was before the resume.
                 var key = RecoveryOf(visit.RaisedBy!).Key;
                 _recoveryVisits[key] = Math.Max(_recoveryVisits.GetValueOrDefault(key), visit.Visit);
             }
@@ -14993,9 +15001,8 @@ public sealed class FlowCoordinator
                     case JoinCourse:
                         // What became of a join is read from the fix it joined, as it is read while the run goes on: fixed
                         // where a visit of its own ended done; and a visit or a triage of its own the join is owed is given
-                        // it in this session's first pass (SettleJoins).
+                        // it in this session's first pass (SettleJoins), which reads the joins from the records (Joins).
                         _tally.Add(new PreExistingTally(triage.Id, RecoveriesOf(triage).Any(created => created.State == FlowInstanceState.Done) ? "fixed" : JoinedState, $"{TitleOf(triage)} ({WhereOf(triage)})", triage));
-                        _joined.Add(triage);
                         break;
                     case "duplicate" or "unproven":
                         _tally.Add(SettledTally(triage, CourseOf(triage)!));

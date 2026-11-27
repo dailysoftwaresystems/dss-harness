@@ -3025,6 +3025,112 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
+    /// An issue joined to another's fix and met again after that fix is counted against its own bound from the fix that
+    /// did not hold, and a resume counts it so too - the joins read from the records before a visit is counted: its visit
+    /// is the recovery's second, and once that one fails and is tried again the bound of two is met and the run asks,
+    /// with no third visit, whether or not a pause and a resume came between.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AJoinedIssueMetAgainAfterItsFix_MeetsTheRecoverysBoundAtTheSameVisit_WithAResumeBetweenOrNot(bool resumed)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              maxVisits: 2
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var joined = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failed = FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the remedy stayed red");
+        var first = new FakeRunner()
+            .On("think", asked => asked switch
+            {
+                1 => FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole", blocks: true), Issue("the second hole", blocks: true)]),
+                2 => FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the second hole", blocks: true)]),
+                _ => FlowStepResult.Ended(passed: true, HarnessExit.Success),
+            })
+            .OnAsync("triage", async run =>
+            {
+                switch (run.Instance)
+                {
+                    case "triage+2":
+                        return Joins(run.Issue!.Title, "triage");
+                    case "triage":
+                        await joined.Task;
+                        return Course("fix", run.Issue!.Title);
+                    default:
+                        return Course("fix", run.Issue!.Title);
+                }
+            })
+            .OnAsync("mend", run => run.Instance switch
+            {
+                "recover.mend" => Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)),
+                _ when resumed => held.Task,
+                _ => Task.FromResult(failed),
+            });
+        var harness = new HarnessFactory();
+        var store = new OrchestrationStore(harness.FileSystem, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new ManualClock();
+        var cancel = TestContext.Current.CancellationToken;
+        var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock);
+        var watched = new Watched(records, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
+        _ = watched.Seen.ContinueWith(_ => joined.TrySetResult(), TaskScheduler.Default);
+        var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watched);
+        var session = coordinator.RunAsync(cancel);
+
+        if (resumed)
+        {
+            // The second visit is at work when the run pauses: the next session takes it up from the records alone.
+            await watched.Until(snapshot => snapshot.Steps.Any(step => step.Instance == "recover+2.mend" && step.State == FlowInstanceState.Running)).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            coordinator.RequestPause("interrupt", all: true);
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+            records.Dispose();
+
+            var taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+            records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock);
+            coordinator = new FlowCoordinator(definition, new FakeRunner().On("mend", failed), new RunnerFacts(), clock, records: records, resume: taken);
+            session = coordinator.RunAsync(cancel);
+        }
+
+        using (records)
+        {
+            // The issue met again took the recovery's second visit, which failed: the run asks what its failure does.
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+            Assert.Equal(("triage+3", 2), (coordinator.Instances["recover+2"].RaisedBy!.Id, coordinator.Instances["recover+2"].Visit));
+            var failure = coordinator.OpenQuestions.Single(question => question.Kind == "failure");
+            Assert.True(coordinator.TryAnswer(failure.Id, "retry", out _));
+
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+
+            // Tried again, it is the issue's third visit, past its bound of two: the run asks, and makes none.
+            var bound = coordinator.OpenQuestions.Single(question => question.Kind == "recoveryBound");
+            Assert.Equal("triage+3", bound.Instance);
+            Assert.Contains("'the second hole' is to be fixed at its root, and the recovery has taken it 2 times without putting it right", bound.Problem, StringComparison.Ordinal);
+            Assert.False(coordinator.Instances.ContainsKey("recover+3"));
+        }
+    }
+
+    /// <summary>
     /// The run's words of the classes its items closed are gathered by their one owner from the steps that judge and
     /// count them, known by their type: each item's record as its newest class-closure check that ended done judged it
     /// - a check run again after a rework is the one that stands - whole, and each class's claim alone; the hotspots

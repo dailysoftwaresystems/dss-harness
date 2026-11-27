@@ -1364,6 +1364,10 @@ public sealed class WorkflowTemplatesTests
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
+            "over the joins the run's records hold, in the order they ended: `Joins`, each triage ended done with the course `join` by its `endedIn`, kept in no list of its own, so a resume reads every join before it counts a visit of the recovery - whose key reads what each visit fixed - and no rebuild has an order to keep),",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "A triage is told, where it starts, only those it may name - each taken before its own (`TakenBefore`), the tally's whose triage was and those being triaged - with the ids of those it may join (`JoinableBy`: of those, each whose issue had not ended without a fix as it began, `EndedWithoutAFixBefore` - being triaged, being fixed or fixed), both read from the rules its answer is refused by,",
             architecture,
             StringComparison.Ordinal);
