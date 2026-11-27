@@ -1180,14 +1180,16 @@ public sealed partial class GitClient(
     public async Task<bool> IsIgnoredAsync(
         string directory,
         string path,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool asTheIndexHolds = false)
     {
         // check-ignore's exit code is three valued: 0 matched, 1 did not match, and
         // anything else is a failure. Folding the third into "not ignored" would
-        // report a secret as safe to copy because the question itself errored.
+        // report a secret as safe to copy because the question itself errored. Without
+        // --no-index, a path the index tracks is never ignored, as git reads it.
         var result = await RunAsync(
             directory,
-            ["check-ignore", "--quiet", "--no-index", "--", Literally(path)],
+            ["check-ignore", "--quiet", .. asTheIndexHolds ? Array.Empty<string>() : ["--no-index"], "--", Literally(path)],
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return result.ExitCode switch
@@ -2034,7 +2036,8 @@ public sealed partial class GitClient(
     /// <summary>
     /// Runs a read-only query whose failure message is inspected: "not a git repository"
     /// (<see cref="NotARepositoryAnswers"/>) and "not a gitdir" are recognised by their text, which every git of the tool's
-    /// says untranslated (<see cref="GitOwnSettings.Locale"/>).
+    /// says untranslated but one git runs the repository's hooks for, which no question is
+    /// (<see cref="GitOwnSettings.Untranslated"/>).
     /// </summary>
     private Task<GitCommandResult> RunQueryAsync(
         string directory,

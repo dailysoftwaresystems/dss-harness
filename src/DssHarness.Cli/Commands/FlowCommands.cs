@@ -1,4 +1,5 @@
 using System.CommandLine;
+using DssHarness.Core.Application;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
@@ -33,7 +34,7 @@ internal static class FlowCommands
         string command,
         Func<FlowInterrupts, CancellationToken, Task<CommandOutcome>> session,
         CancellationToken commandToken)
-        => new FlowTerminal(context.Get<IHarnessOutput>(), command).RunAsync(session, commandToken);
+        => new FlowTerminal(context.Get<IHarnessOutput>(), command, end: context.Get<IEndWrites>()).RunAsync(session, commandToken);
 
     /// <summary>
     /// The <c>--json</c> answer of the two ask commands: the same document wherever they stop, the facts and the answer

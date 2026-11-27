@@ -1,14 +1,15 @@
 using DssHarness.Core.Execution;
 using DssHarness.Core.Git;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Tests;
 
 /// <summary>
 /// What an engine's session holds of where its trees are (<see cref="DssHarness.Core.Repository.SessionTrees"/>): each tree
 /// located from its root once in the session and at every load outside one, a directory inside a tree never kept, a
-/// tree made again found anew, and an agent's tree made, told and deleted starting only the git its work needs - each
-/// git untranslated.
+/// tree made again found anew, a tree whose .git is taken away asked anew, and an agent's tree made, told and deleted
+/// starting only the git its work needs - each git untranslated.
 /// </summary>
 public sealed class SessionTreesTests
 {
@@ -109,6 +110,84 @@ public sealed class SessionTreesTests
     }
 
     /// <summary>
+    /// What a session kept of a worktree is served only while the tree still holds its own .git: one whose .git file a
+    /// person took away is no worktree - git answers for the directory by the repository enclosing it - and is located
+    /// anew at every load, as a directory inside the main checkout is; with the file put back it is located anew once
+    /// more, what was kept before dropped, and kept again.
+    /// </summary>
+    [Fact]
+    public async Task AWorktreeWhoseGitIsTakenAwayInASession_IsNoWorktree_AndIsLocatedAnew()
+    {
+        using var temp = new TempDirectory();
+        var (kit, counted) = await PrepareAsync(temp);
+        var inspector = new WorktreeInspector(kit.Harness.GitClient, kit.Harness.FileSystem, kit.Harness.Platform, kit.Harness.Output);
+
+        using var session = EngineSession.Begin();
+        _ = await kit.Harness.ContextLoader.LoadAsync(kit.Main, Token);
+        var made = await kit.Harness.WorktreeService.CreateAsync(kit.Main, "wt", useRandomName: false, Token);
+        Assert.True(made.Succeeded, made.Outcome.Message);
+        var tree = made.Path;
+        var main = (await kit.Harness.GitClient.GetMainWorktreeAsync(kit.Main, Token))!.Path;
+
+        Assert.Equal(WorktreeMembership.OfThisRepository, (await inspector.IdentifyAsync(main, WorktreeAddress.Plain("wt"), tree, Token)).Membership);
+        Assert.Equal(Located, await GitsOfAsync(counted, () => kit.Harness.ContextLoader.LoadAsync(tree, Token)));
+        Assert.Empty(await GitsOfAsync(counted, () => kit.Harness.ContextLoader.LoadAsync(tree, Token)));
+
+        var dotGit = Path.Combine(tree, ".git");
+        var held = File.ReadAllBytes(dotGit);
+        File.Delete(dotGit);
+
+        Assert.Equal(WorktreeMembership.NotAWorktree, (await inspector.IdentifyAsync(main, WorktreeAddress.Plain("wt"), tree, Token)).Membership);
+        Assert.Equal(Located, await GitsOfAsync(counted, () => kit.Harness.ContextLoader.LoadAsync(tree, Token)));
+        Assert.Equal(Located, await GitsOfAsync(counted, () => kit.Harness.ContextLoader.LoadAsync(tree, Token)));
+        PathAssert.Same(kit.Main, (await kit.Harness.ContextLoader.LoadAsync(tree, Token)).Layout.RepositoryRoot);
+
+        File.WriteAllBytes(dotGit, held);
+
+        Assert.Equal(Located, await GitsOfAsync(counted, () => kit.Harness.ContextLoader.LoadAsync(tree, Token)));
+        Assert.Empty(await GitsOfAsync(counted, () => kit.Harness.ContextLoader.LoadAsync(tree, Token)));
+        PathAssert.Same(tree, (await kit.Harness.ContextLoader.LoadAsync(tree, Token)).Layout.RepositoryRoot);
+        Assert.Equal(WorktreeMembership.OfThisRepository, (await inspector.IdentifyAsync(main, WorktreeAddress.Plain("wt"), tree, Token)).Membership);
+    }
+
+    /// <summary>
+    /// An agent's tree the session found marked and lent its objects is told as the agent's from the session, starting no
+    /// git, only while it holds its .git: with its .git taken away it is none, and with it put back it is asked of anew.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentsTreeWhoseGitIsTakenAwayInASession_IsNoAgentsRepository_AndIsAskedOfAnew()
+    {
+        using var temp = new TempDirectory();
+        var (kit, counted) = await PrepareAsync(temp);
+        var repositories = new AgentRepositories(kit.Harness.GitClient, kit.Harness.FileSystem, kit.Harness.Platform);
+        var address = WorktreeAddress.Nested(OrchestrationKit.Orchestrator, "ag");
+
+        using var session = EngineSession.Begin();
+        _ = await kit.Harness.ContextLoader.LoadAsync(kit.Main, Token);
+        await kit.CreateReadingAgentAsync("ag");
+        var tree = kit.Worktree("ag");
+        var main = (await kit.Harness.GitClient.GetMainWorktreeAsync(kit.Main, Token))!.Path;
+        var told = false;
+
+        Assert.Equal(LocatedAgent, await GitsOfAsync(counted, () => kit.Harness.ContextLoader.LoadAsync(tree, Token)));
+        Assert.Empty(await GitsOfAsync(counted, async () => told = await repositories.IsAtAsync(main, address, tree, Token)));
+        Assert.True(told);
+
+        var dotGit = Path.Combine(tree, ".git");
+        var away = Path.Combine(tree, "git-away");
+        Directory.Move(dotGit, away);
+
+        Assert.False(await repositories.IsAtAsync(main, address, tree, Token));
+
+        Directory.Move(away, dotGit);
+
+        Assert.Equal(["git config", "git count-objects"], await GitsOfAsync(counted, async () => told = await repositories.IsAtAsync(main, address, tree, Token)));
+        Assert.True(told);
+        Assert.Empty(await GitsOfAsync(counted, async () => told = await repositories.IsAtAsync(main, address, tree, Token)));
+        Assert.True(told);
+    }
+
+    /// <summary>
     /// In an engine's session that located its main checkout, an agent's tree made, deleted, made and told, and deleted
     /// again starts only the git its work needs: the main checkout's HEAD read once for the making and the room its files
     /// take, those files listed once for every tree made at the commit, where the main checkout keeps its objects kept
@@ -160,8 +239,9 @@ public sealed class SessionTreesTests
 
         var gits = counted.Started.Skip(from).Where(started => started.FileName == "git").ToList();
 
-        Assert.NotEmpty(gits);
-        Assert.All(gits, git => Assert.Equal(GitOwnSettings.Locale, git.Environment[GitOwnSettings.LocaleVariable]));
+        // Untranslated, but the checkout an agent's tree is made with, which git runs hooks for: it keeps the person's locale.
+        Assert.Contains(gits, git => CountingProcesses.Named(git) == "git checkout");
+        Assert.All(gits, git => Assert.Equal(CountingProcesses.Named(git) == "git checkout" ? null : GitOwnSettings.Locale, git.Environment.GetValueOrDefault(GitOwnSettings.LocaleVariable)));
     }
 
     private static async Task DeletedAsync(OrchestrationKit kit, string agent)

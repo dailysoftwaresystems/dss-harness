@@ -9,10 +9,11 @@ namespace DssHarness.Core.Repository;
 /// <inheritdoc cref="IRepositoryLocator"/>
 /// <remarks>
 /// Inside an engine session, a tree located from its root is located once: the session keeps where it is
-/// (<see cref="SessionTrees"/>), for nothing it holds can move while the engine holds the run.
+/// (<see cref="SessionTrees"/>), for nothing it holds can move while the engine holds the run - served while the tree
+/// holds its <c>.git</c>.
 /// </remarks>
 /// <param name="gitClient">Asks git where the tree and its main checkout are.</param>
-/// <param name="fileSystem">Looks for an agent's repository's own configuration.</param>
+/// <param name="fileSystem">Looks for an agent's repository's own configuration, and for a kept tree's <c>.git</c>.</param>
 /// <param name="platform">How paths compare.</param>
 public sealed class RepositoryLocator(IGitClient gitClient, IFileSystem fileSystem, IHostPlatform platform) : IRepositoryLocator
 {
@@ -28,7 +29,7 @@ public sealed class RepositoryLocator(IGitClient gitClient, IFileSystem fileSyst
 
         var known = SessionTrees.OfSession(_platform.PathComparison);
 
-        if (known?.Find(startDirectory) is { } found)
+        if (known?.Find(startDirectory, _fileSystem) is { } found)
         {
             return found;
         }
@@ -97,7 +98,7 @@ public sealed class RepositoryLocator(IGitClient gitClient, IFileSystem fileSyst
         // a main checkout the session located is the tree's still: what NotLentAsync asks, answered by the session.
         var known = SessionTrees.OfSession(_platform.PathComparison);
 
-        if (known?.LentMarkOf(repositoryRoot) is { } lent && known.IsMainCheckout(lent.MainCheckout))
+        if (known?.LentMarkOf(repositoryRoot, _fileSystem) is { } lent && known.IsMainCheckout(lent.MainCheckout, _fileSystem))
         {
             return new HarnessLayout(repositoryRoot, lent.MainCheckout);
         }

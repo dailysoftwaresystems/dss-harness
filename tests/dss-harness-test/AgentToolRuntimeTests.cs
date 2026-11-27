@@ -1425,7 +1425,10 @@ public sealed partial class AgentToolRuntimeTests : IDisposable
         Assert.Equal(5, _events.All.OfType<ToolCallFinished>().Count());
     }
 
-    /// <summary>Calls that read run together, at most the bound at once, each read of a file still under way while the others start.</summary>
+    /// <summary>
+    /// Calls that read run together, at most the bound at once: the first reads are held until the bound of them are under
+    /// way together - however long each call takes to reach its read - and none beyond it is ever under way beside them.
+    /// </summary>
     [Fact]
     public async Task ATurnsReads_RunAtMostTheBoundAtOnce()
     {
@@ -1436,7 +1439,7 @@ public sealed partial class AgentToolRuntimeTests : IDisposable
             Write($"f{at}.txt", $"{at}");
         }
 
-        var reads = new SlowReads(_harness.FileSystem, _worktree);
+        var reads = new GatedReads(_harness.FileSystem, _worktree, AgentToolRuntime.MostTogether);
         var runtime = Open(fileSystem: reads);
 
         var results = await runtime.RunTurnAsync([.. Enumerable.Range(0, count).Select(at => Request($"{at}", AgentTools.ViewFile, ("path", $"f{at}.txt")))], Token);
@@ -2994,9 +2997,20 @@ public sealed partial class AgentToolRuntimeTests : IDisposable
         }
     }
 
-    /// <summary>A file system whose reads of files under a directory take a while, which counts how many are under way at once.</summary>
-    private sealed class SlowReads(IFileSystem inner, string under) : PassThroughFileSystem(inner)
+    /// <summary>
+    /// A file system whose reads of files under a directory are held until <paramref name="gathered"/> of them are under
+    /// way at once - the gate opens as the last of them opens its file, and stays open - which counts the most under way
+    /// at once. Held by the gate and not by a time, the reads that run together are all under way together however fast
+    /// or slow each call is to reach its read; a runtime that never has as many under way finds the gate shut, and the
+    /// first read to have waited <see cref="GivenUp"/> opens it for every read - the most counted then says how many it
+    /// ran at once.
+    /// </summary>
+    private sealed class GatedReads(IFileSystem inner, string under, int gathered) : PassThroughFileSystem(inner)
     {
+        /// <summary>How long a read waits on a gate that has not opened before it goes on without it.</summary>
+        private static readonly TimeSpan GivenUp = TimeSpan.FromSeconds(30);
+
+        private readonly TaskCompletionSource _gathered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _open;
         private int _most;
 
@@ -3017,16 +3031,23 @@ public sealed partial class AgentToolRuntimeTests : IDisposable
                 Interlocked.CompareExchange(ref _most, open, most);
             }
 
-            return new Slow(base.OpenRead(path), () => Interlocked.Decrement(ref _open));
+            var stream = new Gated(base.OpenRead(path), _gathered, () => Interlocked.Decrement(ref _open));
+
+            if (open >= gathered)
+            {
+                _ = _gathered.TrySetResult();
+            }
+
+            return stream;
         }
 
-        /// <summary>Where the file a slowed stream wraps stands, as the file system names the stream it opened.</summary>
-        public override string FinalPathOf(Stream opened) => base.FinalPathOf(opened is Slow slow ? slow.Inner : opened);
+        /// <summary>Where the file a gated stream wraps stands, as the file system names the stream it opened.</summary>
+        public override string FinalPathOf(Stream opened) => base.FinalPathOf(opened is Gated gated ? gated.Inner : opened);
 
-        /// <summary>A stream each read of which waits a little first, and says when it is closed.</summary>
-        private sealed class Slow(Stream inner, Action closed) : Stream
+        /// <summary>A stream each read of which waits on the gate first, and says when it is closed.</summary>
+        private sealed class Gated(Stream inner, TaskCompletionSource gate, Action closed) : Stream
         {
-            /// <summary>The stream the file system opened, which this one slows.</summary>
+            /// <summary>The stream the file system opened, which this one holds at the gate.</summary>
             public Stream Inner => inner;
 
             public override bool CanRead => true;
@@ -3041,7 +3062,9 @@ public sealed partial class AgentToolRuntimeTests : IDisposable
 
             public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
             {
-                await Task.Delay(50, cancellationToken);
+                _ = await Task.WhenAny(gate.Task, Task.Delay(GivenUp, cancellationToken));
+                cancellationToken.ThrowIfCancellationRequested();
+                _ = gate.TrySetResult();
                 return await inner.ReadAsync(buffer, cancellationToken);
             }
 

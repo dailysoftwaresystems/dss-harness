@@ -234,6 +234,152 @@ public sealed class FlowRecordsTests
     }
 
     /// <summary>
+    /// What a power loss left of a pass never put on the disk - NULs where an earlier page of the pass never landed, the
+    /// end of one of its lines and its later lines whole after them - is never refused: the reader sets aside the first line
+    /// that holds a NUL with every line after it, and says so, and the next writer takes them back and goes on from the last
+    /// event before them, so a resume of the run goes on.
+    /// </summary>
+    [Fact]
+    public void WhatAPowerLossLeftOfAPass_FromItsFirstNul_IsSetAsideAndTakenBack_NeverRefused()
+    {
+        using var temp = new TempDirectory();
+        var files = Files();
+        var file = temp.Combine("events.jsonl");
+        var pass = temp.Combine("pass.jsonl");
+
+        using (var log = FlowEventLog.Open(files, file))
+        {
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionBegan);
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Step, "one", "one", "NotStarted", "Running", 1);
+        }
+
+        using (var log = FlowEventLog.Open(files, pass))
+        {
+            for (var seq = 1; seq <= 5; seq++)
+            {
+                _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed);
+            }
+        }
+
+        // The pass after the two: events 3 to 5, of which the end of 3 and the whole of 4 and 5 landed, after the NULs
+        // where the page holding 3's start never did.
+        var lines = File.ReadAllLines(pass);
+        File.WriteAllBytes(file, [.. File.ReadAllBytes(file), .. new byte[37], .. System.Text.Encoding.UTF8.GetBytes($"{lines[2][9..]}\n{lines[3]}\n{lines[4]}\n")]);
+
+        var (events, torn) = FlowEventLog.Read(files, file);
+
+        Assert.Equal([1, 2], events.Select(read => read.Seq));
+        Assert.Equal("the log's lines from the one after event 2 on hold a NUL, what a power loss left of a pass never put on the disk, and were set aside: ''", torn);
+
+        using (var again = FlowEventLog.Open(files, file))
+        {
+            Assert.Equal(3, again.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed).Seq);
+        }
+
+        var (whole, none) = FlowEventLog.Read(files, file);
+
+        Assert.Equal([1, 2, 3], whole.Select(read => read.Seq));
+        Assert.Null(none);
+        Assert.DoesNotContain((byte)0, File.ReadAllBytes(file));
+    }
+
+    /// <summary>
+    /// A line holding a NUL is never written to a log written a batch at a time, whose opening takes back from its first
+    /// NUL: refused, nothing written - a guard against its writer's defect, for the event log's own lines are JSON, which
+    /// writes a NUL of a value escaped.
+    /// </summary>
+    [Fact]
+    public void ALineHoldingANul_IsNeverWrittenToALogWrittenABatchAtATime()
+    {
+        using var temp = new TempDirectory();
+        var file = temp.Combine("events.jsonl");
+
+        using (var log = DssHarness.Core.Agents.AppendLog.Open(Files(), file, batched: true))
+        {
+            var refused = Assert.Throws<ArgumentOutOfRangeException>(() => log.Write("a\0b"));
+
+            Assert.StartsWith($"A line of '{file}' holds a NUL, which its opening would take back as what a power loss left of an unwritten batch; nothing was written.", refused.Message, StringComparison.Ordinal);
+        }
+
+        // An event whose words hold a NUL is written escaped, read back whole, and never taken for a power loss's.
+        using (var events = FlowEventLog.Open(Files(), file))
+        {
+            _ = events.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed, detail: "a\0b");
+        }
+
+        var (read, torn) = FlowEventLog.Read(Files(), file);
+
+        Assert.Equal(("a\0b", (string?)null), (Assert.Single(read).Detail, torn));
+        Assert.DoesNotContain((byte)0, File.ReadAllBytes(file));
+    }
+
+    /// <summary>
+    /// The log's close never throws a flush's failure over the failure a session leaves by: the failure in flight - here the
+    /// session's last pass's own flush that failed - is the one the session ends with, its code and its trace its own, and
+    /// the close's failed flush is said as a warning by the run's records.
+    /// </summary>
+    [Fact]
+    public async Task AFlushThatFailsAtTheClose_NeverReplacesTheFailureLeaving_AndTheRecordsSayIt()
+    {
+        using var temp = new TempDirectory();
+        var clock = new ManualClock();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+            """);
+        var harness = new HarnessFactory();
+        var files = new UnflushableAppends(harness.FileSystem);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var said = new List<string>();
+
+        var leaving = await Assert.ThrowsAsync<IOException>(async () =>
+        {
+            using var records = new FlowRunRecords(files, new OrchestrationStore(files, harness.Output), layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock, said.Add);
+            await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), clock, records: records).RunAsync(TestContext.Current.CancellationToken);
+        });
+
+        Assert.Equal("flush 1 failed", leaving.Message);
+        Assert.Equal(["the run's events written since its last pass could not be put on the disk as its records closed: flush 2 failed; they are written, and only a power loss before they reach the disk would lose them"], said);
+
+        // And a log closed as a defect leaves never throws its own flush's failure over it.
+        var defect = Assert.Throws<InvalidOperationException>(new Action(() =>
+        {
+            using var log = FlowEventLog.Open(files, temp.Combine("other.jsonl"));
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed);
+            throw new InvalidOperationException("the defect leaving");
+        }));
+
+        Assert.Equal("the defect leaving", defect.Message);
+    }
+
+    /// <summary>A disk whose files of lines fail every flush, each said by its count.</summary>
+    private sealed class UnflushableAppends(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        private int _flushes;
+
+        public override IAppendFile OpenForAppend(string path) => new Unflushable(base.OpenForAppend(path), this);
+
+        private sealed class Unflushable(IAppendFile file, UnflushableAppends disk) : IAppendFile
+        {
+            public long Length => file.Length;
+
+            public void ReadExactlyAt(long position, Span<byte> buffer) => file.ReadExactlyAt(position, buffer);
+
+            public void TruncateTo(long length) => file.TruncateTo(length);
+
+            public void AppendFlushed(ReadOnlySpan<byte> bytes) => file.AppendFlushed(bytes);
+
+            public void Append(ReadOnlySpan<byte> bytes) => file.Append(bytes);
+
+            public void Flush() => throw new IOException($"flush {Interlocked.Increment(ref disk._flushes)} failed");
+
+            public void Dispose() => file.Dispose();
+        }
+    }
+
+    /// <summary>
     /// The engine's own values are held to the engine's own names, exactly: a number, two names joined and a name the
     /// engine does not have are each refused - which a parse of the enumeration would let through - and a question's id
     /// is held to the one rule of its shape.

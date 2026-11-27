@@ -335,11 +335,12 @@ public sealed class CommitStepTests
     }
 
     /// <summary>
-    /// The repository's commit hooks still run under the git the tool starts untranslated, and inherit its locale: a
-    /// pre-commit hook runs, sees <c>LC_ALL=C</c>, and the commit is made.
+    /// The repository's commit hooks run in the person's own locale, as in their shell: a pre-commit hook runs, sees the
+    /// <c>LC_ALL</c> and <c>LANG</c> the tool was started with - never the C every other git of the tool's runs under - and
+    /// the commit is made.
     /// </summary>
     [Fact]
-    public async Task ACommitsHooks_RunAndInheritTheUntranslatedLocale()
+    public async Task ACommitsHooks_RunInThePersonsOwnLocale()
     {
         using var temp = new TempDirectory();
         using var seen = new TempDirectory();
@@ -347,7 +348,7 @@ public sealed class CommitStepTests
         _ = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
         var hook = Path.Combine(kit.Main, ".git", "hooks", "pre-commit");
         var said = seen.Combine("locale.txt");
-        File.WriteAllText(hook, $"#!/bin/sh\nprintf '%s' \"$LC_ALL\" > '{said.Replace('\\', '/')}'\n");
+        File.WriteAllText(hook, $"#!/bin/sh\nprintf '%s|%s' \"$LC_ALL\" \"$LANG\" > '{said.Replace('\\', '/')}'\n");
 
         if (!OperatingSystem.IsWindows())
         {
@@ -357,7 +358,7 @@ public sealed class CommitStepTests
         var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token);
 
         Assert.True(ended.Passed, ended.Error);
-        Assert.Equal(GitOwnSettings.Locale, File.ReadAllText(said));
+        Assert.Equal($"{Environment.GetEnvironmentVariable(GitOwnSettings.LocaleVariable)}|{Environment.GetEnvironmentVariable("LANG")}", File.ReadAllText(said));
         Assert.Equal(FlowCommitEntry.Committed, kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits[0].State);
     }
 

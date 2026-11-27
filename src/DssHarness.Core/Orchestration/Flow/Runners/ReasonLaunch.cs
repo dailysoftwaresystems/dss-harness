@@ -97,7 +97,9 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
     /// <summary>
     /// The mask the run's records and its answer are held to: the value of every secret the configuration appoints that
     /// the slot answers - each provider's keys, each client's token, each web-search source's key - whatever of them the
-    /// run itself is given, and <paramref name="with"/>'s beside them. Null where nothing is masked.
+    /// run itself is given, and <paramref name="with"/>'s beside them. Null where nothing is masked. Built inside an engine
+    /// session, it is held by the session's masks (<see cref="Execution.SessionMasks"/>), which the command's output logs
+    /// are masked by: no record the session kept through it is left in them unmasked.
     /// </summary>
     /// <param name="layout">The repository, whose slot holds the secrets.</param>
     /// <param name="providers">The configuration's providers, clients and sources, resolved: what they appoint.</param>
@@ -120,12 +122,15 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
 
         var slot = secrets.Count > 0 ? new ActionValues(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), secrets) : null;
 
-        return (slot, with) switch
+        var mask = (slot, with) switch
         {
             ({ } held, { } more) => held.With(more),
             ({ } held, null) => held,
             (null, var more) => more,
         };
+
+        Execution.SessionMasks.OfSession()?.Hold(mask);
+        return mask;
     }
 
     /// <summary>

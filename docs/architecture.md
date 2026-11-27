@@ -70,7 +70,9 @@ its pipeline. That is read from the core's own metadata, not its source's text: 
 type below the layers names in its signatures, its locals and its bodies' instructions, however
 its source spells it. The layer's contracts are its use cases with their requests and results,
 and the few points it is open to below it, each reviewed with its reason - the facts every
-document of an operation says (`IDocumentFacts`), which the service that did them fills. The
+document of an operation says (`IDocumentFacts`), which the service that did them fills, and
+what an operation writes at its end once its work has stopped (`IEndWrites`), which the service
+that writes it answers and a terminal's second interrupt says is still to come. The
 one scan of the core for a contract's implementations (`CoreImplementations<T>`) is the
 core's own, at its root, so the registries below the layer that read it never reach into the
 composition root that registers what it finds. The command line builds no container: the registrations are the core's own
@@ -665,18 +667,33 @@ and taken by the other, so a tree a deletion tells and then loads is asked of on
 files of each commit a tree is made at, by the commit's id (`WorktreeRoom.ForFilesAsync`). Its
 configuration is still read where it always is, for it is the tree's file. A
 tree the session makes, deletes or makes again is dropped by the one owner of the making and the
-deleting of trees (`WorktreeService`), and found anew by the next asking; a directory inside a
+deleting of trees (`WorktreeService`), and found anew by the next asking; what was kept of a tree
+is served only while its root still holds its own `.git`, looked at as it is served, so a `.git`
+taken away by anything else - a person, another command - leaves the directory asked of anew, as
+whatever repository encloses it answers for it, and the fact is dropped; a directory inside a
 tree is never kept, for it may become a tree of its own; and the session's scope flows with the
 work it starts alone, so no other command or session is answered from it, and it ends with the
 session.
 
 git's messages are matched in two places only: telling "not a repository" apart from
 "git could not look", and "not a gitdir" apart from the same when a directory among a
-worktree's submodule repositories is examined. Every git the tool starts runs with
-`LC_ALL=C`, set at the one place a git of the tool's starts (`GitOwnSettings`), never by a
-caller: a translated git still answers in the words being matched, and every message of
-git's a person is shown is in English. The hooks a commit or a push runs inherit it, as
-they inherit every variable git runs with.
+worktree's submodule repositories is examined - both questions - and a workflow source's fetch
+or listing telling "not there" from "not reached". Every git the tool starts runs with
+`LC_ALL=C` but one git runs a repository's hooks for, set at the one place for every git start
+(`GitOwnSettings.Untranslated`) - the client's (`GitOwnSettings.Apply`), the question that names
+the variables every git is started without (`GitLocalVariables`), and the isolation probe's
+`git --version` alike - never by a caller: a question is answered in the words being matched.
+The commands git runs hooks for keep the person's locale, whether a hook runs or not, so a hook
+behaves as in their shell - a JVM tool's file names, Ruby's default encoding, a shell's
+character classes and lengths, a server's hooks over ssh that `SendEnv LC_*` would forward to -
+and their messages reach the person in their language: each command `githooks(5)` names as
+running one (`GitHooks.Runners` - `am`, `commit`, `merge`, `pull`, `rebase`, `cherry-pick`,
+`revert`, `checkout`, `switch`, `clone`, `worktree add`, `push`, `receive-pack`, `send-email`,
+`gc`, `p4 submit`), by its subcommand after git's own options (`GitHooks.MayRun`). The two hooks
+it names no command for - reference-transaction, which any command that moves a ref runs, and
+post-index-change, which any that writes the index runs - make no command one of them: every
+command that writes would be, and no git of the tool's runs a hook but where it runs them on
+purpose.
 
 ### Reading config.json
 
@@ -3626,8 +3643,10 @@ every step, read again before the expiry the host tells of it passes - `gh` says
 answer to a request a token that expires signed (`github-authentication-token-expiration`), read again a minute ahead
 (`GhLogins.Ahead`), once for that expiry - and read again once where the host refuses a request it signed as unsigned
 (401), the request then sent once more with the token read where it is another and never a third time, a second
-refusal answered as the first would have been (`WebSearchRenewal`), each token a step comes to send held by its mask
-before it is sent (`GrowingMask`) - a slot's key sent to the scheme, host
+refusal answered as the first would have been (`WebSearchRenewal`); a reading that gives no token - gh signed out, or not
+answering in time - is held nowhere, so the next step reads gh again, never takes the place of a token held, and leaves a
+step that began without one to be sent the token the session comes to hold, read by another of its steps; each token a
+step comes to send held by its mask before it is sent (`GrowingMask`) - a slot's key sent to the scheme, host
 and port the source's own address writes alone (`IWebSearchKind.KeyOrigin`, a source whose address takes its host from
 what discover finds refused one where the configuration is read), a gh login to that host or its API alone
 (`WebFetchKey.Origins`), never a host a document the source read names - and added by the fetch to what it sends the
@@ -4973,11 +4992,19 @@ held untracked, one to a line), then `flow.json` (the
 truth a resume reads), `workflow.json`, `pre-existing-issues.json` where the change listed one, and last the event
 in `events.jsonl`, each line handed to the system whole and in order as it is written and put on the disk once per
 pass of the engine's loop - as the pass ends, before the loop waits on anything, and as the session ends
-(`IFlowRecords.Flush`) - so an end of the engine's process loses no line and a power loss at most the last pass's,
-never one before them - each read back strictly: a value the engine does not name, a nested record that
+(`IFlowRecords.Flush`) - so an end of the engine's process loses no line, and a power loss what the last pass had not
+put on the disk, never a line before it: writes never put on the disk reach it in any order, so the log can come back
+with the pass's later lines and its size and NULs where an earlier page of the pass never landed, and as no line holds a
+NUL - each is JSON - the log's opening takes back from its first NUL to its end (`AppendLog.Open`, `batched`) and its
+reader sets aside the first line that holds one with every line after it, said. That holds where the file system shows a
+byte it never wrote as NUL, as ext4's ordered and journalled modes, XFS, Btrfs, APFS and NTFS do; one that can show a
+block's old bytes instead (ext4's writeback mode) can leave a line of the last pass's that reads as no event, refused by
+its number. The log's close never throws a flush's failure over the failure a session leaves by: the records say it as a
+warning (`FlowRunRecords.Dispose`), and a session that ends in order heard it at its last pass's flush. Each record is
+read back strictly: a value the engine does not name, a nested record that
 does not hold, a time in any but the one form (`yyyy-MM-dd HH:mm:ss`, UTC; one not yet come is
 written `null`), a log line out of sequence or corrupt is refused by its number, and only a torn last
-line is set aside, said. A resume reconciles `flow.json` against every step's own record, taking the
+line, or the lines from the first that holds a NUL, are set aside, said. A resume reconciles `flow.json` against every step's own record, taking the
 step's own whole wherever there is one, keeping the index's order and adopting what only a step's
 directory holds at the end. The graph is rebuilt in that order, never sorted again - `build+10` after
 `build+2`, `rounds#10` after `rounds#2`, a loop's later visit (`rounds+2`) and its items as their own,
@@ -5356,7 +5383,10 @@ Stopped from then on whatever a runner its drain waits for still does; the engin
 the stop as stopped all the same (`PointOfNoReturn.SafePauseDrain`), and the command ends within 120 s
 of the interrupt whatever is left (`PointOfNoReturn.HardStopBound`, the drain and 30 s to write the
 end, so the terminal never cuts off a session the engine is still ending in order) - what a crash
-leaves, which a resume goes on from. A session cut off answers as every command over its run does:
+leaves, which a resume goes on from. A command given `--output-logs` then writes its zip before it
+ends, after the bound and with no bound of its own (no cap is put on it), for as long as packing the
+run's directory takes, the run in it as the engine left it then; the second interrupt's warning says
+so (`FlowTerminal`, told what the command writes at its end through `IEndWrites`, which `FlowOutputLogs` answers). A session cut off answers as every command over its run does:
 the run and `resume-orchestrator <run>` named, every record listed in text and `--json`, and its line
 in the run's log. A hang-up keeps the process to pause the run but leaves nobody to read the
 terminal: from it on the terminal says nothing, and a line said while the session runs - an
@@ -5372,9 +5402,17 @@ as typed) - the command line by `--output-logs <file>` on `run-orchestrator`, `r
 `answer-orchestrator` alone, with no configuration key and no default: no flag, no zip. The lifecycle
 every command shares (`CommandSession`) holds the path before anything is weighed - whole, read from
 the directory the process stands in; a directory, a path inside `.orchestrators/` (where every run
-keeps its own records, and a start names its run only as it starts) or one whose directory cannot be
+keeps its own records, and a start names its run only as it starts), one inside a work tree that does
+not ignore it - asked of git from the nearest directory on its way that is there, `check-ignore` read
+against the index (`IGitClient.IsIgnoredAsync`), so a path the tree tracks is never ignored: such a zip
+is one of the tree's uncommitted files, which every agent a run of it makes is handed with its seed, and
+the next zip would hold it once for each - or one whose directory cannot be
 made is refused with 13, nothing started - and at every end - the body's answer, a directory refused,
-a failure it caught - writes the zip before it says how the command ended: the events it ends with are
+a failure it caught - writes the zip before it says how the command ended, the operation's own end and
+the ends handed to it run first, with `--json` or without, so the manifest holds the lines they say and
+the code a defect they met gives (70), and every wait any end makes - replacing a zip another program
+holds among them - is said as the body's waits are, the operation's teller (`Waits.TellingTo`) set for
+its whole life: the events it ends with are
 kept as they will be written, so the zip holds its output as it ends, and then published, the zip named
 as every record of a run is, the last line naming them (`outputLogs: <file>`) and
 `records.outputLogs` in every document (`IDocumentFacts`). The zip is written whole through
@@ -5391,10 +5429,22 @@ them, the `--json` document apart. The run's directory is walked from it held (`
 key stores and dotenv files at any depth (the tool's slots' names, `.env.*` and `*.env`) and the shared
 copy of one a seed names, the run's `temp/`, the graph's caches (`FlowOutputLogs.GraphCaches`) and each
 agent's worktree are left out, each listed in `manifest.json` with why. Every byte is held to the mask
-the run's records are held to (`ReasonLaunch.Mask`), read byte for byte - Latin-1, which keeps every
-byte - by `ActionValues.ReadByteForByte`, which masks each secret's UTF-8 bytes read so beside the
-secret itself, a piece at a time cut where no secret parts (`ILineMask.Cut`); the manifest's strings
-are masked as text. A command line the parser refuses writes none: no command began.
+the command's sessions kept the run's records through, never built again at the end: each session
+begins its masks (`SessionMasks`, an owner of the engine's session) with the secrets its configuration
+appoints that the key slot answers, and holds every mask the one builder of a launch's mask makes while
+it runs (`ReasonLaunch.Mask`) - a step's web-search keys in every form they are sent in among them - and
+every mask that comes to hold the gh login read again (`GrowingMask`), read as it holds its tokens at
+the end; the sessions are told to `FlowRunReached`, whose `Masks` the zip reads. So a configuration
+edited or a slot changed since a session began masks nothing its records were not masked of. The mask
+is read byte for byte - Latin-1, which keeps every byte - by `ActionValues.ReadByteForByte`, which masks
+each secret's bytes in UTF-8 and in UTF-16 of either byte order read so beside the secret itself, a
+piece at a time cut where no secret parts (`ILineMask.Cut`); the manifest's strings are masked as text.
+Where no session built the mask - the command began none, or none could build the configuration's
+(its providers do not resolve, the slot could not be read) - the places of the run that hold files as
+they came, which no record's mask was applied to (`FlowOutputLogs.KeptAsTheyCame`: each agent's
+transcripts under `logs/`, the files an agent was handed and the rows it files, `work/`, `plans/`,
+`inputs/`, `artifacts/`), are left out whole, each named with why: never an unmasked copy. A command
+line the parser refuses writes none: no command began.
 
 ### The codebase graph
 

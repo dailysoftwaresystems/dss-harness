@@ -861,6 +861,38 @@ public sealed class HarnessWebSearchTests
         Assert.Equal("***", step.Mask.Redact("gho_new"));
     }
 
+    /// <summary>
+    /// A step that began without a token - its gh signed out then - is sent the one the session comes to hold, read by
+    /// another of its steps: held by the step's mask before it is sent, its part no longer saying it was asked without a
+    /// key, and gh never asked by the step itself while none is held.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatBeganWithoutAToken_IsSentTheOneTheSessionCameToHold_MaskedFirst()
+    {
+        using var rig = new Rig(request => Json(request.Headers.Authorization?.Parameter is { } token ? Found.Replace("first", $"signed as {token}", StringComparison.Ordinal) : Found));
+        var (gh, asked) = Gh("gho_new");
+        var logins = new Core.Ci.GhLogins(gh, rig.Clock);
+        var mask = new GrowingMask(Core.Runners.ActionValues.Empty);
+        var step = rig.Step(
+            [Signed()],
+            keys: new Dictionary<string, WebSearchKey> { ["hub"] = new(null, "gh answered no token: the machine's gh login for github.com is signed out") },
+            mask: mask,
+            renewal: new WebSearchRenewal(logins, new HarnessLayout(rig.Root, rig.Root), mask));
+
+        var unsigned = await rig.SearchAsync(step, "x");
+        Assert.Empty(asked);
+
+        // Another step of the session reads the login, signed back in.
+        _ = await logins.ReadAsync(rig.Root, "github.com", TestContext.Current.CancellationToken);
+        var signed = await rig.SearchAsync(step, "y");
+
+        Assert.Equal(new string?[] { null, "Bearer gho_new" }, rig.Endpoint.Asked.Select(sent => sent.Headers.GetValueOrDefault("Authorization")));
+        Assert.Single(asked);
+        Assert.Equal(("gh answered no token: the machine's gh login for github.com is signed out", (string?)null), (unsigned.Parts[0].KeyMissing, signed.Parts[0].KeyMissing));
+        Assert.Contains("signed as ***", signed.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("gho_", signed.Text, StringComparison.Ordinal);
+    }
+
     /// <summary>What a source answered without its key is no answer to a step that sends it: the run keeps each apart, and serves each again.</summary>
     [Fact]
     public async Task AnAnswerMadeWithoutTheKey_IsNotServedToAStepThatSendsIt()

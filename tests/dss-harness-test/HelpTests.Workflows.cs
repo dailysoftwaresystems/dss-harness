@@ -222,6 +222,14 @@ public sealed partial class HelpTests
                 + "folded and never committed, which what the run's end leaves for a person names too",
             workflows,
             StringComparison.Ordinal);
+        // A commit's hooks run in the person's own locale, as every command git runs hooks for does, each named.
+        Assert.Contains(
+            "git's commit and the repository's commit hooks run inside the operating system's isolation of the agents' work "
+                + "('help agent-clients'), in the person's own locale, as every git command git runs hooks for does (am, commit, "
+                + "merge, pull, rebase, cherry-pick, revert, checkout, switch, clone, worktree add, push, receive-pack, send-email, "
+                + "gc, p4 submit) while every other git of the tool's runs under LC_ALL=C, so a hook behaves as in their shell;",
+            workflows,
+            StringComparison.Ordinal);
         Assert.Contains(
             $"else the step's own message - none, or a blank one, fails it ({HarnessExit.ConfigInvalid}) - and the rest is written to the ledger",
             workflows,

@@ -1,4 +1,5 @@
 using System.Globalization;
+using DssHarness.Core.Application;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
@@ -167,7 +168,10 @@ public sealed class FlowInterrupts(Action? stopAsked = null)
 /// and a hang-up - are each taken as one interrupt of the session (<see cref="FlowInterrupts"/>) and never end the
 /// process: the first asks the safe pause, which starts no clock, and the second the hard stop, which is bounded - where
 /// the session has not ended <see cref="PointOfNoReturn.HardStopBound"/> after it, the engine's own drain and the margin
-/// for writing its end both passed, the command ends where it stands, and what is left is what a crash leaves.
+/// for writing its end both passed, the session is cut off where it stands, and what is left is what a crash leaves.
+/// The command then ends - once its output logs are written where it was asked for them (<see cref="FlowOutputLogs"/>),
+/// after the bound and with none of their own, for as long as packing the run's records takes: they show the run as the
+/// engine left it then.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -195,6 +199,7 @@ public sealed class FlowTerminal
 {
     private readonly IHarnessOutput _output;
     private readonly string _command;
+    private readonly IEndWrites? _end;
     private readonly TimeProvider _clock;
     private readonly TimeSpan _drain;
     private readonly TaskCompletionSource _drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -208,10 +213,12 @@ public sealed class FlowTerminal
     /// <param name="command">The run verb the session is of.</param>
     /// <param name="clock">How the drain after the second interrupt is timed.</param>
     /// <param name="drain">How long the session may take to end after the second interrupt; <see cref="PointOfNoReturn.HardStopBound"/> where not given.</param>
-    public FlowTerminal(IHarnessOutput output, string command, TimeProvider? clock = null, TimeSpan? drain = null)
+    /// <param name="end">What the command writes at its end - its output logs, where they were asked for - which the second interrupt says is written after the run is stopped; nothing where null.</param>
+    public FlowTerminal(IHarnessOutput output, string command, TimeProvider? clock = null, TimeSpan? drain = null, IEndWrites? end = null)
     {
         _output = output ?? throw new ArgumentNullException(nameof(output));
         _command = command ?? throw new ArgumentNullException(nameof(command));
+        _end = end;
         _clock = clock ?? TimeProvider.System;
         _drain = drain ?? PointOfNoReturn.HardStopBound;
         Interrupts = new FlowInterrupts(BeginDrain);
@@ -279,7 +286,12 @@ public sealed class FlowTerminal
         }
         else if (count == 2)
         {
-            Warn(_output, _command, $"interrupted again: the run is stopped where it stands, and the command ends within {Seconds(_drain)} s whatever is left");
+            Warn(
+                _output,
+                _command,
+                _end?.AtTheEnd is { } zip
+                    ? $"interrupted again: the run is stopped where it stands, within {Seconds(_drain)} s whatever is left; the command then writes its output logs '{_output.Shown(zip)}', for as long as packing the run's records takes, and ends"
+                    : $"interrupted again: the run is stopped where it stands, and the command ends within {Seconds(_drain)} s whatever is left");
         }
     }
 

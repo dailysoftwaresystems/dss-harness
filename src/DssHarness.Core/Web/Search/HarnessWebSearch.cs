@@ -139,10 +139,11 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
     {
         var kind = Kind(source);
         var key = step.Keys.GetValueOrDefault(source.Name);
-        WebSearchPart Part(WebSearchAnswer answer, bool cached = false) => PartOf(step, source, kind, query, answer, cached) with { Page = page };
+        WebSearchPart Part(WebSearchAnswer answer, bool cached = false) => PartOf(step, source, kind, query, answer, cached, key) with { Page = page };
 
         // A key the machine's gh login signs is the token the login holds now: one read since the step began - by another
-        // step, or for an expiry the host told that has come - in place of the step's, held by its mask first.
+        // step, or for an expiry the host told that has come - in place of the step's, or of none where it began without
+        // one, held by its mask first; the part says why it was asked without a key only where it still was.
         if (step.Renewal is { } renewal)
         {
             key = await renewal.CurrentAsync(source, key, cancellationToken).ConfigureAwait(false);
@@ -306,11 +307,15 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
     private IWebSearchKind Kind(WebSearchSource source)
         => _kinds.Find(source.Kind) ?? throw new InvalidOperationException($"The source '{source.Name}' names the kind '{source.Kind}', which this build does not hold; the configuration's check refuses it.");
 
-    /// <summary><paramref name="source"/>'s part of the search: <paramref name="answer"/> as <paramref name="step"/> is given it.</summary>
-    private static WebSearchPart PartOf(WebSearchStep step, WebSearchSource source, IWebSearchKind kind, string query, WebSearchAnswer answer, bool cached = false)
+    /// <summary>
+    /// <paramref name="source"/>'s part of the search: <paramref name="answer"/> as <paramref name="step"/> is given it, asked
+    /// with <paramref name="key"/> - the key the step was given for it where none is named, which says why it was asked
+    /// without one where it was.
+    /// </summary>
+    private static WebSearchPart PartOf(WebSearchStep step, WebSearchSource source, IWebSearchKind kind, string query, WebSearchAnswer answer, bool cached = false, WebSearchKey? key = null)
     {
         var (given, withheld) = Given(step, answer);
-        return new(source.Name, kind.Kind, kind.Version, query, given, withheld, cached, step.Keys.GetValueOrDefault(source.Name)?.Missing);
+        return new(source.Name, kind.Kind, kind.Version, query, given, withheld, cached, (key ?? step.Keys.GetValueOrDefault(source.Name))?.Missing);
     }
 
     /// <summary>

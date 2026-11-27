@@ -61,8 +61,9 @@ public interface IFlowRecords
     /// <summary>
     /// Puts every line of the run's events written since the last flush on the disk (<see cref="FlowEventLog.Flush"/>): the
     /// engine asks it once per pass, as the pass ends - before it waits on anything - and as its session ends, however it
-    /// ends, so a power loss loses at most the last pass's lines and an end of the engine's process none. A run held in
-    /// memory alone has nothing to flush.
+    /// ends, so an end of the engine's process loses no line and a power loss what the last pass had not put on the disk,
+    /// never a line before it (<see cref="FlowEventLog"/> says where a file system can cost more). A run held in memory
+    /// alone has nothing to flush.
     /// </summary>
     void Flush()
     {
@@ -421,6 +422,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     private readonly OrchestratorLayout _layout;
     private readonly FlowRunContext _context;
     private readonly TimeProvider _clock;
+    private readonly Action<string>? _warn;
     private readonly WorkflowStatusWriter _status;
     private readonly PreExistingIssuesWriter _issues;
     private readonly FlowEventLog _events;
@@ -449,13 +451,15 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     /// <param name="layout">The run's layout.</param>
     /// <param name="context">What the run is.</param>
     /// <param name="clock">When each record is written.</param>
-    public FlowRunRecords(IFileSystem fileSystem, OrchestrationStore store, OrchestratorLayout layout, FlowRunContext context, TimeProvider? clock = null)
+    /// <param name="warn">Says what the records' close could not do, as a warning; nothing says it where none is given.</param>
+    public FlowRunRecords(IFileSystem fileSystem, OrchestrationStore store, OrchestratorLayout layout, FlowRunContext context, TimeProvider? clock = null, Action<string>? warn = null)
     {
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _clock = clock ?? TimeProvider.System;
+        _warn = warn;
         _status = new WorkflowStatusWriter(store, layout, context);
         _issues = new PreExistingIssuesWriter(store, layout, context.Run);
 
@@ -707,8 +711,28 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     /// <inheritdoc/>
     public void Flush() => _events.Flush();
 
-    /// <summary>Closes the run's records: its event log, every line on the disk and its last line whole.</summary>
-    public void Dispose() => _events.Dispose();
+    /// <summary>
+    /// Closes the run's records: its event log, every line put on the disk first and its last line whole. The close runs as
+    /// a session leaves by a failure too, so it never throws a flush's failure over the one leaving - its code and its trace
+    /// are the session's answer - and says it as a warning instead: the lines are the system's still, and only a power loss
+    /// before they reach the disk would lose them. A session that ends in order flushed its last pass already
+    /// (<see cref="Flush"/>), whose failure it heard.
+    /// </summary>
+    public void Dispose()
+    {
+        try
+        {
+            _events.Flush();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _warn?.Invoke($"the run's events written since its last pass could not be put on the disk as its records closed: {ex.Message.TrimEnd('.')}; they are written, and only a power loss before they reach the disk would lose them");
+        }
+        finally
+        {
+            _events.Dispose();
+        }
+    }
 
     /// <summary>Writes one step's own files: its output, validated, then its record, in the step's own directory.</summary>
     private void WriteStepFiles(FlowSnapshotStep step)

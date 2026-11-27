@@ -97,6 +97,57 @@ public sealed class GhLoginsTests
         Assert.Equal(3, asked.Count);
     }
 
+    /// <summary>
+    /// A reading that gave no token is held nowhere: in one engine session, a gh that did not answer in time for one step
+    /// is read again by the next, and the token it then gives is held - no step after the first is answered with a
+    /// failure of the first's for the rest of the session.
+    /// </summary>
+    [Fact]
+    public async Task AReadingThatGaveNoToken_IsHeldNowhere_TheNextAskingReadsGhAgain()
+    {
+        var (gh, asked) = Gh(TimedOut, Answered("gho_one\n"));
+
+        using (EngineSession.Begin())
+        {
+            var first = await GhLogins.For(gh).ReadAsync("/repo", "github.com", Token);
+
+            Assert.Null(first.Token);
+            Assert.StartsWith("gh auth token --hostname github.com did not answer within ", first.Missing, StringComparison.Ordinal);
+            Assert.False(GhLogins.For(gh).Holds("github.com"));
+
+            Assert.Equal("gho_one", (await GhLogins.For(gh).ReadAsync("/repo", "github.com", Token)).Token);
+            Assert.Equal("gho_one", (await GhLogins.For(gh).ReadAsync("/repo", "github.com", Token)).Token);
+            Assert.True(GhLogins.For(gh).Holds("github.com"));
+            Assert.Equal(2, asked.Count);
+        }
+    }
+
+    /// <summary>
+    /// A reading that gives no token never takes the place of the token held: a reading again after a refusal, or for an
+    /// expiry that has come, that gh cannot answer leaves the token held as it was - answered by it - and one still due is
+    /// read again by the next asking.
+    /// </summary>
+    [Fact]
+    public async Task AReadingThatGaveNoToken_NeverTakesThePlaceOfTheTokenHeld()
+    {
+        var clock = new ManualClock(new DateTimeOffset(2026, 11, 26, 12, 0, 0, TimeSpan.Zero));
+        var (gh, asked) = Gh(Answered("gho_old\n"), TimedOut, Answered("\n"), Answered("gho_new\n"));
+        var logins = new GhLogins(gh, clock);
+
+        _ = await logins.ReadAsync("/repo", "github.com", Token);
+
+        // Refused, and read again: gh does not answer, and the token held is kept and answered.
+        Assert.Equal("gho_old", (await logins.RenewAsync("/repo", "github.com", "gho_old", Token)).Token);
+        Assert.Equal("gho_old", (await logins.ReadAsync("/repo", "github.com", Token)).Token);
+        Assert.Equal(2, asked.Count);
+
+        // Due for its expiry, and read again: gh is signed out, and the token is kept, still due - so the next asking reads again.
+        logins.Expires("github.com", "gho_old", clock.GetUtcNow().AddSeconds(30));
+        Assert.Equal("gho_old", (await logins.ReadAsync("/repo", "github.com", Token)).Token);
+        Assert.Equal("gho_new", (await logins.ReadAsync("/repo", "github.com", Token)).Token);
+        Assert.Equal(4, asked.Count);
+    }
+
     /// <summary>The expiry GitHub's API names, as it writes it, is read; anything else names none.</summary>
     [Theory]
     [InlineData("2026-12-01 10:00:00 UTC", "2026-12-01T10:00:00+00:00")]
@@ -119,10 +170,20 @@ public sealed class GhLoginsTests
 
     /// <summary>A gh that answers each of <paramref name="tokens"/> in turn, the last again after them, each asking kept.</summary>
     private static (GhProcess Gh, List<ProcessRequest> Asked) Gh(params string[] tokens)
+        => Gh(tokens.Select(Answered).ToArray());
+
+    /// <summary>gh's answer of <paramref name="token"/>, as it prints it.</summary>
+    private static ProcessResult Answered(string token) => new(0, token, string.Empty, TimeSpan.Zero, TimedOut: false);
+
+    /// <summary>A gh that did not answer in time.</summary>
+    private static ProcessResult TimedOut => new(-1, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: true);
+
+    /// <summary>A gh that answers each of <paramref name="results"/> in turn, the last again after them, each asking kept.</summary>
+    private static (GhProcess Gh, List<ProcessRequest> Asked) Gh(params ProcessResult[] results)
     {
         var asked = new List<ProcessRequest>();
         var runner = Substitute.For<IProcessRunner>();
-        var answers = tokens.Select(token => Task.FromResult(new ProcessResult(0, token, string.Empty, TimeSpan.Zero, TimedOut: false))).ToArray();
+        var answers = results.Select(Task.FromResult).ToArray();
 
         runner.FindExecutable(GhProcess.Executable).Returns(GhProcess.Executable);
         runner.RunAsync(Arg.Do<ProcessRequest>(asked.Add), Arg.Any<CancellationToken>()).Returns(answers[0], answers[1..]);

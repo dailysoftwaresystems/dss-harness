@@ -155,7 +155,9 @@ itself: the first Ctrl+C (off Windows, SIGTERM or a hang-up as well) asks the sa
 handoff in its own conversation and answers within the workflow's `handoffSeconds` (180 where it says none), the machine
 steps finish, then the run is paused - and starts no clock of its own; the second stops the run where it stands: a step whose runner
 does not end within 90 s is recorded stopped all the same, and the command ends within 120 s whatever is left - the
-engine's 90 s and 30 s to write the end - which `resume-orchestrator` goes on from. Every session writes the run's report
+engine's 90 s and 30 s to write the end - which `resume-orchestrator` goes on from; given `--output-logs`, it then writes
+the zip before it ends, with no bound of its own, for as long as packing the run's records takes, the run in it as the
+engine left it then. Every session writes the run's report
 (`report.md`, `report.json`) and names each record it wrote, in text and in `--json`.
 
 Given `--output-logs <file>` - and only then: no configuration key asks for it - each of the three writes one zip at
@@ -167,8 +169,14 @@ what was left out and why. It is rewritten whole at every end - done, failed, pa
 reached or after, a failure the command caught - through a file beside it, so a resumed run's zip holds the whole run,
 and it is named in the text (`outputLogs: <file>`) and in `--json` (`records.outputLogs`). Links and junctions, never
 followed, key stores and dotenv files, the run's `temp/`, the codebase graph's caches and each agent's worktree are left
-out, and no secret value the configuration appoints lands in it. A path that is a directory, inside `.orchestrators/`, or
-in a directory that cannot be made is refused (13) before anything runs.
+out, and no secret the run's records were masked of lands in it: every byte is held to the mask the command's sessions
+kept them through - the configuration's secrets the key slot answers, each web-search key a step was given in every form
+it is sent in, and each gh login token a step came to hold - never built again at the end, each secret masked as itself
+and as its UTF-8 and UTF-16 bytes; where no session built that mask, the places that hold files as they came (each
+agent's transcripts, the files it was handed and its rows, `work/`, `plans/`, `inputs/`, `artifacts/`) are left out,
+each named. A path that is a directory, inside `.orchestrators/`, inside a work tree that does not ignore it - it would be
+handed to the run's agents as uncommitted state - or in a directory that cannot be made is refused (13) before anything
+runs.
 
 `--time` pulls each phase's own timing marks out of its output, using `buildTimingRegex`,
 `testTimingRegex` or `runTimingRegex`, and prints them under the ledger as a `TIMINGS` block naming
@@ -1666,8 +1674,12 @@ repository signs with gpg or x509 reaches no agent of the user's where its socke
 user's runtime directory under bubblewrap, and every one under macOS's sandbox and MXC's container -
 and fails there, as does one signed with an ssh key under MXC. One signed with an ssh key whose
 `user.signingKey` names a file under `~/.ssh` fails as well, for the file is hidden: name the public
-key itself (`key::` and its line) and keep the private key in the agent. Every other git command of this
-tool's runs none of the repository's hooks - `core.hooksPath` pointed at the null device (`GitHooks`),
+key itself (`key::` and its line) and keep the private key in the agent. A commit's and a push's hooks run in
+the person's own locale, as in their shell: each git command git runs hooks for - a commit, a merge, a rebase,
+a cherry-pick, a revert, a checkout or switch, a clone, a worktree added, a push, `am`, a pull - keeps the locale
+the tool was started with, whether it runs them or not, and every other git of the tool's runs untranslated
+(`LC_ALL=C`). Every git command of this tool's but a commit step's commit and a push
+runs none of the repository's hooks - `core.hooksPath` pointed at the null device (`GitHooks`),
 set as every git of the tool's sets its own settings, through `GIT_CONFIG_PARAMETERS` - so a fold, a
 refresh, a rebase, a sync or a question of the tool's never runs the agents' work as a side effect of
 a checkout, an index written or a ref moved; those that only read (`rev-parse`, `config` and the like)

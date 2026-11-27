@@ -45,22 +45,30 @@ public sealed class ActionValuesTests
     }
 
     /// <summary>
-    /// Read byte for byte - Latin-1, one character a byte - a secret is masked as itself and as its UTF-8 bytes read so,
-    /// whatever its characters; a secret of ASCII reads the same either way and is masked once, under its own name.
+    /// Read byte for byte - Latin-1, one character a byte - a secret is masked as itself and as its bytes in UTF-8 and in
+    /// UTF-16 of either byte order read so, whatever its characters, each with the mask in its own encoding: a secret of
+    /// ASCII reads the same as itself in UTF-8 and is masked once for both, and in UTF-16 - what Windows PowerShell's
+    /// redirection writes - once for each byte order.
     /// </summary>
     [Fact]
-    public void ReadByteForByte_MasksEachSecretAsItselfAndAsItsUtf8Bytes()
+    public void ReadByteForByte_MasksEachSecretAsItself_AndAsItsUtf8AndUtf16Bytes()
     {
         var values = new ActionValues(
             new Dictionary<string, string>(StringComparer.Ordinal),
             new Dictionary<string, string>(StringComparer.Ordinal) { ["WIDE"] = "clé-ünï", ["PLAIN"] = "TOPSECRET" });
-        var bytes = System.Text.Encoding.Latin1.GetString(System.Text.Encoding.UTF8.GetBytes("clé-ünï"));
+        static string Bytes(System.Text.Encoding encoding, string text) => System.Text.Encoding.Latin1.GetString(encoding.GetBytes(text));
+        var utf8 = Bytes(System.Text.Encoding.UTF8, "clé-ünï");
+        var little = Bytes(System.Text.Encoding.Unicode, "TOPSECRET");
+        var big = Bytes(System.Text.Encoding.BigEndianUnicode, "clé-ünï");
 
         var read = values.ReadByteForByte();
 
-        Assert.Equal($"a {bytes} b", values.Redact($"a {bytes} b"));
-        Assert.Equal("a *** b *** c *** d", read.Redact($"a {bytes} b clé-ünï c TOPSECRET d"));
-        Assert.Equal(["PLAIN", "WIDE", "WIDE#bytes"], read.SecretNames.Order(StringComparer.Ordinal));
+        Assert.Equal($"a {utf8} b {little} c {big} d", values.Redact($"a {utf8} b {little} c {big} d"));
+        Assert.Equal($"a *** b *** c *** d {Bytes(System.Text.Encoding.Unicode, "***")} e {Bytes(System.Text.Encoding.BigEndianUnicode, "***")} f", read.Redact($"a {utf8} b clé-ünï c TOPSECRET d {little} e {big} f"));
+
+        // A form of one byte order a byte off inside text of the other is replaced with the very bytes the other's would be.
+        Assert.Equal(Bytes(System.Text.Encoding.Unicode, "x *** y"), read.Redact(Bytes(System.Text.Encoding.Unicode, "x TOPSECRET y")));
+        Assert.Equal(["PLAIN", "PLAIN#bytes", "PLAIN#bytes2", "WIDE", "WIDE#bytes", "WIDE#bytes2", "WIDE#bytes3"], read.SecretNames.Order(StringComparer.Ordinal));
     }
 
     [Fact]

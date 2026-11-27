@@ -58,7 +58,9 @@ public sealed partial class HelpTests
             "In the terminal a session runs in, the first Ctrl+C - and off Windows SIGTERM or a hang-up - asks the safe pause, which starts no "
                 + "clock of its own: each agent is asked for its handoff in its own conversation and answers within the workflow's handoffSeconds, "
                 + "and a build may take as long as it takes. The second stops the run where it stands - a step whose "
-                + "runner does not end within 90 s is recorded stopped all the same - and the command ends within 120 s whatever is left;",
+                + "runner does not end within 90 s is recorded stopped all the same - and the command ends within 120 s whatever is left - given "
+                + "--output-logs, once it has written the zip after that, with no bound of its own, for as long as packing the run's records takes, "
+                + "the run in it as the engine left it then;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("which it reads every 2 s", prose, StringComparison.Ordinal);
@@ -94,13 +96,24 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("the last line naming them (outputLogs: <file>) and records.outputLogs in --json.", prose, StringComparison.Ordinal);
         Assert.Contains(
-            "A path that is a directory, inside .orchestrators/, or in a directory that cannot be made is refused (13) before anything runs, nothing started.",
+            "A path that is a directory, inside .orchestrators/, inside a work tree that does not ignore it - git's ignore rules read as a status reads them, a path "
+                + "the tree tracks never ignored: the zip would be one of the tree's uncommitted files, handed to every agent a run of it makes - or in a directory "
+                + "that cannot be made is refused (13) before anything runs, nothing started.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("The zip holds run/ - the run's whole directory, its folders kept - config.json, the configuration the run was read with, and manifest.json,", prose, StringComparison.Ordinal);
         Assert.Contains(
             "the run's temp/; the caches of its codebase graph made again from the tree (graph/graph.json, graph/symbols.jsonl, graph/extracts, "
                 + "graph/views); and each agent's worktree, which is outside the run.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "No secret value lands in it: every byte of it is held to the mask the command's sessions kept the run's records through, never built again at "
+                + "the end - every secret the configuration appoints that the key slot answers, as each session began; every form each web-search key a step "
+                + "was given is sent in; and every gh login token a step came to hold - each masked as itself and as its bytes in UTF-8 and in UTF-16 of either "
+                + "byte order, the configuration, the command line and the output among it. Where no session built that mask - none began, or none could build "
+                + "it - the places of the run that hold files as they came, which no record's mask was applied to, are left out whole, each named with why: "
+                + $"{string.Join(", ", FlowOutputLogs.KeptAsTheyCame.Select(place => place + "/"))}.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -131,7 +144,8 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains($"it is named in the text (`{FlowOutputLogs.Record}: <file>`) and in `--json` (`{FlowReports.RecordsMember}.{FlowOutputLogs.Record}`).", readme, StringComparison.Ordinal);
         Assert.Contains(
-            $"A path that is a directory, inside `{HarnessLayout.OrchestratorsDirectoryName}/`, or in a directory that cannot be made is refused ({HarnessExit.Refused}) before anything runs.",
+            $"A path that is a directory, inside `{HarnessLayout.OrchestratorsDirectoryName}/`, inside a work tree that does not ignore it - it would be handed "
+                + $"to the run's agents as uncommitted state - or in a directory that cannot be made is refused ({HarnessExit.Refused}) before anything runs.",
             readme,
             StringComparison.Ordinal);
 
@@ -148,6 +162,11 @@ public sealed partial class HelpTests
             $"(`{nameof(IFileSystem)}.{nameof(IFileSystem.Hold)}`, `{nameof(HeldDirectory)}`)",
             $"(`{nameof(FlowOutputLogs)}.{nameof(FlowOutputLogs.GraphCaches)}`)",
             $"(`{nameof(ReasonLaunch)}.{nameof(ReasonLaunch.Mask)}`)",
+            $"(`{nameof(SessionMasks)}`, an owner of the engine's session)",
+            $"`{nameof(FlowRunReached)}`, whose `{nameof(FlowRunReached.Masks)}` the zip reads",
+            $"(`{nameof(GrowingMask)}`)",
+            $"(`{nameof(FlowOutputLogs)}.{nameof(FlowOutputLogs.KeptAsTheyCame)}`:",
+            $"(`{nameof(IGitClient)}.{nameof(IGitClient.IsIgnoredAsync)}`)",
             $"`{nameof(ActionValues)}.{nameof(ActionValues.ReadByteForByte)}`",
             $"(`{nameof(ILineMask)}.{nameof(ILineMask.Cut)}`)",
             $"(`{nameof(DssHarness.Core.Application.IDocumentFacts)}`)",

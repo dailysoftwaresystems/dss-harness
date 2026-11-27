@@ -159,7 +159,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         CancellationToken cancellationToken)
     {
         var main = await MainGitDirectoryAsync(mainCheckoutRoot, cancellationToken).ConfigureAwait(false);
-        var here = await SessionTrees.LocationAsync(path, _platform.PathComparison, () => _gitClient.GetLocationAsync(path, cancellationToken)).ConfigureAwait(false);
+        var here = await SessionTrees.LocationAsync(path, _platform.PathComparison, _fileSystem, () => _gitClient.GetLocationAsync(path, cancellationToken)).ConfigureAwait(false);
 
         // A directory that is not the root of a work tree, such as a worktree whose .git file is
         // gone, is answered for by whatever repository encloses it, and that answer says nothing
@@ -590,7 +590,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     /// <summary>The main checkout's git directory, as git names it: asked once in an engine's session, which keeps it (<see cref="SessionTrees.LocationAsync"/>).</summary>
     private async Task<string> MainGitDirectoryAsync(string mainCheckoutRoot, CancellationToken cancellationToken)
     {
-        var main = await SessionTrees.LocationAsync(mainCheckoutRoot, _platform.PathComparison, () => _gitClient.GetLocationAsync(mainCheckoutRoot, cancellationToken)).ConfigureAwait(false);
+        var main = await SessionTrees.LocationAsync(mainCheckoutRoot, _platform.PathComparison, _fileSystem, () => _gitClient.GetLocationAsync(mainCheckoutRoot, cancellationToken)).ConfigureAwait(false);
 
         return main?.GitDirectory ?? throw new HarnessException(
             HarnessExit.CommandFailed,

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Application;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
@@ -11,6 +12,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
 using DssHarness.Core.Secrets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -250,15 +252,20 @@ public sealed class FlowOutputLogsTests
     }
 
     /// <summary>
-    /// No value of a secret the configuration appoints lands anywhere in the zip - in a file of the run, in UTF-8 or in
-    /// Latin-1, across the piece a long file is read in, in the command line, the output or its document - each masked
-    /// where it stood, every other byte kept; the manifest says how many secrets the zip is held to.
+    /// No secret the session's records were masked of lands anywhere in the zip - each the configuration appoints, as the
+    /// one builder of a launch's mask made it in the session, a web-search key's form a step was given, and a token a step's
+    /// mask came to hold after it was told - in a file of the run, in UTF-8, in Latin-1 or in UTF-16 of either byte order
+    /// with its mark or without, across the piece a long file is read in, in the command line, the output or its document:
+    /// each masked where it stood, every other byte kept, though the configuration no longer reads by the end; the manifest
+    /// says how many secrets the zip is held to.
     /// </summary>
     [Fact]
-    public async Task NoSecretTheConfigurationAppoints_LandsInTheZip_EachMaskedWhereItStood()
+    public async Task NoSecretTheSessionsRecordsWereMaskedOf_LandsInTheZip_EachMaskedWhereItStood()
     {
         const string Anthropic = "test-anthropic-value-0123456789";
         const string Zai = "zai-clé-ünï-9876";
+        const string Web = "web-search-value-4242";
+        const string Later = "gho_read-again-7777";
         var agents = DssHarness.Core.Agents.AgentProviderTemplates.Read();
         using var scene = await PausedAsync(new HarnessConfig
         {
@@ -273,11 +280,33 @@ public sealed class FlowOutputLogsTests
 
         Write(scene.Run, "notes/said.txt", $"anthropic {Anthropic} zai {Zai} end\n");
         File.WriteAllBytes(Path.Combine(scene.Run.Directory, "notes", "latin1.txt"), Encoding.Latin1.GetBytes($"zai {Zai} end\n"));
+        File.WriteAllBytes(Path.Combine(scene.Run.Directory, "notes", "utf16le.txt"), [.. Encoding.Unicode.GetPreamble(), .. Encoding.Unicode.GetBytes($"zai {Zai} key {Web} end\n")]);
+        File.WriteAllBytes(Path.Combine(scene.Run.Directory, "notes", "utf16be.txt"), Encoding.BigEndianUnicode.GetBytes($"anthropic {Anthropic} token {Later} end\n"));
+        Write(scene.Run, "notes/web.txt", $"sent {Web} then {Later}\n");
         var across = new string('x', 81920 - 5);
         Write(scene.Run, "notes/across.txt", across + Anthropic + "\n");
         var zip = outside.Combine("logs.zip");
 
-        await Logs(scene.Harness).WriteAsync(
+        // The session's masks, as a session of the run builds them: the configuration's secrets and a step's web-search
+        // key by the one builder, and a mask that comes to hold a token only after it was told.
+        var reached = new FlowRunReached();
+
+        using (EngineSession.Begin())
+        {
+            var masks = SessionMasks.OfSession()!;
+            reached.Masked(masks);
+            var launch = new ReasonLaunch(scene.Harness.FileSystem, scene.Harness.Platform, new AgentKeyStore(scene.Harness.FileSystem, scene.Harness.FilePermissions, scene.Harness.Platform), updates: null, new TestIsolation());
+            var providers = DssHarness.Core.Agents.AgentProviders.Resolve((await scene.Harness.ContextLoader.LoadAsync(scene.Repository.Path, Token)).Config).Providers!;
+            _ = launch.Mask(scene.Layout, providers, new ActionValues(new Dictionary<string, string>(), new Dictionary<string, string> { ["web-search-key-1"] = Web }));
+            var growing = new GrowingMask(ActionValues.Empty);
+            masks.Hold(growing);
+            growing.Hold([Later]);
+        }
+
+        // The configuration no longer reads by the end, and the zip is masked all the same.
+        File.WriteAllText(Path.Combine(scene.Layout.MainHarnessDirectory, HarnessLayout.ConfigFileName), "{ not json");
+
+        await Logs(scene.Harness, reached: reached).WriteAsync(
             zip,
             new OutputLogsEnd(
                 FlowService.RunCommand,
@@ -290,7 +319,9 @@ public sealed class FlowOutputLogsTests
             Token);
 
         var entries = Entries(zip);
-        var forms = new[] { Encoding.UTF8.GetBytes(Anthropic), Encoding.UTF8.GetBytes(Zai), Encoding.Latin1.GetBytes(Zai) };
+        var forms = new[] { Anthropic, Zai, Web, Later }
+            .SelectMany(secret => new[] { Encoding.UTF8, Encoding.Latin1, Encoding.Unicode, Encoding.BigEndianUnicode }.Select(encoding => encoding.GetBytes(secret)))
+            .ToArray();
 
         foreach (var (name, bytes) in entries)
         {
@@ -299,6 +330,10 @@ public sealed class FlowOutputLogsTests
 
         Assert.Equal("anthropic *** zai *** end\n", Text(entries, "run/notes/said.txt"));
         Assert.Equal(Encoding.Latin1.GetBytes("zai *** end\n"), entries.Single(entry => entry.Name == "run/notes/latin1.txt").Bytes);
+        // Each masked in its own encoding: the file still reads as UTF-16 past it.
+        Assert.Equal([.. Encoding.Unicode.GetPreamble(), .. Encoding.Unicode.GetBytes("zai *** key *** end\n")], entries.Single(entry => entry.Name == "run/notes/utf16le.txt").Bytes);
+        Assert.Equal(Encoding.BigEndianUnicode.GetBytes("anthropic *** token *** end\n"), entries.Single(entry => entry.Name == "run/notes/utf16be.txt").Bytes);
+        Assert.Equal("sent *** then ***\n", Text(entries, "run/notes/web.txt"));
         Assert.Equal(across + "***\n", Text(entries, "run/notes/across.txt"));
 
         var manifest = Manifest(zip);
@@ -308,7 +343,68 @@ public sealed class FlowOutputLogsTests
         Assert.Equal("request=***", manifest["commandLine"]![4]!.GetValue<string>());
         Assert.Equal("paused, ***", manifest["summary"]!.GetValue<string>());
         Assert.Equal("""{"json":true,"document":{"said":"***"},"lines":["run-orchestrator: said ***"]}""", manifest["output"]!.ToJsonString());
-        Assert.Equal("""{"secrets":2}""", manifest["mask"]!.ToJsonString());
+        Assert.Equal("""{"secrets":4}""", manifest["mask"]!.ToJsonString());
+    }
+
+    /// <summary>
+    /// Where no mask of the session's records stands for the zip - the session could not build the mask of the secrets its
+    /// configuration appoints, or the command began no session at all - every place of the run that holds files as they
+    /// came is left out whole, each named with why, and the records the run's masks were applied to are kept: never an
+    /// unmasked copy of a transcript, a handed file or an agent's own work.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AZipNoMaskStandsFor_LeavesOutWhatTheRunKeptAsItCame_EachNamedWithWhy(bool began)
+    {
+        using var scene = await PausedAsync();
+        using var outside = new TempDirectory();
+        var zip = outside.Combine("logs.zip");
+
+        foreach (var file in new[] { "logs/a1/session.jsonl", "agents/a1/shared/0123", "agents/a1/rows/r.json", "work/a1/scratch.txt", "plans/a1/plan.md", "inputs/spec/spec.md", "notes/kept.txt" })
+        {
+            Write(scene.Run, file, "anything\n");
+        }
+
+        Write(scene.Run, "logs/r1.log", "the tool's own log\n");
+        var reached = new FlowRunReached();
+
+        if (began)
+        {
+            var masks = new SessionMasks();
+            masks.Unbuilt("the configuration's providers do not resolve, so it appoints no secret a mask could be built of");
+            reached.Masked(masks);
+        }
+
+        await WriteAsync(Logs(scene.Harness, reached: reached), scene, zip);
+
+        var why = began
+            ? "the configuration's providers do not resolve, so it appoints no secret a mask could be built of"
+            : "the command began no session of a run, so no mask of a run's records was built";
+        var manifest = Manifest(zip);
+        var leftOut = manifest["leftOut"]!.AsArray().Select(left => (left!["path"]!.GetValue<string>(), left["why"]!.GetValue<string>())).ToList();
+        var unmasked = $"kept in the run as it came, and no mask of the run's records stands for the zip: {why}";
+
+        Assert.Equal(
+            [
+                ("run/agents/a1/rows", unmasked),
+                ("run/agents/a1/shared", unmasked),
+                ("run/artifacts", unmasked),
+                ("run/inputs", unmasked),
+                ("run/logs/a1", unmasked),
+                ("run/plans", unmasked),
+                ("run/temp", FlowOutputLogs.TempWhy),
+                ("run/work", unmasked),
+            ],
+            leftOut);
+        Assert.Equal((0, why), (manifest["mask"]!["secrets"]!.GetValue<int>(), manifest["mask"]!["whyNone"]!.GetValue<string>()));
+        Assert.Equal(2, manifest["mask"]!.AsObject().Count);
+
+        var names = Entries(zip).Select(entry => entry.Name).ToList();
+        Assert.DoesNotContain(names, name => leftOut.Any(left => name == left.Item1 || name.StartsWith(left.Item1 + "/", StringComparison.Ordinal)));
+        Assert.Contains("run/notes/kept.txt", names);
+        Assert.Contains("run/logs/r1.log", names);
+        Assert.Contains("run/flow.json", names);
     }
 
     /// <summary>
@@ -397,6 +493,44 @@ public sealed class FlowOutputLogsTests
 
         Assert.Null(logs.Target);
         Assert.False(logs.HasAny);
+    }
+
+    /// <summary>
+    /// A path inside a work tree that does not ignore it is refused before anything runs - the zip would be one of the
+    /// tree's uncommitted files, handed to every agent a run of it makes - whether it is there yet or not, its directory
+    /// made or not, and where the tree tracks it, though its ignore rules match it; one the tree ignores is the zip's.
+    /// </summary>
+    [Fact]
+    public async Task APathInAWorkTreeThatDoesNotIgnoreIt_IsRefused_SayingNothingWasStarted()
+    {
+        var (repository, _) = await FlowServiceTests.RepositoryAsync(Paused);
+        using var disposed = repository;
+        var tree = repository.Path;
+        repository.Tree.WriteFile("tracked.zip", "tracked\n");
+        await repository.Harness.CommitAllAsync(tree, "a tracked zip", Token);
+        repository.Tree.WriteFile(".gitignore", "*.zip\nignored/\n");
+        await repository.Harness.CommitAllAsync(tree, "ignore zips", Token);
+        var root = await repository.Harness.GitClient.GetRepositoryRootAsync(tree, Token);
+
+        foreach (var refused in new[] { Path.Combine(tree, "r1.log"), Path.Combine(tree, "not", "made", "yet.log"), Path.Combine(tree, "tracked.zip") })
+        {
+            var logs = Logs(repository.Harness);
+
+            Assert.Equal(
+                $"--output-logs names '{refused}', inside the work tree '{root}', which does not ignore it: it would be handed to the run's agents as uncommitted state; name a path outside the tree or one git ignores. Nothing was started.",
+                await logs.CheckAsync(refused, ["dssharness"], tree, Token));
+            Assert.Null(logs.Target);
+        }
+
+        Assert.False(Directory.Exists(Path.Combine(tree, "not")));
+
+        foreach (var kept in new[] { Path.Combine(tree, "r1.zip"), Path.Combine(tree, "ignored", "deep", "r1.log") })
+        {
+            var logs = Logs(repository.Harness);
+
+            Assert.Null(await logs.CheckAsync(kept, ["dssharness"], tree, Token));
+            Assert.Equal(kept, logs.Target);
+        }
     }
 
     /// <summary>A relative path is read from the directory the process stands in, whose directories on the way are made.</summary>
@@ -544,6 +678,55 @@ public sealed class FlowOutputLogsTests
     }
 
     /// <summary>
+    /// A session of a run begins the mask its records are kept through with every secret its configuration appoints that the
+    /// key slot answers, and the zip is held to that mask - never to the configuration read again at the end, which may no
+    /// longer read: a secret typed on the command line is masked in the manifest though the configuration was broken before
+    /// the zip was written.
+    /// </summary>
+    [Fact]
+    public async Task ASessionsZip_IsHeldToTheMaskItsSessionBegan_NeverToTheConfigurationReadAgain()
+    {
+        const string Anthropic = "test-anthropic-value-0123456789";
+        var agents = DssHarness.Core.Agents.AgentProviderTemplates.Read();
+        var (repository, _) = await FlowServiceTests.RepositoryAsync(Paused, new HarnessConfig
+        {
+            Workflows = [FlowServiceTests.Workflow],
+            Defaults = new() { AgentTier = agents.AgentTier },
+            Providers = [.. agents.Providers],
+            TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase),
+        });
+        using var disposed = repository;
+        using var outside = new TempDirectory();
+        var slot = repository.Tree.WriteFile(".harness-config/workflows/.env/keys.env", $"ANTHROPIC_API_KEY={Anthropic}\n");
+        repository.Harness.FilePermissions.ProtectSecret(slot);
+        var zip = outside.Combine("logs.zip");
+        var config = Path.Combine(repository.Path, HarnessLayout.DirectoryName, HarnessLayout.ConfigFileName);
+
+        var ended = await SessionAsync(
+            new SessionOptions
+            {
+                Command = FlowService.RunCommand,
+                Directory = repository.Path,
+                Prompting = false,
+                Document = DocumentKind.None,
+                OutputLogs = new OutputLogsRequest(zip, ["dssharness", FlowService.RunCommand, FlowServiceTests.Workflow, "--input", $"request={Anthropic}"]),
+            },
+            async (scope, token) =>
+            {
+                var outcome = await scope.Use<IFlowService>().RunAsync(scope.Directory, FlowServiceTests.Workflow, run: "r1", inputs: null, json: false, cancellationToken: token);
+                File.WriteAllText(config, "{ not json");
+                return outcome;
+            });
+
+        Assert.Equal(FlowExit.Paused, ended.Completion.ExitCode);
+
+        var manifest = Manifest(zip);
+        Assert.Equal("request=***", manifest["commandLine"]![4]!.GetValue<string>());
+        Assert.Equal("""{"secrets":1}""", manifest["mask"]!.ToJsonString());
+        Assert.DoesNotContain(Entries(zip), entry => entry.Bytes.AsSpan().IndexOf(Encoding.UTF8.GetBytes(Anthropic)) >= 0);
+    }
+
+    /// <summary>
     /// A start refused before any run exists still writes the zip: the manifest, with no run, and the command's output; and
     /// so does a command refused before its directory could be read, which finds no repository and so no configuration.
     /// </summary>
@@ -660,6 +843,110 @@ public sealed class FlowOutputLogsTests
         Assert.False(File.Exists(zip));
     }
 
+    /// <summary>
+    /// A wait the zip's replacing makes - over one another program holds open - is said as the command's lines are at every
+    /// end of it, not only where its body answered: a command that ends by a defect, and one refused before its body for a
+    /// directory that is not there, each say it, and then write the zip.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AWaitToReplaceTheZip_IsSaid_AtAFailuresEndAndARefusalsToo(bool failed)
+    {
+        using var scene = await PausedAsync();
+        using var outside = new TempDirectory();
+        var zip = outside.Combine("logs.zip");
+        var told = new DssHarness.Core.Waiting.WaitTold($"'{zip}' to be replaced", TimeSpan.FromMinutes(5), "another program", null);
+
+        var ended = await SessionAsync(
+            Options(FlowService.RunCommand, failed ? scene.Repository.Path : outside.Combine("not-there"), zip, json: false),
+            (_, _) => throw new InvalidOperationException("the engine met a defect"),
+            services => services.Replace(ServiceDescriptor.Singleton<IFileSystem>(provider => new WaitingWrites(new PhysicalFileSystem(provider.GetRequiredService<IFilePermissions>()), told))));
+
+        Assert.Equal(failed ? HarnessExit.InternalError : HarnessExit.UsageError, ended.Completion.ExitCode);
+        Assert.Contains($"run-orchestrator: {told.Line()}", Lines(ended.Output));
+        Assert.True(File.Exists(zip));
+    }
+
+    /// <summary>
+    /// Without --json as with it, the operation's own end runs before the zip is written: a defect it meets is the code the
+    /// manifest says - the code the process exits with - and the line that says it is among the zip's lines.
+    /// </summary>
+    [Fact]
+    public async Task TheOperationsEnd_RunsBeforeTheZip_WithoutJsonToo_ItsDefectTheManifestsCode()
+    {
+        using var scene = await PausedAsync();
+        using var outside = new TempDirectory();
+        var zip = outside.Combine("logs.zip");
+
+        var ended = await SessionAsync(
+            Options(FlowService.ResumeCommand, scene.Repository.Path, zip, json: false),
+            (scope, _) =>
+            {
+                scope.Services.GetRequiredService<FlowRunReached>().Reach(scene.Layout, scene.Run);
+                return Task.FromResult(new CommandOutcome(FlowExit.Paused, "r1 is paused on q1"));
+            },
+            services => services.Replace(ServiceDescriptor.Singleton<DssHarness.Core.Hosts.CommandEnd>(_ => throw new InvalidOperationException("the end broke"))));
+
+        Assert.Equal(HarnessExit.InternalError, ended.Completion.ExitCode);
+
+        var manifest = Manifest(zip);
+        Assert.Equal(HarnessExit.InternalError, manifest["exitCode"]!.GetValue<int>());
+        Assert.Equal(
+            [
+                "resume-orchestrator: FAIL - this operation's own end could not run: Unexpected InvalidOperationException: the end broke",
+                $"resume-orchestrator: outputLogs: {zip}",
+                "resume-orchestrator: FAIL - r1 is paused on q1",
+            ],
+            Values(manifest["output"]!["lines"]!));
+    }
+
+    /// <summary>
+    /// The second interrupt says the command writes its output logs once the run is stopped, after the bound - never that
+    /// the command ends within it - where the zip was asked for, and the bound alone where it was not.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TheSecondInterrupt_SaysTheZipIsWrittenAfterTheRunIsStopped(bool asked)
+    {
+        using var scene = await PausedAsync();
+        using var outside = new TempDirectory();
+        var (standardOutput, standardError) = (new StringWriter(), new StringWriter());
+        var output = new ConsoleHarnessOutput(standardOutput, standardError, verbose: false);
+        var logs = Logs(scene.Harness);
+        var zip = outside.Combine("logs.zip");
+
+        if (asked)
+        {
+            Assert.Null(await logs.CheckAsync(zip, ["dssharness"], scene.Repository.Path, Token));
+        }
+
+        var terminal = new FlowTerminal(output, FlowService.RunCommand, end: logs);
+        terminal.Interrupted();
+        terminal.Interrupted();
+
+        Assert.Equal(
+            asked
+                ? $"run-orchestrator: WARN - interrupted again: the run is stopped where it stands, within {PointOfNoReturn.HardStopBound.TotalSeconds} s whatever is left; the command then writes its output logs '{output.Shown(zip)}', for as long as packing the run's records takes, and ends"
+                : $"run-orchestrator: WARN - interrupted again: the run is stopped where it stands, and the command ends within {PointOfNoReturn.HardStopBound.TotalSeconds} s whatever is left",
+            Lines(standardError.ToString())[^1]);
+    }
+
+    /// <summary>A file system whose whole write of a zip first waits, as a rename over a file another program holds tells it.</summary>
+    private sealed class WaitingWrites(IFileSystem inner, DssHarness.Core.Waiting.WaitTold told) : PassThroughFileSystem(inner)
+    {
+        public override void WriteAtomic(string path, Action<Stream> write)
+        {
+            if (path.EndsWith(".zip", StringComparison.Ordinal))
+            {
+                DssHarness.Core.Waiting.Waits.Told(told);
+            }
+
+            base.WriteAtomic(path, write);
+        }
+    }
+
     /// <summary>A command other than the three that drive a session of a run is refused its output logs before any service is built for it.</summary>
     [Fact]
     public void AnotherCommandAskedForOutputLogs_IsRefused_BeforeAnyServiceIsBuilt()
@@ -691,21 +978,30 @@ public sealed class FlowOutputLogsTests
         return new Scene(repository, layout, FlowServiceTests.RunOf(repository));
     }
 
-    /// <summary>The output logs over <paramref name="harness"/>'s services, on <paramref name="fileSystem"/>.</summary>
-    private static FlowOutputLogs Logs(HarnessFactory harness, IFileSystem? fileSystem = null, TimeProvider? clock = null)
-        => new(
+    /// <summary>
+    /// The output logs over <paramref name="harness"/>'s services, on <paramref name="fileSystem"/>, of a command that reached
+    /// <paramref name="reached"/> - where none is given, one whose one session built a mask of no secret.
+    /// </summary>
+    private static FlowOutputLogs Logs(HarnessFactory harness, IFileSystem? fileSystem = null, TimeProvider? clock = null, FlowRunReached? reached = null)
+    {
+        if (reached is null)
+        {
+            reached = new FlowRunReached();
+            reached.Masked(new SessionMasks());
+        }
+
+        return new(
             fileSystem ?? harness.FileSystem,
             harness.RepositoryLocator,
-            harness.ContextLoader,
+            harness.GitClient,
             harness.OrchestrationStore,
             harness.Platform,
             harness.ProcessContext,
             new RunningToolDouble("1.0.0"),
-            new AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform),
-            new TestIsolation(),
-            new FlowRunReached(),
+            reached,
             capture: null,
             clock ?? new ManualClock());
+    }
 
     /// <summary>Writes the zip of <paramref name="scene"/>'s run as a resume that left it paused would.</summary>
     private static Task WriteAsync(FlowOutputLogs logs, Scene scene, string zip)
