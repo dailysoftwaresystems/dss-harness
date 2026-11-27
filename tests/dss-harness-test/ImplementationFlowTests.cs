@@ -1913,13 +1913,12 @@ public sealed class ImplementationFlowTests
         }
 
         /// <summary>
-        /// Where the first provider's key is not in the slot, every step falls back to its tier's later models: a run with
-        /// only the Z.AI key works every step of the shipped flow, each step's order its tier's Claude model - reached
-        /// through claude-code by the machine's login, which reads no key - and after it the Z.AI model of its tier, signed
-        /// with the key the slot holds, both usable.
+        /// Where the first provider's key is not in the slot, every step of the shipped flow is still ready on its tier's
+        /// whole order: its tier's Claude model first - reached through claude-code by the machine's login, which reads no
+        /// key - and after it the Z.AI model of its tier, signed with the key the slot holds, both usable.
         /// </summary>
         [Fact]
-        public async Task WhereNoAnthropicKeyIsHeld_EveryStepFallsBackToItsTiersLaterModels()
+        public async Task WhereNoAnthropicKeyIsHeld_EveryStepsOrder_IsItsTiersClaudeModelThenItsZaiModel_BothUsable()
         {
             using var temp = new TempDirectory();
             var kit = await PrepareAsync(temp, keys: "ZAI_API_KEY=sk-test-two\n");
