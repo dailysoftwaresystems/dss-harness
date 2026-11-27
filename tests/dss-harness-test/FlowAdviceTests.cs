@@ -776,7 +776,10 @@ public sealed class FlowAdviceTests
         var calls = 0;
         var advisor = new Advisor((_, token) => Interlocked.Increment(ref calls) == 1 ? held.AdviseAsync(token) : Task.FromResult(new FlowAdvice("more", "now", null)));
         var records = new Records();
-        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
+
+        // A clock that never passes the bound on the advice's runner on its own: the runner, its token ended, answers at
+        // once, within it - so the session takes what it spent, and never lets it go as a runner that outlived the bound.
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new TimerClock(), records: records, advisor: advisor);
 
         var session = coordinator.RunAsync(Token);
         await TestEventuallyAsync(() => advisor.Asked.Count == 1);

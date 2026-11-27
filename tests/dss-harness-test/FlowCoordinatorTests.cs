@@ -152,13 +152,30 @@ public sealed class FlowCoordinatorTests
             => runners.Any(entry => entry.Runner == runner && entry.WritesTree);
     }
 
-    /// <summary>A run's records that keep only the last snapshot written, and tell a test the first change whose snapshot holds what it waits for.</summary>
+    /// <summary>
+    /// A run's records that keep only the last snapshot written, and tell a test the first change whose snapshot holds
+    /// what it waits for, or that says what it waits for.
+    /// </summary>
     private sealed class Snapshots : IFlowRecords
     {
         private readonly List<(Func<FlowSnapshot, bool> Holds, TaskCompletionSource<FlowSnapshot> Seen)> _waits = [];
+        private readonly List<(FlowChangeKind Kind, string Detail, TaskCompletionSource Said)> _sayings = [];
 
         /// <summary>The last snapshot written.</summary>
         public FlowSnapshot? Last { get; private set; }
+
+        /// <summary>The first change written after this call of <paramref name="kind"/> whose detail is <paramref name="detail"/>.</summary>
+        public Task SaidAsync(FlowChangeKind kind, string detail)
+        {
+            var said = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            lock (_waits)
+            {
+                _sayings.Add((kind, detail, said));
+            }
+
+            return said.Task;
+        }
 
         /// <summary>The first snapshot written after this call that <paramref name="holds"/> holds of.</summary>
         public Task<FlowSnapshot> SeenAsync(Func<FlowSnapshot, bool> holds)
@@ -183,6 +200,11 @@ public sealed class FlowCoordinatorTests
                 foreach (var (_, seen) in _waits.Where(wait => wait.Holds(snapshot)))
                 {
                     seen.TrySetResult(snapshot);
+                }
+
+                foreach (var (_, _, said) in _sayings.Where(saying => saying.Kind == kind && string.Equals(saying.Detail, detail, StringComparison.Ordinal)))
+                {
+                    said.TrySetResult();
                 }
             }
         }
@@ -2671,6 +2693,7 @@ public sealed class FlowCoordinatorTests
         var paused = records.SeenAsync(snapshot => snapshot.Steps.Any(step => step.Instance == "audit" && step.State == FlowInstanceState.Paused));
         var retried = records.SeenAsync(snapshot => snapshot.Steps.Any(step => step.Instance == "audit" && step.Attempt == 2
             && (step.WaitsOn.Count > 0 || step.State != FlowInstanceState.NotStarted)));
+        var advised = records.SaidAsync(FlowChangeKind.Advised, "q1 left without a recommendation");
 
         var session = coordinator.RunAsync(cancel);
         await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -2679,9 +2702,12 @@ public sealed class FlowCoordinatorTests
         clock.Advance(TimeSpan.FromSeconds(90));
         _ = await paused.WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
+        // The failure is answered once it is recommended - the test's advisor obtaining nothing - so the answer ends no
+        // advice working in the agent's tree, and what the retry waits on is the old runner's claim alone.
+        await advised.WaitAsync(TimeSpan.FromSeconds(30), cancel);
         var asked = Assert.Single(coordinator.OpenQuestions);
 
-        Assert.Equal("failure", asked.Kind);
+        Assert.Equal(("q1", "failure"), (asked.Id, asked.Kind));
         Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAnswerAsync(asked.Id, "retry").WaitAsync(TimeSpan.FromSeconds(30), cancel));
 
         var waiting = (await retried.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Steps.Single(step => step.Instance == "audit");

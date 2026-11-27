@@ -72,8 +72,10 @@ public sealed class FlowResumeTests
 
         using (records)
         {
+            // Each session is waited out - its question recommended before it ends paused - so the answer is given between
+            // sessions, never beside one still running.
             var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records, workflowFileIfThere: ReadBar);
-            _ = coordinator.RunAsync(Token);
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
 
             var first = coordinator.OpenQuestions.Single();
 
@@ -82,7 +84,7 @@ public sealed class FlowResumeTests
             File.WriteAllText(bar, "Prefer the safer answer.\n");
 
             Assert.True(coordinator.TryAnswer(first.Id, "approve", null, out _));
-            _ = coordinator.RunAsync(Token);
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
 
             // The change holds from the next question on: the second question reads the bar as it is now.
             Assert.Contains("safer", coordinator.OpenQuestions.Single().Problem, StringComparison.Ordinal);
@@ -126,8 +128,10 @@ public sealed class FlowResumeTests
 
         using (records)
         {
+            // Each session is waited out - its question recommended before it ends paused - so the answer is given between
+            // sessions, never beside one still running.
             var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records, workflowFile: (_, named) => ReadText(named));
-            _ = coordinator.RunAsync(Token);
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
 
             var first = coordinator.OpenQuestions.Single();
 
@@ -136,7 +140,7 @@ public sealed class FlowResumeTests
             File.WriteAllText(closure, "formats x targets x tiers, both directions");
 
             Assert.True(coordinator.TryAnswer(first.Id, "approve", null, out _));
-            _ = coordinator.RunAsync(Token);
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
 
             // The change holds from the next question on: a text is read live, as the bar is.
             Assert.Equal("formats x targets x tiers, both directions", coordinator.OpenQuestions.Single().Problem);

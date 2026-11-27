@@ -788,8 +788,9 @@ public sealed class FlowPauseTests
     }
 
     /// <summary>
-    /// A hard stop cancels what is in flight and nothing that waits: a question open at the stop is open still, its step
-    /// waiting on it, and the resume goes on with it answered.
+    /// A hard stop cancels what is in flight and nothing that waits: a question open at the stop - recommended already -
+    /// is open still, its recommendation as it was given and its step waiting on it, and the resume goes on with it
+    /// answered.
     /// </summary>
     [Fact]
     public async Task AHardStop_LeavesAnOpenQuestionOpen_ForTheResumeToGoOnWith()
@@ -810,17 +811,23 @@ public sealed class FlowPauseTests
         var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner();
         _ = runner.Hold("gate");
-        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new TimerClock());
+        var advised = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var records = new RecordsWatch((_, _, _, _) => { }, (kind, detail) => { if (kind == FlowChangeKind.Advised && detail == "q1 left without a recommendation") { advised.TrySetResult(); } });
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records);
 
+        // The stop comes once the question is recommended - the test's advisor obtaining nothing - so it leaves no
+        // recommendation owed: the answer between sessions is taken, as an answer to an open question is.
         var session = coordinator.RunAsync(cancel);
-        await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await Task.WhenAll(runner.StartedAsync("gate"), advised.Task).WaitAsync(TimeSpan.FromSeconds(30), cancel);
         coordinator.RequestStop();
 
         var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
         Assert.Equal(FlowRunStatus.Stopped, end.Status);
         var asked = Assert.Single(coordinator.OpenQuestions);
-        Assert.Equal("q1", asked.Id);
+        Assert.Equal(
+            ("q1", new FlowRecommendation("notObtained", Why: $"no recommendation: one was sought and not obtained ({TestAdvice.NotObtained})")),
+            (asked.Id, asked.Recommendation));
         Assert.Equal(FlowInstanceState.Paused, coordinator.Instances["ask"].State);
         Assert.Equal("q1", coordinator.Instances["ask"].WaitingQuestion);
 
