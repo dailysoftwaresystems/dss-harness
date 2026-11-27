@@ -14,9 +14,11 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// builds but an owed one, and no added piece, takes a name an instance of the work-item group carries already: a round
 /// added to a work-item group with no loop around it builds the owed work alone, and its own items, which the group's
 /// round before built under those names, are held to none. An item's <c>settles</c> names one of the issues the run
-/// owes its next round whose ids the engine hands the check (<c>settleable</c>), or is refused; and a check that opens a
-/// round, handed those issues whole (<c>next</c>), holds its items to them as well - each settled, the settling items
-/// first. The same check reads the answer of a reason step whose items it will read, at the answer itself
+/// owes its next round whose ids the engine hands the check (<c>settleable</c>), or is refused; and a check handed those
+/// issues whole (<c>next</c>) - the engine hands them to every check whose list the next round opens with - holds that
+/// list to them as well, each settled, the settling items first: its own items, or, where its pieces join a round it is
+/// handed (<c>round</c>), that round joined with them. The rule is this step's alone; which checks apply it is the
+/// engine's. The same check reads the answer of a reason step whose items it will read, at the answer itself
 /// (<see cref="AnswerProblemsAsync"/>), so the agent puts right in its own conversation what this step would find.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
@@ -137,17 +139,41 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
             problems.AddRange(validator.Check([.. items], context, place.Run, place.Definition));
         }
 
+        // The pieces of a plan update, checked with the items where the step names them: Missing, null or an empty
+        // list is no update, and nothing more is checked; anything but a list is no pieces at all. Where they join a
+        // round the engine hands the check, that round joined with them is the list it opens with once the update is
+        // placed.
+        IReadOnlyList<JsonNode?>? joinedRound = null;
+
+        if (read.TryGetValue("scope", out var scope) && !scope.IsMissing && scope.ToNode() is { } update)
+        {
+            if (update is not JsonArray pieces)
+            {
+                return ([], null, $"'{run.Instance}' is given the pieces of a plan update its scope yields, and it yields no list");
+            }
+
+            if (pieces.Count > 0)
+            {
+                IReadOnlyList<JsonNode?>? round = read.TryGetValue("round", out var joining) && !joining.IsMissing && joining.ToNode() is JsonArray joiningList ? [.. joiningList] : null;
+
+                problems.AddRange(validator.CheckPieces([.. pieces], [.. items], round, Names(read, "known"), context, place.Run, place.Definition, out var joined, carried));
+                joinedRound = round is null ? null : joined;
+            }
+        }
+
         // The ids of the issues the run owes its next round, where the engine hands them - to every check whose items a
         // round opens with: an item may name one of them in settles and no other, for a round built on another would
         // settle nothing; a check handed none - a recovery's - refuses every settles. And the issues themselves, where
-        // this check opens a round, which it holds the round's items to: each named in an item's settles, none left
-        // unsettled, and the items that settle them ordered first - the run's defects taken from its own rounds are
-        // built before the work that came after them.
+        // the engine hands them - to every check whose list the next round opens with - which the check holds that list
+        // to: each named in an item's settles, none left unsettled, and the items that settle them ordered first - the
+        // run's defects taken from its own rounds are built before the work that came after them. The list is its own,
+        // or, where its pieces join a round it is handed, that round joined with them: the one the round opens with.
         var settleable = Names(read, "settleable");
         List<JsonObject> owedNext = read.TryGetValue("next", out var owedNow) && !owedNow.IsMissing && owedNow.ToNode() is JsonArray owedList
             ? [.. owedList.Select(issue => issue as JsonObject).OfType<JsonObject>()]
             : [];
         IReadOnlyList<JsonObject> held = [.. checkedItems.Select(item => item as JsonObject).OfType<JsonObject>()];
+        IReadOnlyList<JsonObject> opensWith = joinedRound is null ? held : [.. joinedRound.Select(item => item as JsonObject).OfType<JsonObject>()];
         string? Settling(JsonObject item) => TextOf(item["settles"]) is { Length: > 0 } settles ? settles : null;
         List<string> nextProblems =
         [
@@ -157,7 +183,7 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
                     ? $"the item '{named}' settles '{Settling(item)}', which is not an issue the run owes its next round"
                     : $"an item settles '{Settling(item)}', which is not an issue the run owes its next round"),
             .. owedNext
-                .Where(issue => !held.Any(item => Settling(item) is { } names && string.Equals(names, TextOf(issue["id"]), StringComparison.Ordinal)))
+                .Where(issue => !opensWith.Any(item => Settling(item) is { } names && string.Equals(names, TextOf(issue["id"]), StringComparison.Ordinal)))
                 .Select(issue => $"the issue '{TextOf(issue["id"])}' ({TextOf(issue["title"])}) is owed the next round, and no work item settles it"),
         ];
         problems.AddRange(nextProblems);
@@ -170,23 +196,6 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
                 [.. checkedItems
                     .Select(item => item?.DeepClone())
                     .OrderBy(item => item is JsonObject held && Settling(held) is { Length: > 0 } ? 0 : 1)]);
-        }
-
-        // The pieces of a plan update, checked with the items where the step names them: Missing, null or an empty
-        // list is no update, and nothing more is checked; anything but a list is no pieces at all.
-        if (read.TryGetValue("scope", out var scope) && !scope.IsMissing && scope.ToNode() is { } update)
-        {
-            if (update is not JsonArray pieces)
-            {
-                return ([], null, $"'{run.Instance}' is given the pieces of a plan update its scope yields, and it yields no list");
-            }
-
-            if (pieces.Count > 0)
-            {
-                IReadOnlyList<JsonNode?>? round = read.TryGetValue("round", out var joining) && !joining.IsMissing && joining.ToNode() is JsonArray joiningList ? [.. joiningList] : null;
-
-                problems.AddRange(validator.CheckPieces([.. pieces], [.. items], round, Names(read, "known"), context, place.Run, place.Definition, carried));
-            }
         }
 
         // A problem two of its rules find - a pair of items that meet, found in the plan's list and again in the round the

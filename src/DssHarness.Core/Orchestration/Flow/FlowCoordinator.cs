@@ -2663,6 +2663,51 @@ public sealed class FlowCoordinator
             && FlowUpdateGates.ChecksTheItemsARoundOpensWith(_definition, scope.Parent is null ? null : scope.GroupPath, scope.Group, check);
 
     /// <summary>
+    /// Whether <paramref name="check"/>, declared in a scope like <paramref name="scope"/>, holds the items it checks to
+    /// the issues the run owes its next round - each settled, the settling items first (<see cref="PlanCheckRunner"/>):
+    /// where what it checks is the list the next round opens with. The check that opens a round does, whichever round it
+    /// opens; and a check whose items a round opens with (<see cref="FlowUpdateGates.RoundsOpenedWith"/>) does where the
+    /// round they open is the next - no round of its groups has opened yet, so its items open the first: the plan's
+    /// check; or the plan update under way was raised by the check that opens one of them, whose round its pieces join,
+    /// that round's own list joined with them. Every other check - a plan update's while a round is open, whose pieces
+    /// join that round or the one after it, a recovery's - does not, for the next round opens with no list it checks.
+    /// The one gate of which checks hold their items to the owed issues, at the check's own moment and within the answer
+    /// of the reason step whose items it reads (<see cref="AnswerChecksOf"/>) alike, so the planner and the self-audit
+    /// settle an owed issue in their own conversation and no later check finds it unsettled.
+    /// </summary>
+    /// <param name="check">The check's declaration.</param>
+    /// <param name="scope">A scope the check is declared in: its own, or one of a step declared beside it.</param>
+    private bool HoldsTheOwedIssues(WorkflowStep check, Scope? scope)
+    {
+        if (RoundOpenedBy(check, scope) is not null)
+        {
+            return true;
+        }
+
+        if (scope is null)
+        {
+            return false;
+        }
+
+        var groups = FlowUpdateGates.RoundsOpenedWith(_definition, scope.Parent is null ? null : scope.GroupPath, scope.Group, check);
+
+        if (groups.Count == 0)
+        {
+            return false;
+        }
+
+        if (UnderWayUpdate is { Cause: FlowUpdateCauses.PlanCheck, Check: { } raiser }
+            && _instances.GetValueOrDefault(raiser) is { } raising
+            && RoundOpenedBy(raising) is { } raised
+            && groups.Contains(raised, StringComparer.Ordinal))
+        {
+            return true;
+        }
+
+        return !_created.Any(group => group.Step.IsGroup && groups.Contains(group.Path, StringComparer.Ordinal));
+    }
+
+    /// <summary>
     /// Whether <paramref name="check"/> opens a round of the group plan updates owe their work to - the group of
     /// <c>amend.whenAddScope</c> - and so is handed that work and raises the update its problems ask for.
     /// </summary>
@@ -13443,14 +13488,15 @@ public sealed class FlowCoordinator
             // starts after one was taken reads it whatever moved meanwhile. Every check whose items a round opens with -
             // the plan's, so the one a plan update sends the run back to, and the round's own - is handed their ids: an
             // item of its list may settle one of them and no other. Every other check - a recovery's - is handed none,
-            // for no issue is owed it, and an item of it that names one in settles is refused. The check that opens a
-            // round - whether a loop or a plan update opens it - is handed the issues themselves as well, which it alone
-            // holds its items to: each named in an item's settles, none left unsettled, the settling items ordered first.
+            // for no issue is owed it, and an item of it that names one in settles is refused. A check whose list the next
+            // round opens with (HoldsTheOwedIssues) - the round's own, and the plan's while that round is the first or
+            // the update under way joins it - is handed the issues themselves as well, which it holds that list to: each
+            // named in an item's settles, none left unsettled, the settling items ordered first.
             var owed = UnsettledNext();
 
             read["settleable"] = FlowValue.Of(new JsonArray([.. owed.Select(issue => (JsonNode?)issue.Id)]));
 
-            if (RoundOpenedBy(check, declaredIn) is not null)
+            if (HoldsTheOwedIssues(check, declaredIn))
             {
                 read["next"] = FlowValue.Of(new JsonArray([.. owed.Select(issue => (JsonNode?)issue.Value())]));
             }

@@ -832,10 +832,54 @@ public sealed class FlowStepRunnerTests : IDisposable
     }
 
     /// <summary>
-    /// A plan check handed the ids of the issues the run owes and not the issues to hold its items to - the plan's own,
-    /// whose plan a round opens with - takes an item that settles one, refuses one that names an issue the run does not
-    /// owe, and demands nothing: an owed issue no item of it settles is no problem of its, and its items keep their order,
-    /// for the round's own check holds the round to them. A check handed neither - a recovery's - refuses every settles.
+    /// A check handed the issues the run owes its next round and the round a plan update's pieces join holds the list that
+    /// round opens with to them - the round's own items, less the one a changed piece names, with the pieces' items - and
+    /// not the plan's own list: an issue an item of the round settles is settled though no item of the plan names it, and
+    /// one only the plan's list settles is not, for the round would open without it.
+    /// </summary>
+    [Fact]
+    public async Task ACheckHandedTheRoundAnUpdateJoins_HoldsThatRoundsListToTheOwedIssues()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items", Scope = "plan.scope" };
+        var settling = Item("settle-the-parser", "src/Parser.cs");
+        settling["settles"] = "nx-1";
+        var moved = Item("two", "src/moved/**");
+
+        async Task<IReadOnlyList<string>> ProblemsAsync(JsonArray items, JsonArray round)
+        {
+            var result = await runner.RunAsync(
+                Run(step, repository.Path, new Dictionary<string, FlowValue>
+                {
+                    ["items"] = FlowValue.Of(items),
+                    ["scope"] = FlowValue.Of(new JsonArray(Piece("changed", (JsonObject)moved.DeepClone()))),
+                    ["round"] = FlowValue.Of(round),
+                    ["known"] = FlowValue.Of(new JsonArray("one", "two", "settle-the-parser")),
+                    ["settleable"] = FlowValue.Of(new JsonArray("nx-1")),
+                    ["next"] = FlowValue.Of(new JsonArray(NextIssue("nx-1"))),
+                }),
+                Token);
+
+            Assert.True(result.Passed, result.Error);
+            return [.. result.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+        }
+
+        // The round's own item settles the issue: the list it opens with settles it, though the plan's names none.
+        Assert.Empty(await ProblemsAsync(new JsonArray(Item("one"), moved.DeepClone()), new JsonArray(settling.DeepClone(), Item("two", "src/two/**"))));
+
+        // Only the plan's list settles it: the round would open without it.
+        Assert.Equal(
+            ["the issue 'nx-1' (a defect in the parser) is owed the next round, and no work item settles it"],
+            await ProblemsAsync(new JsonArray(settling.DeepClone(), moved.DeepClone()), new JsonArray(Item("two", "src/two/**"))));
+    }
+
+    /// <summary>
+    /// A plan check handed the ids of the issues the run owes and not the issues to hold its items to - the plan's, once
+    /// the round its plan opens is no longer the next - takes an item that settles one, refuses one that names an issue
+    /// the run does not owe, and demands nothing: an owed issue no item of it settles is no problem of its, and its items
+    /// keep their order, for the round's own check holds the round to them. A check handed neither - a recovery's -
+    /// refuses every settles.
     /// </summary>
     [Fact]
     public async Task APlanCheckHandedTheOwedIds_TakesAnItemThatSettlesOne_AndDemandsNothing()

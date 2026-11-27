@@ -3760,18 +3760,27 @@ an item a person skipped, done with nothing landed, settles nothing - and the fi
 a resume finds), whatever the run takes plan updates by. The check that opens a round - a `validate-plan` the `forEach`
 declared beside it expands from (`FlowUpdateGates.OpeningCheckOf`), where that group runs in rounds: declared in an
 iteration of a `repeat`, or the group plan updates owe their work to, to which an update adds a round where no loop is
-around it - is decided by one owner (`FlowUpdateGates.RoundOpenedBy`), whichever opens the round: that check is handed
-the owed issues under `next` and, where its group is the one updates owe, their work (`owed`, `owedAlone`) and the plan
-update its problems raise; and `PlanCheckRunner` refuses a round whose items leave one unsettled, and orders the
-settling items first - no other check holds its items to them. Which checks take an item that settles one is decided
-by one owner too (`FlowUpdateGates.ChecksTheItemsARoundOpensWith`): every check whose items a round opens with - the
-check that opens it, and each whose `items` read a step the items of such a check read: the plan's, whose plan a
-round opens with, and so the one a plan update sends the run back to. Each is handed the owed issues' ids under
-`settleable`, and `PlanCheckRunner` refuses an item whose `settles` names none of them, so an issue owed while the
-plan is made or updated becomes a work item of it that no check of the plan refuses; every other check - a
-recovery's, whose items the recovery builds and no round does - is handed none, and an item of one that names an
-issue is refused. The planner's prompts and the self-audit's list `{run.nextRound}`, each owed issue to be a work item
-of the round naming its id in `settles`. The rounds' `until` reads `empty(run.nextRound)`, so a clean
+around it - is decided by one owner (`FlowUpdateGates.RoundOpenedBy`), whichever opens the round: where its group is
+the one updates owe, that check is handed their work (`owed`, `owedAlone`) and raises the plan update its problems ask
+for. Which checks take an item that settles one is decided by one owner too
+(`FlowUpdateGates.ChecksTheItemsARoundOpensWith`, over `FlowUpdateGates.RoundsOpenedWith`, the groups whose rounds open
+with what a check checks): every check whose items a round opens with - the check that opens it, and each whose
+`items` read a step the items of such a check read: the plan's, whose plan a round opens with, and so the one a plan
+update sends the run back to. Each is handed the owed issues' ids under `settleable`, and `PlanCheckRunner` refuses an
+item whose `settles` names none of them, so an issue owed while the plan is made or updated becomes a work item of it
+that no check of the plan refuses; every other check - a recovery's, whose items the recovery builds and no round
+does - is handed none, and an item of one that names an issue is refused. Which of them hold the list they check to
+the owed issues is one gate (`FlowCoordinator.HoldsTheOwedIssues`): every check whose list the next round opens with -
+the check that opens a round, always; the plan's while no round of its group has opened, for its plan opens the first;
+and the plan's again where the plan update under way was raised by the check that opens one, its pieces joining that
+round's own list. Each is handed the issues under `next`, and `PlanCheckRunner` - the rule's one owner - refuses a
+list that leaves one unsettled, its own items or, where its pieces join a round it is handed, that round joined with
+them, and orders the settling items first. The gate holds where the check runs and within the answer of the reason
+step whose items it reads (`FlowCoordinator.AnswerChecksOf`) alike, so the planner, its update and the self-audit -
+whose items the next round's check reads through `previous` - are told an owed issue they left unsettled in their own
+conversation, and no check that opens a round finds it unsettled and raises a plan update for it. The planner's
+prompts and the self-audit's list `{run.nextRound}`, each owed issue to be a work item of the round naming its id in
+`settles`. The rounds' `until` reads `empty(run.nextRound)`, so a clean
 self-audit does not end them while one is left; never holding the round the issue came from, for the triage never holds
 a loop. The value an issue is read as and the schema typing `run.nextRound` are made from one list of its members
 (`FlowNextIssue.Value`, `ValueSchema`).

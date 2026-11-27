@@ -884,9 +884,12 @@ nothing - is owed the run's next round as its first item, sized by its files: th
 it plans or updates the plan while one is owed, and the self-audit make it one with its class,
 naming it in `settles`; every check whose items a round opens with - the plan's, so the one a plan
 update sends the run back to, and the round's own - takes that item and refuses one that names an
-issue the run does not owe, and a recovery's check refuses every `settles`; the check that opens a
-round - and no other check - refuses a round whose items leave one unsettled, and the rounds go on
-while one is left - never the round the issue came from, which no fold waits for. The item that
+issue the run does not owe, and a recovery's check refuses every `settles`; every check whose list
+the next round opens with - the round's own, and the plan's while that round is the first or the
+plan update under way joins it - refuses a list that leaves one unsettled, and within the step that
+gives the list too, so the planner and the self-audit settle it in their own conversation and no
+round's check raises a plan update for it; and the rounds go on while one is left - never the round
+the issue came from, which no fold waits for. The item that
 names the issue settles it once it ends done with a
 commit of its own made; one a person skipped lands nothing and settles nothing, and the issue stays
 owed.
