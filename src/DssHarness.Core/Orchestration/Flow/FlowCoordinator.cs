@@ -1089,12 +1089,14 @@ public sealed class FlowCoordinator
     /// its wakes gone, a reason step's minutes counted, and where its runner still runs the drain's bound armed, by which a
     /// runner that does not end is waited for no longer. Whether its runner still runs.
     /// </summary>
-    private bool StopWork(FlowInstance instance)
+    /// <param name="instance">The step.</param>
+    /// <param name="countedTo">Where its time limit stops it, the moment the limit passed, which its minutes are counted to (<see cref="CountMinutes"/>); null for a stop, counted to now.</param>
+    private bool StopWork(FlowInstance instance, DateTimeOffset? countedTo = null)
     {
         instance.Stoppable?.Cancel();
         DisarmTimeLimit(instance);
         _ = _wakes.RemoveAll(wake => ReferenceEquals(wake.Instance, instance));
-        CountMinutes(instance);
+        CountMinutes(instance, countedTo);
 
         if (instance.Runner is not { IsCompleted: false })
         {
@@ -2061,13 +2063,17 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Adds the minutes <paramref name="instance"/>'s turn ran, where it is a reason step counted running: once, whichever of its
-    /// endings - its answer, a stop, a pause, its time limit - reaches it first.
+    /// endings - its answer, a stop, a pause, its time limit - reaches it first. A turn its time limit ends ran up to the
+    /// moment the limit passed, however late the loop comes to the limit's message - behind other messages, or parked on a
+    /// handoff turn - so the run is never charged the engine's own delay as minutes of reasoning.
     /// </summary>
-    private void CountMinutes(FlowInstance instance)
+    /// <param name="instance">The step.</param>
+    /// <param name="to">The moment its turn ended, where that is not now: the moment its time limit passed.</param>
+    private void CountMinutes(FlowInstance instance, DateTimeOffset? to = null)
     {
         if (instance.Step.Type == "reason" && _reasonStarted.Remove(instance.Id, out var began))
         {
-            _spent.Minutes += (_clock.GetUtcNow() - began).TotalMinutes;
+            _spent.Minutes += ((to ?? _clock.GetUtcNow()) - began).TotalMinutes;
         }
     }
 
@@ -7850,7 +7856,8 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Arms the time limit of the run of <paramref name="instance"/> that starts now, where its step says one: a timer of
     /// the engine's clock that tells the loop once it passes. The message names the timer it came from, so a run that
-    /// starts again in the same attempt - after an answer - is never ended by the timer of the run before it.
+    /// starts again in the same attempt - after an answer - is never ended by the timer of the run before it, and the
+    /// moment the limit passed, which a reason step's minutes are counted to (<see cref="PassTimeLimit"/>).
     /// </summary>
     private void ArmTimeLimit(FlowInstance instance)
     {
@@ -7863,6 +7870,7 @@ public sealed class FlowCoordinator
 
         var limit = instance.TimeLimit = new CancellationTokenSource();
         var attempt = instance.Attempt;
+        var passes = _clock.GetUtcNow() + TimeSpan.FromMinutes(minutes);
         _ = PassAsync(limit.Token);
 
         async Task PassAsync(CancellationToken disarmed)
@@ -7876,7 +7884,7 @@ public sealed class FlowCoordinator
                 return;
             }
 
-            _ = _messages.Writer.TryWrite(new Message(instance, null, null, Attempt: attempt, TimeLimit: limit));
+            _ = _messages.Writer.TryWrite(new Message(instance, null, null, Attempt: attempt, TimeLimit: limit, LimitPassed: passes));
         }
     }
 
@@ -7892,13 +7900,13 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// The run of <paramref name="instance"/> in flight passed its step's time limit: it is stopped as a stop stops one -
-    /// its work cancelled, a reason step's minutes counted - and once its runner has answered it ends incomplete,
-    /// whatever it answered (<see cref="Complete"/>). A runner that does not end within
-    /// <see cref="PointOfNoReturn.SafePauseDrain"/> fails the step all the same, saying so, and the step is not retried.
-    /// A runner that has answered already is left to its answer, which is on its way to the loop.
+    /// The run of <paramref name="instance"/> in flight passed its step's time limit at <paramref name="passed"/>: it is
+    /// stopped as a stop stops one - its work cancelled, a reason step's minutes counted, up to that moment - and once its
+    /// runner has answered it ends incomplete, whatever it answered (<see cref="Complete"/>). A runner that does not end
+    /// within <see cref="PointOfNoReturn.SafePauseDrain"/> fails the step all the same, saying so, and the step is not
+    /// retried. A runner that has answered already is left to its answer, which is on its way to the loop.
     /// </summary>
-    private void PassTimeLimit(FlowInstance instance)
+    private void PassTimeLimit(FlowInstance instance, DateTimeOffset passed)
     {
         DisarmTimeLimit(instance);
 
@@ -7909,7 +7917,7 @@ public sealed class FlowCoordinator
 
         instance.PastTimeLimit = true;
         Record(FlowChangeKind.Step, instance, from: instance.State, to: instance.State, attempt: instance.Attempt, detail: $"{PastTimeLimitError(instance)}: stopped");
-        _ = StopWork(instance);
+        _ = StopWork(instance, countedTo: passed);
     }
 
     /// <summary>What a step that passed its time limit says of its ending.</summary>
@@ -11816,7 +11824,7 @@ public sealed class FlowCoordinator
             // Only the timer of the run in flight speaks: one of a run that answered already was disarmed with it.
             if (ReferenceEquals(limit, message.Instance.TimeLimit))
             {
-                PassTimeLimit(message.Instance);
+                PassTimeLimit(message.Instance, message.LimitPassed);
             }
         }
         else if (message.HandoffTaken)
@@ -15450,7 +15458,7 @@ public sealed class FlowCoordinator
     /// spent, an answer offered from outside, a handoff taken, or a step's time limit passing - named by the timer it came
     /// from, so the timer of a run that has answered already says nothing.
     /// </summary>
-    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, FlowTurnSpend? Turn = null, int Attempt = 0, Offer? Offered = null, bool HandoffTaken = false, CancellationTokenSource? TimeLimit = null);
+    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, FlowTurnSpend? Turn = null, int Attempt = 0, Offer? Offered = null, bool HandoffTaken = false, CancellationTokenSource? TimeLimit = null, DateTimeOffset LimitPassed = default);
 
     /// <summary>
     /// What is handed to a running session from outside it - an answer, a change of an answer, or an amendment of the
