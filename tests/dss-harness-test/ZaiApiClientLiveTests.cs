@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.ZaiApi;
@@ -68,7 +67,7 @@ public sealed class ZaiApiClientLiveTests
         Assert.Equal((false, false), (last["thinking"]!.AsObject().ContainsKey("clear_thinking"), sentOn["thinking"]!["clear_thinking"]!.GetValue<bool>()));
 
         // The first step's answer goes on as Z.AI streamed it: its text and its reasoning, whole.
-        var answered = File.ReadLines(Path.Combine(run.Wire, $"{sentFirst.ToString("D2", CultureInfo.InvariantCulture)}-answer.sse"))
+        var answered = File.ReadLines(WireRecording.AnswerOf(run.Requests()[sentFirst - 1]))
             .Where(line => line.StartsWith("data:", StringComparison.Ordinal) && line.Trim() != "data: [DONE]")
             .Select(line => JsonNode.Parse(line["data:".Length..])!["choices"]![0]!["delta"]!)
             .ToList();
