@@ -694,9 +694,9 @@ public sealed class FlowPlanPiecesTests
                 again)));
     }
 
-    /// <summary>A coordinator over the run's records, as every test of this class makes one.</summary>
-    private static FlowCoordinator CoordinatorOf(WorkflowDefinition definition, IFlowStepRunner runner, IFlowRecords records, HarnessFactory harness, OrchestratorLayout layout, FlowResumeState? resume = null)
-        => TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, resume: resume, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+    /// <summary>A coordinator over the run's records, as every test of this class makes one: on a clock whose every wait passes at once, where the test gives none.</summary>
+    private static FlowCoordinator CoordinatorOf(WorkflowDefinition definition, IFlowStepRunner runner, IFlowRecords records, HarnessFactory harness, OrchestratorLayout layout, FlowResumeState? resume = null, TimeProvider? clock = null)
+        => TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock ?? new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, resume: resume, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
     /// <summary>The run as its records stand on disk, for a coordinator that takes it up.</summary>
     private static FlowResumeState ResumeOf(HarnessFactory harness, OrchestratorLayout layout, WorkflowDefinition definition)
@@ -1336,6 +1336,85 @@ public sealed class FlowPlanPiecesTests
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
             Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+        }
+    }
+
+    /// <summary>
+    /// A session its cancellation token ends while a plan update's handoff turn runs ends once the turn has answered,
+    /// keeping what the turn gave - the step stopped for the update, its handoff written - and decides nothing more: the
+    /// instance is neither brought to rest nor visited again, and nothing of a visit again is made or started, for a
+    /// session its token ends draws and starts nothing once it has. The next session does both, and asks the visit
+    /// again's probe.
+    /// </summary>
+    [Fact]
+    public async Task ASessionItsTokenEndsWhileAPlanUpdatesHandoffTurnRuns_VisitsNothingAgainUntilTheNextSession()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(WithReconcile());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var handingOff = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handedOff = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runs = 0;
+        var runner = ChangingOne().OnAsync("settle", async (run, _) =>
+        {
+            if (Interlocked.Increment(ref runs) > 1)
+            {
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            }
+
+            // Its handoff turn, answered only once the test lets it: the session waits on it as the token ends it.
+            await run.Telling!.Handoff.WhenAsked.WaitAsync(Token);
+            handingOff.TrySetResult();
+            await handedOff.Task.WaitAsync(Token);
+            return FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "handed off");
+        });
+
+        using (records)
+        {
+            // A clock that passes no bound of its own: the turn ends only as the step's runner answers it.
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout, clock: new TimerClock());
+
+            _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            using var ending = CancellationTokenSource.CreateLinkedTokenSource(Token);
+            var session = coordinator.RunAsync(ending.Token);
+            await runner.StartedAsync("rounds.items[0].reconcile.settle").WaitAsync(Bound, Token);
+            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            await handingOff.Task.WaitAsync(Bound, Token);
+            List<string> startedBefore = [.. runner.Started];
+
+            await ending.CancelAsync();
+            handedOff.SetResult();
+
+            _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.WaitAsync(Bound, Token));
+
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+
+            Assert.Equal(startedBefore, runner.Started);
+            Assert.DoesNotContain(steps.Keys, id => id.StartsWith("rounds.items[1]", StringComparison.Ordinal));
+            Assert.Equal(
+                [
+                    ("rounds.items[0]", nameof(FlowInstanceState.Running), "u1"),
+                    ("rounds.items[0].reconcile", nameof(FlowInstanceState.Running), null),
+                    ("rounds.items[0].reconcile.catch-up", nameof(FlowInstanceState.Done), null),
+                    ("rounds.items[0].reconcile.settle", nameof(FlowInstanceState.Stopped), "u1"),
+                ],
+                NestedOf(harness, layout));
+            Assert.Equal("agent", steps["rounds.items[0].reconcile.settle"].Handoff?.By);
+            Assert.DoesNotContain("rounds.items[0].build", steps.Keys);
+
+            _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal("rounds.items[1].probe", coordinator.OpenQuestions.Single().Instance);
+            Assert.Equal(
+                [
+                    ("rounds.items[0]", nameof(FlowInstanceState.Stopped), "u1"),
+                    ("rounds.items[0].reconcile", nameof(FlowInstanceState.Stopped), "u1"),
+                    ("rounds.items[0].reconcile.catch-up", nameof(FlowInstanceState.Done), null),
+                    ("rounds.items[0].reconcile.settle", nameof(FlowInstanceState.Stopped), "u1"),
+                ],
+                NestedOf(harness, layout));
         }
     }
 

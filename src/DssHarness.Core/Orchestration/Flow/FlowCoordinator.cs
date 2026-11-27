@@ -536,18 +536,12 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Every advice the session has begun and not yet taken - one an answer or a stop ended among them, kept until its
-    /// runner has ended, for what it spent is counted and the asking step is not started again beside it.
+    /// runner has ended, for what it spent is counted and the asking step is not started again beside it. Each is ended by
+    /// the loop alone, through <see cref="DropAdvice"/> - an answer, a stop as the loop applies it, the session's end - and
+    /// never by anything that does not mark it ended first, the session's token among them: an advice that returns no
+    /// recommendation is then said ended only where it was (<see cref="Took"/>), never taken for one that obtained none.
     /// </summary>
     private readonly List<Advising> _advising = [];
-
-    /// <summary>The token of the session in flight, which every advice is held to; null between sessions.</summary>
-    private CancellationToken _sessionToken;
-
-    /// <summary>
-    /// Ends every advice of the session in flight at once, from whatever thread a hard stop is asked on: each advice is
-    /// held to it beside the session's token. Made anew as each session begins.
-    /// </summary>
-    private CancellationTokenSource _adviceStop = new();
 
     /// <summary>Every read-only agent deletion the run has begun, seen to before its session ends: a deletion left half-done by a session's end is a record the next command reads as one.</summary>
     private readonly List<Task> _deletions = [];
@@ -1050,10 +1044,10 @@ public sealed class FlowCoordinator
     /// <c>always</c> steps do not run, and the run ends <see cref="FlowRunStatus.Stopped"/>, as the answer <c>abort</c>
     /// ends it too. Once the pause is complete - every agent handed off - it is what <c>--all</c> is: the machine steps
     /// the engine records are stopped, and the run stays <see cref="FlowRunStatus.Paused"/>; and it ends every advice
-    /// under way, as every stop does - its token ended here, its question saying the recommendation is sought at the
-    /// resume once the loop takes it - and the complete pause starts no advice after it (<see cref="AdviseThePause"/>), so
-    /// the stop never waits on an advisor. The loop applies it where a session is running; between sessions the next one
-    /// begins by applying it.
+    /// under way, as every stop does - the loop ends each as it takes the stop (<see cref="DeferAdvice"/>), its question
+    /// saying the recommendation is sought at the resume - and the complete pause starts no advice after it
+    /// (<see cref="AdviseThePause"/>), so the stop never waits on an advisor. The loop applies it where a session is
+    /// running; between sessions the next one begins by applying it.
     /// </summary>
     public void RequestStop()
     {
@@ -1061,7 +1055,6 @@ public sealed class FlowCoordinator
         {
             _stopPastThePause = true;
             _pauseAllAsked = true;
-            CancelAdvice();
             WakeTheLoop();
             return;
         }
@@ -1072,8 +1065,9 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Asks for the hard stop: what a second interrupt, <c>stop-orchestrator</c> and the answer <c>abort</c> share. It
     /// changes nothing of the graph, which is the loop's alone: it cancels the handoff turns under way - a turn that
-    /// begins after it ends at once - and every advice of the run's advisor still running, and wakes the loop, which
-    /// applies it.
+    /// begins after it ends at once - and wakes the loop, which applies it, ending every advice of the run's advisor
+    /// still running as it does (<see cref="ApplyTheStop"/>): an advice is ended by the loop alone, which marks it ended
+    /// first, so one that returns no recommendation is never taken for one that obtained none.
     /// </summary>
     private void BeginHardStop()
     {
@@ -1084,7 +1078,6 @@ public sealed class FlowCoordinator
 
         DropPauseRequest();
         CancelHandoffTurns();
-        CancelAdvice();
         WakeTheLoop();
     }
 
@@ -1172,10 +1165,6 @@ public sealed class FlowCoordinator
     private static string RunnerNotEnded
         => $"its runner did not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s of the stop";
 
-    /// <summary>Ends every advice of the session in flight, from whatever thread: the loop takes each as its runner ends.</summary>
-    private void CancelAdvice()
-        => _adviceStop.TryCancel();
-
     /// <summary>Cancels every handoff turn in flight, wherever the loop is parked awaiting them.</summary>
     private void CancelHandoffTurns()
     {
@@ -1204,10 +1193,13 @@ public sealed class FlowCoordinator
     /// </summary>
     /// <param name="cancellationToken">
     /// Ends the session where it stands, which then throws <see cref="OperationCanceledException"/>: nothing more is
-    /// started, decided or waited for, save the advice it ends, whose runners it waits for as a stop's drain does. What it
-    /// charged and holds is written all the same - what each advice answered, and its last record with every spend among
-    /// it - and nothing else of the run is changed: the steps it started run on, and what they answer is the next
-    /// session's. One that ends the session's start writes nothing, as a refused start does.
+    /// started, decided or waited for once the loop meets it - at the top of each pass, and after every wait it does not end
+    /// itself, a pause's or a plan update's handoff turns, whose answers are kept - save the advice it ends, whose runners
+    /// it waits for as a stop's drain does. The token ends no advice itself: the session's end does, as a stop does, so an
+    /// advice it ends is never taken for one that obtained nothing. What it charged and holds is written all the same -
+    /// what each advice answered, and its last record with every spend among it, which has no end time while a step still
+    /// runs (<see cref="StillRunning"/>) - and nothing else of the run is changed: the steps it started run on, and what
+    /// they answer is the next session's. One that ends the session's start writes nothing, as a refused start does.
     /// </param>
     public async Task<FlowSessionEnd> RunAsync(CancellationToken cancellationToken)
     {
@@ -1257,9 +1249,6 @@ public sealed class FlowCoordinator
         // is refused below, and a refused resume writes nothing of itself.
         _held = _records is null ? null : [];
         _starting = true;
-        _sessionToken = cancellationToken;
-        _adviceStop.Dispose();
-        _adviceStop = new CancellationTokenSource();
 
         // How the session leaves: in order, through its end below; by its cancellation token once it went on, which ends
         // it now and writes what it charged and holds all the same; or by a refusal of its start or a defect, which writes
@@ -1368,9 +1357,13 @@ public sealed class FlowCoordinator
 
             while (true)
             {
+                // The session's token ends it where it stands, met at the top of each pass as it is after every wait it
+                // does not end itself - a pause's or a plan update's handoff turns: a pass that has begun draws, decides
+                // and starts nothing once it has.
+                cancellationToken.ThrowIfCancellationRequested();
                 Progress();
 
-                if (await SettlePiecesEndingAsync().ConfigureAwait(false))
+                if (await SettlePiecesEndingAsync(cancellationToken).ConfigureAwait(false))
                 {
                     // An instance the run brings to rest for an update came to rest and was visited again: its new
                     // scope draws as any does, this same pass.
@@ -1422,10 +1415,10 @@ public sealed class FlowCoordinator
 
                 if (_stopPastThePause)
                 {
-                    // A stop once the pause is complete ends every advice under way, as every stop does - its token was
-                    // ended as the stop was asked - each question it was sought for saying the recommendation is sought at
-                    // the resume; what each spent is counted as its runner ends, and no runner is waited for past the
-                    // drain's bound of its end.
+                    // A stop once the pause is complete ends every advice under way, as every stop does, here as the loop
+                    // takes it - each question it was sought for saying the recommendation is sought at the resume; what
+                    // each spent is counted as its runner ends, and no runner is waited for past the drain's bound of its
+                    // end.
                     DeferAdvice("the run was stopped while the advisor ran");
                 }
 
@@ -1465,11 +1458,10 @@ public sealed class FlowCoordinator
                     continue;
                 }
 
-                // Anything to wait for: a step in flight - a leaf, for a group is only bookkeeping over its members
-                // and a group whose member waits on a question can run nothing until it is answered - a stopped
-                // step's runner still ending, a retry's time coming, an advice of the run's advisor still running, or
-                // a completion still unread.
-                if (_created.Any(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup) || _wakes.Count > 0 || started > 0 || _advising.Count > 0)
+                // Anything to wait for: a step still running (StillRunning) - a step in flight, a stopped step's runner
+                // still ending, a retry's time coming - an advice of the run's advisor still running, or a completion
+                // still unread.
+                if (StillRunning().Any() || started > 0 || _advising.Count > 0)
                 {
                     await WaitNextAsync(cancellationToken).ConfigureAwait(false);
                     continue;
@@ -1581,13 +1573,16 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The session's last record - the one owner of it, however the session ends: in order (<see cref="Finish"/>), or where
     /// its cancellation token ends it once it went on - the run as the session leaves it, every spend it charged among it,
-    /// recorded and put on the disk before the session answers. A run its session leaves with steps still running - its
-    /// token ended it while they ran - has not ended, and its records say so.
+    /// recorded and put on the disk before the session answers. A run its session leaves with a step still running - its
+    /// token ended it while one ran (<see cref="StillRunning"/>) - has not ended, and its records say so: no end time,
+    /// whatever its status says - <see cref="FlowRunStatus.Running"/>, or the pause's or the stop's own standing where one
+    /// is in force (<see cref="Status"/>), for a pause or a stop the session's token cut short is as much the run's as one
+    /// the loop saw through.
     /// </summary>
     /// <param name="summary">The session in words, as its record says it.</param>
     private void RecordTheSessionsEnd(string summary)
     {
-        _endedAt = Status is FlowRunStatus.Running ? null : _clock.GetUtcNow();
+        _endedAt = StillRunning().Any() ? null : _clock.GetUtcNow();
         Record(FlowChangeKind.SessionEnded, detail: summary);
 
         // The session's end is a pass's end: its record on the disk before the session answers.
@@ -1595,13 +1590,27 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
+    /// The steps of the run still running, in the order they were made: a step in flight - a leaf, for a group is only
+    /// bookkeeping over its members, and one whose member waits on a question runs nothing until it is answered - a
+    /// stopped step whose runner is still ending among them, and one a wake is owed, its retry's time or its drain's bound
+    /// still to come. The one owner of whether anything runs: the loop waits while one does, a session's last record has
+    /// no end time while one does (<see cref="RecordTheSessionsEnd"/>), and a session its token ended names each
+    /// (<see cref="CancelledSummary"/>).
+    /// </summary>
+    private IEnumerable<FlowInstance> StillRunning()
+    {
+        var owed = _wakes.Count == 0 ? null : _wakes.Select(wake => wake.Instance).ToHashSet(ReferenceEqualityComparer.Instance);
+        return _created.Where(instance => !instance.Step.IsGroup && (instance.State is FlowInstanceState.Running || owed?.Contains(instance) == true));
+    }
+
+    /// <summary>
     /// What a session its cancellation token ended says of itself, as its last record words it: <c>cancelled</c>, with the
-    /// steps it leaves running - their runners are not the token's to end, and the coordinator's next session takes what
-    /// they answer - and the questions it leaves open.
+    /// steps it leaves running (<see cref="StillRunning"/>) - their runners are not the token's to end, and the
+    /// coordinator's next session takes what they answer - and the questions it leaves open.
     /// </summary>
     private string CancelledSummary()
     {
-        var running = _created.Where(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup).Select(instance => instance.Id).ToList();
+        var running = StillRunning().Select(instance => instance.Id).ToList();
         var open = OpenQuestions.Select(question => question.Id).ToList();
         var said = new List<string>(2);
 
@@ -1841,6 +1850,11 @@ public sealed class FlowCoordinator
     /// time limit stopped already is left to end as that stop ends it. The loop has marked the run pausing already, as
     /// it took the request (<see cref="TakePauseRequest"/>).
     /// </summary>
+    /// <param name="request">The pause asked for.</param>
+    /// <param name="cancellationToken">
+    /// The session's token, which ends no handoff turn: one that ends the session while the turns run is met once they
+    /// have answered, what they charged and gave written - and the pause never completes.
+    /// </param>
     private async Task PauseInOrderAsync(FlowPauseRequest request, CancellationToken cancellationToken)
     {
         _pause = new FlowPauseState(request.Cause, request.All, _clock.GetUtcNow());
@@ -1928,6 +1942,10 @@ public sealed class FlowCoordinator
                 _pause._handoffs.Add(instance.Id);
                 Record(FlowChangeKind.Handoff, instance, detail: instance.Handoff.By);
             }
+
+            // The session's token came while the handoffs were written: what the turns spent and gave is written above, as
+            // the session's, and nothing more is decided - the pause never completes, and the session ends where it stands.
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         if (_hardStop)
@@ -5552,7 +5570,11 @@ public sealed class FlowCoordinator
     /// kind, in which the agent a <c>create-agent</c> step of the old instance made, and that is live, is taken and not
     /// made again. Whether anything followed.
     /// </summary>
-    private async Task<bool> SettlePiecesEndingAsync()
+    /// <param name="cancellationToken">
+    /// The session's token, which ends no handoff turn: one that ends the session while the turns run is met once they
+    /// have answered, what they charged and gave written - and no instance comes to rest or is visited again.
+    /// </param>
+    private async Task<bool> SettlePiecesEndingAsync(CancellationToken cancellationToken)
     {
         var changed = false;
         var ending = _scopes.Where(scope => scope.EndingFor is not null).ToList();
@@ -5614,6 +5636,10 @@ public sealed class FlowCoordinator
                 WriteStepRecordOf(member);
                 changed = true;
             }
+
+            // The session's token came while the turns ran: what they spent and gave is written above, as the session's,
+            // and nothing more is decided or drawn - the instances come to rest at the next session.
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         foreach (var item in ending.Where(item => item.GroupInstance is { State: FlowInstanceState.Running or FlowInstanceState.Paused }))
@@ -11927,7 +11953,9 @@ public sealed class FlowCoordinator
             _place,
             RunValues());
 
-        var cancel = CancellationTokenSource.CreateLinkedTokenSource(_sessionToken, _adviceStop.Token);
+        // The asking's own end, held to nothing else: it is ended only where it is marked ended first (Advising.Drop), so
+        // an advice that returns no recommendation is said ended only where it was.
+        var cancel = new CancellationTokenSource();
         var task = Task.Run(() => _advisor!.AdviseAsync(call, cancel.Token), CancellationToken.None);
         _ = task.ContinueWith(_ => WakeTheLoop(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
         _advising.Add(new Advising(asked, instance, advisor, cancel, task));
@@ -16977,7 +17005,10 @@ public sealed class FlowCoordinator
     /// <param name="Task">The asking, answering the advice.</param>
     private sealed record Advising(FlowQuestion Asked, FlowInstance? Instance, FlowAdvisor Advisor, CancellationTokenSource Cancel, Task<FlowAdvice> Task)
     {
-        /// <summary>Whether the asking was ended - an answer was given, or the run paused or stopped - and its advice is not the question's.</summary>
+        /// <summary>
+        /// Whether the asking was ended - an answer was given, the run stopped, or its session ended - and its advice is not
+        /// the question's: marked before its runner is told to end (<see cref="Drop"/>), the one way an asking is ended.
+        /// </summary>
         public bool Dropped { get; private set; }
 
         /// <summary>

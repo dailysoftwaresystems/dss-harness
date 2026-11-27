@@ -1894,6 +1894,319 @@ public sealed class FlowResumeTests
         Assert.Equal((nameof(FlowInstanceState.Done), 0.52, 1900L), (flow.Steps.Single(step => step.Instance == "write").State, Math.Round(flow.Spent.Usd, 6), flow.Spent.Tokens));
     }
 
+    /// <summary>
+    /// An advisor that answers only once its asking is ended - at that moment, on the thread that ends it, with no
+    /// recommendation and what every asking spends - so whatever reads the asking next finds it answered. Every asking
+    /// kept, and told once one has begun.
+    /// </summary>
+    private sealed class AnswersOnceEnded : IFlowAdvisorRunner
+    {
+        /// <summary>Every asking, in order.</summary>
+        public List<FlowAdvisorCall> Asked { get; } = [];
+
+        /// <summary>Completes once the first asking has begun.</summary>
+        public TaskCompletionSource Begun { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<FlowAdvice> AdviseAsync(FlowAdvisorCall call, CancellationToken cancellationToken)
+        {
+            lock (Asked)
+            {
+                Asked.Add(call);
+            }
+
+            var answered = new TaskCompletionSource<FlowAdvice>();
+            _ = cancellationToken.Register(
+                () => answered.TrySetResult(new FlowAdvice(null, null, null, Model: SpendingAdvisor.Spent.Model, NotObtained: "the asking was ended before the advisor answered", Usd: SpendingAdvisor.Spent.Usd, Tokens: SpendingAdvisor.Spent.Tokens)),
+                useSynchronizationContext: false);
+            Begun.TrySetResult();
+            return answered.Task;
+        }
+    }
+
+    /// <summary>
+    /// A session its cancellation token ends while a safe pause waits on a reason step's handoff turn ends once the turn
+    /// has answered, and the token ends no advice of its own: the advice of the question raised before, still running, is
+    /// ended by the session's end and deferred to the resume - never left saying it was not obtained, which no resume
+    /// would seek again - what it spent counted all the same. Nothing more is decided or started: the handoff the turn
+    /// gave is kept, the pause never completes, and no step starts after the token. The resume seeks the recommendation,
+    /// once.
+    /// </summary>
+    [Fact]
+    public async Task ASessionItsTokenEndsWhileAPausesHandoffTurnRuns_DefersTheAdviceItEnds_AndDecidesNothingMore()
+    {
+        using var temp = new TempDirectory();
+        var definition = AdvisedThink("""
+              - name: write
+                type: reason
+                prompt: write.md
+                outputs: write.json
+            """);
+        var writing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handingOff = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handedOff = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = AtItsTurnsFirst().OnAsync("write", async (run, _) =>
+        {
+            if (run.Attempt > 1)
+            {
+                return FlowStepResult.Ended(passed: true, 0);
+            }
+
+            writing.TrySetResult();
+
+            // Its handoff turn, answered only once the test lets it: the session waits on it as the token ends it.
+            await run.Telling!.Handoff.WhenAsked.WaitAsync(Token);
+            handingOff.TrySetResult();
+            await handedOff.Task.WaitAsync(Token);
+            return FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "handed off");
+        }).HandsOff("write", "the work so far");
+        var advisor = new AnswersOnceEnded();
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            using var ending = CancellationTokenSource.CreateLinkedTokenSource(Token);
+
+            // A clock that passes no bound of its own: the turn ends only as the step's runner answers it.
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records, advisor: advisor);
+            var session = coordinator.RunAsync(ending.Token);
+
+            await advisor.Begun.Task.WaitAsync(Bound, Token);
+            await writing.Task.WaitAsync(Bound, Token);
+            coordinator.RequestPause("command");
+            await handingOff.Task.WaitAsync(Bound, Token);
+            List<string> startedBefore = [.. runner.Started];
+
+            await ending.CancelAsync();
+            handedOff.SetResult();
+
+            _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.WaitAsync(Bound, Token));
+            Assert.Equal(startedBefore, runner.Started);
+        }
+
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        var write = flow.Steps.Single(step => step.Instance == "write");
+        var (events, torn) = FlowEventLog.Read(harness.FileSystem, layout.EventsFile);
+
+        Assert.Equal(
+            new FlowRecommendation("deferred", Why: "the session was ended while the advisor ran: the recommendation is sought when the run is resumed with this question still open"),
+            harness.OrchestrationStore.ReadFlowQuestions(layout)!.Open.Single().Recommendation);
+        Assert.Equal((0.02, 1500L), (flow.Spent.Usd, flow.Spent.Tokens));
+        Assert.Equal((nameof(FlowInstanceState.Stopped), "agent"), (write.State, write.Handoff?.By));
+        Assert.Null(torn);
+
+        // The pause began and handed write off; the token came before it completed, and the session's end took the advice.
+        Assert.Equal(
+            [("handoff", "write"), ("advised", "think"), ("sessionEnded", null)],
+            events.SkipWhile(each => each.Kind != "pauseBegan").Skip(1).Select(each => (each.Kind, each.Instance)));
+        Assert.Equal((nameof(FlowRunStatus.Paused), "cancelled; waiting on q1"), (events[^1].To, events[^1].Detail));
+
+        var resumed = new SpendingAdvisor("more", held: false);
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again, advisor: resumed);
+
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        Assert.Single(resumed.Asked);
+        Assert.Equal(SpendingAdvisor.Given("more"), harness.OrchestrationStore.ReadFlowQuestions(layout)!.Open.Single().Recommendation);
+    }
+
+    /// <summary>
+    /// A session its cancellation token ends in the middle of a pass - a step's runner ends it as the step starts - draws,
+    /// decides and starts nothing more, though the pass goes round again over a pause step a configuration answered at
+    /// once: the step that waits on that answer starts at the next session, which takes the first step's answer the
+    /// ending session read. Its last record says the step it left running, with no end time while it runs.
+    /// </summary>
+    [Fact]
+    public async Task ASessionItsTokenEndsInThePassThatStartsAStep_StartsNothingMore()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: first
+                type: orient
+              - name: approval
+                type: pause
+                question: may it go ahead?
+                options: [approve, revise]
+                answers:
+                  pause: approve
+              - name: after
+                type: orient
+                dependsOn: [approval]
+            """);
+        using var ending = CancellationTokenSource.CreateLinkedTokenSource(Token);
+
+        // Ended where the step is asked, on the loop's own thread, in the pass that starts it.
+        var runner = new Runner().On("first", _ =>
+        {
+            ending.Cancel();
+            return FlowStepResult.Ended(passed: true, 0);
+        });
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
+
+            _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => coordinator.RunAsync(ending.Token)).WaitAsync(Bound, Token);
+
+            var (events, _) = FlowEventLog.Read(harness.FileSystem, layout.EventsFile);
+
+            Assert.Equal(["first"], runner.Started);
+            Assert.DoesNotContain("after", coordinator.Instances.Keys);
+            Assert.Equal(
+                ("sessionEnded", nameof(FlowRunStatus.Running), "cancelled; 1 step still running: first"),
+                (events[^1].Kind, events[^1].To, events[^1].Detail));
+            Assert.Null(harness.OrchestrationStore.ReadWorkflowStatus(layout)!.FinishedAt);
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(["first", "after"], runner.Started);
+        }
+    }
+
+    /// <summary>
+    /// An advice still running as the session's token ends the session, or a stop is asked, in the middle of a pass - a
+    /// step's runner asks it as the step starts - is ended by the loop alone, which marks it ended first: the pass that
+    /// goes on to take what the advice answered never takes its asking ended for one that obtained nothing, so its
+    /// question is deferred to the resume, which seeks it, and what it spent is counted all the same.
+    /// </summary>
+    /// <param name="byItsToken">Whether the session's token ends the session, rather than a stop.</param>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AnAdviceRunningAsTheTokenOrAStopEndsThePass_IsDeferred_NeverLeftNotObtained(bool byItsToken)
+    {
+        using var temp = new TempDirectory();
+        var definition = AdvisedThink("""
+              - name: gate
+                type: orient
+              - name: second
+                type: orient
+                dependsOn: [gate]
+            """);
+        using var ending = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        FlowCoordinator? coordinator = null;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = AtItsTurnsFirst()
+            .OnAsync("gate", async (_, _) =>
+            {
+                await gate.Task.WaitAsync(Token);
+                return FlowStepResult.Ended(passed: true, 0);
+            })
+            .On("second", _ =>
+            {
+                // Asked where the step is asked, on the loop's own thread, in the pass that starts it.
+                if (byItsToken)
+                {
+                    ending.Cancel();
+                }
+                else
+                {
+                    coordinator!.RequestStop();
+                }
+
+                return FlowStepResult.Ended(passed: true, 0);
+            });
+        var advisor = new AnswersOnceEnded();
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records, advisor: advisor);
+            var session = coordinator.RunAsync(ending.Token);
+
+            await advisor.Begun.Task.WaitAsync(Bound, Token);
+            gate.SetResult();
+
+            if (byItsToken)
+            {
+                _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.WaitAsync(Bound, Token));
+            }
+            else
+            {
+                Assert.Equal(FlowRunStatus.Stopped, (await session.WaitAsync(Bound, Token)).Status);
+            }
+        }
+
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+
+        Assert.Equal(
+            new FlowRecommendation("deferred", Why: $"{(byItsToken ? "the session was ended" : "the run was stopped")} while the advisor ran: the recommendation is sought when the run is resumed with this question still open"),
+            harness.OrchestrationStore.ReadFlowQuestions(layout)!.Open.Single().Recommendation);
+        Assert.Equal((0.02, 1500L), (flow.Spent.Usd, flow.Spent.Tokens));
+        Assert.Single(advisor.Asked);
+    }
+
+    /// <summary>
+    /// A session its cancellation token ends while a step still runs - a machine step a pause leaves running, or one whose
+    /// runner a stop's drain waits on - has not ended the run, whatever the pause or the stop makes its status: its last
+    /// record has no end time, and says the step it left running, by the one rule of what still runs.
+    /// </summary>
+    /// <param name="stopped">Whether a stop, rather than a pause, is in force as the token ends the session.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ASessionItsTokenEndsWithAStepStillRunning_UnderAPauseOrAStop_WritesNoEndTime(bool stopped)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+            """);
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Deaf to its stop: a runner a stop's drain waits on, as a pause leaves one to finish.
+        var runner = new Runner().OnAsync("build", async (_, _) =>
+        {
+            await released.Task;
+            return FlowStepResult.Ended(passed: true, 0);
+        });
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var watched = new Watched(records);
+        var standing = stopped ? FlowRunStatus.Stopped : FlowRunStatus.Paused;
+
+        using (records)
+        {
+            using var ending = CancellationTokenSource.CreateLinkedTokenSource(Token);
+
+            // A clock that passes no bound of its own: the stop's drain never gives up on the runner while the test runs.
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: watched);
+            var session = coordinator.RunAsync(ending.Token);
+
+            await runner.StartedAsync("build").WaitAsync(Bound, Token);
+
+            if (stopped)
+            {
+                coordinator.RequestStop();
+                await watched.SeenAsync(snapshot => snapshot.Status is FlowRunStatus.Stopped).WaitAsync(Bound, Token);
+            }
+            else
+            {
+                coordinator.RequestPause("command");
+                await watched.SeenAsync(snapshot => snapshot.Pause?.CompletedAt is not null).WaitAsync(Bound, Token);
+            }
+
+            await ending.CancelAsync();
+
+            _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.WaitAsync(Bound, Token));
+        }
+
+        released.SetResult();
+        var status = harness.OrchestrationStore.ReadWorkflowStatus(layout)!;
+        var (events, _) = FlowEventLog.Read(harness.FileSystem, layout.EventsFile);
+
+        Assert.Equal((standing.ToString(), (DateTimeOffset?)null), (status.Status, status.FinishedAt));
+        Assert.Equal(nameof(FlowInstanceState.Running), harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single().State);
+        Assert.Equal(("sessionEnded", standing.ToString(), "cancelled; 1 step still running: build"), (events[^1].Kind, events[^1].To, events[^1].Detail));
+    }
+
     /// <summary>A resume beside an open question is not refused where something can run; it is refused only where nothing can until the question is answered, naming answer-orchestrator.</summary>
     [Fact]
     public async Task AResumeBesideAnOpenQuestionIsRefusedOnlyWhereNothingCanRun()
