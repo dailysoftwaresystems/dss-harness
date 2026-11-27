@@ -2487,7 +2487,8 @@ fallback, an account at its limit or a provider that fails is a pause that resum
 still fails is asked. The implementation workflow writes `onFailure: recover` on every step of its flow that tests, folds,
 checks, commits, pushes or waits - itself or through its group - and `onFailure: pause` on every
 reasoning step; its recovery diagnoses the failure (`diagnose`, which goes on with its own conversation across
-the visits), asks a person only for what only a person can give (`direction`), holds the remedy items its last word
+the visits for the same failure or issue - a visit for another issue diagnosing in a conversation and an agent of its
+own, beside it, `FlowCoordinator.SameRecoveryThread`), asks a person only for what only a person can give (`direction`), holds the remedy items its last word
 sets out - the diagnosis's, or the one it gives on the person's answer (`redirect`) - to the plan's own check
 (`remedy-check`), gives what the check refuses back to the diagnostician within the visit (`remedy-revise`) and checks
 what it gives again (`remedy-recheck`), and builds, tests, folds and reviews the items those checks read as a round's
@@ -3876,8 +3877,8 @@ attempts as `FlowStepRecord.Skills`, `step.json`'s `skills[]`, and taken up agai
 pieces (`FlowStepRun.Prompts`, `FlowTemplate.FillAroundSkills`), so what was filled is never read as a template again
 and a value's braces stand - a skill that cannot be handed refusing the step (12), the work it goes on with rendered
 as its continuation record (`AgentContinuation.Render` over its `FlowStepRun.GoesOnWith` - the step it resumes, then its
-own earlier visits in the order they went, the newest last, whose stream gives the last iterations; never a step it only
-depends on), and the run answered
+own earlier visits in the order they went, the newest last, whose stream gives the last iterations - within the
+recovery, those of visits for the same failure or issue alone; never a step it only depends on), and the run answered
 through `IAgentRunner`, its ending mapped to the step's own (`FlowStepResult.AtLimit` for a limit of its own,
 incomplete for a stop, the schema-validated output the step's, with the issues it reports under `preExisting`). The
 step's stream is read by the store's one reader of it (`OrchestrationStore.ReadStepStream`): a whole line that does
@@ -4522,7 +4523,9 @@ A reason step holds write on the tree of the agent it works in whatever its acce
 step whose work it goes on with, `FlowCoordinator.WorkingOf`): the start of a step that works as an agent that only
 reads resets that tree and its work writes it, so of two steps that go on with one reading step's work the second
 starts once the first has ended - two visits of one that goes on with its own, which work in the agent its first visit
-made, claiming that agent by the declaration before either is given it (`FlowCoordinator.ClaimedAgentOf`) - and no
+made, claiming that agent by the declaration before either is given it (`FlowCoordinator.ClaimedAgentOf`); within the
+recovery, by the declaration and the thing its visit takes (`FlowInstance.RecoveryKey`, `RecoveryThreadOf`), so visits
+for different issues each make an agent of their own and diagnose side by side, each within the run's limits - and no
 step's start discards another's scratch under it. A reading step that begins work of its own is given its agent as it
 starts, and holds write on that agent's tree from then (`FlowCoordinator.ClaimsOf`, read again once `Start` names it),
 so what its attempt keeps held past its end names the tree too. A step that waits on a question holds nothing, so the
@@ -4754,7 +4757,9 @@ before the repository's section where another run's ledger owes a path, a path g
 leaves it out), so a commit made by hand ends a stopped run's hold as the run's own does. The texts of what a run
 checked - `{run.ran}`, `{run.notRun}`, `{run.red}`, and `{carried.*}` of one commit - are `FlowChecks`', over the
 step records the coordinator hands it; a check is a type `WorkflowStepTypes.StepType.Checks` marks or an independent
-reason step. A deletion run
+reason step. A red result stands until a later visit or iteration of the same step of the same work item ends green
+checking the same (`FlowCheck.Work`): within the recovery, a visit for the same failure or issue, so another issue's
+green never hides it from the visit that is to put it right. A deletion run
 again whose agent its record says deleted - its ending cut off by a stop's drain, a time limit or a crash - is done
 (`FoldFamilyStepRunner.DoneAlreadyAsync`), its output what `fold.json` kept of the apply. A
 refresh or a rebase of `others` is one turn for each target (`FlowInstance.Targets`, `FlowTargetRecord`), in
@@ -6671,7 +6676,8 @@ lines never its type's), as the view at the step's end holds them. The coordinat
 `FlowStepRun.WorkedFrom` the instances whose sets seed its pack: the step it goes on with (`resume`), each step it
 depends on directly - its own `dependsOn` and `on` and each enclosing group's, a group by each reason step in it -
 then its own earlier visits of the same work item (`FlowInstanceId.SameStep`: the same id but for the visits and
-iterations after its innermost item), newest first, each that began, once; `FlowWorkingSets.SeedsOf` reads their sets
+iterations after its innermost item - and within the recovery, of visits for the same failure or issue,
+`FlowCoordinator.EarlierVisitsOf`), newest first, each that began, once; `FlowWorkingSets.SeedsOf` reads their sets
 into `ContextPackRequest.Worked` (`CodebaseWorkingSet.Seeds`: each node once, edited where any set says so, none
 gone). A reason step that has a graph writes both files as it ends (`FlowStepGraph.Ended`: the working set made from
 the view at the step's end, its `graph.jsonl` and its stored stream) and its pack is given the seeds; its `graph.jsonl`

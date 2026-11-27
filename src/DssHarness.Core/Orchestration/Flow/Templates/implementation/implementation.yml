@@ -524,7 +524,8 @@ recover:
   # stands. Once its steps are done, the step that gave it its
   # failure runs again from where it stopped (onSuccess: failed-step), now that what stood
   # in its way was put right. Should that step fail again, its own onFailure: recover brings
-  # it back here, to the diagnostician who saw the last attempt - until the step passes or
+  # it back here, to the diagnostician who saw the last attempt - the one of that failure or
+  # issue: a visit for another issue has its own, beside it - until the step passes or
   # the diagnosis says only a person can lift what stands in the way. The recovery never
   # calls itself: its steps have their own retries, and where its own work still fails, a
   # person is asked (onFailure: pause). Past five recoveries of one step the run asks

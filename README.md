@@ -2440,7 +2440,8 @@ the attempt goes on, and its agent told that what it wrote there is gone; no two
 once, for a reason step holds write on the tree of the agent it works in whatever its access, and an advice of the
 run's advisor holds the tree it works in while it runs - of two that go on with one step's work, two visits of one
 that goes on with its own among them, the second starts once the first has ended, or waits on a question with no
-advice on it still running, for a step that waits holds nothing: the step's model resolved with its agent definition
+advice on it still running, for a step that waits holds nothing (the recovery's visits go on with one another's work
+only for the same failure or issue: a visit for another issue diagnoses in an agent of its own, beside it): the step's model resolved with its agent definition
 below its own and its order built as
 entries of a model and one of its provider's keys, each entry's credential read from the slot; its prompt file read
 and filled where the step starts, each skill it names looked up again and the folder handed over in the agent's work

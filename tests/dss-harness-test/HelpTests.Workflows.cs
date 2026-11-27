@@ -442,7 +442,9 @@ public sealed partial class HelpTests
     /// its access, since the start of a step that works as an agent that only reads resets that tree and its work writes it,
     /// from the moment its own agent is named - and that of two steps that go on with one step's work, two visits of one
     /// that goes on with its own among them, the second starts once the first has ended or waits on a question, which holds
-    /// nothing, while an advice holds the tree it works in; the step types' table says it in the claim it carries.
+    /// nothing, while an advice holds the tree it works in - within the recovery, only visits for the same failure or issue
+    /// share one agent, so visits for different issues run side by side; the step types' table says it in the claim it
+    /// carries.
     /// </summary>
     [Fact]
     public void TheDocuments_SayAReasonStepHoldsWriteOnTheTreeOfTheAgentItWorksIn_WhateverItsAccess()
@@ -452,7 +454,9 @@ public sealed partial class HelpTests
             "no two steps work in one agent's tree at once, for a reason step holds write on the tree of the agent it works in "
                 + "whatever its access, and an advice of the run's advisor holds the tree it works in while it runs - of two that go "
                 + "on with one step's work, two visits of one that goes on with its own among them, the second starts once the first "
-                + "has ended, or waits on a question with no advice on it still running, for a step that waits holds nothing:",
+                + "has ended, or waits on a question with no advice on it still running, for a step that waits holds nothing (the recovery's "
+                + "visits go on with one another's work only for the same failure or issue: a visit for another issue diagnoses in an agent "
+                + "of its own, beside it):",
             Prose.Document("README.md"),
             StringComparison.Ordinal);
         Assert.Contains(
@@ -461,7 +465,9 @@ public sealed partial class HelpTests
                 + "that works as an agent that only reads resets that tree and its work writes it, so of two steps that go on with one "
                 + "reading step's work the second starts once the first has ended - two visits of one that goes on with its own, which "
                 + "work in the agent its first visit made, claiming that agent by the declaration before either is given it "
-                + $"(`{nameof(FlowCoordinator)}.ClaimedAgentOf`) - and no step's start discards another's scratch under it. A reading step "
+                + $"(`{nameof(FlowCoordinator)}.ClaimedAgentOf`); within the recovery, by the declaration and the thing its visit takes "
+                + $"(`{nameof(FlowInstance)}.{nameof(FlowInstance.RecoveryKey)}`, `RecoveryThreadOf`), so visits for different issues each make an agent of their own "
+                + "and diagnose side by side, each within the run's limits - and no step's start discards another's scratch under it. A reading step "
                 + "that begins work of its own is given its agent as it starts, and holds write on that agent's tree from then "
                 + $"(`{nameof(FlowCoordinator)}.ClaimsOf`, read again once `Start` names it), so what its attempt keeps held past its end names "
                 + "the tree too. A step that waits on a question holds nothing, so the second may start while the first waits - and the "

@@ -731,7 +731,7 @@ public static partial class HelpTopics
             + "is text any template reads: {run.ran}, every check that ended so far, a line each with where it ran and its "
             + "verdict, each leg's for a step that runs legs; {run.notRun}, each check not run yet, by its step's name, and each "
             + "skipped or never reached, with why; and {run.red}, each red result not seen green since by a later visit of the "
-            + "same step - a red leg, with what its line said of the units its build failed where its own tool failed it, a "
+            + "same step checking the same - in the recovery, a visit for the same failure or issue - a red leg, with what its line said of the units its build failed where its own tool failed it, a "
             + "red check of CI, an anchor check's findings, a plan's problems, a failure - each 'none' "
             + "where it names nothing. The checks are the steps of type "
             + $"{string.Join(", ", WorkflowStepTypes.All.Where(type => type.Checks).Select(type => type.Type))} and a reason step "

@@ -1153,6 +1153,188 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
+    /// A diagnostician's work goes on only for the thing its visit takes: the visits for two issues sent to fix at once
+    /// each have a diagnostician of their own - its own agent, its own conversation begun anew - and diagnose side by
+    /// side, while the visit a retry makes for the first issue goes on with that issue's diagnosis, in its agent.
+    /// </summary>
+    [Fact]
+    public async Task VisitsForTwoIssues_EachHaveADiagnosticianOfTheirOwn_SideBySide_AndARetryGoesOnWithItsOwnIssues()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: diagnose
+                  type: reason
+                  resume: diagnose
+                  prompt: diagnose.md
+                  resumePrompt: rediagnose.md
+                  outputs: diagnosis.json
+                - name: mend
+                  type: orient
+                  dependsOn: [diagnose]
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var diagnosed = new Dictionary<string, (string? Agent, IReadOnlyList<FlowWorkedFrom> GoesOnWith)>(StringComparer.Ordinal);
+        var (running, most) = (0, 0);
+        var counting = new Lock();
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the second hole")]))
+            .On("triage", run => Course("fix", run.Issue!.Title))
+            .OnAsync("diagnose", async run =>
+            {
+                lock (counting)
+                {
+                    diagnosed[run.Instance] = (run.WorksIn, run.GoesOnWith);
+                    most = Math.Max(most, ++running);
+                }
+
+                try
+                {
+                    // The first issue's diagnosis holds on until the second's has begun beside it - bounded, so a run that
+                    // keeps the second waiting behind it ends all the same, and its asserts say so.
+                    if (run.Instance == "recover.diagnose")
+                    {
+                        await Task.WhenAny(secondStarted.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+                    }
+                    else
+                    {
+                        secondStarted.TrySetResult();
+                    }
+
+                    return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+                }
+                finally
+                {
+                    lock (counting)
+                    {
+                        running--;
+                    }
+                }
+            })
+            .On("mend", run => run.Instance == "recover.mend" ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the remedy stayed red") : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), workflowFile: (_, named) => named);
+        var cancel = TestContext.Current.CancellationToken;
+
+        var paused = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The first issue's remedy failed, and its visit asks; the second issue's visit is done.
+        Assert.Equal(FlowRunStatus.Paused, paused.Status);
+        Assert.Equal(2, most);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["recover+2"].State);
+        var first = diagnosed["recover.diagnose"];
+        var second = diagnosed["recover+2.diagnose"];
+        Assert.NotNull(first.Agent);
+        Assert.NotNull(second.Agent);
+        Assert.NotEqual(first.Agent, second.Agent);
+        Assert.Equal([], first.GoesOnWith);
+        Assert.Equal([], second.GoesOnWith);
+
+        var asked = coordinator.OpenQuestions.Single(question => question.Kind == "failure");
+        Assert.True(coordinator.TryAnswer(asked.Id, "retry", out _));
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The retry is the first issue's second visit: its diagnosis goes on with the first's, in that agent, and with
+        // nothing of the second issue's.
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Same(coordinator.Instances["triage"], coordinator.Instances["recover+3"].RaisedBy);
+        Assert.Equal(first.Agent, diagnosed["recover+3.diagnose"].Agent);
+        Assert.Equal([new FlowWorkedFrom("recover.diagnose", first.Agent)], diagnosed["recover+3.diagnose"].GoesOnWith);
+    }
+
+    /// <summary>
+    /// What the run knows to be red is red until the same work is seen green: a check of the visit for one issue that
+    /// found problems stays in <c>{run.red}</c> though the same check of another issue's visit ended green after it, so
+    /// the first issue's next visit is told what its own remedy got wrong.
+    /// </summary>
+    [Fact]
+    public async Task ARedCheckOfOneIssuesVisit_IsRedStill_ThoughAnotherIssuesVisitPassedTheSameCheckAfterIt()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: diagnose
+                  type: reason
+                  prompt: diagnose.md
+                  outputs: diagnosis.json
+                - name: check
+                  type: validate-plan
+                  items: 'diagnose.items'
+                  dependsOn: [diagnose]
+                - name: mend
+                  type: orient
+                  dependsOn: [check]
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var firstChecked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var prompts = new Dictionary<string, string>(StringComparer.Ordinal);
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the second hole")]))
+            .On("triage", run => Course("fix", run.Issue!.Title))
+            .On("diagnose", run =>
+            {
+                lock (prompts)
+                {
+                    prompts[run.Instance] = FlowTemplate.Joined(run.Prompts!["prompt"]);
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"items": []}"""));
+            })
+            .OnAsync("check", async run =>
+            {
+                if (run.Instance == "recover.check")
+                {
+                    firstChecked.TrySetResult();
+                    return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": false, "problems": ["the remedy misses the cause"], "items": []}"""));
+                }
+
+                // The second issue's check ends green after the first's ended red.
+                await firstChecked.Task;
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": true, "problems": [], "items": []}"""));
+            })
+            .On("mend", run => run.Instance == "recover.mend" ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the remedy stayed red") : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), workflowFile: (_, named) => named == "diagnose.md" ? "red: {run.red}" : "Do it.");
+        var cancel = TestContext.Current.CancellationToken;
+
+        Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["recover+2"].State);
+        Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single(question => question.Kind == "failure").Id, "retry", out _));
+        Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+
+        // The first issue's second visit is told its own check's red; the green that came after it was another issue's.
+        Assert.Same(coordinator.Instances["triage"], coordinator.Instances["recover+3"].RaisedBy);
+        Assert.Equal("red: recover.check (validate-plan) in the main tree: 1 problem(s)", prompts["recover+3.diagnose"]);
+    }
+
+    /// <summary>
     /// An issue a step of a visit of the recovery reported waits for that visit to end before the recovery takes it, the
     /// run's records saying so: the recovery never calls itself. Once the visit has ended, the issue's own visit is made.
     /// </summary>

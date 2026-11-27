@@ -391,6 +391,14 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     internal string? RaisedByRecord;
 
     /// <summary>
+    /// A visit of the recovery's: what it takes - a step's failure, or an issue - by the key its visits are counted under
+    /// against the recovery's bound (the coordinator's <c>RecoveryOf</c>), set where the visit is made and where a resume
+    /// counts the visits again from the records; null for every other instance. The thread a diagnostician's work goes
+    /// on in: only visits under the one key go on with one conversation and work in one agent.
+    /// </summary>
+    internal (string Scope, string Step)? RecoveryKey;
+
+    /// <summary>
     /// The id of the plan update this instance was raised to plan: the visit of the step the <c>amend</c> block names,
     /// raised by an update alone the way a handler is raised by an ending.
     /// </summary>
@@ -7215,14 +7223,16 @@ public sealed class FlowCoordinator
         // another's worktree nor going on with another's work (a step that resumes itself begins its own again) - is
         // given the engine's own read-only one, named the same way a create-agent's is: before the record, with the
         // model the step resolves to. Its records live in that agent's directory, as every reason step's do. A step
-        // that resumes itself keeps one agent over all its visits - a repeat's iterations of one share the first's -
-        // and every other step's each visit makes its own.
+        // that resumes itself keeps one agent over all its visits - a repeat's iterations of one share the first's, and
+        // the recovery's visits for one failure or one issue theirs (SameRecoveryThread), a visit for another issue
+        // making its own - and every other step's each visit makes its own.
         if (instance.Step.Type == "reason" && WorkflowStepTypes.MakesAgent(instance.Step) && WorksInOf(instance) is null)
         {
             instance.Made ??= (instance.Step.Resume is { } self && string.Equals(self, instance.Step.Name, StringComparison.Ordinal)
                 ? _created.FirstOrDefault(earlier => !ReferenceEquals(earlier, instance)
                     && string.Equals(earlier.Path, instance.Path, StringComparison.Ordinal)
-                    && earlier.Made is not null)?.Made
+                    && earlier.Made is not null
+                    && SameRecoveryThread(earlier, instance))?.Made
                 : null)
                 ?? NameAgent();
             instance.MadeModel ??= _agentModels.GetValueOrDefault(instance.Path);
@@ -10145,6 +10155,7 @@ public sealed class FlowCoordinator
             visit.RaisedBy = source;
             visit.Visit = visits;
             visit.Direction = direction;
+            visit.RecoveryKey = key;
         });
 
         // Its lookups across a use's boundary - inputs, params, texts, answers, the policy a group writes - are made in
@@ -11212,9 +11223,10 @@ public sealed class FlowCoordinator
     /// The agent whose tree <paramref name="instance"/>'s claims name: the one it works in (<see cref="WorksInOf"/>) - save
     /// where it works as a reading step that goes on with its own work (its <c>resume</c> names itself), whose visits all
     /// work in the one agent the first of them made (<see cref="Start"/>): every visit of that declaration, and every step
-    /// that goes on with one, names that agent by the declaration, made yet or not, so two visits admitted in one pass -
-    /// neither yet given its agent - claim the one tree too. Null where the step works in no agent, or in one of its own
-    /// not yet named.
+    /// that goes on with one, names that agent by the declaration - and, within the recovery, by the thing its visit
+    /// takes (<see cref="RecoveryThreadOf"/>) - made yet or not, so two visits admitted in one pass, neither yet given its
+    /// agent, claim the one tree too, while visits for different issues, each with an agent of its own, claim theirs and
+    /// run side by side. Null where the step works in no agent, or in one of its own not yet named.
     /// </summary>
     private string? ClaimedAgentOf(FlowInstance instance)
     {
@@ -11223,7 +11235,9 @@ public sealed class FlowCoordinator
         return working.Step is { Type: "reason", Resume: { } resumed } step
             && string.Equals(resumed, step.Name, StringComparison.Ordinal)
             && WorkflowStepTypes.MakesAgent(step)
-                ? $"the agent of {working.Path}"
+                ? RecoveryThreadOf(working) is (var scope, var taken)
+                    ? $"the agent of {working.Path} for {scope}:{taken}"
+                    : $"the agent of {working.Path}"
                 : WorksInOf(instance);
     }
 
@@ -12925,7 +12939,8 @@ public sealed class FlowCoordinator
             instance.SkippedBecause ?? instance.NotRunBecause ?? instance.Error,
             instance.PassedOver,
             instance.HandledBy,
-            instance.FinishedAt);
+            instance.FinishedAt,
+            RecoveryThreadOf(instance) is (var scope, var taken) ? $"{scope}\0{taken}" : null);
     }
 
     /// <summary>
@@ -14599,11 +14614,38 @@ public sealed class FlowCoordinator
     private FlowInstance? ResumedOf(FlowInstance instance)
         => instance.Step.Resume is { } resumed ? DeclaredOf(instance, resumed, "reason") : null;
 
-    /// <summary>The earlier visits of <paramref name="instance"/>'s step of the same work item, oldest first, as the run made them.</summary>
+    /// <summary>
+    /// The earlier visits of <paramref name="instance"/>'s step of the same work item, oldest first, as the run made them -
+    /// within a visit of the recovery, of the same thing it takes (<see cref="SameRecoveryThread"/>): the visits for one
+    /// failure or one issue go on with one another's work, and a visit for another issue begins its own.
+    /// </summary>
     private IEnumerable<FlowInstance> EarlierVisitsOf(FlowInstance instance)
-        => _created
+    {
+        var thread = RecoveryThreadOf(instance);
+
+        return _created
             .TakeWhile(other => !ReferenceEquals(other, instance))
-            .Where(other => FlowInstanceId.SameStep(other.Id, instance.Id));
+            .Where(other => FlowInstanceId.SameStep(other.Id, instance.Id) && Nullable.Equals(RecoveryThreadOf(other), thread));
+    }
+
+    /// <summary>
+    /// What the visit of the recovery <paramref name="instance"/> is a step of, at any depth, takes - the failure or the
+    /// issue it is counted under (<see cref="FlowInstance.RecoveryKey"/>); null outside every visit. The one reading of
+    /// which visits a diagnostician's work goes on over (<see cref="SameRecoveryThread"/>).
+    /// </summary>
+    private (string Scope, string Step)? RecoveryThreadOf(FlowInstance instance)
+        => RecoveryAround(instance)?.RecoveryKey;
+
+    /// <summary>
+    /// Whether <paramref name="one"/> and <paramref name="other"/> stand in the one thread of the recovery's work: both
+    /// outside every visit of it, or both in visits that take the same thing (<see cref="RecoveryThreadOf"/>). Only such
+    /// steps go on with one conversation (<see cref="EarlierVisitsOf"/>), and a step that goes on with its own keeps one
+    /// agent over them (<see cref="Start"/>) and claims it by that thread (<see cref="ClaimedAgentOf"/>): the
+    /// diagnostician who saw the last attempt at a failure or an issue is the one met again for it, and visits for
+    /// different issues each have their own and run side by side, each within the run's limits.
+    /// </summary>
+    private bool SameRecoveryThread(FlowInstance one, FlowInstance other)
+        => Nullable.Equals(RecoveryThreadOf(one), RecoveryThreadOf(other));
 
     /// <summary>
     /// <paramref name="sources"/> as a run names them to its step, in their order: each a reason step that began, other than
@@ -14779,8 +14821,9 @@ public sealed class FlowCoordinator
             {
                 // Each visit counted under the key it was taken under, read from the records alone - what each visit fixed,
                 // the issues joined to it among it (Joins) - so a visit of an issue met again after its fix is counted
-                // against that issue's bound here as it was before the resume.
+                // against that issue's bound here as it was before the resume - and goes on in that thread, as it did.
                 var key = RecoveryOf(visit.RaisedBy!).Key;
+                visit.RecoveryKey = key;
                 _recoveryVisits[key] = Math.Max(_recoveryVisits.GetValueOrDefault(key), visit.Visit);
             }
 

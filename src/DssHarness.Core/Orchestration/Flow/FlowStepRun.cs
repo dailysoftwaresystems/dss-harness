@@ -245,8 +245,8 @@ public sealed record FlowStepRun(
 
     /// <summary>
     /// A reason step's: the earlier work its conversation goes on with, in the order that work went, oldest first - the
-    /// step its resume names, then its own earlier visits of the same work item, the newest last - each that began once
-    /// and no other. The one owner of what a step goes on with: its continuation record is the record of this work, the
+    /// step its resume names, then its own earlier visits of the same work item (within the recovery, of visits for the
+    /// same failure or issue), the newest last - each that began once and no other. The one owner of what a step goes on with: its continuation record is the record of this work, the
     /// last iterations of the newest of it word for word; its resume prompt is asked only where there is earlier work, this
     /// or an attempt of its own; and its graph tool reads the pages this work kept, the newest first, where its own keep
     /// none. Empty where the step resumes nothing - its conversation begins its own work, whatever it depends on - and for
