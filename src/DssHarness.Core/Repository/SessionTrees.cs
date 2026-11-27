@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
+using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Core.Repository;
 
@@ -24,6 +26,12 @@ namespace DssHarness.Core.Repository;
 /// <para>
 /// A tree the session makes, deletes or makes again is dropped (<see cref="Forget"/>) by the one owner of the making and
 /// the deleting of trees (<see cref="Worktrees.WorktreeService"/>), so the next asking finds it anew.
+/// </para>
+/// <para>
+/// A fact is served only while the root it was kept for still holds its own <c>.git</c>
+/// (<see cref="WorktreeInspector.HoldsOwnGit"/>), looked at as it is served: a <c>.git</c> taken away by anything but that
+/// owner - a person, another command - leaves a directory git answers for by whatever repository encloses it, and the
+/// fact is dropped, so the asking finds what the directory is now, and finds it anew should a <c>.git</c> be put back.
 /// </para>
 /// </remarks>
 public sealed class SessionTrees
@@ -72,11 +80,13 @@ public sealed class SessionTrees
 
     /// <summary>
     /// The mark the tree at <paramref name="path"/> carries, where the session found it marked as an agent's repository
-    /// and borrowing the objects of the main checkout its mark names (<see cref="KeepLentMark"/>); null where it found none.
+    /// and borrowing the objects of the main checkout its mark names (<see cref="KeepLentMark"/>) and the tree still holds
+    /// its <c>.git</c>; null where it found none.
     /// </summary>
     /// <param name="path">The tree's root.</param>
-    public AgentRepositoryMark? LentMarkOf(string path)
-        => _agents.TryGetValue(Whole(path), out var mark) ? mark : null;
+    /// <param name="fileSystem">Looks for the tree's <c>.git</c>.</param>
+    public AgentRepositoryMark? LentMarkOf(string path, IFileSystem fileSystem)
+        => Served(_agents, path, fileSystem, out var mark) ? mark : null;
 
     /// <summary>
     /// Keeps that the tree at <paramref name="path"/> carries <paramref name="mark"/> and borrows the objects of the main
@@ -95,19 +105,20 @@ public sealed class SessionTrees
 
     /// <summary>
     /// Where <paramref name="directory"/> sits in its repository and its git directory, as <paramref name="ask"/> asks git:
-    /// the session's where it asked it of the same tree's root before, else asked now - and kept where the directory is a
-    /// tree's root (its prefix empty). Asked each time outside a session.
+    /// the session's where it asked it of the same tree's root before and the root still holds its <c>.git</c>, else asked
+    /// now - and kept where the directory is a tree's root (its prefix empty). Asked each time outside a session.
     /// </summary>
     /// <param name="directory">The directory.</param>
     /// <param name="comparison">How this machine compares paths.</param>
+    /// <param name="fileSystem">Looks for the root's <c>.git</c>.</param>
     /// <param name="ask">Asks git (<see cref="IGitClient.GetLocationAsync"/>).</param>
-    public static async Task<GitLocation?> LocationAsync(string directory, StringComparison comparison, Func<Task<GitLocation?>> ask)
+    public static async Task<GitLocation?> LocationAsync(string directory, StringComparison comparison, IFileSystem fileSystem, Func<Task<GitLocation?>> ask)
     {
         ArgumentNullException.ThrowIfNull(ask);
 
         var known = OfSession(comparison);
 
-        if (known is not null && known._locations.TryGetValue(Whole(directory), out var held))
+        if (known is not null && known.Served(known._locations, directory, fileSystem, out var held))
         {
             return held;
         }
@@ -124,18 +135,20 @@ public sealed class SessionTrees
 
     /// <summary>
     /// The object directory of the repository whose checkout is <paramref name="mainCheckout"/>, as <paramref name="ask"/>
-    /// asks git: the session's where it asked it before, else asked now and kept. Asked each time outside a session.
+    /// asks git: the session's where it asked it before and the checkout still holds its <c>.git</c>, else asked now and
+    /// kept. Asked each time outside a session.
     /// </summary>
     /// <param name="mainCheckout">The checkout.</param>
     /// <param name="comparison">How this machine compares paths.</param>
+    /// <param name="fileSystem">Looks for the checkout's <c>.git</c>.</param>
     /// <param name="ask">Asks git (<see cref="AgentRepositoryMark.ObjectsOfAsync"/>).</param>
-    public static async Task<string> ObjectsAsync(string mainCheckout, StringComparison comparison, Func<Task<string>> ask)
+    public static async Task<string> ObjectsAsync(string mainCheckout, StringComparison comparison, IFileSystem fileSystem, Func<Task<string>> ask)
     {
         ArgumentNullException.ThrowIfNull(ask);
 
         var known = OfSession(comparison);
 
-        if (known is not null && known._objects.TryGetValue(Whole(mainCheckout), out var held))
+        if (known is not null && known.Served(known._objects, mainCheckout, fileSystem, out var held))
         {
             return held;
         }
@@ -163,18 +176,23 @@ public sealed class SessionTrees
         _objects[Whole(mainCheckout)] = objects;
     }
 
-    /// <summary>The layout of the tree whose root is <paramref name="directory"/>, where the session found it; null where it did not.</summary>
+    /// <summary>
+    /// The layout of the tree whose root is <paramref name="directory"/>, where the session found it and the root still
+    /// holds its <c>.git</c>; null where it did not.
+    /// </summary>
     /// <param name="directory">The directory a location starts from.</param>
-    public HarnessLayout? Find(string directory)
-        => _layouts.TryGetValue(Whole(directory), out var layout) ? layout : null;
+    /// <param name="fileSystem">Looks for the root's <c>.git</c>.</param>
+    public HarnessLayout? Find(string directory, IFileSystem fileSystem)
+        => Served(_layouts, directory, fileSystem, out var layout) ? layout : null;
 
     /// <summary>
-    /// Whether the session found <paramref name="directory"/> to be a main checkout: a tree whose own main checkout is
-    /// itself - so no bare repository, and no agent's repository, which names another.
+    /// Whether the session found <paramref name="directory"/> to be a main checkout, and it still holds its <c>.git</c>: a
+    /// tree whose own main checkout is itself - so no bare repository, and no agent's repository, which names another.
     /// </summary>
     /// <param name="directory">The directory.</param>
-    public bool IsMainCheckout(string directory)
-        => Find(directory) is { } layout && PathContainment.AreSame(layout.RepositoryRoot, layout.MainCheckoutRoot, _comparison);
+    /// <param name="fileSystem">Looks for the directory's <c>.git</c>.</param>
+    public bool IsMainCheckout(string directory, IFileSystem fileSystem)
+        => Find(directory, fileSystem) is { } layout && PathContainment.AreSame(layout.RepositoryRoot, layout.MainCheckoutRoot, _comparison);
 
     /// <summary>Keeps <paramref name="layout"/>, found from <paramref name="directory"/>, where that directory is the tree's own root.</summary>
     /// <param name="directory">The directory the location started from.</param>
@@ -187,6 +205,32 @@ public sealed class SessionTrees
         {
             _layouts[Whole(directory)] = layout;
         }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="facts"/> hold one for the root <paramref name="path"/> that can be served: kept, and the root
+    /// still holding its own <c>.git</c>. One whose root no longer does is dropped - that one, never one kept for the root
+    /// meanwhile - so the root is asked anew from here on.
+    /// </summary>
+    private bool Served<T>(ConcurrentDictionary<string, T> facts, string path, IFileSystem fileSystem, [MaybeNullWhen(false)] out T fact)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        var root = Whole(path);
+
+        if (!facts.TryGetValue(root, out fact))
+        {
+            return false;
+        }
+
+        if (WorktreeInspector.HoldsOwnGit(fileSystem, root))
+        {
+            return true;
+        }
+
+        _ = facts.TryRemove(new KeyValuePair<string, T>(root, fact));
+        fact = default;
+        return false;
     }
 
     private void Drop<T>(ConcurrentDictionary<string, T> facts, string path)

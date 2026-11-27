@@ -121,7 +121,7 @@ public sealed record AgentRepositoryMark(string MainCheckout, string Agent)
 
         // A main checkout the engine's session located already is one: no bare repository and no agent's repository, which
         // names another (SessionTrees.IsMainCheckout) - what the three questions below ask, answered by the session.
-        if (SessionTrees.OfSession(platform.PathComparison)?.IsMainCheckout(MainCheckout) is not true)
+        if (SessionTrees.OfSession(platform.PathComparison)?.IsMainCheckout(MainCheckout, fileSystem) is not true)
         {
             var main = await gitClient.GetMainWorktreeAsync(MainCheckout, cancellationToken).ConfigureAwait(false);
 
@@ -146,7 +146,7 @@ public sealed record AgentRepositoryMark(string MainCheckout, string Agent)
             }
         }
 
-        var objects = await ObjectsOfAsync(gitClient, platform, MainCheckout, cancellationToken).ConfigureAwait(false);
+        var objects = await ObjectsOfAsync(gitClient, fileSystem, platform, MainCheckout, cancellationToken).ConfigureAwait(false);
 
         return await BorrowsAsync(gitClient, platform, tree, objects, cancellationToken).ConfigureAwait(false)
             ? null
@@ -158,16 +158,18 @@ public sealed record AgentRepositoryMark(string MainCheckout, string Agent)
     /// asked once in an engine's session, which keeps it (<see cref="SessionTrees.ObjectsAsync"/>).
     /// </summary>
     /// <param name="gitClient">Asks git.</param>
+    /// <param name="fileSystem">Looks for the checkout's <c>.git</c>, which the session's answer is served while it holds.</param>
     /// <param name="platform">How paths compare.</param>
     /// <param name="mainCheckout">The checkout.</param>
     /// <param name="cancellationToken">Stops git.</param>
     /// <exception cref="HarnessException">git could not say (<see cref="HarnessExit.CommandFailed"/>).</exception>
-    public static Task<string> ObjectsOfAsync(IGitClient gitClient, IHostPlatform platform, string mainCheckout, CancellationToken cancellationToken)
+    public static Task<string> ObjectsOfAsync(IGitClient gitClient, IFileSystem fileSystem, IHostPlatform platform, string mainCheckout, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(gitClient);
+        ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentNullException.ThrowIfNull(platform);
 
-        return SessionTrees.ObjectsAsync(mainCheckout, platform.PathComparison, async () =>
+        return SessionTrees.ObjectsAsync(mainCheckout, platform.PathComparison, fileSystem, async () =>
         {
             var asked = await gitClient
                 .RunAsync(mainCheckout, ["rev-parse", "--path-format=absolute", "--git-common-dir"], cancellationToken: cancellationToken)

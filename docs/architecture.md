@@ -665,7 +665,10 @@ and taken by the other, so a tree a deletion tells and then loads is asked of on
 files of each commit a tree is made at, by the commit's id (`WorktreeRoom.ForFilesAsync`). Its
 configuration is still read where it always is, for it is the tree's file. A
 tree the session makes, deletes or makes again is dropped by the one owner of the making and the
-deleting of trees (`WorktreeService`), and found anew by the next asking; a directory inside a
+deleting of trees (`WorktreeService`), and found anew by the next asking; what was kept of a tree
+is served only while its root still holds its own `.git`, looked at as it is served, so a `.git`
+taken away by anything else - a person, another command - leaves the directory asked of anew, as
+whatever repository encloses it answers for it, and the fact is dropped; a directory inside a
 tree is never kept, for it may become a tree of its own; and the session's scope flows with the
 work it starts alone, so no other command or session is answered from it, and it ends with the
 session.

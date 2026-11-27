@@ -75,7 +75,7 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
                 mainCheckoutRoot,
                 address,
                 path,
-                () => AgentRepositoryMark.ObjectsOfAsync(_gitClient, _platform, mainCheckoutRoot, cancellationToken),
+                () => AgentRepositoryMark.ObjectsOfAsync(_gitClient, _fileSystem, _platform, mainCheckoutRoot, cancellationToken),
                 cancellationToken).ConfigureAwait(false);
     }
 
@@ -115,7 +115,7 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
             return [];
         }
 
-        var objects = await AgentRepositoryMark.ObjectsOfAsync(_gitClient, _platform, mainCheckoutRoot, cancellationToken).ConfigureAwait(false);
+        var objects = await AgentRepositoryMark.ObjectsOfAsync(_gitClient, _fileSystem, _platform, mainCheckoutRoot, cancellationToken).ConfigureAwait(false);
         var found = new List<AgentRepositoryFound>();
 
         foreach (var candidate in candidates)
@@ -152,10 +152,11 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
     {
         // Nothing an engine's session holds marks a tree, or makes or deletes one, but the one owner of the making and the
         // deleting of trees, which drops what the session knew of it (SessionTrees.Forget): a mark the session kept is the
-        // directory's still, while the directory holds its .git - one taken away meanwhile is none, as it is below.
+        // directory's still, which the session serves only while the directory holds its .git - one taken away meanwhile
+        // is none, as it is below.
         var known = SessionTrees.OfSession(_platform.PathComparison);
 
-        if (known?.LentMarkOf(path) is { } kept && WorktreeInspector.HoldsOwnGit(_fileSystem, path))
+        if (known?.LentMarkOf(path, _fileSystem) is { } kept)
         {
             return Names(kept, mainCheckoutRoot, address);
         }
