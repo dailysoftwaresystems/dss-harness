@@ -150,8 +150,11 @@ public static partial class HelpTopics
             + $"of is the context exhausted ({nameof(Agents.AgentRunStatus.ContextExhausted)}); a 403, a 404, or a 400 "
             + "answering a conversation's first request - a model the key's organization is not given, such as one that "
             + "needs a data retention the organization does not keep - is a model the provider does not serve the key, "
-            + "naming it; an overload, a server's error, a request timed out, a conflict, a network that failed and a "
-            + "stream cut or ended before its message are asked again; and any other 400 fails the step, said in the "
+            + "naming it; a 400 that refuses the format as more than structured outputs compile - its grammar too large, "
+            + "more optional or union-typed properties than they take, or a schema too complex - is the format refused, a "
+            + "first request's too, and the step goes on with its envelope in words, as below; an overload, a server's "
+            + "error, a request timed out, a conflict, a network that failed and a stream cut or ended before its message are "
+            + "asked again; and any other 400 fails the step, said in the "
             + "API's own words with the request it names.";
     }
 
@@ -228,8 +231,10 @@ public static partial class HelpTopics
             + $"{Agents.ClaudeApi.ClaudeApiClient.ClientName} client sends it as output_config.format on every request, the "
             + $"handoff's too, each array's minItems above {Agents.ClaudeApi.ClaudeApiRequest.MostLeastItems} and every maxItems moved "
             + "into the array's description in words, for structured outputs take no other - and where the API refuses it as "
-            + "more than it compiles, the run's later requests carry no format, and a message of the conversation says it in "
-            + "words, the system prompt untouched; the "
+            + "more than it compiles - its grammar too large, more optional or union-typed properties than it takes - the run's "
+            + "later requests carry no format, and a message of the conversation says it in words, the system prompt "
+            + "untouched, and every later run of that envelope on that model, in the same session, says it in words from its "
+            + "first request; the "
             + $"{Agents.ZaiApi.ZaiApiClient.ClientName} client, whose wire holds no answer to a schema, says it in words in a "
             + "message of its own after the step's first, in every conversation the step begins, and asks an answer that read "
             + "as no JSON again in JSON alone - no tool offered, "

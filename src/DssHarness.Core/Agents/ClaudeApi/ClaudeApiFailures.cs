@@ -19,8 +19,10 @@ namespace DssHarness.Core.Agents.ClaudeApi;
 /// waited out within the client's tries and its longest wait; a 413 or a prompt too long the context full; a
 /// 403 or a 404 - and a 400 answering a conversation's first request, which a model the key's organization is not set
 /// up for is refused with - a model the provider will not serve the account; a 400 for a thinking block bound to another
-/// conversation a defect of this tool's, never sent again; a 400 for a format too large to compile the schema refused
-/// (<see cref="RefusesTheFormat"/>), which the loop answers by asking without it; any other 400 a request no try mends;
+/// conversation a defect of this tool's, never sent again; a 400 for a format more than structured outputs compile - its
+/// grammar too large, more optional or union-typed properties than they take, a schema too complex, a conversation's first
+/// request among them - the schema refused (<see cref="RefusesTheFormat"/>), which the loop answers by asking without it;
+/// any other 400 a request no try mends;
 /// and an overload, a server's error, a request timed out or a conflict, a network that failed and a stream cut, the
 /// service failing for now.
 /// </remarks>
@@ -50,10 +52,29 @@ public static class ClaudeApiFailures
     /// <summary>What the API says of a request whose format's schema is more than its structured outputs compile.</summary>
     public const string GrammarTooLarge = "compiled grammar is too large";
 
+    /// <summary>What the API says of a request whose format holds more optional properties than its structured outputs take.</summary>
+    public const string TooManyOptional = "too many optional parameters";
+
+    /// <summary>What the API says of a request whose format holds more properties of a union type - a type array or an <c>anyOf</c> - than its structured outputs take.</summary>
+    public const string TooManyUnions = "too many parameters with union types";
+
+    /// <summary>What the API says of a request whose format's schema is too complex for its structured outputs to compile.</summary>
+    public const string TooComplex = "too complex for compilation";
+
     /// <summary>
-    /// Whether <paramref name="refused"/> refuses the request's format - its schema more than structured outputs compile -
-    /// which is the schema refused (<see cref="ChatFailureKind.SchemaRefused"/>), never a failure of the step's: the loop
-    /// sends the run's requests no format from then on, the envelope said in words in a message of the conversation.
+    /// Every way the API says a request's format is more than its structured outputs compile - its grammar too large, more
+    /// optional or union-typed properties than it takes, a schema too complex - each matched in what it says whatever its
+    /// case: the one list of them, which is the format refused (<see cref="ChatFailureKind.SchemaRefused"/>) and never a
+    /// model the account is not given.
+    /// </summary>
+    public static IReadOnlyList<string> MoreThanItCompiles { get; } = [GrammarTooLarge, TooManyOptional, TooManyUnions, TooComplex];
+
+    /// <summary>
+    /// Whether <paramref name="refused"/> refuses the request's format - its schema more than structured outputs compile
+    /// (<see cref="MoreThanItCompiles"/>) - which is the schema refused (<see cref="ChatFailureKind.SchemaRefused"/>), never
+    /// a failure of the step's: the loop sends the run's requests no format from then on, the envelope said in words in a
+    /// message of the conversation, and every later run of that envelope on that model in the client's life says it so from
+    /// its first request.
     /// </summary>
     /// <param name="refused">The refusal.</param>
     public static bool RefusesTheFormat(ApiEvent.Refused refused)
@@ -125,10 +146,12 @@ public static class ClaudeApiFailures
 
     /// <summary>
     /// Whether a refusal of <paramref name="status"/> - none for an error of a stream, then of <paramref name="type"/> -
-    /// says <paramref name="message"/> of a format too large to compile.
+    /// says <paramref name="message"/> of a format more than structured outputs compile, in any of the ways the API says it
+    /// (<see cref="MoreThanItCompiles"/>).
     /// </summary>
     private static bool FormatTooLarge(int? status, string? type, string message)
-        => (status == 400 || (status is null && type == "invalid_request_error")) && message.Contains(GrammarTooLarge, StringComparison.OrdinalIgnoreCase);
+        => (status == 400 || (status is null && type == "invalid_request_error"))
+            && MoreThanItCompiles.Any(said => message.Contains(said, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// A refused body's error - its type, message and request, and the code its details name - read as it streams from
