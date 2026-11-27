@@ -3591,8 +3591,10 @@ every step, read again before the expiry the host tells of it passes - `gh` says
 answer to a request a token that expires signed (`github-authentication-token-expiration`), read again a minute ahead
 (`GhLogins.Ahead`), once for that expiry - and read again once where the host refuses a request it signed as unsigned
 (401), the request then sent once more with the token read where it is another and never a third time, a second
-refusal answered as the first would have been (`WebSearchRenewal`), each token a step comes to send held by its mask
-before it is sent (`GrowingMask`) - a slot's key sent to the scheme, host
+refusal answered as the first would have been (`WebSearchRenewal`); a reading that gives no token - gh signed out, or not
+answering in time - is held nowhere, so the next step reads gh again, never takes the place of a token held, and leaves a
+step that began without one to be sent the token the session comes to hold, read by another of its steps; each token a
+step comes to send held by its mask before it is sent (`GrowingMask`) - a slot's key sent to the scheme, host
 and port the source's own address writes alone (`IWebSearchKind.KeyOrigin`, a source whose address takes its host from
 what discover finds refused one where the configuration is read), a gh login to that host or its API alone
 (`WebFetchKey.Origins`), never a host a document the source read names - and added by the fetch to what it sends the

@@ -14,6 +14,12 @@ namespace DssHarness.Core.Ci;
 /// </summary>
 /// <remarks>
 /// <para>
+/// Only a login that holds a token is held. A reading that gave none - gh signed out, or not answering in time - answers
+/// the asking that read it alone, and the next asking reads gh again: a gh that timed out once, or a person who signed
+/// back in, is asked again by the next step, never answered "signed out" for the rest of the session. And a reading that
+/// gives none never takes the place of a token held: the token is kept, and the reading answered by it.
+/// </para>
+/// <para>
 /// <c>gh</c> says no expiry of the token it holds - neither <c>gh auth token</c> nor <c>gh auth status --json hosts</c>
 /// names one - so the expiry is the one the host tells: GitHub's API names it on every answer to a request a token that
 /// expires signed (<see cref="ExpiryHeader"/>).
@@ -52,8 +58,9 @@ public sealed class GhLogins
         => EngineSession.Of(() => new GhLogins(gh, clock)) ?? new GhLogins(gh, clock);
 
     /// <summary>
-    /// The login for <paramref name="host"/>: as held, read where none is yet - and read again where the expiry the host
-    /// told of the token held is less than <see cref="Ahead"/> away, once for that expiry.
+    /// The login for <paramref name="host"/>: the token held, read where none is - and read again where the expiry the host
+    /// told of the token held is less than <see cref="Ahead"/> away, once for that expiry. A reading that gives no token
+    /// answers this asking alone, by the token held where there is one, and leaves the next asking to read gh again.
     /// </summary>
     /// <param name="directory">Where <c>gh</c> runs: the repository's main checkout.</param>
     /// <param name="host">The host the login is for.</param>
@@ -65,21 +72,26 @@ public sealed class GhLogins
 
         try
         {
-            if (held.Login is { } login && !Due(login))
+            if (held.Login is { Token: not null } login && !Due(login))
             {
                 return login;
             }
 
-            var read = await AskAsync(directory, host, cancellationToken).ConfigureAwait(false);
-            held.Login = Kept(held.Login, read);
-
-            return held.Login;
+            return Kept(held, await AskAsync(directory, host, cancellationToken).ConfigureAwait(false));
         }
         finally
         {
             held.Asking.Release();
         }
     }
+
+    /// <summary>
+    /// Whether a token is held for <paramref name="host"/> now: one a step of the session read, which a step that began
+    /// without one is sent from then on (<see cref="Web.Search.WebSearchRenewal"/>). Asks nothing of <c>gh</c>.
+    /// </summary>
+    /// <param name="host">The host the login is for.</param>
+    public bool Holds(string host)
+        => _hosts.TryGetValue(host, out var held) && held.Login is { Token: not null };
 
     /// <summary>
     /// The login for <paramref name="host"/> after the host refused <paramref name="refused"/>: read again where that is
@@ -103,10 +115,7 @@ public sealed class GhLogins
                 return login;
             }
 
-            var read = await AskAsync(directory, host, cancellationToken).ConfigureAwait(false);
-            held.Login = Kept(held.Login, read);
-
-            return held.Login;
+            return Kept(held, await AskAsync(directory, host, cancellationToken).ConfigureAwait(false));
         }
         finally
         {
@@ -171,13 +180,26 @@ public sealed class GhLogins
         => login is { Expiry: { } expiry, ReadForExpiry: false } && _clock.GetUtcNow() >= expiry - Ahead;
 
     /// <summary>
-    /// What is held once <paramref name="read"/> was read in place of <paramref name="was"/>: the token read, its expiry not
-    /// known yet - or, where it is the token held already, that token with its expiry, read again for it once.
+    /// What an asking answers once <paramref name="read"/> was read for <paramref name="held"/>, and what is held after it:
+    /// the token read, its expiry not known yet - or, where it is the token held already, that token with its expiry, read
+    /// again for it once. A reading that gave no token is held nowhere: the token held answers it where there is one, still
+    /// due where it was, and else the reading itself, which the next asking reads again.
     /// </summary>
-    private static Login Kept(Login? was, Login read)
-        => was is { Token: { } token } && string.Equals(token, read.Token, StringComparison.Ordinal)
+    private static Login Kept(Held held, Login read)
+    {
+        var was = held.Login;
+
+        if (read.Token is null)
+        {
+            return was is { Token: not null } ? was : read;
+        }
+
+        held.Login = was is { Token: { } token } && string.Equals(token, read.Token, StringComparison.Ordinal)
             ? was with { ReadForExpiry = was.Expiry is not null }
             : read;
+
+        return held.Login;
+    }
 
     private Held HeldFor(string host)
     {
@@ -203,7 +225,10 @@ public sealed class GhLogins
     /// <summary>One host's login as held, and the one asking of it at a time.</summary>
     private sealed class Held
     {
-        /// <summary>The login held, replaced whole: by a reading, one at a time, and by an expiry told (<see cref="Expires"/>).</summary>
+        /// <summary>
+        /// The login held - one that holds a token, or none - replaced whole: by a reading that gave a token, one at a time,
+        /// and by an expiry told (<see cref="Expires"/>).
+        /// </summary>
         public Login? Current;
 
         public SemaphoreSlim Asking { get; } = new(1, 1);

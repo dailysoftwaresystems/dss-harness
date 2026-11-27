@@ -7,7 +7,8 @@ namespace DssHarness.Core.Web.Search;
 /// <summary>
 /// What a step's search does with the machine's gh login while it runs, over the logins' one owner
 /// (<see cref="GhLogins"/>): each request of a source the login signs is sent the token held now - one read since the step
-/// began, by another step of the session or for an expiry that has come, in place of the step's (<see cref="CurrentAsync"/>);
+/// began, by another step of the session or for an expiry that has come, in place of the step's, or of none where the step
+/// began without one (<see cref="CurrentAsync"/>);
 /// a request the host refused is sent once more with the token read again (<see cref="RenewedAsync"/>), never twice; and the
 /// expiry a host tells of the token it was sent is kept beside it (<see cref="Answered"/>). Every token the step comes to
 /// send is held by its mask before it is sent (<see cref="GrowingMask"/>), so no record of the step writes one.
@@ -23,7 +24,10 @@ public sealed class WebSearchRenewal(GhLogins logins, HarnessLayout layout, Grow
 
     /// <summary>
     /// The key <paramref name="source"/> is sent now: <paramref name="key"/>, or - where the source is signed by the gh login
-    /// and the login holds another token than the one the step was given - that token, held by the step's mask first.
+    /// and the login holds another token than the one the step was given - that token, held by the step's mask first. A
+    /// step that began without a token is sent the one the session came to hold since, read by another of its steps, and
+    /// asks nothing of <c>gh</c> itself where none is held: its record said why it had none, and the next step to begin
+    /// reads gh again (<see cref="GhLogins"/>).
     /// </summary>
     /// <param name="source">The source asked.</param>
     /// <param name="key">The key the step holds for it; null where it holds none.</param>
@@ -32,14 +36,14 @@ public sealed class WebSearchRenewal(GhLogins logins, HarnessLayout layout, Grow
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        if (source.Credential is not { Host: { } host } credential || key?.Value is not { } given)
+        if (source.Credential is not { Host: { } host } credential || (key?.Value is null && !_logins.Holds(host)))
         {
             return key;
         }
 
         var login = await _logins.ReadAsync(_layout.MainCheckoutRoot, host, cancellationToken).ConfigureAwait(false);
 
-        return login.Token is { } token && !string.Equals(token, given, StringComparison.Ordinal) ? Held(credential, token) : key;
+        return login.Token is { } token && !string.Equals(token, key?.Value, StringComparison.Ordinal) ? Held(credential, token) : key;
     }
 
     /// <summary>
