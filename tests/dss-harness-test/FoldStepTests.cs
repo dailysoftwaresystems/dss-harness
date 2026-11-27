@@ -904,7 +904,9 @@ public sealed class FoldStepTests
 
         var asked = await Runner(kit).RunAsync(Run(kit, step) with { Place = place }, Token);
 
-        Assert.Equal(["docs/api/index.md"], asked.DryRun!.Outside);
+        // A fold that found nothing outside its within would have applied, holding no dry run.
+        Assert.NotNull(asked.DryRun);
+        Assert.Equal(["docs/api/index.md"], asked.DryRun.Outside);
         Assert.Equal(
             "'fold': the fold of 'ag' would write 'docs/api/index.md', which is outside the paths its within names; 'docs/api' names a file: a directory to be made is written 'docs/api/'",
             FlowQuestions.FoldProblemOf("fold", asked.DryRun, FlowQuestions.FoldQuestionOf(asked.DryRun)!));
