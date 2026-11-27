@@ -818,6 +818,67 @@ public sealed class FlowStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// A plan update's check holds to the main tree as it now is the items its added and changed pieces place alone: an
+    /// item of the round that no piece changes was checked as the round opened, and what a fold has made of the tree since
+    /// - a directory under an entry another item keeps off, a path it reuses taken away by the item that replaced it - is
+    /// no breach of it, in the round the update joins or in the plan's own list, so the update passes, as one that answers
+    /// no piece does; a changed piece's item is held to the tree as it is, and refused for the path it reuses that is gone,
+    /// and for nothing else - its forbidden entry naming the new directory is no problem.
+    /// </summary>
+    [Fact]
+    public async Task AnUpdatesCheck_HoldsToTheMainTreeAsItNowIs_OnlyTheItemsItsPiecesAddOrChange()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        repository.WriteFile("src/old.cs", "replaced by the first round\n");
+        await harness.CommitAllAsync(repository.Path, "the start", Token);
+        var start = await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token);
+        var startTree = await harness.StartTreeAsync(repository.Path, Token);
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items", Scope = "plan.scope" };
+
+        // The round's items: one replaces src/old.cs and makes src/feature; the other reuses that file and keeps off that directory.
+        var replacing = Item("a", "src/feature/");
+        replacing["ownedPaths"] = new JsonArray("src/feature/", "src/old.cs");
+        replacing["replaces"] = new JsonArray(new JsonObject { ["path"] = "src/old.cs", ["what"] = "the old parser" });
+        var keeping = Item("b", "src/two/**", reuses: "src/old.cs");
+        keeping["forbiddenPaths"] = new JsonArray("src/feature");
+        var round = new JsonArray(replacing.DeepClone(), keeping.DeepClone());
+
+        async Task<IReadOnlyList<string>> ProblemsAsync(JsonArray items, JsonArray? pieces)
+        {
+            var read = new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(items.DeepClone()) };
+
+            if (pieces is not null)
+            {
+                read["scope"] = FlowValue.Of(pieces);
+                read["round"] = FlowValue.Of(round.DeepClone());
+                read["known"] = FlowValue.Of(new JsonArray("a", "b"));
+            }
+
+            var result = await runner.RunAsync(Run(step, repository.Path, read) with { Place = new FlowRunPlace(repository.Path, "r1", start, Flow) { StartTree = startTree } }, Token);
+            Assert.True(result.Passed, result.Error);
+            return [.. result.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+        }
+
+        // As the round opened, both were sound.
+        Assert.Empty(await ProblemsAsync(round, pieces: null));
+
+        // The first item's fold made src/feature and took src/old.cs away.
+        repository.WriteFile("src/feature/made.cs", "made by the first round\n");
+        File.Delete(repository.Combine("src/old.cs"));
+        await harness.CommitAllAsync(repository.Path, "the first round", Token);
+
+        var added = Item("c", "src/three/**");
+        Assert.Empty(await ProblemsAsync(new JsonArray(replacing.DeepClone(), keeping.DeepClone(), added.DeepClone()), new JsonArray(Piece("added", (JsonObject)added.DeepClone()))));
+        Assert.Empty(await ProblemsAsync(round, new JsonArray()));
+
+        // Changed, the item is checked against the tree as it now is: the path it reuses is gone.
+        Assert.Equal(
+            ["work item 'b' reuses 'src/old.cs', which is not in the main tree: a plan builds on what is there"],
+            await ProblemsAsync(round, new JsonArray(Piece("changed", (JsonObject)keeping.DeepClone()))));
+    }
+
+    /// <summary>
     /// The plan check that opens a round holds its items to the issues the run owes its next round: each named in an
     /// item's <c>settles</c>, none left unsettled, an item may name only an issue the run owes, and the items that settle
     /// them come first in its output - what the run took from its own rounds is built before the work planned around it.

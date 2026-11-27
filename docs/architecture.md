@@ -4005,12 +4005,20 @@ to be made - is told how to write what it meant at every refusal the reading cau
 (`GlobPattern.WrittenFor`): a step's writes denied, a fold's `foldOutside`, and the plan's check of a class's home and
 sites (P-C3, P-C4) - `'docs/generated' names a file: a directory to be made is written 'docs/generated/'`, and
 `'*.md' names the root's own: '**/*.md' names any depth`. A later round's plan update, self-audit or diagnosis is
-written beside a main tree that holds what earlier rounds folded, so the plan's check refuses an entry an item owns or
-must not touch, written with no trailing separator, that names a directory of the main tree the start tree does not
-hold - every reader would read it as that one path, and its builder's every write beneath it would be refused - in the
-same owner's words (`GlobPattern.WrittenForDirectory`): `'src/feature' names a file of the run's start tree, which the
-run's lists of paths are read against, and a directory of the main tree: write it 'src/feature/'`, at the answer within
-the step that gives it as at the check's own moment. A start tree that cannot be read is never silent: the session
+written beside a main tree that holds what earlier rounds folded, so the plan's check refuses an entry an item owns,
+written with no trailing separator, that names a directory of the main tree the start tree does not hold - every reader
+would read it as that one path, and its builder's every write beneath it would be refused - in the same owner's words
+(`GlobPattern.WrittenForDirectory`): `'src/feature' names a file of the run's start tree, which the run's lists of paths
+are read against, and a directory of the main tree: write it 'src/feature/'`, at the answer within the step that gives
+it as at the check's own moment (`PlanValidator.DirectoryProblems`). An entry an item must not touch is never refused
+so, for nothing gates a write by one: the check weighs it for meeting the item's own owned paths, and its builder is
+told it. That rule, and every other that reads the main tree as it now is - a path an item reuses or replaces, a class's
+home and sites being there - holds only the items the check introduces or changes (`PlanValidator.Check`'s
+`introduced`): an update's check holds to it the items its added and changed pieces place alone
+(`PlanValidator.Introduced`), in the round they join and in the plan's own list, and one whose scope yields no piece
+none of its plan's, for every other item was checked when its round opened, against the tree of that moment - a round's
+own item a fold since made a directory under, or took a path it reused from, would otherwise fail every update after it.
+A start tree that cannot be read is never silent: the session
 warns once why (`TreeDirectories.UnreadWarning`, through the records' warner), and every refusal its reading causes
 says it too - the narrow reading's after how to write the entry (`TreeDirectories.UnreadForWriting`, carried by each
 entry read for what may be written beneath it, `TreeDirectories.ForWriting`), and an overlap of the check's that the wide

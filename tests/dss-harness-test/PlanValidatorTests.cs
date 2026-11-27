@@ -313,14 +313,15 @@ public sealed class PlanValidatorTests : IDisposable
     }
 
     /// <summary>
-    /// An entry an item owns or must not touch, written with no trailing separator, that names a directory of the main tree
-    /// the run's start tree does not hold - one an earlier round's fold made - names that one path to every reader of the
-    /// item's paths: the builder's every write beneath it would be refused, and its fold would carry none of it. So the
-    /// check refuses it, in the words every refusal of the reading uses, saying to write it with a trailing separator; a
-    /// directory both trees hold, and the same entry written so, pass.
+    /// An entry an item owns, written with no trailing separator, that names a directory of the main tree the run's start
+    /// tree does not hold - one an earlier round's fold made - names that one path to every reader of the item's paths: the
+    /// builder's every write beneath it would be refused, and its fold would carry none of it. So the check refuses it, in
+    /// the words every refusal of the reading uses, saying to write it with a trailing separator; a directory both trees
+    /// hold, and the same entry written so, pass. An entry an item must not touch, written so, is no problem: nothing
+    /// gates a write by a forbidden path, so none would be refused for it.
     /// </summary>
     [Fact]
-    public async Task AnEntryNamingADirectoryOnlyTheMainTreeHolds_IsAProblem_SayingToWriteItEndingInASeparator()
+    public async Task AnOwnedEntryNamingADirectoryOnlyTheMainTreeHolds_IsAProblem_SayingToWriteItEndingInASeparator_AndAForbiddenOneIsNot()
     {
         var (harness, repository) = await RepositoryAsync();
         var startTree = await harness.StartTreeAsync(repository.Path, Token);
@@ -334,17 +335,13 @@ public sealed class PlanValidatorTests : IDisposable
         kept["forbiddenPaths"] = new JsonArray("src/feature");
         var there = Item("there", "src/other");
 
-        const string Said = "'src/feature' names a file of the run's start tree, which the run's lists of paths are read against, and a directory of the main tree: write it 'src/feature/'";
-
+        // The forbidden entry is said of nothing: the owned one alone is refused.
         Assert.Equal(
-            [
-                $"work item 'made' owns 'src/feature', which names nothing beneath it: {Said}",
-                $"work item 'kept' must not touch 'src/feature', which names nothing beneath it: {Said}",
-            ],
+            ["work item 'made' owns 'src/feature', which names nothing beneath it: 'src/feature' names a file of the run's start tree, which the run's lists of paths are read against, and a directory of the main tree: write it 'src/feature/'"],
             await CheckAsync(repository, startTree, made, kept, there));
+        Assert.Empty(await CheckAsync(repository, startTree, kept));
 
         made["ownedPaths"] = new JsonArray("src/feature/");
-        kept["forbiddenPaths"] = new JsonArray("src/feature/");
 
         Assert.Empty(await CheckAsync(repository, startTree, made, kept, there));
     }
