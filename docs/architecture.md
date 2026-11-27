@@ -4022,7 +4022,9 @@ A start tree that cannot be read is never silent: the session
 warns once why (`TreeDirectories.UnreadWarning`, through the records' warner), and every refusal its reading causes
 says it too - the narrow reading's after how to write the entry (`TreeDirectories.UnreadForWriting`, carried by each
 entry read for what may be written beneath it, `TreeDirectories.ForWriting`), and an overlap of the check's that the wide
-reading alone made (`TreeDirectories.UnreadForMeeting`). A pattern keeps its meaning, anchored at the root: a
+reading alone made (`TreeDirectories.UnreadForMeeting`) - which the check names only where no pair of the two lists meets
+read narrowly, a pair that meets whatever the tree holds named first and without it, so a real conflict is never hidden
+behind one the unread tree made. A pattern keeps its meaning, anchored at the root: a
 directory it matches covers what is beneath it. Two entries
 meet (`GlobPattern.Overlaps`) only where some path a tree can hold matches both: a path naming no directory holds
 nothing beneath it, unless the other names only paths beneath it by its own names - `src/new` and `src/new/a.py` -

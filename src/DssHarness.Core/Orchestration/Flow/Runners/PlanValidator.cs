@@ -107,19 +107,20 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
         foreach (var (item, at) in read.Select((item, at) => (item, at)))
         {
-            // No file is written by two items: each pair is said once, by the first patterns found to meet - and where they
-            // meet only because the start tree could not be read, and every path was taken for a directory, it says so.
+            // No file is written by two items: each pair is said once, by the patterns found to meet - a pair that meets
+            // whatever the start tree holds first, and only where none does, one that meets because the start tree could
+            // not be read and every path was taken for a directory, saying so.
             foreach (var other in read.Skip(at + 1))
             {
-                if (Meeting(item.Owned, other.Owned, comparison) is var (mine, theirs))
+                if (Meeting(startTree, (item.Writes, other.Writes), (item.Owned, other.Owned), comparison) is var (mine, theirs, unread))
                 {
-                    problems.Add($"work items '{item.Name}' and '{other.Name}' both own what '{mine}' and '{theirs}' match: no file is written by two items, so give it to one{Unread(startTree, item.Writes, other.Writes, comparison)}");
+                    problems.Add($"work items '{item.Name}' and '{other.Name}' both own what '{mine}' and '{theirs}' match: no file is written by two items, so give it to one{unread}");
                 }
             }
 
-            if (Meeting(item.Owned, item.Forbidden, comparison) is var (owned, forbidden))
+            if (Meeting(startTree, (item.Writes, item.Kept), (item.Owned, item.Forbidden), comparison) is var (owned, forbidden, kept))
             {
-                problems.Add($"work item '{item.Name}' owns '{owned}' and must not touch '{forbidden}', which match the same paths: an item's forbidden paths are kept by the paths it owns{Unread(startTree, item.Writes, item.Kept, comparison)}");
+                problems.Add($"work item '{item.Name}' owns '{owned}' and must not touch '{forbidden}', which match the same paths: an item's forbidden paths are kept by the paths it owns{kept}");
             }
 
             // What the main tree holds now is asked of the items the check introduces or changes alone.
@@ -425,12 +426,22 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
         => GlobPattern.WrittenFor(item.Writes.Select(entry => (entry.Pattern, entry.Text)), [path], comparison) is { } said ? $"; {said}" : string.Empty;
 
     /// <summary>
-    /// What the start tree says of two lists of entries found to meet, as a clause after a semicolon: where it could not be
-    /// read, and the entries meet only because every path was taken for one of its directories (<see cref="TreeDirectories.UnreadForMeeting"/>)
-    /// - read narrowly, as what may be written beneath them, they would not - why; empty otherwise.
+    /// The pair two lists of entries are said to meet at, with what the start tree says of it as a clause after a
+    /// semicolon: the first pair, in the order written, that meets read narrowly - as what may be written beneath each
+    /// (<paramref name="narrow"/>) - which meets whatever the tree holds and is said with nothing of it; and only where none
+    /// does, the first that meets read wide - every path the tree could not answer for taken for one of its directories
+    /// (<paramref name="wide"/>) - with why, where the tree could not be read (<see cref="TreeDirectories.UnreadForMeeting"/>).
+    /// So a conflict that is real is never hidden behind one the unread tree alone made, and one it made is never said
+    /// without why. Null where no pair meets either way; where the tree was read, the two readings are one.
     /// </summary>
-    private static string Unread(TreeDirectories startTree, IReadOnlyList<(string Text, GlobPattern Pattern)> left, IReadOnlyList<(string Text, GlobPattern Pattern)> right, StringComparison comparison)
-        => startTree.UnreadForMeeting is { } said && Meeting(left, right, comparison) is null ? $"; {said}" : string.Empty;
+    private static (string Left, string Right, string Unread)? Meeting(
+        TreeDirectories startTree,
+        (IReadOnlyList<(string Text, GlobPattern Pattern)> Left, IReadOnlyList<(string Text, GlobPattern Pattern)> Right) narrow,
+        (IReadOnlyList<(string Text, GlobPattern Pattern)> Left, IReadOnlyList<(string Text, GlobPattern Pattern)> Right) wide,
+        StringComparison comparison)
+        => Meeting(narrow.Left, narrow.Right, comparison) is var (left, right) ? (left, right, string.Empty)
+            : Meeting(wide.Left, wide.Right, comparison) is var (wideLeft, wideRight) ? (wideLeft, wideRight, startTree.UnreadForMeeting is { } said ? $"; {said}" : string.Empty)
+            : null;
 
     /// <summary>
     /// An entry an item owns that names no directory of the run's start tree, read for what may be written beneath it - a
