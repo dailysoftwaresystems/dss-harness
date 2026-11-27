@@ -4532,7 +4532,10 @@ counted - each naming its steps and its numbers, their thresholds keys of `defau
 (`FlowReportThresholds.Of`) for every report of the run. The session's end writes this same report
 (`FlowReports.Write` keeps its place; `report.json` is the document with the session's own members - its line, its
 code, its end and its handoffs - beside it, `report.md` its sections with the session's own words at its head and its
-questions, updates, handoffs and what is left for a person said in full), and `read-orchestrator-report <run>`
+questions, updates, handoffs and what is left for a person said in full - each open question with its recommendation
+and its next step (`FlowReports.NextStepOf`): `answer-orchestrator <run> <answer> --question <id>`, or, where it still
+owes the recommendation it is answered with (`FlowAnswerRules.OwesRecommendation`) - a stop or a crash left it -
+`resume-orchestrator <run>`, which seeks it first, for the answer command refuses any answer but `abort` until then), and `read-orchestrator-report <run>`
 answers it any time - reads only, its `--json` the code, the line and the report on every exit (the report null where
 the read stopped early), with `--steps` keeping the rows to named instances (one the run does not hold refused,
 named), `--by` regrouping the dollars in every form and `--top` bounding the signal lists.
@@ -4664,11 +4667,19 @@ recommendation `cancelled`), the asking step not admitted again until the advice
 leaves running does, the session waiting for it, and its recommendation is kept (`PauseInOrderAsync` ends no advice), so
 a resume that comes back to a pause - the budget's, whose question is still open (`CheckBudget`) - pays for each advice
 once; a stop ends it (`DeferAdvice` from `ApplyTheStop`, `BeginHardStop` through the session's advice stop), the
-question `deferred`, and a session's end ends and waits for whatever is left (`EndAdviceAsync`); a recommendation
+question `deferred` - a stop once the pause is complete among them, which is what `--all` is for the machine steps
+(`RequestStop` ending the session's advice stop and marking the stop, the loop's `DeferAdvice` taking each asking), and
+after which the complete pause starts no advice (`AdviseThePause` leaving each question owing one to the resume, deferred),
+so the stop never waits on an advisor - and a session's end ends and waits for whatever is left (`EndAdviceAsync`); a recommendation
 obtained is written with who gave it and where its records are, none obtained said so, and what every advice spent - an
-ended one's among them, counted from its turns (`AgentRunSpend`) - is counted in the run's spend, each held to what is
-left of the run's dollars as a step is, the loop going round once it takes one so an advice that spends the run to its
-budget's reserve pauses it at once (`TakeAdviceAsync` answering true, then `CheckBudget`); a bar that cannot be read leaves the question `notObtained` saying why, and a
+ended one's among them, counted from its turns (`AgentRunSpend`) - is counted in the run's spend, the loop going round
+once it takes one so an advice that spends the run to its budget's reserve pauses it at once (`TakeAdviceAsync` answering
+true, then `CheckBudget`), and one taken while the run pauses already asks no second pause (`CheckBudget` does nothing
+while the run is pausing). Every advice is held to its own definition's bounds alone - `maxTurns`, `maxBudgetUsd`,
+`maxMinutes` (`AdvisorRunner`'s `AgentLimits`) - never to what is left of the run's dollars, which a reason step's launch
+is held to (`FlowRunBudget.Bound`): an asking carries nothing of the run's budget (`FlowAdvisorCall`), so a question raised
+once the run is past its reserve - one a complete pause advises (`AdviseThePause`), or a failure owed to a resume - is
+recommended as any other is; a bar that cannot be read leaves the question `notObtained` saying why, and a
 default `recommendations.md` that could not be looked at is never taken for one that is not there
 (`WorkflowNamedFiles.ReadTextIfThere`); an advice owed at a resume - sought by a session a crash ended, deferred by a
 stop or by a pause a stop cut short, the budget's own among them - is sought once the session is known to go on
@@ -4682,13 +4693,13 @@ the pause is the budget's. A person's answer is held to the recommendation by th
 share (`FlowAnswerRules.Unrecommended`): an answer to an open question still owing its recommendation that no advisor
 seeks now is refused, nothing answered, and `abort` taken - by `answer-orchestrator` before anything of the run is
 touched where no engine runs it (13, naming `resume-orchestrator`, which seeks it first), and by the engine as it weighs
-a person's answer (`TryAnswer`): between sessions, as a session begins and where a stop ends it, naming the resume, and
-while a pause under way defers it, naming the pause's completion; an answer given while the advisor works is taken and
+a person's answer (`TryAnswer`): between sessions, as a session begins and where a stop ends it - a stop once the pause
+is complete among them, after which the pause seeks none - naming the resume, and while a pause under way defers it,
+naming the pause's completion; an answer given while the advisor works is taken and
 ends the asking. The budget's own question is asked of the run as a whole - `FlowQuestions.RunsOwn` its
 instance, so its records sit under `steps/run/advice/<n>/` and `{question.step}` reads `run`, no agent's tree held, and
-`{question.record}` the run's facts as `FlowStatus.Facts` gives them (`AdvisorRunner`); held to no share of the budget it
-asks about (`FlowAdvisorCall.BudgetLeftUsd` null), for the spent budget never stops the recommendation on spending
-more; and what it spends is charged on the run's own measure (`FlowBudgetSpent.RunsOwn`), kept in `flow.json` as
+`{question.record}` the run's facts as `FlowStatus.Facts` gives them (`AdvisorRunner`); held, as every advice is, to its
+own definition's bounds alone; and what it spends is charged on the run's own measure (`FlowBudgetSpent.RunsOwn`), kept in `flow.json` as
 `spent.advice` (`FlowBudgetRecord.Advice`), summed with the instances' at a resume and in the report's totals. An
 agent's own questions (`ask`, and a `pause` step's shown questions) carry their recommendation within them and are
 never advised, nor is one its `preAnswer` or its configuration answers at once (weighed before the advisor is sought),
@@ -5306,7 +5317,9 @@ over the same facts. The facts are the engine's (`FlowStatus`, pure, over the re
 methods `list-orchestrator` reads: `flow.json`, `questions.json`, `updates.json`, the frozen
 `definition.json` and the run's owner), computed and never guessed, stamped with the moment they
 were read: how the run stands and for how long, its engine and its pause; each step instance in
-progress; what it waits for - each open question with the command that answers it, a plan update
+progress; what it waits for - each open question with the command that answers it, or, where no engine runs the run and
+the question still owes its recommendation (`FlowAnswerRules.OwesRecommendation`), the resume, which seeks it first, `abort`
+alone taken now - a plan update
 under way or queued, an instance waiting on another, on a claim or room, or on the fix of an issue that holds a file its
 work item owns or that the item needs, a `ci-wait` reading the
 checks of the commit the run last pushed; what is done and what was spent of the budget; what is

@@ -20,7 +20,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// there, whatever agent the asking step names or none, and the run's own question's under the run's own name among the
 /// steps' (<see cref="FlowQuestions.RunsOwn"/>) - and held to the engine's own schema for an advice, in the
 /// subset every answer is held to, whose <c>answer</c> the schema itself refuses unless it is one of the question's and
-/// whose <c>text</c> it asks for exactly where the answer takes one.
+/// whose <c>text</c> it asks for exactly where the answer takes one - and bounded by its own definition alone
+/// (<c>maxTurns</c>, <c>maxBudgetUsd</c>, <c>maxMinutes</c>), never by the run's budget or its reserve.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
@@ -211,9 +212,13 @@ public sealed class AdvisorRunner(
             workspace,
             OutputOf(call),
             Conversation: null,
+
+            // The advice is held to its own definition's bounds alone, never to what is left of the run's budget: a
+            // question raised once the run is past its reserve is recommended as any other is, and what the advice spends
+            // is counted in the run's spend all the same.
             new AgentLimits(
                 definition.MaxTurns,
-                FlowRunBudget.Bound(definition.MaxBudgetUsd, call.BudgetLeftUsd),
+                definition.MaxBudgetUsd,
                 definition.MaxMinutes is { } minutes ? TimeSpan.FromMinutes(minutes) : null,
                 definition.StallSeconds,
                 place.Definition.HandoffSeconds),

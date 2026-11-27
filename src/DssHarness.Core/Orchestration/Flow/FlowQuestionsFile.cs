@@ -325,7 +325,7 @@ public static class FlowAnswerRules
     /// <param name="question">The question's id.</param>
     /// <param name="answer">The answer given.</param>
     /// <param name="owedUnsought">Whether the question owes its recommendation (<see cref="OwesRecommendation"/>) and no advisor is seeking it now.</param>
-    /// <param name="pausing">Whether a session of the run is pausing, which seeks the recommendation once its pause is complete; false between sessions, as a session begins, and where a stop ends it.</param>
+    /// <param name="pausing">Whether a session of the run is pausing, which seeks the recommendation once its pause is complete; false between sessions, as a session begins, and where a stop ends it - a stop once the pause is complete among them, after which the pause seeks none.</param>
     public static string? Unrecommended(string? run, string question, string answer, bool owedUnsought, bool pausing)
     {
         if (!owedUnsought || answer == "abort")

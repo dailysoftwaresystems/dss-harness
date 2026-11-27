@@ -47,6 +47,54 @@ public sealed class FlowReportsTests
     }
 
     /// <summary>
+    /// Each open question is left for a person with the next step it takes: a question a stop or a crash left owing the
+    /// recommendation it is answered with names resume-orchestrator, which seeks it first - answer-orchestrator refuses
+    /// any answer but abort until then - while a question recommended, and an agent's own, which carries its own, name
+    /// the answer itself. A question answered already is left for nobody.
+    /// </summary>
+    [Fact]
+    public void EveryOpenQuestion_IsLeftForAPerson_WithItsNextStep_TheResumeWhereItOwesItsRecommendation()
+    {
+        var layout = OrchestratorLayout.Of(new HarnessLayout("/repo", "/repo"), "r1");
+        var file = new FlowFile(
+            1,
+            "r1",
+            "flow",
+            "digest",
+            new Dictionary<string, string>(),
+            "Stopped",
+            new FlowBudgetRecord(0, 0, 0),
+            0,
+            [],
+            [],
+            DateTimeOffset.UnixEpoch);
+        FlowQuestionEntry Open(string id, string kind, FlowRecommendation recommendation, string state = "open")
+            => new(id, state, kind, DateTimeOffset.UnixEpoch, [], [new FlowQuestionOption("retry", "the step runs again as a new attempt")], [], ProblemShown: new FlowQuestionProblem($"'{id}' happened"), Recommendation: recommendation);
+        var questions = new FlowQuestionsFile(
+            1,
+            "r1",
+            DateTimeOffset.UnixEpoch,
+            [
+                Open("q1", "failure", new FlowRecommendation("deferred", Why: "the run was stopped while the advisor ran: the recommendation is sought when the run is resumed with this question still open")),
+                Open("q2", "turnLimit", new FlowRecommendation("given", "retry", Why: "the step was nearly done", By: "advisor", Agent: "advisor")),
+                Open("q3", "ask", FlowRecommendation.NotSought),
+                Open("q4", "failure", new FlowRecommendation("sought", Why: "a recommendation is being sought from the advisor")),
+                Open("q5", "failure", new FlowRecommendation("deferred", Why: "never read"), state: "answered"),
+            ]);
+
+        Assert.Equal(
+            [
+                "question q1 (failure) is open: 'q1' happened; the run was stopped while the advisor ran: the recommendation is sought when the run is resumed with this question still open - "
+                    + "resume-orchestrator r1 seeks its recommendation first, and answer it with answer-orchestrator r1 <answer> --question q1 then; 'abort' is taken now",
+                "question q2 (turnLimit) is open: 'q2' happened; recommended: 'retry', the step was nearly done - answer with answer-orchestrator r1 <answer> --question q2",
+                "question q3 (ask) is open: 'q3' happened; no recommendation was sought - answer with answer-orchestrator r1 <answer> --question q3",
+                "question q4 (failure) is open: 'q4' happened; a recommendation is being sought from the advisor - "
+                    + "resume-orchestrator r1 seeks its recommendation first, and answer it with answer-orchestrator r1 <answer> --question q4 then; 'abort' is taken now",
+            ],
+            FlowReports.LeftForAPerson(layout, file, questions));
+    }
+
+    /// <summary>
     /// Each path the run's folds changed that git ignores - as its commit steps answered them, once however many did, and
     /// none a later commit took once git no longer ignored it - is left for a person in one line, before the questions and
     /// the loops: folded, ignored by git, never committed, and never in what the run pushed.
