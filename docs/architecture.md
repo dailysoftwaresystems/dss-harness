@@ -679,17 +679,22 @@ git's messages are matched in two places only: telling "not a repository" apart 
 "git could not look", and "not a gitdir" apart from the same when a directory among a
 worktree's submodule repositories is examined - both questions - and a workflow source's fetch
 or listing telling "not there" from "not reached". Every git the tool starts runs with
-`LC_ALL=C` but one git runs a repository's hooks for, set at the one place for every git start
-(`GitOwnSettings.Untranslated`) - the client's (`GitOwnSettings.Apply`), the question that names
-the variables every git is started without (`GitLocalVariables`), and the isolation probe's
-`git --version` alike - never by a caller: a question is answered in the words being matched.
-The commands git runs hooks for keep the person's locale, whether a hook runs or not, so a hook
+`LC_ALL=C` but one that runs a repository's hooks on purpose (a commit step's commit, a push) and
+one git runs them for, set at the one place for every git start (`GitOwnSettings.Untranslated`) -
+the client's (`GitOwnSettings.Apply`), the question that names the variables every git is started
+without (`GitLocalVariables`), and the isolation probe's `git --version` alike - never by a caller:
+a question is answered in the words being matched. Those commands keep the person's locale, the
+ones git runs hooks for whether a hook runs or not, so a hook
 behaves as in their shell - a JVM tool's file names, Ruby's default encoding, a shell's
 character classes and lengths, a server's hooks over ssh that `SendEnv LC_*` would forward to -
 and their messages reach the person in their language: each command `githooks(5)` names as
 running one (`GitHooks.Runners` - `am`, `commit`, `merge`, `pull`, `rebase`, `cherry-pick`,
 `revert`, `checkout`, `switch`, `clone`, `worktree add`, `push`, `receive-pack`, `send-email`,
-`gc`, `p4 submit`), by its subcommand after git's own options (`GitHooks.MayRun`). The two hooks
+`gc`, `p4 submit`), by its subcommand after git's own options (`GitHooks.MayRun`), read by the one
+grammar of them the agents' policy reads too (`GitGlobalOptions.SubcommandAt`): each option that
+takes the next word as its value - `-C`, `-c`, `--config-env`, `--git-dir`, `--work-tree`,
+`--namespace` and the other long ones that name a place or a list - is passed over with it, so
+`git --git-dir /r/.git commit` is a commit, never a command named `/r/.git`. The two hooks
 it names no command for - reference-transaction, which any command that moves a ref runs, and
 post-index-change, which any that writes the index runs - make no command one of them: every
 command that writes would be, and no git of the tool's runs a hook but where it runs them on

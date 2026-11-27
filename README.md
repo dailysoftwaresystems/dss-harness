@@ -1677,8 +1677,8 @@ and fails there, as does one signed with an ssh key under MXC. One signed with a
 key itself (`key::` and its line) and keep the private key in the agent. A commit's and a push's hooks run in
 the person's own locale, as in their shell: each git command git runs hooks for - a commit, a merge, a rebase,
 a cherry-pick, a revert, a checkout or switch, a clone, a worktree added, a push, `am`, a pull - keeps the locale
-the tool was started with, whether it runs them or not, and every other git of the tool's runs untranslated
-(`LC_ALL=C`). Every git command of this tool's but a commit step's commit and a push
+the tool was started with, whether it runs them or not, whatever git options stand before the command
+(`git --git-dir <dir> commit` is a commit), and every other git of the tool's runs untranslated (`LC_ALL=C`). Every git command of this tool's but a commit step's commit and a push
 runs none of the repository's hooks - `core.hooksPath` pointed at the null device (`GitHooks`),
 set as every git of the tool's sets its own settings, through `GIT_CONFIG_PARAMETERS` - so a fold, a
 refresh, a rebase, a sync or a question of the tool's never runs the agents' work as a side effect of
