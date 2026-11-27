@@ -59,8 +59,8 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Equal(WorkflowTemplates.ShippedWorkflowName, definition.Name);
         Assert.Equal(99, Count(definition.Steps));
-        Assert.Equal(67, Count(definition.Recover!.Steps));
-        Assert.Equal(62, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
+        Assert.Equal(65, Count(definition.Recover!.Steps));
+        Assert.Equal(61, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
         Assert.Equal(6, definition.Inputs.Count);
         Assert.Contains(definition.Inputs, input => input.Name == "finalTests" && input.Default == "affected");
         Assert.Equal(["affected", "all"], definition.Inputs.Single(input => input.Name == "finalTests").Options);
@@ -841,8 +841,9 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
-    /// The shipped flow declares its texts - the bar for recommendations and its closure, the universe a repository's
-    /// decisions range over - and <c>init</c> writes <c>closure.md</c> once and never over a repository's own, exactly
+    /// The shipped flow declares its texts - the bar for recommendations, the one saying of what an issue being fixed is
+    /// to the work items, and its closure, the universe a repository's decisions range over - and <c>init</c> writes
+    /// <c>closure.md</c> once and never over a repository's own, exactly
     /// as it keeps <c>recommendations.md</c>: the file is the repository's from the day it is written.
     /// </summary>
     [Fact]
@@ -855,6 +856,7 @@ public sealed class WorkflowTemplatesTests
             {
                 ["recommendations"] = "recommendations.md",
                 ["closure"] = "closure.md",
+                ["fixes"] = "fixes.md",
             },
             definition.Texts);
         Assert.Null(definition.Recommendations);
