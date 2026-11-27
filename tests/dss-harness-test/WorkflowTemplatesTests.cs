@@ -1340,7 +1340,7 @@ public sealed class WorkflowTemplatesTests
             StringComparison.Ordinal);
         Assert.Contains(
             "An issue joined to another, being triaged or being fixed, takes no visit of its own: it goes with that issue's fix - waiting for its triage, where it is still triaged - and a visit whose diagnosis began after the join reads every issue joined to it as source.joined, each with its id, its end settling all of them, run.preExisting saying each 'fixed with <id>' and a step one of them stopped running again. "
-                + "One that joined while a visit of that fix was diagnosing takes a visit of its own once that visit has fixed it, and one joined to an issue fixed already takes one at once, each reading what that fix did as source.joinedTo; and where the issue it joined ends without a fix, it is triaged again on its own.",
+                + "One that joined while a visit of that fix was diagnosing takes a visit of its own once that visit has fixed it, and one joined to an issue fixed already takes one at once, each reading what that fix did as source.joinedTo; and where the issue it joined ends without a fix, it is triaged again on its own - as a duplicate is where the triage of the issue it repeats ends without a decision, its failure passed over, so neither is lost.",
             help,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1352,7 +1352,7 @@ public sealed class WorkflowTemplatesTests
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
-            "One that joins while a visit of that fix is already diagnosing takes a visit of its own once that visit has fixed it, told what it fixed, and one that joins an issue fixed already takes one at once, told the same; and where the issue it joined ends without a fix, it is triaged again on its own.",
+            "One that joins while a visit of that fix is already diagnosing takes a visit of its own once that visit has fixed it, told what it fixed, and one that joins an issue fixed already takes one at once, told the same; and where the issue it joined ends without a fix, it is triaged again on its own - as a duplicate is where the triage of the issue it repeats ends without a decision, failed with its failure passed over, so neither is lost.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1368,11 +1368,15 @@ public sealed class WorkflowTemplatesTests
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            "A triage is told, where it starts, only those it may name - each taken before its own (`TakenBefore`), the tally's whose triage was and those being triaged - with the ids of those it may join (`JoinableBy`: of those, each whose issue had not ended without a fix as it began, `EndedWithoutAFixBefore` - being triaged, being fixed or fixed), both read from the rules its answer is refused by,",
+            "A triage is told, where it starts, only those it may name - each taken before its own (`TakenBefore`), the tally's whose triage was and those being triaged - with the ids of those it may join (`JoinableBy`: of those, each whose issue had not ended without a fix as it began, `NamedEndedBefore` - being triaged, being fixed or fixed), both read from the rules its answer is refused by,",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            "the joined issue is triaged again on its own: `SettleJoins` raises a triage of the same step for it, as its reporter's report raised the first, the records saying why,",
+            "the joined issue is triaged again on its own: `SettleNamedIssues` raises a triage of the same step for it, as its reporter's report raised the first, the records saying why,",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A duplicate is treated so too where the issue it repeats ends without a decision - its triage failed, its failure passed over, was skipped or never ran - for no issue is lost with the one it named: one owner, `NamedEnd`, says what a name of another's issue leads to and where that issue ended without what the name needs - a fix for a join (`NotFixedIn`), a decision for a duplicate (`UndecidedIn`),",
             architecture,
             StringComparison.Ordinal);
     }

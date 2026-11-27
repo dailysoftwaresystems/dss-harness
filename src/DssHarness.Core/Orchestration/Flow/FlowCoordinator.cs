@@ -3869,7 +3869,7 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Everything the coordinator decides between two events, until nothing more follows: instantiate what its
     /// dependencies freed, end what its members finished, carry failures to their policies, a stopping run's reach, the
-    /// joins a fix went on without (<see cref="SettleJoins"/>) and the fixes that waited for a visit no longer at work
+    /// issues named after another's the run went on without (<see cref="SettleNamedIssues"/>) and the fixes that waited for a visit no longer at work
     /// (<see cref="DrainPendingFixes"/>) - and then draw what it all freed and the pass ends (<see cref="DrawFreed"/>).
     /// </summary>
     private void Progress()
@@ -3888,7 +3888,7 @@ public sealed class FlowCoordinator
             changed |= EndGroups();
             changed |= CarryTheStop();
             changed |= SettleUpdates();
-            changed |= SettleJoins();
+            changed |= SettleNamedIssues();
             changed |= DrainPendingFixes();
         }
 
@@ -7992,13 +7992,14 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Whether a triage instance holds its issue for a repeat of it: one waiting, running, paused on a question, stopped
     /// to run again, or ended done, whatever it answered - a repeat met after the issue's fix was done is never offered
-    /// to the triage whose fix that was (<see cref="HolderOf"/>) - save one whose join a fix ended without, whose issue a
-    /// triage of its own holds now (<see cref="Joining.Again"/>). A triage that failed, was skipped or never ran triaged
-    /// nothing, and holds nothing.
+    /// to the triage whose fix that was (<see cref="HolderOf"/>) - save one that named another's issue which ended without
+    /// what the name needs, a join's fix or a repeated issue's decision, whose issue a triage of its own holds now
+    /// (<see cref="OwesATriageOfItsOwn"/>). A triage that failed, was skipped or never ran triaged nothing, and holds
+    /// nothing.
     /// </summary>
     private bool HoldsIssue(FlowInstance triage)
         => triage.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped
-            || triage.State == FlowInstanceState.Done && (CourseOf(triage) != JoinCourse || JoiningOf(triage).Fate != Joining.Again);
+            || triage.State == FlowInstanceState.Done && !OwesATriageOfItsOwn(triage, out _);
 
     /// <summary>
     /// Whether <paramref name="reporter"/> met <paramref name="issue"/> after a fix of it was done: a visit of the recovery
@@ -8108,12 +8109,12 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Why a triage instance may not name <paramref name="id"/>, as the issue its own repeats or whose root cause it shares
     /// - one taken before its own (<see cref="TakenBefore"/>), so no two issues ever name each other and neither is lost -
-    /// or, for a join, one whose issue had ended without a fix before it began (<see cref="EndedWithoutAFixBefore"/>), so
-    /// an issue a join sent to be triaged again on its own never joins the same fix twice; null where it may. A join to an
-    /// issue being triaged, being fixed or fixed already is taken: one fixed already gives the joined issue a visit of its
-    /// own, told what that fix did (<see cref="Joining.Due"/>). An id the run gave an issue its triage listed or owed the
-    /// next round may be repeated where that triage was taken before - or where the records name none - and is joined by
-    /// no issue, for only a fix is joined.
+    /// or one whose issue had ended without what the name needs before it began (<see cref="NamedEndedBefore"/>): for a
+    /// join a fix, for a duplicate a decision, so an issue triaged again on its own never names the same one twice; null
+    /// where it may. A join to an issue being triaged, being fixed or fixed already is taken: one fixed already gives the
+    /// joined issue a visit of its own, told what that fix did (<see cref="Joining.Due"/>). An id the run gave an issue its
+    /// triage listed or owed the next round may be repeated where that triage was taken before - or where the records
+    /// name none - and is joined by no issue, for only a fix is joined.
     /// </summary>
     /// <param name="instance">The triage instance, ending.</param>
     /// <param name="field">The member of its answer that names the issue.</param>
@@ -8133,9 +8134,11 @@ public sealed class FlowCoordinator
             return $"its answer's {field} names '{id}', which was not taken before its own issue: an issue names only one taken before it";
         }
 
-        return joining && EndedWithoutAFixBefore(instance, named!)
-            ? $"its answer joins '{id}', which had ended without a fix before it began: an issue joins only one being triaged, being fixed or fixed"
-            : null;
+        return named is null || !NamedEndedBefore(instance, named, joining)
+            ? null
+            : joining
+                ? $"its answer joins '{id}', which had ended without a fix before it began: an issue joins only one being triaged, being fixed or fixed"
+                : $"its answer's duplicates names '{id}', which had ended without triaging its issue before it began: an issue repeats only one being triaged or triaged";
     }
 
     /// <summary>Whether <paramref name="instance"/> is a triage instance: raised for a pre-existing issue, which it holds.</summary>
@@ -8160,16 +8163,6 @@ public sealed class FlowCoordinator
     private FlowInstance? TookUnder(string id)
         => _tally.FirstOrDefault(entry => string.Equals(entry.Id, id, StringComparison.Ordinal))?.Triage;
 
-    /// <summary>
-    /// Whether the issue <paramref name="named"/>, a triage taken before <paramref name="asking"/>, leads a join to - the
-    /// one it holds, or the one its own join leads to (<see cref="RootFrom"/>) - had ended without a fix before
-    /// <paramref name="asking"/>'s attempt began, in the run's own order (<see cref="NotFixedIn"/>): the one rule of which
-    /// issues a triage may join, which its refusal (<see cref="NamedIssueRefusal"/>) and what it is told it may join
-    /// (<see cref="JoinableBy"/>) both read. One being triaged, being fixed or fixed already may be joined.
-    /// </summary>
-    private bool EndedWithoutAFixBefore(FlowInstance asking, FlowInstance named)
-        => RootFrom(asking, named) is { } root && NotFixedIn(root) is > 0 and var ended && ended < asking.AttemptBegan;
-
     /// <summary>The course a triage instance answered; null where its answer says none as text.</summary>
     private static string? CourseOf(FlowInstance triage)
         => TextOf(triage.Output?["course"]);
@@ -8191,7 +8184,7 @@ public sealed class FlowCoordinator
     /// the end's one write carries them, in the one order: list adds it to the run's file, fix counts it being fixed,
     /// join counts it with the fix it joins (<see cref="JoiningOf"/>), duplicate and unproven are counted and not listed.
     /// What fix gives the recovery waits for the end (<see cref="FixOf"/>), and what becomes of a join for the fix it
-    /// joined (<see cref="SettleJoins"/>).
+    /// joined, or of a duplicate for the triage it repeats, the run settles as it goes on (<see cref="SettleNamedIssues"/>).
     /// </summary>
     private void TriageOf(FlowInstance instance)
     {
@@ -8306,7 +8299,8 @@ public sealed class FlowCoordinator
     /// Whether <paramref name="triage"/> may yet have the recovery fix its issue - the issue is being triaged or being
     /// fixed: the triage has not ended, or it waits on a question; or it sent the issue to fix, and that fix waits for a
     /// visit, has none made yet, or has one at work; or it joined the issue to another's fix, which has not ended
-    /// (<see cref="JoiningOf"/>), or ended without it, the issue owed a triage of its own that is not raised yet.
+    /// (<see cref="JoiningOf"/>), or ended without it - or repeated another's whose triage ended without a decision - the
+    /// issue owed a triage of its own that is not raised yet (<see cref="OwesATriageOfItsOwn"/>).
     /// </summary>
     private bool MayStillFix(FlowInstance triage)
     {
@@ -8334,6 +8328,8 @@ public sealed class FlowCoordinator
                     Joining.Again => !TriagedAgain(triage),
                     _ => true,
                 };
+            case "duplicate":
+                return OwesATriageOfItsOwn(triage, out _) && !TriagedAgain(triage);
             default:
                 return false;
         }
@@ -8503,11 +8499,11 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The ids of the issues <paramref name="asking"/>, a triage, may join, in the order they were taken: each taken before
     /// its own (<see cref="TakenBefore"/>) whose issue had not ended without a fix as it began
-    /// (<see cref="EndedWithoutAFixBefore"/>) - being triaged, being fixed, or fixed already - read from the rules its
-    /// answer is refused by (<see cref="NamedIssueRefusal"/>), so it is offered every id it may join and no other.
+    /// (<see cref="NamedEndedBefore"/>) - being triaged, being fixed, or fixed already - read from the rules its answer is
+    /// refused by (<see cref="NamedIssueRefusal"/>), so it is offered every id it may join and no other.
     /// </summary>
     private List<string> JoinableBy(FlowInstance asking)
-        => [.. TakenBefore(asking).Where(triage => !EndedWithoutAFixBefore(asking, triage)).Select(triage => triage.Id)];
+        => [.. TakenBefore(asking).Where(triage => !NamedEndedBefore(asking, triage, joining: true)).Select(triage => triage.Id)];
 
     /// <summary>
     /// One issue of the tally as <c>{run.preExisting}</c> and every step told the issues say it: its id, what became of it
@@ -8563,17 +8559,17 @@ public sealed class FlowCoordinator
             return (Joining.Own, null);
         }
 
-        if (RootOf(joined) is not { } root)
+        // Where the issue it joined ended without a fix, or it leads to none, the join is owed a triage of its own.
+        var (root, ended) = NamedEnd(joined, JoinedTo(joined), joining: true);
+
+        if (root is null || ended > 0)
         {
-            return (Joining.Again, null);
+            return (Joining.Again, root);
         }
 
-        switch (FateOf(root))
+        if (FateOf(root) == IssueFate.BeingTriaged)
         {
-            case IssueFate.BeingTriaged:
-                return (Joining.Waits, root);
-            case IssueFate.NotFixed:
-                return (Joining.Again, root);
+            return (Joining.Waits, root);
         }
 
         var visits = RecoveriesOf(root).ToList();
@@ -8677,6 +8673,107 @@ public sealed class FlowCoordinator
         return null;
     }
 
+    /// <summary>The triage instance whose issue <paramref name="duplicate"/>'s answer repeats, by its <c>duplicates</c>; null where it names none of the run's triages - a listed issue's id, or one owed the next round's.</summary>
+    private FlowInstance? RepeatedOf(FlowInstance duplicate)
+        => DuplicateOf(duplicate) is { } id && _instances.TryGetValue(id, out var named) && IsTriage(named) ? named : null;
+
+    /// <summary>
+    /// The issue a duplicate of <paramref name="at"/> by <paramref name="duplicate"/> repeats in the end: the one named, or -
+    /// where that one is a duplicate in its turn - the one it repeats, and so on; null where it leads to none of the run's
+    /// triages, or round. Every one walked is kept, so a chain that turns on itself ends.
+    /// </summary>
+    private FlowInstance? RepeatedFrom(FlowInstance duplicate, FlowInstance? at)
+    {
+        var seen = new HashSet<FlowInstance>(ReferenceEqualityComparer.Instance) { duplicate };
+
+        for (; at is not null; at = RepeatedOf(at))
+        {
+            if (!seen.Add(at))
+            {
+                return null;
+            }
+
+            if (at.State != FlowInstanceState.Done || CourseOf(at) != "duplicate")
+            {
+                return at;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// What a name of <paramref name="named"/>'s issue by <paramref name="naming"/>, a triage, leads to - as the issue its
+    /// own repeats, or, for <paramref name="joining"/>, the one whose root cause it shares (<see cref="RepeatedFrom"/>,
+    /// <see cref="RootFrom"/>) - and where in the run's own order that issue ended without what the name needs of it: for
+    /// a join, a fix (<see cref="NotFixedIn"/>); for a duplicate, a decision - its triage failed, was skipped or never ran,
+    /// and asks nothing - for an issue another triage decided on is held by that decision, whatever it was. 0 where it has
+    /// not. The one owner of what becomes of an issue named after another that ended so: a triage that begins after it
+    /// may not name it (<see cref="NamedEndedBefore"/>), and one that named it before is triaged again on its own
+    /// (<see cref="OwesATriageOfItsOwn"/>) - a join and a duplicate alike, so neither issue of the two is lost.
+    /// </summary>
+    /// <param name="naming">The triage that names it.</param>
+    /// <param name="named">The triage whose issue it names; null where its answer names none of the run's.</param>
+    /// <param name="joining">Whether it joins the issue, rather than repeats it.</param>
+    private (FlowInstance? Root, long EndedIn) NamedEnd(FlowInstance naming, FlowInstance? named, bool joining)
+    {
+        var root = joining ? RootFrom(naming, named) : RepeatedFrom(naming, named);
+
+        return (root, root is null ? 0 : joining ? NotFixedIn(root) : UndecidedIn(root));
+    }
+
+    /// <summary>
+    /// Where in the run's own order <paramref name="root"/>, a triage, ended without deciding what becomes of its issue -
+    /// it failed, was skipped or never ran, and waits on no question (<see cref="IssueFate.NotFixed"/>, never having ended
+    /// done) - its end, or 1 where its record says none; 0 where it has not.
+    /// </summary>
+    private long UndecidedIn(FlowInstance root)
+        => root.State != FlowInstanceState.Done && FateOf(root) == IssueFate.NotFixed ? Math.Max(root.EndedIn, 1) : 0;
+
+    /// <summary>
+    /// Whether the issue <paramref name="named"/>, which <paramref name="asking"/> - a triage - would name, had ended
+    /// without what the name needs of it before <paramref name="asking"/>'s attempt began (<see cref="NamedEnd"/>): the
+    /// one rule of which issues a triage may no longer name, which its refusal (<see cref="NamedIssueRefusal"/>) and what
+    /// it is told it may join (<see cref="JoinableBy"/>) both read - so an issue triaged again on its own never names the
+    /// one it named before again. One being triaged, being fixed or fixed already may be joined, and one being triaged or
+    /// decided may be repeated.
+    /// </summary>
+    private bool NamedEndedBefore(FlowInstance asking, FlowInstance named, bool joining)
+        => NamedEnd(asking, named, joining).EndedIn is > 0 and var ended && ended < asking.AttemptBegan;
+
+    /// <summary>
+    /// Whether <paramref name="named"/>, a triage that ended done naming another's issue - as the one whose root cause its
+    /// own shares (<c>join</c>) or the one its own repeats (<c>duplicate</c>) - is owed a triage of its own again: the issue
+    /// it named ended without what the name needs of it (<see cref="NamedEnd"/>), a join's without a fix
+    /// (<see cref="Joining.Again"/>), a duplicate's without a decision. Its issue is then held by none but that new
+    /// triage (<see cref="HoldsIssue"/>), the run's words of it leave it out (<see cref="StateOf"/>), and the triage is
+    /// raised (<see cref="SettleNamedIssues"/>): the one owner of what becomes of an issue named after another that ended
+    /// so, read from the run's state alone.
+    /// </summary>
+    /// <param name="named">The triage.</param>
+    /// <param name="root">The issue it leads to, where it leads to one.</param>
+    private bool OwesATriageOfItsOwn(FlowInstance named, out FlowInstance? root)
+    {
+        root = null;
+
+        if (named.State != FlowInstanceState.Done)
+        {
+            return false;
+        }
+
+        switch (CourseOf(named))
+        {
+            case JoinCourse:
+                (var fate, root) = JoiningOf(named);
+                return fate == Joining.Again;
+            case "duplicate" when RepeatedOf(named) is { } repeated:
+                (root, var ended) = NamedEnd(named, repeated, joining: false);
+                return ended > 0;
+            default:
+                return false;
+        }
+    }
+
     /// <summary>
     /// Whether <paramref name="joined"/> goes with <paramref name="visit"/>, a visit of the fix it joined: the visit's
     /// diagnosis - its first step to begin - began after the join ended, in the run's own order, or has not begun; a
@@ -8701,8 +8798,15 @@ public sealed class FlowCoordinator
     /// recovery, whose key reads what each visit fixed (<see cref="RecoveryOf"/>) - and no rebuild has an order to keep.
     /// </summary>
     private IEnumerable<FlowInstance> Joins()
+        => NamingAnother().Where(named => CourseOf(named) == JoinCourse);
+
+    /// <summary>
+    /// Every triage that ended done naming another's issue - joining it (<see cref="Joins"/>) or repeating it - in the order
+    /// they ended, read from the run's state alone as the joins are.
+    /// </summary>
+    private IEnumerable<FlowInstance> NamingAnother()
         => _created
-            .Where(created => IsTriage(created) && created.State == FlowInstanceState.Done && CourseOf(created) == JoinCourse)
+            .Where(created => IsTriage(created) && created.State == FlowInstanceState.Done && CourseOf(created) is JoinCourse or "duplicate")
             .OrderBy(created => created.EndedIn);
 
     /// <summary>
@@ -8715,26 +8819,28 @@ public sealed class FlowCoordinator
             : RecoveriesOf(triage);
 
     /// <summary>
-    /// Whether the issue of <paramref name="joined"/>, whose join a fix ended without, has a triage of its own again: one
-    /// of the same step its reporter raised after it, for the same issue.
+    /// Whether the issue of <paramref name="named"/>, which named another's that ended without what the name needs
+    /// (<see cref="OwesATriageOfItsOwn"/>), has a triage of its own again: one of the same step its reporter raised after
+    /// it, for the same issue.
     /// </summary>
-    private bool TriagedAgain(FlowInstance joined)
-        => _created.Any(again => again.Visit > joined.Visit
-            && again.Step.Name == joined.Step.Name
-            && ReferenceEquals(again.RaisedBy, joined.RaisedBy)
+    private bool TriagedAgain(FlowInstance named)
+        => _created.Any(again => again.Visit > named.Visit
+            && again.Step.Name == named.Step.Name
+            && ReferenceEquals(again.RaisedBy, named.RaisedBy)
             && again.Issue is { } issue
-            && joined.Issue is { } own
+            && named.Issue is { } own
             && SameIssue(issue, own));
 
     /// <summary>
-    /// Settles each join whose fix has gone on without it, once nothing is started for a pause or a stop: an issue whose
-    /// joined fix ended without a fix is triaged again on its own, the triage of the same step raised as its reporter's
-    /// report raised the first, the record saying why; one whose joined fix was done by a visit it did not go with is
-    /// given its own visit, told what that visit fixed (<see cref="FixOf"/>). Each is read from the run's state, so a
-    /// session after a crash settles what the one before left.
+    /// Settles each issue named after another's that the run went on without, once nothing is started for a pause or a
+    /// stop: one whose named issue ended without what the name needs - a joined fix without a fix, a repeated issue's
+    /// triage without a decision (<see cref="OwesATriageOfItsOwn"/>) - is triaged again on its own, the triage of the same
+    /// step raised as its reporter's report raised the first, the record saying why; one whose joined fix was done by a
+    /// visit it did not go with is given its own visit, told what that visit fixed (<see cref="FixOf"/>). Each is read
+    /// from the run's state, so a session after a crash settles what the one before left.
     /// </summary>
     /// <returns>Whether it raised anything.</returns>
-    private bool SettleJoins()
+    private bool SettleNamedIssues()
     {
         if (_pausing || _stopping || _hardStop)
         {
@@ -8743,25 +8849,32 @@ public sealed class FlowCoordinator
 
         var raised = false;
 
-        foreach (var joined in Joins().ToList())
+        foreach (var named in NamingAnother().ToList())
         {
-            switch (JoiningOf(joined))
+            if (OwesATriageOfItsOwn(named, out var root))
             {
-                case (Joining.Again, var root) when !TriagedAgain(joined) && joined.Issue is { } issue:
-                    _ = Create(_top, joined.Step, FlowInstanceState.NotStarted, made: again =>
+                if (!TriagedAgain(named) && named.Issue is { } issue)
+                {
+                    _ = Create(_top, named.Step, FlowInstanceState.NotStarted, made: again =>
                     {
-                        again.RaisedBy = joined.RaisedBy;
+                        again.RaisedBy = named.RaisedBy;
                         again.Issue = issue;
-                        again.ReportedIn = joined.ReportedIn;
+                        again.ReportedIn = named.ReportedIn;
                     });
-                    Record(FlowChangeKind.Step, joined, detail: $"the issue '{TitleOf(joined)}' is triaged again on its own: '{root?.Id ?? TextOf(joined.Output?["joins"])}', whose root cause it joined, ended without a fix");
+                    Record(FlowChangeKind.Step, named, detail: CourseOf(named) == JoinCourse
+                        ? $"the issue '{TitleOf(named)}' is triaged again on its own: '{root?.Id ?? TextOf(named.Output?["joins"])}', whose root cause it joined, ended without a fix"
+                        : $"the issue '{TitleOf(named)}' is triaged again on its own: '{root?.Id ?? DuplicateOf(named)}', whose issue it repeats, ended without triaging it");
                     raised = true;
-                    break;
-                case (Joining.Due, var root):
-                    Record(FlowChangeKind.Step, joined, detail: $"the issue '{TitleOf(joined)}' is given a visit of its own: '{root!.Id}', whose root cause it joined, was fixed by a visit whose diagnosis began before it joined");
-                    FixOf(joined);
-                    raised = true;
-                    break;
+                }
+
+                continue;
+            }
+
+            if (CourseOf(named) == JoinCourse && JoiningOf(named) is (Joining.Due, { } due))
+            {
+                Record(FlowChangeKind.Step, named, detail: $"the issue '{TitleOf(named)}' is given a visit of its own: '{due.Id}', whose root cause it joined, was fixed by a visit whose diagnosis began before it joined");
+                FixOf(named);
+                raised = true;
             }
         }
 
@@ -8855,11 +8968,18 @@ public sealed class FlowCoordinator
     /// the one owner of whether it was - and one its triage joined to another's fix is what that fix made of it
     /// (<see cref="JoiningOf"/>): joined to the issue while that one is triaged, being fixed with it, fixed with it, being
     /// fixed after it while a visit it did not go with works or once that visit fixed it, and being fixed once it has a
-    /// visit of its own; null once that fix ended without it, for the issue is triaged again on its own.
+    /// visit of its own; null for one that named another's issue which ended without what the name needs - a joined fix
+    /// without a fix, a repeated issue's triage without a decision - for the issue is triaged again on its own
+    /// (<see cref="OwesATriageOfItsOwn"/>), and that triage says it.
     /// </summary>
     /// <param name="entry">The issue's tally.</param>
     private string? StateOf(PreExistingTally entry)
     {
+        if (entry.Triage is { } named && OwesATriageOfItsOwn(named, out _))
+        {
+            return null;
+        }
+
         if (entry is { State: JoinedState, Triage: { } joined })
         {
             return JoiningOf(joined) switch
@@ -14176,7 +14296,8 @@ public sealed class FlowCoordinator
                 _tally.Count(entry => entry.State == "listed"),
                 // An issue fixed with the one it joined is fixed, as that one is.
                 _tally.Count(entry => StateOf(entry) is { } state && (state == "fixed" || state.StartsWith("fixed with ", StringComparison.Ordinal))),
-                _tally.Count(entry => entry.State.StartsWith("duplicate", StringComparison.Ordinal)),
+                // A duplicate of an issue whose triage ended without deciding is counted where its own triage again counts it.
+                _tally.Count(entry => StateOf(entry)?.StartsWith("duplicate", StringComparison.Ordinal) == true),
                 _tally.Count(entry => entry.State == "unproven")),
             [.. _issues],
             NextRound: [.. _nextRound]);
@@ -15044,7 +15165,7 @@ public sealed class FlowCoordinator
                     case JoinCourse:
                         // What became of a join is read from the fix it joined, as it is read while the run goes on: fixed
                         // where a visit of its own ended done; and a visit or a triage of its own the join is owed is given
-                        // it in this session's first pass (SettleJoins), which reads the joins from the records (Joins).
+                        // it in this session's first pass (SettleNamedIssues), which reads the joins from the records (Joins).
                         _tally.Add(new PreExistingTally(triage.Id, RecoveriesOf(triage).Any(created => created.State == FlowInstanceState.Done) ? "fixed" : JoinedState, $"{TitleOf(triage)} ({WhereOf(triage)})", triage));
                         break;
                     case "duplicate" or "unproven":

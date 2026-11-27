@@ -2558,8 +2558,9 @@ whose root cause its own shares; see the paragraph on joins below); an answer wh
 list or send to the next round does not read back, or that names an issue it may not (`FlowCoordinator.NamedIssueRefusal`:
 for `duplicates` or `joins`, an issue not taken before its own - a triage instance, or the triage that took one the run
 listed or owes the next round, `TookUnder` - so no two issues ever name each other and both vanish (`TakenBefore`, the
-one owner of the rule); for `joins`, too, an id that names no triage instance, or one whose issue had ended without a
-fix before this triage began, `EndedWithoutAFixBefore`), fails the triage step (12) before it ends. The engine raises it for each issue a reason
+one owner of the rule); for `joins`, too, an id that names no triage instance; and one whose issue had ended without
+what the name needs before this triage began - for `joins` a fix, for `duplicates` a decision, `NamedEndedBefore`),
+fails the triage step (12) before it ends. The engine raises it for each issue a reason
 step's answer reports under `preExisting` (`FlowPreExistingReport.In`, as the shipped schemas spell
 one) - once for an issue: a repeat of the same title at the same place raises nothing while a triage
 of it holds the issue (`FlowCoordinator.HolderOf`: one waiting, running, paused, stopped or ended done,
@@ -2581,7 +2582,7 @@ with its triage's id - so a repeat it would word its own way, which `HolderOf` c
 where it stops its own work, and raises no triage only to be merged as a duplicate. A triage is told, where it starts,
 only those it may name - each taken before its own (`TakenBefore`), the tally's whose triage was and those being
 triaged - with the ids of those it may join (`JoinableBy`: of those, each whose issue had not ended without a fix as it
-began, `EndedWithoutAFixBefore` - being triaged, being fixed or fixed), both read from the rules its answer is refused
+began, `NamedEndedBefore` - being triaged, being fixed or fixed), both read from the rules its answer is refused
 by, so it names the issue it repeats, or the one whose root cause it shares, by the id the run gave it, and is never
 offered one it would be refused for: of two raised together, the earlier is told nothing of the later, which is
 triaged after it and names it where it repeats it, and the pair resolves to the earlier.
@@ -2630,14 +2631,21 @@ whose diagnosis - its first step to begin - began after the join ended, in the r
 and proof) and the visit's end settles it: fixed with that issue, a step it stopped run again as the issue it joined
 would be (`RunTheReporterAgain`, which reads the visits that fixed each issue, `FixesOf`, and sends a reporter no
 redirect the run owes resets already). A join that came while a visit of that fix was diagnosing waits for that visit
-to end and then, once it fixed the issue, takes a visit of its own (`SettleJoins`, a step of every pass, `FixOf`) - as
+to end and then, once it fixed the issue, takes a visit of its own (`SettleNamedIssues`, a step of every pass, `FixOf`) - as
 one to an issue fixed already does at once, a join its refusal takes (`Joining.Due`) - whose
 steps read in `{source.joinedTo}` what that visit did - the issue it joined, by its id, title and where, the visit, and
 the remedy items its checks read. Where the issue it joined ends without a fix - listed, owed the next round,
 unproven, a duplicate, a triage that failed, was skipped or never ran, or a fix given up - the joined issue is triaged
-again on its own: `SettleJoins` raises a triage of the same step for it, as its reporter's report raised the first, the
+again on its own: `SettleNamedIssues` raises a triage of the same step for it, as its reporter's report raised the first, the
 records saying why, and its join holds the issue no more (`HoldsIssue`); a triage that began after that issue had
-ended so is refused a join to it, so the same join is never made twice. A visit fixes every issue that goes with it
+ended so is refused a join to it, so the same join is never made twice. A duplicate is treated so too where the issue
+it repeats ends without a decision - its triage failed, its failure passed over, was skipped or never ran - for no
+issue is lost with the one it named: one owner, `NamedEnd`, says what a name of another's issue leads to and where that
+issue ended without what the name needs - a fix for a join (`NotFixedIn`), a decision for a duplicate (`UndecidedIn`),
+each through the chain of names it leads along - and `OwesATriageOfItsOwn`, read by `SettleNamedIssues`, `HoldsIssue`,
+`MayStillFix` and `StateOf`, gives either its triage of its own; its words leave `{run.preExisting}` and the run's
+counts, which that triage's answer says, and a triage that began after the issue it would repeat had ended so is refused
+the duplicate (`NamedEndedBefore`). A visit fixes every issue that goes with it
 (`IssuesFixedBy`): a fix sent for one of them waits for it as for its own (`FixWaitsFor`), and a report of one met after
 it ended counts against the issue's own bound (`MetAfterItsFix`). Each visit is admitted against the run's own limits,
 as every step is. The tally keeps a joined issue in the place it was taken, its state read where the fix it joined

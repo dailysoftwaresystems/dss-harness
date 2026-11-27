@@ -618,6 +618,107 @@ public sealed class FlowPreExistingTests
         Assert.Equal("its answer joins 'triage', which had ended without a fix before it began: an issue joins only one being triaged, being fixed or fixed", joining.Error);
     }
 
+    /// <summary>A flow whose triage's failure is passed over, as a workflow may say: the run goes on without its answer.</summary>
+    private const string TriageFailurePassedOver = """
+        name: flow
+        steps:
+          - name: think
+            type: reason
+            prompt: work.md
+            outputs: work.json
+            onPreExisting: triage
+          - name: triage
+            type: reason
+            prompt: triage.md
+            outputs: pre-existing.json
+            raised: preExisting
+            onAddress: recover
+            onFailure: continue
+        """;
+
+    /// <summary>
+    /// A duplicate of an issue whose triage then ends without deciding - it fails, its failure passed over - is not lost
+    /// with it: as a join is when the fix it joined ends without one, the duplicate's issue is triaged again on its own,
+    /// told no issue it may name, the run's records saying why, and what that triage answers is what becomes of it - here
+    /// listed, and counted listed, never a duplicate.
+    /// </summary>
+    [Fact]
+    public async Task ADuplicateOfAnIssueWhoseTriageEndsWithoutDeciding_IsTriagedAgainOnItsOwn()
+    {
+        var definition = Parse(TriageFailurePassedOver);
+        var prompts = new Dictionary<string, string>(StringComparer.Ordinal);
+        var repeated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the first hole, worded otherwise")]))
+            .OnAsync("triage", async run =>
+            {
+                lock (prompts)
+                {
+                    prompts[run.Instance] = FlowTemplate.Joined(run.Prompts!["prompt"]);
+                }
+
+                switch (run.Instance)
+                {
+                    case "triage":
+                        // The earlier fails once the later has named it as the issue its own repeats.
+                        await repeated.Task;
+                        return FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the triage's agent failed");
+                    case "triage+2":
+                        return Naming("duplicate", run.Issue!.Title, "duplicates", "triage");
+                    default:
+                        return Course("list", run.Issue!.Title);
+                }
+            });
+        var said = new Said();
+        var watched = new Watched(said, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
+        _ = watched.Seen.ContinueWith(_ => repeated.TrySetResult(), TaskScheduler.Default);
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, _) => "Triage it.");
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["triage"].State);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["triage+2"].State);
+        Assert.Equal(
+            [("think", null), ("triage", "the first hole"), ("triage+2", "the first hole, worded otherwise"), ("triage+3", "the first hole, worded otherwise")],
+            runner.Started);
+        Assert.Contains(("triage+2", "the issue 'the first hole, worded otherwise' is triaged again on its own: 'triage', whose issue it repeats, ended without triaging it"), said.Details);
+
+        // Told nothing: the issue it repeated is held by no triage, and its own earlier duplicate is no issue to name.
+        Assert.Equal("Triage it.", prompts["triage+3"]);
+        Assert.Equal(new WorkflowPreExisting(1, 0, 0, 0), watched.Last!.PreExisting);
+        Assert.Equal("the first hole, worded otherwise", Assert.Single(watched.Last.Issues!).Title);
+    }
+
+    /// <summary>
+    /// A triage that began after the issue it would repeat had ended without a decision may not name it - it was never
+    /// being triaged or triaged while this one looked - so an issue triaged again on its own never repeats the same one
+    /// twice, and a duplicate that never holds is never raised round and round.
+    /// </summary>
+    [Fact]
+    public async Task ADuplicateOfAnIssueWhoseTriageEndedWithoutDecidingBeforeItBegan_FailsTheTriageStep()
+    {
+        var definition = Parse(TriageFailurePassedOver.Replace("name: flow\n", "name: flow\nmaxReasoningAgents: 1\n", StringComparison.Ordinal));
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the first hole, worded otherwise")]))
+            .On("triage", run => run.Instance switch
+            {
+                "triage" => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the triage's agent failed"),
+                "triage+2" => Naming("duplicate", run.Issue!.Title, "duplicates", "triage"),
+                _ => Course("list", run.Issue!.Title),
+            });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var repeating = coordinator.Instances["triage+2"];
+        Assert.Equal(FlowInstanceState.Failed, repeating.State);
+        Assert.Equal(HarnessExit.ConfigInvalid, repeating.Exit);
+        Assert.Equal("its answer's duplicates names 'triage', which had ended without triaging its issue before it began: an issue repeats only one being triaged or triaged", repeating.Error);
+        Assert.False(coordinator.Instances.ContainsKey("triage+3"));
+    }
+
     /// <summary>The ids a triage's prompt offers it, in its order: each line of its <c>pre-existing</c> part that names an issue.</summary>
     private static List<string> OfferedIds(string prompt)
         => [.. prompt.Split('\n').Where(line => line.StartsWith("- ", StringComparison.Ordinal)).Select(line => line[2..line.IndexOf(':', StringComparison.Ordinal)])];

@@ -733,8 +733,9 @@ its issue takes no visit of its own: it goes with that issue's fix - waiting for
 and the visit's diagnosis is told every issue joined to it, its remedies settling all of them, `{run.preExisting}`
 saying each joined one `fixed with <id>`. One that joins while a visit of that fix is already diagnosing takes a visit
 of its own once that visit has fixed it, told what it fixed, and one that joins an issue fixed already takes one at
-once, told the same; and where the issue it joined ends without a fix, it is triaged again on its own. A triage that
-names an issue taken after its own is refused, so no two issues ever name each other.
+once, told the same; and where the issue it joined ends without a fix, it is triaged again on its own - as a duplicate
+is where the triage of the issue it repeats ends without a decision, failed with its failure passed over, so neither is
+lost. A triage that names an issue taken after its own is refused, so no two issues ever name each other.
 
 A reasoning step's `effort` is one level for every model it may run on, or a map giving each its own -
 `all` for the rest and a model's code for one; the shipped workflow runs its heaviest steps at
