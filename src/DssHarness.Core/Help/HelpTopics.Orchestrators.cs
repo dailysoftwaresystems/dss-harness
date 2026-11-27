@@ -291,7 +291,9 @@ public static partial class HelpTopics
             + "clock of its own: each agent is asked for its handoff in its own conversation and answers within the workflow's "
             + "handoffSeconds, and a build may take as long as it takes. The second stops the run where it stands - a "
             + $"step whose runner does not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s is recorded stopped all the same - and "
-            + $"the command ends within {PointOfNoReturn.HardStopBound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s whatever is left; "
+            + $"the command ends within {PointOfNoReturn.HardStopBound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s whatever is left - "
+            + $"given {FlowOutputLogs.Option}, once it has written the zip after that, with no bound of its own, for as long as packing the "
+            + "run's records takes, the run in it as the engine left it then; "
             + $"what is left then is what a crash leaves, and {FlowService.ResumeCommand} goes on from the records. The steps served so "
             + $"far are {string.Join(", ", FlowStepRunners.Served)} ('{ToolPackage.Command} help workflows'): a step of any other type "
             + "fails, saying no runner serves its type.");

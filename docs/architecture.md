@@ -5284,7 +5284,10 @@ Stopped from then on whatever a runner its drain waits for still does; the engin
 the stop as stopped all the same (`PointOfNoReturn.SafePauseDrain`), and the command ends within 120 s
 of the interrupt whatever is left (`PointOfNoReturn.HardStopBound`, the drain and 30 s to write the
 end, so the terminal never cuts off a session the engine is still ending in order) - what a crash
-leaves, which a resume goes on from. A session cut off answers as every command over its run does:
+leaves, which a resume goes on from. A command given `--output-logs` then writes its zip before it
+ends, after the bound and with no bound of its own (no cap is put on it), for as long as packing the
+run's directory takes, the run in it as the engine left it then; the second interrupt's warning says
+so (`FlowTerminal`, told the command's `FlowOutputLogs`). A session cut off answers as every command over its run does:
 the run and `resume-orchestrator <run>` named, every record listed in text and `--json`, and its line
 in the run's log. A hang-up keeps the process to pause the run but leaves nobody to read the
 terminal: from it on the terminal says nothing, and a line said while the session runs - an
@@ -5306,7 +5309,11 @@ against the index (`IGitClient.IsIgnoredAsync`), so a path the tree tracks is ne
 is one of the tree's uncommitted files, which every agent a run of it makes is handed with its seed, and
 the next zip would hold it once for each - or one whose directory cannot be
 made is refused with 13, nothing started - and at every end - the body's answer, a directory refused,
-a failure it caught - writes the zip before it says how the command ended: the events it ends with are
+a failure it caught - writes the zip before it says how the command ended, the operation's own end and
+the ends handed to it run first, with `--json` or without, so the manifest holds the lines they say and
+the code a defect they met gives (70), and every wait any end makes - replacing a zip another program
+holds among them - is said as the body's waits are, the operation's teller (`Waits.TellingTo`) set for
+its whole life: the events it ends with are
 kept as they will be written, so the zip holds its output as it ends, and then published, the zip named
 as every record of a run is, the last line naming them (`outputLogs: <file>`) and
 `records.outputLogs` in every document (`IDocumentFacts`). The zip is written whole through

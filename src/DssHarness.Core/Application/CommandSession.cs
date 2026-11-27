@@ -31,7 +31,8 @@ public sealed record CommandCompletion(int ExitCode, CommandOutcome? Outcome, Ru
 /// line; the run is named before anything could refuse it, so a run refused before it had a directory keeps its id to
 /// be cited by; and what the operation leaves on the hosts it reached is said however it ended, in its own end - which
 /// an operation begun as a step of a run leaves to that run to await, whatever ended the run, together with the
-/// services that end runs on.
+/// services that end runs on. A wait anything of the operation makes is said as its lines are from its first line to its
+/// last, its ends included - a refusal's, a failure's and its own end's.
 /// </remarks>
 public sealed class CommandSession : IAsyncDisposable
 {
@@ -51,8 +52,8 @@ public sealed class CommandSession : IAsyncDisposable
     private bool? _defective;
 
     /// <summary>
-    /// Whether the end ran before the operation said how it ended - where a document is asked for - and the event that
-    /// says it ended is still to be published, after that.
+    /// Whether the end ran before the operation said how it ended - where a document or the output logs are asked for -
+    /// and the event that says it ended is still to be published, after that.
     /// </summary>
     private bool _endedUnsaid;
 
@@ -116,6 +117,11 @@ public sealed class CommandSession : IAsyncDisposable
         // surveyed: a line written before then would sit in front of it.
         using var document = _options.Document != DocumentKind.None ? _output.DataOnly() : null;
 
+        // A wait deep below the operation - a machine-wide file's update, a child's end, a rename over a file another
+        // program holds - is said as the operation's lines are, for the whole of it: its ends wait as its body does, the
+        // output logs replaced as it stops or fails among them, and a wait told to nobody is one that looks like a hang.
+        using var telling = Waits.TellingTo(told => _output.Info(_options.Command, told.Line()));
+
         if (Run is not null)
         {
             _output.Publish(new RunBegan(_options.Command, Run));
@@ -159,10 +165,8 @@ public sealed class CommandSession : IAsyncDisposable
                 {
                     var scope = new CommandScope(_services, resolved.Directory!, Run);
 
-                    // A commit a line names is shown as git abbreviates it in the repository the operation works in, and a
-                    // wait deep below the body - a machine-wide file's update, a child's end - is said as the body's lines are.
+                    // A commit a line names is shown as git abbreviates it in the repository the operation works in.
                     using var commits = CommitIds.Use(Commits(resolved.Directory!));
-                    using var telling = Waits.TellingTo(told => _output.Info(_options.Command, told.Line()));
                     var outcome = await body(scope, cancellationToken).ConfigureAwait(false);
 
                     if (await EndedDefectiveAsync().ConfigureAwait(false))
@@ -208,13 +212,15 @@ public sealed class CommandSession : IAsyncDisposable
     }
 
     /// <summary>
-    /// Where a document is asked for, runs the end now - once - and says whether it met a defect: a document says the code
-    /// the process exits with, and nothing can be taken back once written, so a defect the end meets is the document's
-    /// code too. Where none is asked for, the end runs after the operation has said how it ended, and nothing is said here.
+    /// Where a document or the output logs are asked for, runs the end now - once - and says whether it met a defect: a
+    /// document says the code the process exits with, and the zip's manifest that code and every line the command wrote,
+    /// and nothing can be taken back once written, so a defect the end meets is their code too, and the lines its end says
+    /// are among the zip's. Where neither is asked for, the end runs after the operation has said how it ended, and nothing
+    /// is said here.
     /// </summary>
     private async Task<bool> EndedDefectiveAsync()
     {
-        if (_options.Document == DocumentKind.None)
+        if (_options.Document == DocumentKind.None && _logs is not { HasAny: true })
         {
             return false;
         }

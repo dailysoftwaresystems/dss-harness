@@ -58,7 +58,9 @@ public sealed partial class HelpTests
             "In the terminal a session runs in, the first Ctrl+C - and off Windows SIGTERM or a hang-up - asks the safe pause, which starts no "
                 + "clock of its own: each agent is asked for its handoff in its own conversation and answers within the workflow's handoffSeconds, "
                 + "and a build may take as long as it takes. The second stops the run where it stands - a step whose "
-                + "runner does not end within 90 s is recorded stopped all the same - and the command ends within 120 s whatever is left;",
+                + "runner does not end within 90 s is recorded stopped all the same - and the command ends within 120 s whatever is left - given "
+                + "--output-logs, once it has written the zip after that, with no bound of its own, for as long as packing the run's records takes, "
+                + "the run in it as the engine left it then;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("which it reads every 2 s", prose, StringComparison.Ordinal);

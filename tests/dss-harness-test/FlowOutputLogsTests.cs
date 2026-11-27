@@ -843,6 +843,110 @@ public sealed class FlowOutputLogsTests
         Assert.False(File.Exists(zip));
     }
 
+    /// <summary>
+    /// A wait the zip's replacing makes - over one another program holds open - is said as the command's lines are at every
+    /// end of it, not only where its body answered: a command that ends by a defect, and one refused before its body for a
+    /// directory that is not there, each say it, and then write the zip.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AWaitToReplaceTheZip_IsSaid_AtAFailuresEndAndARefusalsToo(bool failed)
+    {
+        using var scene = await PausedAsync();
+        using var outside = new TempDirectory();
+        var zip = outside.Combine("logs.zip");
+        var told = new DssHarness.Core.Waiting.WaitTold($"'{zip}' to be replaced", TimeSpan.FromMinutes(5), "another program", null);
+
+        var ended = await SessionAsync(
+            Options(FlowService.RunCommand, failed ? scene.Repository.Path : outside.Combine("not-there"), zip, json: false),
+            (_, _) => throw new InvalidOperationException("the engine met a defect"),
+            services => services.Replace(ServiceDescriptor.Singleton<IFileSystem>(provider => new WaitingWrites(new PhysicalFileSystem(provider.GetRequiredService<IFilePermissions>()), told))));
+
+        Assert.Equal(failed ? HarnessExit.InternalError : HarnessExit.UsageError, ended.Completion.ExitCode);
+        Assert.Contains($"run-orchestrator: {told.Line()}", Lines(ended.Output));
+        Assert.True(File.Exists(zip));
+    }
+
+    /// <summary>
+    /// Without --json as with it, the operation's own end runs before the zip is written: a defect it meets is the code the
+    /// manifest says - the code the process exits with - and the line that says it is among the zip's lines.
+    /// </summary>
+    [Fact]
+    public async Task TheOperationsEnd_RunsBeforeTheZip_WithoutJsonToo_ItsDefectTheManifestsCode()
+    {
+        using var scene = await PausedAsync();
+        using var outside = new TempDirectory();
+        var zip = outside.Combine("logs.zip");
+
+        var ended = await SessionAsync(
+            Options(FlowService.ResumeCommand, scene.Repository.Path, zip, json: false),
+            (scope, _) =>
+            {
+                scope.Services.GetRequiredService<FlowRunReached>().Reach(scene.Layout, scene.Run);
+                return Task.FromResult(new CommandOutcome(FlowExit.Paused, "r1 is paused on q1"));
+            },
+            services => services.Replace(ServiceDescriptor.Singleton<DssHarness.Core.Hosts.CommandEnd>(_ => throw new InvalidOperationException("the end broke"))));
+
+        Assert.Equal(HarnessExit.InternalError, ended.Completion.ExitCode);
+
+        var manifest = Manifest(zip);
+        Assert.Equal(HarnessExit.InternalError, manifest["exitCode"]!.GetValue<int>());
+        Assert.Equal(
+            [
+                "resume-orchestrator: FAIL - this operation's own end could not run: Unexpected InvalidOperationException: the end broke",
+                $"resume-orchestrator: outputLogs: {zip}",
+                "resume-orchestrator: FAIL - r1 is paused on q1",
+            ],
+            Values(manifest["output"]!["lines"]!));
+    }
+
+    /// <summary>
+    /// The second interrupt says the command writes its output logs once the run is stopped, after the bound - never that
+    /// the command ends within it - where the zip was asked for, and the bound alone where it was not.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TheSecondInterrupt_SaysTheZipIsWrittenAfterTheRunIsStopped(bool asked)
+    {
+        using var scene = await PausedAsync();
+        using var outside = new TempDirectory();
+        var (standardOutput, standardError) = (new StringWriter(), new StringWriter());
+        var output = new ConsoleHarnessOutput(standardOutput, standardError, verbose: false);
+        var logs = Logs(scene.Harness);
+        var zip = outside.Combine("logs.zip");
+
+        if (asked)
+        {
+            Assert.Null(await logs.CheckAsync(zip, ["dssharness"], scene.Repository.Path, Token));
+        }
+
+        var terminal = new FlowTerminal(output, FlowService.RunCommand, logs: logs);
+        terminal.Interrupted();
+        terminal.Interrupted();
+
+        Assert.Equal(
+            asked
+                ? $"run-orchestrator: WARN - interrupted again: the run is stopped where it stands, within {PointOfNoReturn.HardStopBound.TotalSeconds} s whatever is left; the command then writes its output logs '{output.Shown(zip)}', for as long as packing the run's records takes, and ends"
+                : $"run-orchestrator: WARN - interrupted again: the run is stopped where it stands, and the command ends within {PointOfNoReturn.HardStopBound.TotalSeconds} s whatever is left",
+            Lines(standardError.ToString())[^1]);
+    }
+
+    /// <summary>A file system whose whole write of a zip first waits, as a rename over a file another program holds tells it.</summary>
+    private sealed class WaitingWrites(IFileSystem inner, DssHarness.Core.Waiting.WaitTold told) : PassThroughFileSystem(inner)
+    {
+        public override void WriteAtomic(string path, Action<Stream> write)
+        {
+            if (path.EndsWith(".zip", StringComparison.Ordinal))
+            {
+                DssHarness.Core.Waiting.Waits.Told(told);
+            }
+
+            base.WriteAtomic(path, write);
+        }
+    }
+
     /// <summary>A command other than the three that drive a session of a run is refused its output logs before any service is built for it.</summary>
     [Fact]
     public void AnotherCommandAskedForOutputLogs_IsRefused_BeforeAnyServiceIsBuilt()

@@ -155,7 +155,9 @@ itself: the first Ctrl+C (off Windows, SIGTERM or a hang-up as well) asks the sa
 handoff in its own conversation and answers within the workflow's `handoffSeconds` (180 where it says none), the machine
 steps finish, then the run is paused - and starts no clock of its own; the second stops the run where it stands: a step whose runner
 does not end within 90 s is recorded stopped all the same, and the command ends within 120 s whatever is left - the
-engine's 90 s and 30 s to write the end - which `resume-orchestrator` goes on from. Every session writes the run's report
+engine's 90 s and 30 s to write the end - which `resume-orchestrator` goes on from; given `--output-logs`, it then writes
+the zip before it ends, with no bound of its own, for as long as packing the run's records takes, the run in it as the
+engine left it then. Every session writes the run's report
 (`report.md`, `report.json`) and names each record it wrote, in text and in `--json`.
 
 Given `--output-logs <file>` - and only then: no configuration key asks for it - each of the three writes one zip at

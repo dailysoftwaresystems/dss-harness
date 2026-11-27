@@ -33,7 +33,7 @@ internal static class FlowCommands
         string command,
         Func<FlowInterrupts, CancellationToken, Task<CommandOutcome>> session,
         CancellationToken commandToken)
-        => new FlowTerminal(context.Get<IHarnessOutput>(), command).RunAsync(session, commandToken);
+        => new FlowTerminal(context.Get<IHarnessOutput>(), command, logs: context.Get<FlowOutputLogs>()).RunAsync(session, commandToken);
 
     /// <summary>
     /// The <c>--json</c> answer of the two ask commands: the same document wherever they stop, the facts and the answer
