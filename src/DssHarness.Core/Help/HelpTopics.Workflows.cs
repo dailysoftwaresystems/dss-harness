@@ -305,8 +305,9 @@ public static partial class HelpTopics
         builder.AppendLine("ends without a fix, it is triaged again on its own - as a duplicate is where the triage of the");
         builder.AppendLine("issue it repeats ends without a decision, its failure passed over, so neither is lost. Each");
         builder.AppendLine("visit counts against the run's limits as every step does, and a visit's diagnosis goes on with");
-        builder.AppendLine("the last one of what it puts right - the same failure, or the same issue whichever step met it");
-        builder.AppendLine("and however often after a fix that did not hold - apart from where its bound counts it.");
+        builder.AppendLine("the last one of what it puts right - the same failure, or the same issue whichever step met it,");
+        builder.AppendLine("in whatever words a duplicate or a join of it gave, and however often after a fix that did not");
+        builder.AppendLine("hold - apart from where its bound counts it.");
         builder.AppendLine();
         builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");
         builder.AppendLine("may run on, or a map giving each its own - all for the rest, a model's code for one, so a");

@@ -10537,21 +10537,41 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// The issue, by its title and where it is: where the recovery's visits for an issue met again after its fix are
-    /// counted, and the thread every visit of the issue goes on in (<see cref="ThreadOf"/>).
+    /// counted, and the thread a visit of an issue no visit fixed before goes on in (<see cref="ThreadOf"/>).
     /// </summary>
     private static string IssueKey(FlowPreExistingReport issue) => $"\0{issue.Title}\0{issue.Where}";
 
     /// <summary>
-    /// The thread the work of a visit of the recovery taken for <paramref name="source"/> goes on in: what it puts right,
-    /// apart from where its bound counts it (<see cref="RecoveryOf"/>) - a failed step's failure by its declaration in its
-    /// scope, and an issue a triage sent to fix by the issue itself (<see cref="IssueKey"/>), for every visit of it, across
-    /// the steps that reported it and the visits that fixed it before - one waiting for another's fix of the same issue,
-    /// and one met again after its fix did not hold, among them. The one owner of which visits a diagnostician's work goes
-    /// on over (<see cref="RecoveryThreadOf"/>): each is told what the last attempt at the same thing decided, in the agent
-    /// that made it.
+    /// The thread the work of <paramref name="visit"/>, a visit of the recovery taken for <paramref name="source"/>, goes on
+    /// in: what it puts right, apart from where its bound counts it (<see cref="RecoveryOf"/>) - a failed step's failure by
+    /// its declaration in its scope; and an issue a triage sent to fix by the issue itself, across the steps that reported
+    /// it and the visits that fixed it before: the thread of the last visit made before this one that ended done fixing the
+    /// same issue (<see cref="IssuesFixedBy"/>, which holds what its source sent to fix, the issues joined to it and the
+    /// duplicates of either, each in its own words, so a repeat under a duplicate's wording is the issue that visit fixed),
+    /// as every reading of the same issue takes it - a fix waiting for another's of the same issue (<see cref="FixWaitsFor"/>)
+    /// and one met again after its fix did not hold (<see cref="MetAfterItsFix"/>) among them - and the issue by its own
+    /// words (<see cref="IssueKey"/>) where no visit did. The visits made before it, in the order the run made them, are
+    /// what both a session that makes it and a resume that reads it again weigh, so each reads the same thread. The one
+    /// owner of which visits a diagnostician's work goes on over (<see cref="RecoveryThreadOf"/>): each is told what the last
+    /// attempt at the same thing decided, in the agent that made it.
     /// </summary>
-    private (string Scope, string Step) ThreadOf(FlowInstance source)
-        => IssueSentToFix(source) is { } issue ? ((source.DeclaredScope ?? _top).Id, IssueKey(issue)) : RecoveryOf(source).Key;
+    /// <param name="source">The step whose failure the visit takes, or the triage whose issue it fixes.</param>
+    /// <param name="visit">The visit, made already: none it holds the thread of was made after it.</param>
+    private (string Scope, string Step) ThreadOf(FlowInstance source, FlowInstance visit)
+    {
+        if (IssueSentToFix(source) is not { } issue)
+        {
+            return RecoveryOf(source).Key;
+        }
+
+        return _created
+            .TakeWhile(made => !ReferenceEquals(made, visit))
+            .LastOrDefault(made => IsRecovery(made)
+                && made.State == FlowInstanceState.Done
+                && made.RecoveryThread is not null
+                && IssuesFixedBy(made).Any(mended => SameIssue(mended, issue)))?.RecoveryThread
+            ?? ((source.DeclaredScope ?? _top).Id, IssueKey(issue));
+    }
 
     /// <summary>
     /// Takes one thing to the workflow's recovery, as <see cref="RecoveryOf"/> says what it is: a failure, or an issue a
@@ -10600,7 +10620,7 @@ public sealed class FlowCoordinator
             visit.RaisedBy = source;
             visit.Visit = visits;
             visit.Direction = direction;
-            visit.RecoveryThread = ThreadOf(source);
+            visit.RecoveryThread = ThreadOf(source, visit);
         });
 
         // Its lookups across a use's boundary - inputs, params, texts, answers, the policy a group writes - are made in
@@ -15291,9 +15311,10 @@ public sealed class FlowCoordinator
                 // Each visit counted under the key it was taken under, read from the records alone - what each visit fixed,
                 // the issues joined to it among it (Joins) - so a visit of an issue met again after its fix is counted
                 // against that issue's bound here as it was before the resume; and each goes on in the thread of what it
-                // puts right, as it did.
+                // puts right, as it did - read in the order the run made them, so each visit's thread is read before a
+                // later one's takes it up.
                 var key = RecoveryOf(visit.RaisedBy!).Key;
-                visit.RecoveryThread = ThreadOf(visit.RaisedBy!);
+                visit.RecoveryThread = ThreadOf(visit.RaisedBy!, visit);
                 _recoveryVisits[key] = Math.Max(_recoveryVisits.GetValueOrDefault(key), visit.Visit);
             }
 

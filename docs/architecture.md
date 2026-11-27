@@ -2509,9 +2509,11 @@ fallback, an account at its limit or a provider that fails is a pause that resum
 still fails is asked. The implementation workflow writes `onFailure: recover` on every step of its flow that tests, folds,
 checks, commits, pushes or waits - itself or through its group - and `onFailure: pause` on every
 reasoning step; its recovery diagnoses the failure (`diagnose`, which goes on with its own conversation across
-the visits for the same failure or issue - the thread of what a visit puts right, the issue by its title and where it is
-for every visit of it, whichever step reported it and however often it was met again after a fix that did not hold,
-apart from where its bound counts it (`FlowCoordinator.ThreadOf`, which `FlowCheck.Work` reads too) - a visit for
+the visits for the same failure or issue - the thread of what a visit puts right: for an issue, the thread of the last
+visit made before it that ended done fixing the same issue in any words that visit fixed (`IssuesFixedBy`: its own,
+those joined to it and the duplicates of either), every reading of the same issue taking it alike, and the issue by its
+own title and where it is where none did - whichever step reported it and however often it was met again after a fix
+that did not hold, apart from where its bound counts it (`FlowCoordinator.ThreadOf`, which `FlowCheck.Work` reads too) - a visit for
 another issue diagnosing in a conversation and an agent of its own, beside it, `FlowCoordinator.SameRecoveryThread`),
 asks a person only for what only a person can give (`direction`), holds the remedy items its last word
 sets out - the diagnosis's, or the one it gives on the person's answer (`redirect`) - to the plan's own check

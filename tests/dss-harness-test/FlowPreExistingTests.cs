@@ -3016,6 +3016,103 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
+    /// The same issue has one reading for the thread a diagnosis goes on in as for a fix that did not hold: an issue met
+    /// again after its fix under the words a duplicate of it gave - another step's report, which that fix settled - is the
+    /// issue that fix fixed, so the visit a new triage sends for it is the issue's second, and its diagnosis goes on with
+    /// the first visit's conversation, in its agent, never a new one.
+    /// </summary>
+    [Fact]
+    public async Task AnIssueMetAgainUnderADuplicatesWords_GoesOnWithTheDiagnosisOfTheFixThatDidNotHold()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: diagnose
+                  type: reason
+                  resume: diagnose
+                  prompt: diagnose.md
+                  resumePrompt: rediagnose.md
+                  outputs: diagnosis.json
+                - name: mend
+                  type: orient
+                  dependsOn: [diagnose]
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: other
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        const string Hole = "a hole in the parser";
+        const string Field = "the parser drops a field";
+        var watched = new Watched(null, _ => false);
+        var diagnosed = new Dictionary<string, (string? Agent, IReadOnlyList<FlowWorkedFrom> GoesOnWith)>(StringComparer.Ordinal);
+        var runner = new FakeRunner()
+            // The step meets the issue, and once its fix is done meets it again, in the words another step gave it.
+            .On("think", asked => FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: asked switch
+            {
+                1 => [Issue(Hole, blocks: true)],
+                2 => [Issue(Field, blocks: true)],
+                _ => [],
+            }))
+
+            // Another step reports it in its own words once the first triage has sent it to fix: a duplicate of that one.
+            .OnAsync("other", async _ =>
+            {
+                await watched.Until(snapshot => snapshot.Steps.Any(step => step.Instance == "triage" && step.State == FlowInstanceState.Done));
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue(Field)]);
+            })
+            .On("triage", run => run.Instance == "triage+2" ? Naming("duplicate", run.Issue!.Title, "duplicates", "triage") : Course("fix", run.Issue!.Title))
+
+            // The first fix ends once the duplicate is settled by it.
+            .OnAsync("diagnose", async run =>
+            {
+                if (run.Instance == "recover.diagnose")
+                {
+                    await watched.Until(snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
+                }
+
+                lock (diagnosed)
+                {
+                    diagnosed[run.Instance] = (run.WorksIn, run.GoesOnWith);
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => named);
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        // The duplicate settled by the first fix, which did not hold: a third triage sent the issue again, in the
+        // duplicate's words, and its visit is the issue's second.
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal("duplicate", coordinator.Instances["triage+2"].Output!["course"]!.GetValue<string>());
+        Assert.Equal((Field, "fix"), (coordinator.Instances["triage+3"].Issue!.Title, coordinator.Instances["triage+3"].Output!["course"]!.GetValue<string>()));
+        Assert.Same(coordinator.Instances["triage+3"], coordinator.Instances["recover+2"].RaisedBy);
+        Assert.Equal(2, coordinator.Instances["recover+2"].Visit);
+        var first = diagnosed["recover.diagnose"];
+        Assert.NotNull(first.Agent);
+        Assert.Equal([], first.GoesOnWith);
+        Assert.Equal(first.Agent, diagnosed["recover+2.diagnose"].Agent);
+        Assert.Equal([new FlowWorkedFrom("recover.diagnose", first.Agent)], diagnosed["recover+2.diagnose"].GoesOnWith);
+        Assert.Equal(["recover", "recover+2"], coordinator.Instances.Keys.Where(id => id.StartsWith("recover", StringComparison.Ordinal) && !id.Contains('.', StringComparison.Ordinal)).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
     /// An issue reported again after its fix was done is one the fix did not hold, and is raised anew: the run's
     /// tally does not say fixed alone of an issue a later step still meets.
     /// </summary>
