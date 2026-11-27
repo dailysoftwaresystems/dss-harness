@@ -4693,8 +4693,9 @@ the pause is the budget's. A person's answer is held to the recommendation by th
 share (`FlowAnswerRules.Unrecommended`): an answer to an open question still owing its recommendation that no advisor
 seeks now is refused, nothing answered, and `abort` taken - by `answer-orchestrator` before anything of the run is
 touched where no engine runs it (13, naming `resume-orchestrator`, which seeks it first), and by the engine as it weighs
-a person's answer (`TryAnswer`): between sessions, as a session begins and where a stop ends it, naming the resume, and
-while a pause under way defers it, naming the pause's completion; an answer given while the advisor works is taken and
+a person's answer (`TryAnswer`): between sessions, as a session begins and where a stop ends it - a stop once the pause
+is complete among them, after which the pause seeks none - naming the resume, and while a pause under way defers it,
+naming the pause's completion; an answer given while the advisor works is taken and
 ends the asking. The budget's own question is asked of the run as a whole - `FlowQuestions.RunsOwn` its
 instance, so its records sit under `steps/run/advice/<n>/` and `{question.step}` reads `run`, no agent's tree held, and
 `{question.record}` the run's facts as `FlowStatus.Facts` gives them (`AdvisorRunner`); held, as every advice is, to its

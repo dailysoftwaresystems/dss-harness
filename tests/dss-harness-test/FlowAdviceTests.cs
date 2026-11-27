@@ -849,7 +849,10 @@ public sealed class FlowAdviceTests
             });
         var advisor = new Advisor(call => Task.FromResult(new FlowAdvice(call.Answers[0].Answer, $"advised for {call.Kind}", null)));
         var records = new Records();
-        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
+
+        // A clock that never passes the drain's bound on its own: the stopped build's runner ends when the test lets it,
+        // so the session is still there to weigh an answer meanwhile.
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), records: records, advisor: advisor);
 
         // The pause leaves both machine steps running; the fold's refusal, raised as it drains, is deferred, and nothing
         // is advised while the build still runs.
@@ -860,9 +863,18 @@ public sealed class FlowAdviceTests
         fold.SetResult();
         await TestEventuallyAsync(() => coordinator.OpenQuestions.Any(question => question.Kind == "foldConflicts"));
 
-        // The stop stops the build, as --all does; once its runner has ended, nothing runs.
+        // The stop stops the build, as --all does. While its runner still ends, an answer to the deferred question is
+        // refused naming the resume, which seeks the recommendation: the pause no longer will.
         coordinator.RequestStop();
         await TestEventuallyAsync(() => records.Saw(FlowChangeKind.StopApplied));
+        var deferred = coordinator.OpenQuestions.Single();
+
+        Assert.Equal(FlowHandedOver.Refused, await coordinator.OfferAnswerAsync(deferred.Id, "fail", inbox: "e1").WaitAsync(Bound, Token));
+        Assert.Equal(
+            ("e1", "question 'q1' still owes the recommendation it is answered with, and no advisor seeks one between sessions, so nothing was answered; resume-orchestrator seeks it first, and 'abort' is taken now"),
+            (records.Refused.Single().Inbox, records.Refused.Single().Why));
+
+        // Once the build's runner has ended, nothing runs.
         slow.SetResult();
         var end = await session.WaitAsync(Bound, Token);
 

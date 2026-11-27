@@ -579,7 +579,7 @@ public static partial class HelpTopics
             + "nor is one the run's input or its configuration answers, which no person is asked. A person answers a question "
             + "recommended: an answer to one still owing its recommendation that no advisor seeks now - between sessions, or "
             + "while a pause defers it - is refused (13), nothing answered, and abort is taken; resume-orchestrator seeks it "
-            + "first, and a pause once it is complete. The run's report names each open question's next step so: "
+            + "first, and a pause once it is complete, unless a stop came after it. The run's report names each open question's next step so: "
             + "resume-orchestrator for one still owing its recommendation, abort taken now, and answer-orchestrator for every other. "
             + "build, test, run and check-mutations run their legs as the commands of those names do, in the worktree "
             + "of the agent their in names, else the main checkout: test with its filter, exclude and labels and run with its "

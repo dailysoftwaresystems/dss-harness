@@ -2477,14 +2477,15 @@ public sealed class FlowCoordinator
         // What an answer may be is the one rule answer-orchestrator holds it to as well, over the question's own record
         // of its answers - and a person answers a question recommended: one still owing its recommendation that no
         // advisor seeks now, between sessions or while a pause defers it, is refused, abort taken. Only a session that is
-        // pausing seeks it later of itself; between sessions, as one begins and where a stop ends it, the resume does.
+        // pausing seeks it later of itself; between sessions, as one begins and where a stop ends it - a stop once the pause
+        // is complete among them, after which the pause starts no advice - the resume does.
         problem = FlowAnswerRules.Problem(question, asked.Held, answer, text)
             ?? FlowAnswerRules.Unrecommended(
                 _runName,
                 question,
                 answer,
                 OwesAdvice(asked) && !AdviceUnderWay(asked),
-                pausing: _inSession && !_starting && !_hardStop && (_pausing || _pauseRequest is not null));
+                pausing: _inSession && !_starting && !_hardStop && !_stopPastThePause && (_pausing || _pauseRequest is not null));
 
         if (problem is not null)
         {
