@@ -4018,13 +4018,22 @@ are read against, and a directory of the main tree: write it 'src/feature/'`, at
 it as at the check's own moment (`PlanValidator.DirectoryProblems`). An entry an item must not touch is never refused
 so, for nothing gates a write by one: the check weighs it for meeting the item's own owned paths, and its builder is
 told it. That rule, and every other that reads the main tree as it now is - a path an item reuses or replaces, a class's
-home and sites being there - holds only the items the check introduces or changes: an update's check - one whose
-`scope` is read, whether it yields pieces or none - passes over every item a round of the run already holds, of the round
-the update joins or carried by an instance of the work-item group, that no added or changed piece places
-(`PlanValidator.CheckedBefore`, handed to `PlanValidator.Check` as `checkedBefore`), in the round the pieces join and in
-the plan's own list alike, for each was checked when its round opened, against the tree of that moment - a round's own
-item a fold since made a directory under, or took a path it reused from, would otherwise fail every update after it; a
-plan's first check, before any round, holds every item to the tree.
+home and sites being there - holds every item still to be built, and passes over the items an opened round holds that
+nothing is to build again, and every removed piece's item, whatever round holds it or none, for an item taken back
+builds nothing (`PlanValidator.CheckedBefore`, handed to `PlanValidator.Check` as `checkedBefore`). The engine hands
+every `validate-plan` step of a run with an `amend` block the names of those items (`opened`, read where the check
+starts, `FlowCoordinator.CheckReads`): each an instance of the work-item group carries, over every round, but one an
+owed piece adds or changes (`FlowCoordinator.OwedPieces`), which the round it joins builds as the piece has it - never
+an item of the list the check that opens a round was opening it with (`FlowCoordinator.OpeningUnderWay`), which no
+instance carries and that check has just found wanting against the tree as it now is. An update's check - one whose
+`scope` is read, whether it yields pieces or none - passes them over, less those its added and changed pieces place, in
+the round the pieces join and in the plan's own list alike, for each was checked when its round opened, against the
+tree of that moment - a round's own item a fold since made a directory under, or took a path it reused from, would
+otherwise fail every update after it - while an update raised by the check that opens a round holds that round's items
+to the tree, so pieces that leave one wanting are refused at once, not found again by the check they were to satisfy;
+the check that opens a round passes over the same - an owed removed piece's item, and the own items of a round that
+carries the owed work alone, which the round before built - and holds the rest; a plan's first check, before any round,
+holds every item to the tree.
 A start tree that cannot be read is never silent: the session
 warns once why (`TreeDirectories.UnreadWarning`, through the records' warner), and every refusal its reading causes
 says it too - the narrow reading's after how to write the entry (`TreeDirectories.UnreadForWriting`, carried by each
@@ -4773,7 +4782,10 @@ the instance, at any depth, by one walk down it, `FlowCoordinator.StepsWithin`, 
 over work the update takes back) and then visited again, in its place and with its agent - a new
 scope of the piece's kind in which the live agent a `create-agent` step made is taken and not made again, made and named
 in the piece's entry before the instance brought to rest ends, so a crash between finds it and never makes a second;
-where it has ended, one more work item of the group, with new agents. What an update did to an instance is in
+where it has ended, one more work item of the group, with new agents. A `removed` piece whose work item no instance
+carries needs no step, and withdraws the work an earlier update owes a round that has not opened under that name: each
+such piece ends in its own update's entry as withdrawn by this one before it was built
+(`FlowCoordinator.WithdrawWhatIsOwed`), so no round builds what the plan took back. What an update did to an instance is in
 the instance's own records - ended for the update (`FlowStepRecord.EndedFor`), the piece it carries (`PieceOf`) and the
 instance it was visited again in place of (`AgainOf`) - so no session after runs an instance an update ended, a resume
 goes on bringing one to rest, and the pieces are placed once from the update's entry however often a crash makes the

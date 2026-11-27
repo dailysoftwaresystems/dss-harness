@@ -26,10 +26,11 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// item's own paths say of them, and each universe to the two ways an axis is answered and to the cells its axes make (P-C1 to P-C8); and each names the tests its change affects, the units it is tested on
 /// alone, or says in <c>noTests</c> why it affects none (P-C9). The rules that read the main tree as it now is - an
 /// owned entry naming one of its directories, a path reused or replaced, a class's home and sites being there - hold
-/// only the items the check introduces or changes: an item a round of the run already holds that a plan update's pieces
-/// leave as it was was checked when its round opened, against the tree of that moment, and what a fold has made of the
-/// tree since is no breach of it (<see cref="CheckedBefore"/>). Each breach is a problem of the plan, worded once here;
-/// none is a failure.
+/// every item still to be built: an item an opened round of the run holds that nothing is to build again - no piece of a
+/// plan update places it, and no owed one does it again - was checked when its round opened, against the tree of that
+/// moment, and what a fold has made of the tree since is no breach of it; a removed piece's item builds nothing; and an
+/// item of a round that has not opened, whose check has just found it wanting, is held as it is
+/// (<see cref="CheckedBefore"/>). Each breach is a problem of the plan, worded once here; none is a failure.
 /// </summary>
 /// <param name="fileSystem">Reads the main tree for the paths the items reuse and replace, and the directories it holds.</param>
 /// <param name="pathBudget">Reckons the paths of the worktree each item would get.</param>
@@ -61,12 +62,13 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// group with no loop around it carries the owed work alone, its own items built by the round before.
     /// </param>
     /// <param name="checkedBefore">
-    /// The names of the items a round of the run already holds that the check neither introduces nor changes
-    /// (<see cref="CheckedBefore"/>), which the rules that read the main tree as it now is pass over
-    /// (<see cref="DirectoryProblems"/>, and the paths <see cref="ListProblems"/> and <see cref="ClassesProblems"/> look
-    /// for there): each was checked when its round opened, against the main tree of that moment, and a fold since that
-    /// made a directory of its bare entry or took away a path it reused is no breach of it. None where the check holds
-    /// every item to the tree: one of no plan update, and the check that opens a round.
+    /// The names of the items the rules that read the main tree as it now is pass over (<see cref="CheckedBefore"/>;
+    /// <see cref="DirectoryProblems"/>, and the paths <see cref="ListProblems"/> and <see cref="ClassesProblems"/> look
+    /// for there): each an opened round holds that nothing is to build again - it was checked when its round opened,
+    /// against the main tree of that moment, and a fold since that made a directory of its bare entry or took away a path
+    /// it reused is no breach of it - and each a removed piece takes back, which builds nothing. An item of a round that
+    /// has not opened is never among them. None where the check holds every item to the tree: a plan's first check, and
+    /// every check that opens no round and is handed no plan update - a recovery's.
     /// </param>
     /// <returns>Every problem of the plan, in the order of its items; none where it passes.</returns>
     public IReadOnlyList<string> Check(IReadOnlyList<JsonNode?> items, HarnessContext context, string run, WorkflowDefinition definition, TreeDirectories startTree, bool noItems = true, IReadOnlyCollection<string>? carried = null, IReadOnlyCollection<string>? checkedBefore = null)
@@ -123,7 +125,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
                 problems.Add($"work item '{item.Name}' owns '{owned}' and must not touch '{forbidden}', which match the same paths: an item's forbidden paths are kept by the paths it owns{kept}");
             }
 
-            // What the main tree holds now is asked of every item but one a round already holds that the check leaves as it was.
+            // What the main tree holds now is asked of every item but one an opened round holds that nothing builds again, and one taken back.
             var asNow = checkedBefore?.Contains(item.Name, StringComparer.Ordinal) != true;
 
             if (asNow)
@@ -182,6 +184,11 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// The list the round opens with once the update is placed, as it was checked: the round's items less those a
     /// changed or a removed piece names, then each piece's item - or the pieces' items alone where the run has no round.
     /// </param>
+    /// <param name="opened">
+    /// The names of the work items opened rounds hold that nothing owed is to build again, which the rules that read the
+    /// main tree as it now is pass over where no piece places them (<see cref="CheckedBefore"/>) - never read of
+    /// <paramref name="round"/>, which may be a round that has not opened.
+    /// </param>
     /// <returns>Every problem of the pieces, in their order; none where they pass.</returns>
     public IReadOnlyList<string> CheckPieces(
         IReadOnlyList<JsonNode?> pieces,
@@ -193,7 +200,8 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
         WorkflowDefinition definition,
         TreeDirectories startTree,
         out IReadOnlyList<JsonNode?> joined,
-        IReadOnlyCollection<string>? carried = null)
+        IReadOnlyCollection<string>? carried = null,
+        IReadOnlyCollection<string>? opened = null)
     {
         ArgumentNullException.ThrowIfNull(pieces);
         ArgumentNullException.ThrowIfNull(items);
@@ -264,42 +272,46 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             .Where(other => FlowWorkItems.NameOf(other) is not { } named || !namedByPieces.Contains(named, StringComparer.Ordinal))
             .Concat(held.Select(piece => piece.Item))];
 
-        // The round's own items were checked against the main tree as it opened: the update's pieces alone are held to it now.
-        problems.AddRange(Check(joined, context, run, definition, startTree, noItems: false, checkedBefore: CheckedBeforeOf(held, round, carried)));
+        // The items an opened round holds were checked against the main tree as that round opened, and a removed piece's
+        // item builds nothing: the pieces that build are held to it now, and so is every item of a round not yet opened.
+        problems.AddRange(Check(joined, context, run, definition, startTree, noItems: false, checkedBefore: CheckedBeforeOf(held, opened)));
 
         return problems;
     }
 
     /// <summary>
-    /// The names of the work items a check of a plan update - one handed the pieces its <c>scope</c> yields, none among
-    /// them where the update answers no piece - passes over where it reads the main tree as it now is (<see cref="Check"/>):
-    /// each a round of the run already holds - an item of the round the update joins, or one an instance of the work-item
-    /// group carries over every round - that no <c>added</c> or <c>changed</c> piece places, a <c>removed</c> piece's item
-    /// among them, for an item taken back builds on nothing. Each was checked when its round opened, against the tree of
-    /// that moment; a plan's first check, before any round, passes none over. The one owner of which items an update's check
-    /// leaves to the check that opened their round, which the check of its pieces and the check of the plan's own list both read.
+    /// The names of the work items a check passes over where it reads the main tree as it now is (<see cref="Check"/>):
+    /// each an opened round of the run holds - one an instance of the work-item group carries, which nothing owed is to
+    /// build again (<paramref name="opened"/>, as the engine hands it) - that no <c>added</c> or <c>changed</c> piece of
+    /// <paramref name="pieces"/> places, and every <c>removed</c> piece's item, whatever round holds it or none, for an
+    /// item taken back builds nothing. Each of the first was checked when its round opened, against the tree of that
+    /// moment, and is built as it was then; an item of a round that has not opened - the list the check that opens it was
+    /// opening it with, the work an update owes it - is held to the tree as it now is, as every item still to be built is,
+    /// and a plan's first check, before any round, passes none over. The one owner of which items a check leaves to the
+    /// check that opened their round, which the check of a plan update's pieces, the check of the plan's own list beside
+    /// them, and the check that opens a round read alike.
     /// </summary>
-    /// <param name="pieces">The pieces, as the plan's scope yielded them.</param>
-    /// <param name="round">The items of the round the pieces would join, as <see cref="CheckPieces"/> is handed them; null where the run has none.</param>
-    /// <param name="carried">The names every instance of the work-item group carries, over every round; null where it is handed none.</param>
-    public static IReadOnlyList<string> CheckedBefore(IReadOnlyList<JsonNode?> pieces, IReadOnlyList<JsonNode?>? round, IReadOnlyCollection<string>? carried)
+    /// <param name="pieces">The pieces of the plan update the check is handed, as its scope yielded them; none where it is handed no update.</param>
+    /// <param name="opened">The names of the work items opened rounds hold that nothing owed is to build again, as the engine hands them; null where it hands none.</param>
+    public static IReadOnlyList<string> CheckedBefore(IReadOnlyList<JsonNode?> pieces, IReadOnlyCollection<string>? opened)
     {
         ArgumentNullException.ThrowIfNull(pieces);
 
-        return CheckedBeforeOf(pieces.Select(node => FlowUpdatePiece.Read(node, out _)).OfType<FlowUpdatePiece>(), round, carried);
+        return CheckedBeforeOf(pieces.Select(node => FlowUpdatePiece.Read(node, out _)).OfType<FlowUpdatePiece>(), opened);
     }
 
-    /// <summary>The names of the work items a check of the update <paramref name="pieces"/>, each read as a piece, are, passes over (<see cref="CheckedBefore"/>).</summary>
-    private static List<string> CheckedBeforeOf(IEnumerable<FlowUpdatePiece> pieces, IReadOnlyList<JsonNode?>? round, IReadOnlyCollection<string>? carried)
+    /// <summary>The names of the work items a check handed the update <paramref name="pieces"/>, each read as a piece, passes over (<see cref="CheckedBefore"/>).</summary>
+    private static List<string> CheckedBeforeOf(IEnumerable<FlowUpdatePiece> pieces, IReadOnlyCollection<string>? opened)
     {
-        var placed = pieces.Where(piece => piece.Kind is FlowUpdatePieceKinds.Added or FlowUpdatePieceKinds.Changed)
+        var read = pieces.ToList();
+        var placed = read.Where(piece => piece.Kind is FlowUpdatePieceKinds.Added or FlowUpdatePieceKinds.Changed)
             .Select(piece => piece.ItemName())
             .OfType<string>()
             .ToHashSet(StringComparer.Ordinal);
 
-        return [.. (round ?? []).Select(FlowWorkItems.NameOf).OfType<string>()
-            .Concat(carried ?? [])
+        return [.. (opened ?? [])
             .Where(name => !placed.Contains(name))
+            .Concat(read.Where(piece => piece.Kind == FlowUpdatePieceKinds.Removed).Select(piece => piece.ItemName()).OfType<string>())
             .Distinct(StringComparer.Ordinal)];
     }
 
