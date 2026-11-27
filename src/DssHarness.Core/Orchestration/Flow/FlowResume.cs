@@ -439,10 +439,11 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
     /// decides what the claim still waits on - a refusal it throws leaves the owner file as it was. Then, before the owner
     /// is written, the run's state is marked as this engine's start (<see cref="FlowFile.Starting"/>): the one owner of when
     /// what the session before left the state saying of its engine - a stop it ended with, the pause it was left under -
-    /// stops being read as the live owner's, so from the moment a reader finds the owner live it reads the engine as
-    /// starting until the start's own writes say otherwise. Everything else the state says stands as written, and a run
-    /// whose state is not there yet - one no session has written - is left so; a state that does not read refuses the
-    /// claim, the owner file left as it was.
+    /// stops being read as the live owner's, so a reader that finds the owner live - and reads the state after it, as every
+    /// reader does (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout)"/>) - reads
+    /// the engine as starting until the start's own writes say otherwise. Everything else the state says stands as written,
+    /// and a run whose state is not there yet - one no session has written - is left so; a state that does not read refuses
+    /// the claim, the owner file left as it was.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
     /// <param name="taking">What is decided at the claim itself, once no live owner holds the run; null where nothing is.</param>
@@ -469,34 +470,45 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
     }
 
     /// <summary>
-    /// Releases the run where this process holds it: its owner removed, so the next session claims it afresh - and the
-    /// mark of its start taken back first where the run's state still holds it (<see cref="FlowFile.Starting"/>), so a
-    /// session that ended before its own writes said what its engine did - refused at its start, or let go at its claim -
-    /// leaves the state as it found it. A state that cannot be read or written now keeps the mark, which says nothing
-    /// beside no live owner; the owner is released all the same. An owner that names another process - one that reclaimed
-    /// the run after this one was taken for gone - is left as it is, with its mark.
+    /// Releases the run where this process holds it: its owner removed, so the next session claims it afresh - and then the
+    /// mark of its start taken back where the run's state still holds it (<see cref="FlowFile.Starting"/>), so a session
+    /// that ended before its own writes said what its engine did - refused at its start, or let go at its claim - leaves the
+    /// state as it found it. The owner goes first, the claim's mirror: a reader that finds the owner gone reads no engine
+    /// whatever the state says, and one that read it live before it went reads it gone once more after the state
+    /// (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout)"/>), so the past
+    /// session's state is never read as this engine's. The mark is taken back inside the repository's one section, where a
+    /// claim marks it, and only where no owner has claimed the run since: a new claim's mark is that claim's. A state that
+    /// cannot be read or written now keeps the mark, which says nothing beside no live owner. An owner that names another
+    /// process - one that reclaimed the run after this one was taken for gone - is left as it is, with its mark.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
     public void Release(OrchestratorLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
-        if (Holds(layout))
+        if (!Holds(layout))
         {
-            try
-            {
-                if (_store.ReadFlow(layout) is { Starting: true } marked)
-                {
-                    _store.WriteFlow(layout, marked with { Starting = null });
-                }
-            }
-            catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
-            {
-                // The mark stays: read only beside a live owner, it says nothing once this one is let go.
-            }
+            return;
         }
 
         _owner.Release(layout.OwnerFile, OrchestrationStore.OwnerKind);
+
+        try
+        {
+            _ = _store.AcrossRuns(layout, () =>
+            {
+                if (_store.ReadOwner(layout) is null && _store.ReadFlow(layout) is { Starting: true } marked)
+                {
+                    _store.WriteFlow(layout, marked with { Starting = null });
+                }
+
+                return true;
+            });
+        }
+        catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+        {
+            // The mark stays: read only beside a live owner, it says nothing once this one is let go.
+        }
     }
 
     /// <summary>Removes an owner record whose engine has gone, or was ended: what the deletion of a run and <c>stop-orchestrator --now</c> leave of it.</summary>

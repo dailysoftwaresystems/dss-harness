@@ -301,6 +301,22 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     }
 
     /// <summary>
+    /// Runs <paramref name="work"/> inside the repository's one section across its runs, as
+    /// <see cref="AcrossRuns{T}(HarnessLayout, Func{T}, CancellationToken)"/> does, for one who holds a run's layout alone:
+    /// a run's directory lies in the repository's orchestrators directory, beside the section's file, as its owner's does.
+    /// </summary>
+    /// <param name="run">One run of the repository.</param>
+    /// <param name="work">The reading, the decision and the writing, all synchronous.</param>
+    /// <param name="cancellationToken">Ends a wait for another process's decision, before the work begins.</param>
+    public T AcrossRuns<T>(OrchestratorLayout run, Func<T> work, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        ArgumentNullException.ThrowIfNull(work);
+
+        return WhileHeld(RunsSectionFileIn(Path.GetDirectoryName(run.Directory) ?? run.Directory), work, cancellationToken);
+    }
+
+    /// <summary>
     /// Runs <paramref name="work"/> with no other process inside the same section of <paramref name="path"/>, waiting for
     /// another process's for as long as it holds it - a holder that ended holding it is let go by the system - told every
     /// five minutes naming the file, and ended by <paramref name="cancellationToken"/>; never refused for how long another
@@ -312,13 +328,17 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     private T WhileHeld<T>(string path, Func<T> work, CancellationToken cancellationToken)
         => MachineWideFile.Update(path, MachineWideFile.Window, told => _output.Info(Hosts.ToolPackage.Id, told.Line()), TimeProvider.System, work, cancellationToken);
 
-    /// <summary>The file that names the repository's one section across its runs (<see cref="AcrossRuns{T}"/>).</summary>
+    /// <summary>The file that names the repository's one section across its runs (<see cref="AcrossRuns{T}(HarnessLayout, Func{T}, CancellationToken)"/>).</summary>
     /// <param name="layout">The repository.</param>
     public static string RunsSectionFile(HarnessLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
-        return Path.Combine(layout.OrchestratorsDirectory, ".runs");
+        return RunsSectionFileIn(layout.OrchestratorsDirectory);
     }
+
+    /// <summary>The section's file in the repository's orchestrators directory <paramref name="orchestrators"/>: the one place it is named.</summary>
+    /// <param name="orchestrators">The repository's orchestrators directory.</param>
+    private static string RunsSectionFileIn(string orchestrators) => Path.Combine(orchestrators, ".runs");
 
     /// <summary>The run's state in one file, or null where the run holds none.</summary>
     /// <param name="orchestrator">The run's orchestrator.</param>

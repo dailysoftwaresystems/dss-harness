@@ -507,6 +507,128 @@ public sealed class FlowResumeTests
         Assert.Null(harness.OrchestrationStore.ReadFlow(layout)!.Starting);
     }
 
+    /// <summary>A workflow whose one reason step stops at its limit, asking a question its advisor recommends.</summary>
+    private const string AskedAtItsLimit = """
+        name: flow
+        advisor:
+          agent: advisor
+          prompt: prompts/recommend.md
+          tier: best
+        steps:
+          - name: asker
+            type: reason
+            prompt: work.md
+            outputs: work.json
+        """;
+
+    /// <summary>
+    /// The run of <see cref="AskedAtItsLimit"/> as an engine left it that crashed while its advisor sought <c>q1</c>'s
+    /// recommendation - <paramref name="state"/> and <paramref name="why"/> written over it where given, as a stop or a
+    /// pause leaves it - and taken up for the next session.
+    /// </summary>
+    private static async Task<(HarnessFactory Harness, OrchestratorLayout Layout, WorkflowDefinition Definition)> CrashedWhileSeekingAsync(string directory, string? state = null, string? why = null)
+    {
+        var definition = Parse(AskedAtItsLimit);
+        var first = new HeldAdvisor();
+        var (harness, layout, records) = Records("r1", directory, definition);
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, new Runner().On("asker", _ => FlowStepResult.AtLimit("turns", "12 turns")), new RunnerFacts(), records: records, advisor: first);
+            _ = coordinator.RunAsync(Token);
+            await first.Begun.Task.WaitAsync(Bound, Token);
+        }
+
+        if (state is not null)
+        {
+            var file = JsonNode.Parse(File.ReadAllText(layout.QuestionsFile))!;
+            file["questions"]![0]!["recommendation"] = new JsonObject { ["state"] = state, ["why"] = why };
+            File.WriteAllText(layout.QuestionsFile, file.ToJsonString());
+        }
+
+        return (harness, layout, definition);
+    }
+
+    /// <summary>
+    /// A start that writes nothing after it - a resume beside a question a stop left owing its recommendation, which it
+    /// seeks and then waits on, its advisor running - ends with a write of its own: every write the start held says the
+    /// engine is starting, and its last, made once the hold is made, the advice sought and what waited for it weighed, says
+    /// it is not - so the run's state says the engine runs all the while the advisor does, never that it is starting.
+    /// </summary>
+    [Fact]
+    public async Task AStartThatWritesNothingAfterIt_EndsWithAWriteOfItsOwn_SoTheRunsStateNeverStaysStarting()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, definition) = await CrashedWhileSeekingAsync(temp.Path, "deferred", "the run was stopped while the advisor ran: the recommendation is sought when the run is resumed with this question still open");
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var resumed = new HeldAdvisor();
+
+        using (again)
+        {
+            var watched = new PassWatched(again);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: watched, runName: "r1", advisor: resumed);
+            var session = coordinator.RunAsync(Token);
+
+            // The loop's first wait - on the advisor, which nothing else ends - with the advice asked.
+            await watched.Flushed.Task.WaitAsync(Bound, Token);
+            await resumed.Begun.Task.WaitAsync(Bound, Token);
+
+            var written = watched.Written;
+
+            Assert.Equal((FlowChangeKind.StartEnded, false), written[^1]);
+            Assert.All(written[..^1], write => Assert.True(write.Starting));
+            Assert.Null(harness.OrchestrationStore.ReadFlow(layout)!.Starting);
+            Assert.Equal("sought", harness.OrchestrationStore.ReadFlowQuestions(layout)!.Open.Single().Recommendation!.State);
+
+            coordinator.RequestStop();
+            Assert.Equal(FlowRunStatus.Stopped, (await session.WaitAsync(Bound, Token)).Status);
+        }
+    }
+
+    /// <summary>
+    /// A pause asked as a session starts - before the start has sought the recommendation an open question owes - is one
+    /// the start refuses an answer handed to it over, as a stop is: the answer that waited for that advice is refused
+    /// naming the pause, which defers the advice, its why kept with what it is settled with; and no write of the start says
+    /// the engine is starting, for the one rule that decides what an answer handed to the start meets decides what the
+    /// run's state says it does - so a reader never names that answer taken now.
+    /// </summary>
+    [Fact]
+    public async Task APauseAskedAsAStartBegins_RefusesTheAnswerThatWaitedForItsAdvice_AndNoWriteOfTheStartSaysStarting()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, definition) = await CrashedWhileSeekingAsync(temp.Path);
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var answering = new AnsweringAdvisor("more");
+        FlowWeighed weighed;
+
+        using (again)
+        {
+            var watched = new PassWatched(again);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: watched, runName: "r1", advisor: answering);
+
+            // Handed over as the session begins, the answer waits for the recommendation the start seeks; then a pause is asked.
+            var handed = coordinator.WeighHandedOver("q1", "retry", null, "answer-orchestrator", "e1");
+
+            Assert.False(handed.IsCompleted);
+            coordinator.RequestPause("command");
+
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            weighed = await handed.WaitAsync(Bound, Token);
+            Assert.All(watched.Written, write => Assert.False(write.Starting));
+        }
+
+        var why = "question 'q1' of run 'r1' still owes the recommendation it is answered with, so nothing was answered - the run seeks it once its pause is complete; "
+            + "answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now";
+        var questions = harness.OrchestrationStore.ReadFlowQuestions(layout)!;
+        var refused = Assert.Single(questions.Refused!);
+
+        Assert.Equal(new FlowWeighed(FlowHandedOver.Refused, why), weighed);
+        Assert.Equal(("e1", "q1", why), (refused.Inbox, refused.Question, refused.Why));
+
+        // The pause, once complete, sought the recommendation the answer was refused over.
+        Assert.Equal(("given", "more"), (questions.Open.Single().Recommendation!.State, questions.Open.Single().Recommendation!.Answer));
+    }
+
     /// <summary>
     /// An abort a session's start takes - the command's own answer, given as the session begins - is the stop that start
     /// applies before anything else, and it seeks no advice after it: the run's state says the engine is stopping from the
@@ -562,7 +684,7 @@ public sealed class FlowResumeTests
             var offered = coordinator.OfferAnswerAsync("q1", "retry", inbox: "e1");
 
             Assert.Equal(FlowRunStatus.Stopped, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
-            handed = await offered.WaitAsync(Bound, Token);
+            handed = (await offered.WaitAsync(Bound, Token)).How;
         }
 
         var refused = Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Refused!);
@@ -2383,7 +2505,7 @@ public sealed class FlowResumeTests
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
-            Assert.Equal(FlowHandedOver.Taken, await offered.WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await offered.WaitAsync(Bound, Token)).How);
         }
     }
 
@@ -2430,7 +2552,7 @@ public sealed class FlowResumeTests
         Assert.Null(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Refused);
 
         var (_, _, again) = Records("r1", temp.Path, definition);
-        Task<FlowHandedOver>? refusedOffer = null;
+        Task<FlowWeighed>? refusedOffer = null;
         var settledAtItsEvent = new List<bool>();
 
         using (again)
@@ -2447,8 +2569,8 @@ public sealed class FlowResumeTests
             var taken = coordinator.OfferAnswerAsync("q1", "go", inbox: "e-taken");
 
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
-            Assert.Equal(FlowHandedOver.Refused, await refusedOffer.WaitAsync(Bound, Token));
-            Assert.Equal(FlowHandedOver.Taken, await taken.WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Refused, (await refusedOffer.WaitAsync(Bound, Token)).How);
+            Assert.Equal(FlowHandedOver.Taken, (await taken.WaitAsync(Bound, Token)).How);
         }
 
         var written = harness.OrchestrationStore.ReadFlowQuestions(layout)!;
@@ -2526,7 +2648,7 @@ public sealed class FlowResumeTests
             """);
         var (_, _, records) = Records("r1", temp.Path, definition);
         FlowCoordinator coordinator = null!;
-        Task<FlowHandedOver>? offered = null;
+        Task<FlowWeighed>? offered = null;
 
         using (records)
         {
@@ -2612,7 +2734,7 @@ public sealed class FlowResumeTests
             Assert.Equal(FlowHandedOver.RecordedAlready, coordinator.AnswerHandedOver("q1", "stay", null, out var said, inbox: "e-refused"));
             Assert.Null(said);
             Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
-            Assert.Equal(FlowHandedOver.RecordedAlready, await offered.WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.RecordedAlready, (await offered.WaitAsync(Bound, Token)).How);
         }
 
         var after = harness.OrchestrationStore.ReadFlowQuestions(layout)!;
@@ -4271,7 +4393,7 @@ public sealed class FlowResumeTests
 
             var second = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
-            Assert.Equal(FlowHandedOver.Taken, await offered.WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await offered.WaitAsync(Bound, Token)).How);
             Assert.Equal(FlowRunStatus.Paused, second.Status);
             Assert.Equal(["q1 runBudget answered more", "q2 runBudget open "], coordinator.Questions.Select(question => $"{question.Id} {question.Kind} {question.State} {string.Join("/", question.Given.Select(given => given.Answer))}"));
         }
@@ -4900,6 +5022,55 @@ public sealed class FlowResumeTests
             {
                 inner.Flush();
             }
+        }
+    }
+
+    /// <summary>
+    /// The run's records, each change written through and kept with whether its snapshot says the engine is starting, and the
+    /// first end of a pass told: the start ends no pass, so the first is the loop's first wait.
+    /// </summary>
+    private sealed class PassWatched(IFlowRecords inner) : IFlowRecords
+    {
+        private readonly List<(FlowChangeKind Kind, bool Starting)> _written = [];
+
+        /// <summary>Completes once a pass of the loop has ended.</summary>
+        public TaskCompletionSource Flushed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Every change written so far, in order, with whether it said the engine is starting.</summary>
+        public List<(FlowChangeKind Kind, bool Starting)> Written
+        {
+            get
+            {
+                lock (_written)
+                {
+                    return [.. _written];
+                }
+            }
+        }
+
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+        {
+            lock (_written)
+            {
+                _written.Add((kind, snapshot.Starting));
+            }
+
+            inner.Write(kind, snapshot, instance, from, to, attempt, detail);
+        }
+
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+            => inner.Question(questions, refused);
+
+        public void Updates(FlowUpdatesFile updates)
+            => inner.Updates(updates);
+
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+            => inner.AffectedTests(entries);
+
+        public void Flush()
+        {
+            inner.Flush();
+            _ = Flushed.TrySetResult();
         }
     }
 

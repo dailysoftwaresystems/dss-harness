@@ -678,8 +678,7 @@ public sealed class FlowSessionsTests
 
         Assert.Null(await sessions.ClaimAsync(layout, run, () => ChildSweep.None, FlowService.ResumeCommand, Token));
 
-        var marked = store.ReadFlow(run)!;
-        var engine = OrchestratorService.EngineOf(store, owner, run, marked);
+        var (marked, engine) = OrchestratorService.EngineOf(store, owner, run)!.Value;
         var deferred = new FlowQuestionEntry(
             "q1",
             "open",

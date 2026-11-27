@@ -2708,7 +2708,7 @@ public sealed class FlowCoordinatorTests
         var asked = Assert.Single(coordinator.OpenQuestions);
 
         Assert.Equal(("q1", "failure"), (asked.Id, asked.Kind));
-        Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAnswerAsync(asked.Id, "retry").WaitAsync(TimeSpan.FromSeconds(30), cancel));
+        Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAnswerAsync(asked.Id, "retry").WaitAsync(TimeSpan.FromSeconds(30), cancel)).How);
 
         var waiting = (await retried.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Steps.Single(step => step.Instance == "audit");
 

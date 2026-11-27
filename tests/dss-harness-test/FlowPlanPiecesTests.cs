@@ -744,7 +744,7 @@ public sealed class FlowPlanPiecesTests
             // the instance is visited again, whose probe the session ends paused on.
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("rounds.items[0].build");
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
             _ = await session.WaitAsync(Bound, Token);
 
             var asked = coordinator.OpenQuestions.Single();
@@ -940,7 +940,7 @@ public sealed class FlowPlanPiecesTests
             // The lint waits on its retry before the amendment is handed over.
             var session = coordinator.RunAsync(Token);
             await clock.AskedAsync(TimeSpan.FromSeconds(10)).WaitAsync(Bound, Token);
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
             _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0]" && step.EndedFor == "u1"));
 
             // The retry's wait passes once the piece is placed: a retry still owed would run the lint again now.
@@ -987,7 +987,7 @@ public sealed class FlowPlanPiecesTests
             // passes its time limit, and its runner outlives the drain's bound.
             var session = coordinator.RunAsync(Token);
             await clock.AskedAsync(TimeSpan.FromMinutes(1)).WaitAsync(Bound, Token);
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
             _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0]" && step.EndedFor == "u1"));
 
             clock.Pass(TimeSpan.FromMinutes(1));
@@ -1039,7 +1039,7 @@ public sealed class FlowPlanPiecesTests
             // The catch-up runs to its own end once the piece is placed, and its success raises the handler.
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("rounds.items[0].reconcile.catch-up").WaitAsync(Bound, Token);
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
             _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0]" && step.EndedFor == "u1"));
             catchUp.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
             _ = await session.WaitAsync(Bound, Token);
@@ -1085,7 +1085,7 @@ public sealed class FlowPlanPiecesTests
             // the lint runs to its own end there - which is a failure the retry table would run again.
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("rounds.items[0].lint").WaitAsync(Bound, Token);
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
             _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0].probe" && step.State == nameof(FlowInstanceState.Skipped)));
 
             lint.TrySetResult(FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, error: "the linter was cut off"));
@@ -1126,7 +1126,7 @@ public sealed class FlowPlanPiecesTests
             // The item is being brought to rest, its lint in flight, when the run is stopped.
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("rounds.items[0].lint").WaitAsync(Bound, Token);
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
             _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0].probe" && step.State == nameof(FlowInstanceState.Skipped)));
 
             coordinator.RequestStop();
@@ -1220,7 +1220,7 @@ public sealed class FlowPlanPiecesTests
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("rounds.items[0].lint").WaitAsync(Bound, Token);
             await runner.StartedAsync("rounds.items[0].reconcile.catch-up").WaitAsync(Bound, Token);
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
             _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0]" && step.EndedFor == "u1"));
             catchUp.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
             _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0].reconcile.catch-up" && step.State == nameof(FlowInstanceState.Done)));
@@ -1275,7 +1275,7 @@ public sealed class FlowPlanPiecesTests
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("rounds.items[1].reconcile.catch-up").WaitAsync(Bound, Token);
             Assert.Equal(nameof(FlowInstanceState.NotStarted), harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "rounds.items[1].make").State);
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the two item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the two item is different").WaitAsync(Bound, Token)).How);
 
             // The piece brings the second item to rest; its catch-up runs to its own end there, and it is visited again.
             _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[1]" && step.EndedFor == "u1"));
@@ -1315,7 +1315,7 @@ public sealed class FlowPlanPiecesTests
             // The amendment reaches the session while the nested settle is in flight.
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("rounds.items[0].reconcile.settle").WaitAsync(Bound, Token);
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
             _ = await session.WaitAsync(Bound, Token);
 
             Assert.Equal("rounds.items[1].probe", coordinator.OpenQuestions.Single().Instance);
@@ -1380,7 +1380,7 @@ public sealed class FlowPlanPiecesTests
             using var ending = CancellationTokenSource.CreateLinkedTokenSource(Token);
             var session = coordinator.RunAsync(ending.Token);
             await runner.StartedAsync("rounds.items[0].reconcile.settle").WaitAsync(Bound, Token);
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
             await handingOff.Task.WaitAsync(Bound, Token);
             List<string> startedBefore = [.. runner.Started];
 
@@ -1441,7 +1441,7 @@ public sealed class FlowPlanPiecesTests
             // The item is being brought to rest, the nested catch-up in flight, when the run is stopped.
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("rounds.items[0].reconcile.catch-up").WaitAsync(Bound, Token);
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
             _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0]" && step.EndedFor == "u1"));
 
             coordinator.RequestStop();
@@ -1495,7 +1495,7 @@ public sealed class FlowPlanPiecesTests
             // never written.
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("rounds.items[0].reconcile.catch-up").WaitAsync(Bound, Token);
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
             _ = await UntilAsync(harness, layout, _ => crashing.Ended);
             coordinator.RequestStop();
             _ = await session.WaitAsync(Bound, Token);
@@ -1594,7 +1594,7 @@ public sealed class FlowPlanPiecesTests
 
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("rounds.items[0].build");
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
             _ = await session.WaitAsync(Bound, Token);
             Assert.True(crashing.Ended);
         }
@@ -1720,7 +1720,7 @@ public sealed class FlowPlanPiecesTests
 
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("rounds.items[0].build");
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
             _ = await session.WaitAsync(Bound, Token);
             Assert.True(crashing.Ended);
         }
@@ -1780,7 +1780,7 @@ public sealed class FlowPlanPiecesTests
 
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("rounds.items[0].build");
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
             _ = await session.WaitAsync(Bound, Token);
             Assert.True(crashing.Ended);
 
@@ -1899,7 +1899,7 @@ public sealed class FlowPlanPiecesTests
 
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("rounds.items[0].build");
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
 
             // The old build is ended for the update, its runner still running: the visit made again waits on the claim
             // it still holds.
@@ -1990,7 +1990,7 @@ public sealed class FlowPlanPiecesTests
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync(First).WaitAsync(Bound, Token);
             await runner.StartedAsync(Second).WaitAsync(Bound, Token);
-            Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAmendmentAsync("both items are different").WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("both items are different").WaitAsync(Bound, Token)).How);
             _ = await session.WaitAsync(Bound, Token);
 
             Assert.Equal([(First, true), (Second, true)], sawTheOtherAsked.OrderBy(seen => seen.Key, StringComparer.Ordinal).Select(seen => (seen.Key, seen.Value)));

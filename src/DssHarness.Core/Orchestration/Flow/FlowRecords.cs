@@ -642,22 +642,24 @@ public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnly
 /// was complete - every step in flight stopped, every advice under way ended and none started after it: written as the
 /// stop is applied, before anything it stops is touched - one asked as a session starts, by an abort the start takes, as
 /// it is taken, for the start applies it before anything else - and kept by the session's end, so a reader of a live
-/// engine's run tells a stop under way from a pause whose advice is still to come (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout, FlowFile)"/>);
+/// engine's run tells a stop under way from a pause whose advice is still to come (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout)"/>);
 /// left out where no stop was applied, and from the next session's first write on. Between, the next session's claim
 /// marks the run <see cref="Starting"/>, which no reader takes a stop the session before ended with for.
 /// </param>
 /// <param name="Starting">
-/// True while the live engine is taking the run up: written by its session's claim, before the owner is
-/// (<see cref="FlowRunOwner.Claim"/>), and by every write its start makes, until the start has written what it held and
-/// sought every recommendation the run owes - or a stop asked as it starts is in force, which <see cref="StoppingSince"/>
-/// says from then on; left out by every write after it, by the release of a session that ended before its own writes
-/// said what its engine did (<see cref="FlowRunOwner.Release"/>), and by a run an older build wrote. A reader of a live
-/// engine's run takes nothing else this file says of what its engine is doing for that engine's while it is true - a stop
-/// the session before it ended with, the pause it was left under, which stays the run's record of where it stood - and
-/// names the start's own step for a question owing its recommendation: the start seeks it and takes an answer then
-/// (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout, FlowFile)"/>,
-/// <see cref="FlowAnswerRules.NextStepOf"/>). Like <see cref="StoppingSince"/>, it is read only beside a live owner: one a
-/// crash left says nothing of a run no engine holds.
+/// True while the live engine is taking the run up and takes an answer handed to it as it seeks the recommendation the
+/// question owes: written by its session's claim, before the owner is (<see cref="FlowRunOwner.Claim"/>), and by every
+/// write its start makes while no stop or pause is asked of it, after which it seeks no advice for such an answer and
+/// refuses it - <see cref="StoppingSince"/> saying a stop from then on - until the start's own end
+/// (<see cref="FlowChangeKind.StartEnded"/>), written once it has made what it held, sought every recommendation the run
+/// owes and weighed what was handed over meanwhile; left out by every write after it, by the release of a session that
+/// ended before its own writes said what its engine did (<see cref="FlowRunOwner.Release"/>), and by a run an older build
+/// wrote. A reader of a live engine's run takes nothing else this file says of what its engine is doing for that engine's
+/// while it is true - a stop the session before it ended with, the pause it was left under, which stays the run's record
+/// of where it stood - and names the start's own step for a question owing its recommendation: the start seeks it and
+/// takes an answer then (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout)"/>,
+/// <see cref="FlowAnswerRules.NextStepOf"/>). Like <see cref="StoppingSince"/>, it is read only beside an owner found live
+/// before this file was read and still the same after: one a crash left says nothing of a run no engine holds.
 /// </param>
 public sealed record FlowFile(
     int Schema,
@@ -1501,6 +1503,13 @@ public enum FlowChangeKind
 
     /// <summary>An iteration was added to a loop at its bound, for a plan update that owes it work.</summary>
     IterationAdded,
+
+    /// <summary>
+    /// A session's start is over and the session goes on: what the start held is written, every recommendation the run owes
+    /// is sought and what was handed over meanwhile weighed - the start's own write, so the run's state says what the engine
+    /// does from here on, never that it is starting (<see cref="FlowFile.Starting"/>), however long it then writes nothing.
+    /// </summary>
+    StartEnded,
 }
 
 /// <summary>
@@ -1531,7 +1540,7 @@ public enum FlowChangeKind
 /// them as they write its listed issues; null where the change says nothing of them.
 /// </param>
 /// <param name="StoppingSince">When the stop the session ends with was applied - its hard stop, or a stop once its pause was complete; null where none was (<see cref="FlowFile.StoppingSince"/>).</param>
-/// <param name="Starting">Whether the change was taken while the engine's start was under way, no stop in force (<see cref="FlowFile.Starting"/>).</param>
+/// <param name="Starting">Whether the change was taken while the engine's start was under way and took what it was handed, no stop and no pause asked of it (<see cref="FlowFile.Starting"/>).</param>
 public sealed record FlowSnapshot(
     FlowRunStatus Status,
     DateTimeOffset? EndedAt,

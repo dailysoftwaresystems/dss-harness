@@ -601,8 +601,8 @@ public sealed class OrchestratorService(
                 inventories,
                 [.. listed.Where(worktree => WorktreeAddress.AgentOf(orchestrator.Name, worktree.Name) is { } agent && !agents.Any(entry => entry.Name == agent))],
                 OrchestrationRules.OpenAgents(orchestrator.Name, agents, listed.Select(worktree => worktree.Name)),
-                Run: _store.ReadFlow(orchestrator) is { } flow
-                    ? new FlowRunInventory(flow, _store.ReadFlowQuestions(orchestrator), EngineOf(orchestrator, flow), _store.ReadFlowUpdates(orchestrator))
+                Run: EngineOf(orchestrator) is { } read
+                    ? new FlowRunInventory(read.Flow, _store.ReadFlowQuestions(orchestrator), read.Engine, _store.ReadFlowUpdates(orchestrator))
                     : null));
         }
 
@@ -610,34 +610,60 @@ public sealed class OrchestratorService(
     }
 
     /// <summary>
-    /// What a run's engine is doing, as its records and its owner say it: none recorded; starting; running; pausing, its
-    /// handoffs being written; recording the machine steps a completed pause left running; stopping, a stop it applied
-    /// ending its session; or gone - an owner recorded whose process has ended.
+    /// The run's state and what its engine is doing, as its records and its owner say it (<see cref="EngineOf(OrchestrationStore, Flow.FlowRunOwner, OrchestratorLayout)"/>);
+    /// null where the run holds no state.
     /// </summary>
-    private FlowEngineState EngineOf(OrchestratorLayout orchestrator, Flow.FlowFile flow)
-        => EngineOf(_store, _owner, orchestrator, flow);
+    private (Flow.FlowFile Flow, FlowEngineState Engine)? EngineOf(OrchestratorLayout orchestrator)
+        => EngineOf(_store, _owner, orchestrator);
 
     /// <summary>
-    /// The one rule of what a run's engine is doing, as <c>list-orchestrator</c>, a run's own facts and its report read it:
-    /// no owner recorded; a live one starting - from its claim until its start has written what it held
-    /// (<see cref="Flow.FlowFile.Starting"/>), so nothing the session before it left the run's state saying, a stop it ended
-    /// with or the pause it was left under, is read as this engine's; running the run; pausing, its handoffs being written;
-    /// recording the machine steps a completed pause left running; stopping, a stop it applied - its hard stop, or a stop
-    /// once its pause was complete - ending its session (<see cref="Flow.FlowFile.StoppingSince"/>); or gone - an owner
-    /// recorded whose process has ended.
+    /// The one rule of what a run's engine is doing, as <c>list-orchestrator</c>, a run's own facts and its report read it,
+    /// with the run's state it judged: no owner recorded; a live one starting - from its claim until its start's own end is
+    /// written, while the start takes what is handed to it (<see cref="Flow.FlowFile.Starting"/>), so nothing the session
+    /// before it left the run's state saying, a stop it ended with or the pause it was left under, is read as this engine's;
+    /// running the run; pausing, its handoffs being written; recording the machine steps a completed pause left running;
+    /// stopping, a stop it applied - its hard stop, or a stop once its pause was complete - ending its session
+    /// (<see cref="Flow.FlowFile.StoppingSince"/>); or gone - an owner recorded whose process has ended. The one path every
+    /// reader of a run's engine takes, for the order of the reads is the rule's too: the owner is read first, then the run's
+    /// state, then the owner again, and the state is judged only beside the owner that stood across its read - read again
+    /// where the owner changed between. A session's claim marks the state starting before it writes the owner, and its
+    /// release removes the owner before it takes the mark back (<see cref="Flow.FlowRunOwner"/>), so a state read beside an owner
+    /// found live before it and still after is that owner's - never the past session's state with the next session's live
+    /// owner, nor a state its release took the mark back from with the owner it had just removed.
     /// </summary>
-    /// <param name="store">Reads the run's owner.</param>
+    /// <param name="store">Reads the run's owner and its state.</param>
     /// <param name="owner">Tells whether a recorded owner still stands.</param>
     /// <param name="orchestrator">The run.</param>
-    /// <param name="flow">The run's state in one file.</param>
-    internal static FlowEngineState EngineOf(OrchestrationStore store, Flow.FlowRunOwner owner, OrchestratorLayout orchestrator, Flow.FlowFile flow)
+    /// <returns>The run's state and what its engine is doing; null where the run holds no state.</returns>
+    /// <exception cref="HarnessException">The owner or the state cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    internal static (Flow.FlowFile Flow, FlowEngineState Engine)? EngineOf(OrchestrationStore store, Flow.FlowRunOwner owner, OrchestratorLayout orchestrator)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(orchestrator);
-        ArgumentNullException.ThrowIfNull(flow);
 
-        if (store.ReadOwner(orchestrator) is not { } held)
+        var held = store.ReadOwner(orchestrator);
+
+        while (true)
+        {
+            var flow = store.ReadFlow(orchestrator);
+            var after = store.ReadOwner(orchestrator);
+
+            if (Equals(held, after))
+            {
+                return flow is null ? null : (flow, Judged(owner, held, flow));
+            }
+
+            // The owner changed while the state was read - a claim, or a release - so the state may be the other's: it is
+            // read again beside the owner as it is now.
+            held = after;
+        }
+    }
+
+    /// <summary>What the run's engine is doing, from its owner and the state read beside it (<see cref="EngineOf(OrchestrationStore, Flow.FlowRunOwner, OrchestratorLayout)"/>).</summary>
+    private static FlowEngineState Judged(Flow.FlowRunOwner owner, Flow.RunOwner? held, Flow.FlowFile flow)
+    {
+        if (held is null)
         {
             return FlowEngineState.NoEngine;
         }
@@ -810,9 +836,9 @@ public sealed record FlowEngineState(string State, string? Process, IReadOnlyLis
     public static FlowEngineState NoEngine { get; } = new(None, null, []);
 
     /// <summary>
-    /// A live engine is taking the run up: from its session's claim until its start has written what it held, it seeks
-    /// every recommendation the run owes and weighs an answer to a question owing one only then, which takes it - and
-    /// nothing the session before it left the run's state saying is this engine's.
+    /// A live engine is taking the run up: from its session's claim until its start's own end is written, while no stop or
+    /// pause is asked of it, it seeks every recommendation the run owes and weighs an answer to a question owing one only
+    /// then, which takes it - and nothing the session before it left the run's state saying is this engine's.
     /// </summary>
     public const string Starting = "starting";
 

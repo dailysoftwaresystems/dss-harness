@@ -339,7 +339,7 @@ public static class FlowAnswerRules
 
     /// <summary>
     /// The next step the open question <paramref name="question"/> takes, as a reader of the run's records names it with
-    /// what the run's engine is doing (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout, FlowFile)"/>,
+    /// what the run's engine is doing (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout)"/>,
     /// the rule <c>answer-orchestrator</c>'s look at the run's owner applies): the one owner of the step every document of
     /// the run names - <c>ask-orchestrator-status</c>'s waits, the report's what is left for a person, which the analyst
     /// is handed too. A question that owes nothing is answered (<see cref="FlowNextStep.Answer"/>). One that still owes the
@@ -349,7 +349,9 @@ public static class FlowAnswerRules
     /// one under way (<see cref="FlowNextStep.ResumeOnceGone"/>); with a live engine that is starting - whatever the session
     /// before it left the question saying, sought, deferred or never sought - answered as its start seeks it, for the start
     /// seeks every recommendation the run owes and weighs an answer to a question owing one only then, which takes it and
-    /// ends the asking; with a live engine whose advisor seeks it now (<c>sought</c>), answered at once, the answer ending the
+    /// ends the asking: its state says starting only while its start takes such an answer, never once a stop or a pause is
+    /// asked of it, which would refuse it (<see cref="FlowFile.Starting"/>, decided by the rule the start weighs it by); with
+    /// a live engine whose advisor seeks it now (<c>sought</c>), answered at once, the answer ending the
     /// asking - and so with a running engine whose record does not say it deferred, for a running engine seeks a
     /// recommendation as it raises the question (<see cref="FlowNextStep.AnswerWhileAdvised"/>); and with a live engine that
     /// is pausing or recording what its complete pause left running - or running, its recommendation deferred, which only a

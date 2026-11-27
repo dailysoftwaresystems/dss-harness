@@ -239,9 +239,10 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// record names. Swept there, what it keeps is never older than the claim - an owner seen gone inside the section
     /// cannot come back, and a live one is never claimed - so an owner the command saw standing - one an answer was handed
     /// to and waited on - and gone since is swept with the rest. The claim marks the run's state as this engine's start
-    /// before it writes the owner (<see cref="FlowRunOwner.Claim"/>), so no reader of the run, finding its owner live,
+    /// before it writes the owner (<see cref="FlowRunOwner.Claim"/>), so no reader of the run, finding its owner live before
+    /// it reads the state - as every reader does (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout)"/>) -
     /// takes what the session before left the state saying for this engine's; a claim let go before its session wrote
-    /// anything takes the mark back with it.
+    /// anything takes the mark back with it, once its owner is removed.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="run">The run the session is for.</param>
