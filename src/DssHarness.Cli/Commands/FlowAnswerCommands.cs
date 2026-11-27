@@ -40,7 +40,7 @@ internal static class AnswerOrchestratorCommand
 
     internal static Command Create()
     {
-        var command = new Command(Name, "Answer a question of a run and go on with it; given to the engine where one is running the run, which takes it while the question is open. A session of its own is refused when the command runs inside a session or group a step of any run of the repository left running, which the next command from outside ends.");
+        var command = new Command(Name, "Answer a question of a run and go on with it; given to the engine where one is running the run, which takes it while the question is open. A question is answered recommended: one still owing its recommendation, which no advisor seeks between sessions, is refused there, abort taken, for resume-orchestrator seeks it first. A session of its own is refused when the command runs inside a session or group a step of any run of the repository left running, which the next command from outside ends.");
         command.Arguments.Add(RunArgument);
         command.Arguments.Add(AnswerArgument);
         command.Options.Add(QuestionOption);
