@@ -4697,19 +4697,29 @@ nothing else - no stop from another thread, no session's token - so an advice th
 ended only where it was, and never left `notObtained`, which no resume seeks again, for one a stop or the session's end
 cut short. A session its cancellation token ends - which no run verb hands it: their interrupts and their command's own
 cancellation are the pause and the stop (`FlowTerminal`, `FlowService.DriveAsync`) - ends where the loop meets the
-token: at the top of each pass, and after every wait the token does not end itself - a pause's or a plan update's
-handoff turns, whose answers it keeps - so once it has, nothing more is drawn, decided, started or waited for, a pause
-under way never completing and an instance a plan update brings to rest neither coming to rest nor visited again until
-the next session (`PauseInOrderAsync`, `SettlePiecesEndingAsync`). It writes what it charged and holds all the same:
-each advice it ends deferred as a stop defers it and taken by `Took`, its recommendation kept where it returned one, and
-the session's last record with every spend among it (`FlowCoordinator.RecordTheSessionsEnd`, the one owner of that
-record, `Finish`'s too), saying `cancelled` with the steps it leaves running - their runners are not the token's to
-end - and no end time while one runs, whatever the run's status says: `Running`, or the pause's or the stop's own
-where one is in force (`StillRunning`, the one owner of what still runs, which the loop waits on and the summary
-names). What they answer as the session ends is kept for the coordinator's next session (`HandBackWhatIsLeft`); one
-its token ends during its start writes nothing, as a refused start does, and one a defect ends leaves what a crash
-leaves - nothing more written, each question it was advising still marked sought. A stop
-is in the run's state from the moment it is applied - the hard stop by `ApplyTheStop`, a stop once the pause is complete
+token: in the loop's wait for what the run learns, which the token ends at once (`WaitNextAsync`), at the top of each
+pass, and after every wait the token does not end itself - a pause's or a plan update's handoff turns, whose answers it
+keeps - so once it has, nothing more is drawn, decided, started or waited for, a pause under way never completing and
+an instance a plan update brings to rest neither coming to rest nor visited again until the next session
+(`PauseInOrderAsync`, `SettlePiecesEndingAsync`). The loop's one read of its channel is armed with no token and is the
+loop's across its waits and its sessions, left armed by a wait it did not win and by a session's end and taken by the
+next wait, while each wait observes its own session's token: no message is lost to a wait that no longer stands, and
+the token of a session that ended ends nothing of a later one. It writes what it charged and holds all the same: each
+advice it ends deferred as a stop defers it and taken by `Took`, its recommendation kept where it returned one, and the
+session's last record with every spend among it (`FlowCoordinator.RecordTheSessionsEnd`, the one owner of that record,
+`Finish`'s too), saying `cancelled` with the steps it leaves running - their runners are not the token's to end - and
+no end time while one runs, whatever the run's status says: `Running`, or the pause's or the stop's own where one is in
+force (`StillRunning`, the one owner of what still runs, which the loop waits on, the run's status reads and the summary
+names). A group is only bookkeeping over its members, and one whose member waits on a question runs nothing, so a run
+left with no step running is never said `Running` beside its end time. A session that ends in order records the
+standing it ends with, its end set before its last record is written (`Finish`), and the run's status is `Done` only
+where nothing of it is left unended (`Unended`, the one owner of what keeps a run from done, `Finish`'s too): work left
+with nothing running is the session's to go on with while one drives the run, which is `Running`, and stands `Paused`
+between sessions - so no gate of a plan update takes a run with work left for one with nothing to go back to
+(`FlowUpdateGates`). What the steps a token-ended session leaves running answer as it ends is kept for the coordinator's
+next session (`HandBackWhatIsLeft`); one its token ends during its start writes nothing, as a refused start does, and
+one a defect ends leaves what a crash leaves - nothing more written, each question it was advising still marked sought.
+A stop is in the run's state from the moment it is applied - the hard stop by `ApplyTheStop`, a stop once the pause is complete
 as the loop takes it, recorded on its own (`StopApplied`) where the pause said all already - as `flow.json`'s
 `stoppingSince`, kept by the session's end and written out by the first write of the session that goes on, so a reader tells a
 live engine that is stopping from a pause whose advice is still to come (`OrchestratorService.EngineOf`). What a past

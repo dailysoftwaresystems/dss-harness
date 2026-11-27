@@ -2265,6 +2265,139 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// A session its cancellation token ends while the advisor runs on a question a step inside a group asked records the
+    /// standing it ends with, as one with no group around the step does: the group stands open over its member, which runs
+    /// nothing until the question is answered, so nothing of the run still runs - its last record says it paused, with its
+    /// end time, never running beside one.
+    /// </summary>
+    [Fact]
+    public async Task ASessionItsTokenEndsOnAQuestionInsideAGroup_RecordsItPaused_WithItsEndTime()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            steps:
+              - name: round
+                steps:
+                  - name: think
+                    type: reason
+                    prompt: work.md
+                    outputs: work.json
+            """);
+        var advisor = new SpendingAdvisor("more", held: true);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            using var ending = CancellationTokenSource.CreateLinkedTokenSource(Token);
+            var coordinator = TestAdvice.Coordinator(definition, AtItsTurnsFirst(), new RunnerFacts(), records: records, advisor: advisor);
+            var session = coordinator.RunAsync(ending.Token);
+
+            await advisor.Begun.Task.WaitAsync(Bound, Token);
+            await ending.CancelAsync();
+
+            _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.WaitAsync(Bound, Token));
+            Assert.Equal(FlowRunStatus.Paused, coordinator.Status);
+        }
+
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        var status = harness.OrchestrationStore.ReadWorkflowStatus(layout)!;
+        var (events, torn) = FlowEventLog.Read(harness.FileSystem, layout.EventsFile);
+
+        Assert.Equal(
+            [("round", nameof(FlowInstanceState.Running)), ("round.think", nameof(FlowInstanceState.Paused))],
+            flow.Steps.Select(step => (step.Instance, step.State)));
+        Assert.Equal(nameof(FlowRunStatus.Paused), flow.Status);
+        Assert.Equal(nameof(FlowRunStatus.Paused), status.Status);
+        Assert.NotNull(status.FinishedAt);
+        Assert.Null(torn);
+        Assert.Equal(("sessionEnded", nameof(FlowRunStatus.Paused), "cancelled; waiting on q1"), (events[^1].Kind, events[^1].To, events[^1].Detail));
+    }
+
+    /// <summary>
+    /// The loop's read of what the run learns outlives the session that armed it, and each session's token ends its own
+    /// wait: a session that ended in order with the read still armed - its stop's drain gave up on a runner deaf to the
+    /// stop - leaves the read to the next session, whose token ends that session at once as it waits, its last record
+    /// written; and the token of the session before, cancelled meanwhile, ends nothing of it - never a defect that writes
+    /// nothing of the session's end.
+    /// </summary>
+    /// <param name="firstCancelled">Whether the first session's token is cancelled while the second waits, before the second's own.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheLoopsReadOutlivesItsSession_AndEachSessionsTokenEndsItsOwnWait(bool firstCancelled)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+            """);
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Deaf to every stop, and held until the test is over: the first attempt's runner, which the stop's drain gives up
+        // on, and the resume's, which the second session waits for.
+        var runner = new Runner().OnAsync("build", async (_, _) =>
+        {
+            await released.Task;
+            return FlowStepResult.Ended(passed: true, 0);
+        });
+        var clock = new TimerClock();
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var watched = new Watched(records);
+
+        try
+        {
+            using (records)
+            {
+                using var first = CancellationTokenSource.CreateLinkedTokenSource(Token);
+                using var second = CancellationTokenSource.CreateLinkedTokenSource(Token);
+                var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+                var stopping = coordinator.RunAsync(first.Token);
+
+                await runner.StartedAsync("build", 1).WaitAsync(Bound, Token);
+                coordinator.RequestStop();
+
+                // The stop applied and its drain's bound armed, then passed: the first session ends in order, stopped, with
+                // the read it waited on still armed.
+                await watched.SeenAsync(snapshot => snapshot.Status is FlowRunStatus.Stopped).WaitAsync(Bound, Token);
+                await clock.WaitingAsync().WaitAsync(Bound, Token);
+                clock.Advance(DssHarness.Core.Execution.PointOfNoReturn.SafePauseDrain);
+                Assert.Equal(FlowRunStatus.Stopped, (await stopping.WaitAsync(Bound, Token)).Status);
+
+                var resumed = coordinator.RunAsync(second.Token);
+                await runner.StartedAsync("build", 2).WaitAsync(Bound, Token);
+
+                if (firstCancelled)
+                {
+                    await first.CancelAsync();
+                }
+
+                await second.CancelAsync();
+                var ended = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => resumed.WaitAsync(Bound, Token));
+
+                // The second session's own token ended it, as its catch takes one: never the first's, which ends a defect.
+                Assert.Equal(second.Token, ended.CancellationToken);
+            }
+
+            var (events, torn) = FlowEventLog.Read(harness.FileSystem, layout.EventsFile);
+
+            Assert.Null(torn);
+            Assert.Equal(("sessionEnded", nameof(FlowRunStatus.Running), "cancelled; 1 step still running: build"), (events[^1].Kind, events[^1].To, events[^1].Detail));
+            Assert.Equal((nameof(FlowRunStatus.Running), (DateTimeOffset?)null), (harness.OrchestrationStore.ReadWorkflowStatus(layout)!.Status, harness.OrchestrationStore.ReadWorkflowStatus(layout)!.FinishedAt));
+        }
+        finally
+        {
+            released.TrySetResult();
+        }
+    }
+
+    /// <summary>
     /// A session its cancellation token ends while a step still runs - a machine step a pause leaves running, or one whose
     /// runner a stop's drain waits on - has not ended the run, whatever the pause or the stop makes its status: its last
     /// record has no end time, and says the step it left running, by the one rule of what still runs.
@@ -4448,11 +4581,13 @@ public sealed class FlowResumeTests
     /// <summary>
     /// A resume never ends done over a step it never drew: a record of a failure nothing decided - which this engine never
     /// leaves, for a failure is recorded owed until something decides it - leaves what depends on it waiting, and the
-    /// session says so, failed.
+    /// session says so, failed - its last record too, which says the standing the session ends with, never one read again
+    /// of what it left.
     /// </summary>
     [Fact]
     public async Task AResumeNeverEndsDone_OverAStepItNeverDrew()
     {
+        using var temp = new TempDirectory();
         var definition = Parse("""
             name: flow
             steps:
@@ -4470,10 +4605,20 @@ public sealed class FlowResumeTests
             [],
             []);
 
-        var end = await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: state).RunAsync(Token).WaitAsync(Bound, Token);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        FlowSessionEnd end;
+
+        using (records)
+        {
+            end = await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: state, records: records).RunAsync(Token).WaitAsync(Bound, Token);
+        }
+
+        var (events, _) = FlowEventLog.Read(harness.FileSystem, layout.EventsFile);
 
         Assert.Equal(FlowRunStatus.Failed, end.Status);
         Assert.Equal("failed; the session ended with steps that never ended: after", end.Summary);
+        Assert.Equal(nameof(FlowRunStatus.Failed), harness.OrchestrationStore.ReadFlow(layout)!.Status);
+        Assert.Equal(("sessionEnded", nameof(FlowRunStatus.Failed), end.Summary), (events[^1].Kind, events[^1].To, events[^1].Detail));
     }
 
     /// <summary>

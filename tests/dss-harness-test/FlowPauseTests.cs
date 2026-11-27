@@ -1020,6 +1020,44 @@ public sealed class FlowPauseTests
     }
 
     /// <summary>
+    /// A session says the run running in every record it writes while it drives the run, between two steps as well: the
+    /// record of a step's end, written before the step after it starts, says running - never done over the step still to
+    /// start - and the run is said done once nothing of it is left, the session's end saying so.
+    /// </summary>
+    [Fact]
+    public async Task ASessionBetweenTwoSteps_SaysTheRunRunning_NeverDoneOverTheStepStillToStart()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: build
+              - name: two
+                type: build
+                dependsOn: [one]
+            """);
+        var ended = new List<(string? Instance, FlowRunStatus Status)>();
+        var records = new RecordsWatch((kind, snapshot, instance, to) =>
+        {
+            if (kind == FlowChangeKind.Step && to == nameof(FlowInstanceState.Done))
+            {
+                lock (ended)
+                {
+                    ended.Add((instance, snapshot.Status));
+                }
+            }
+        });
+        var coordinator = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), records: records);
+
+        Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(TestContext.Current.CancellationToken)).Status);
+
+        lock (ended)
+        {
+            Assert.Equal([("one", FlowRunStatus.Running), ("two", FlowRunStatus.Done)], ended);
+        }
+    }
+
+    /// <summary>
     /// A session driven after one a pause ended, on the same engine with nothing answered between, says how it stands
     /// itself - running while its step runs, in its status and in every record it writes - never how the session before it
     /// ended, for the last session's end says that session only.

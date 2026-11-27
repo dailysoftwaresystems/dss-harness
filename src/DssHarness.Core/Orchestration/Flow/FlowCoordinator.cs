@@ -638,6 +638,14 @@ public sealed class FlowCoordinator
     private bool _stopApplied;
     private int _questionsRaised;
     private FlowSessionEnd? _last;
+
+    /// <summary>
+    /// The loop's one read of its channel, armed with no token and the loop's across waits and sessions until what it read
+    /// is taken: a wait a retry's time, a drain's bound, the budget's tick or a session's token won leaves it armed, as a
+    /// session's end does, and the next wait - this session's or the next one's - takes what it read
+    /// (<see cref="WaitNextAsync"/>), so no message is lost to a wait that no longer stands, and no session's token is
+    /// carried into another session's wait.
+    /// </summary>
     private Task<Message>? _pending;
 
     /// <summary>
@@ -922,7 +930,15 @@ public sealed class FlowCoordinator
         WriteStepRecordOf(instance);
     }
 
-    /// <summary>How the run stands now.</summary>
+    /// <summary>
+    /// How the run stands now: the standing its session ended with, once one has ended in order (<see cref="Finish"/>), until
+    /// something changes it; the stop's or the pause's own while one is in force; <see cref="FlowRunStatus.Running"/> while a
+    /// step still runs (<see cref="StillRunning"/>), for a group is only bookkeeping over its members; paused on a question
+    /// open; failed where a failure ended the run; and done only where nothing of the run is left unended
+    /// (<see cref="Unended"/>). What is left unended with nothing running is the session's to go on with while one drives the
+    /// run, which is running, and stands still where none does - between two sessions, or once a token ended one - paused
+    /// until a session takes it up: never running with nothing running and no session driving it.
+    /// </summary>
     public FlowRunStatus Status
     {
         get
@@ -948,12 +964,25 @@ public sealed class FlowCoordinator
                 return FlowRunStatus.Paused;
             }
 
-            if (_created.Any(instance => instance.State is FlowInstanceState.Running) || _wakes.Count > 0)
+            if (StillRunning().Any())
             {
                 return FlowRunStatus.Running;
             }
 
-            return _open.Count > 0 ? FlowRunStatus.Paused : _stopping || Standing(FlowFailure.EndedRun).Count > 0 ? FlowRunStatus.Failed : FlowRunStatus.Done;
+            if (_open.Count > 0)
+            {
+                return FlowRunStatus.Paused;
+            }
+
+            if (_stopping || Standing(FlowFailure.EndedRun).Count > 0)
+            {
+                return FlowRunStatus.Failed;
+            }
+
+            // Nothing runs, nothing is asked and no failure ended the run: it is done only where nothing of it is left -
+            // the session's end says no other - so a step not started yet, a group standing open or a step still to be
+            // drawn keeps it from done, which no gate of a plan update then takes for a run with nothing to go back to.
+            return !Unended().Any() ? FlowRunStatus.Done : _inSession ? FlowRunStatus.Running : FlowRunStatus.Paused;
         }
     }
 
@@ -1193,13 +1222,15 @@ public sealed class FlowCoordinator
     /// </summary>
     /// <param name="cancellationToken">
     /// Ends the session where it stands, which then throws <see cref="OperationCanceledException"/>: nothing more is
-    /// started, decided or waited for once the loop meets it - at the top of each pass, and after every wait it does not end
-    /// itself, a pause's or a plan update's handoff turns, whose answers are kept - save the advice it ends, whose runners
-    /// it waits for as a stop's drain does. The token ends no advice itself: the session's end does, as a stop does, so an
-    /// advice it ends is never taken for one that obtained nothing. What it charged and holds is written all the same -
-    /// what each advice answered, and its last record with every spend among it, which has no end time while a step still
-    /// runs (<see cref="StillRunning"/>) - and nothing else of the run is changed: the steps it started run on, and what
-    /// they answer is the next session's. One that ends the session's start writes nothing, as a refused start does.
+    /// started, decided or waited for once the loop meets it - in the loop's wait for what the run learns, which it ends at
+    /// once (<see cref="WaitNextAsync"/>), at the top of each pass, and after every wait it does not end itself, a pause's
+    /// or a plan update's handoff turns, whose answers are kept - save the advice it ends, whose runners it waits for as a
+    /// stop's drain does. It ends this session's waits alone, and the token of a session before this one ends nothing of
+    /// it. The token ends no advice itself: the session's end does, as a stop does, so an advice it ends is never taken for
+    /// one that obtained nothing. What it charged and holds is written all the same - what each advice answered, and its
+    /// last record with every spend among it, which has no end time and says the run running only while a step still runs
+    /// (<see cref="StillRunning"/>) - and nothing else of the run is changed: the steps it started run on, and what they
+    /// answer is the next session's. One that ends the session's start writes nothing, as a refused start does.
     /// </param>
     public async Task<FlowSessionEnd> RunAsync(CancellationToken cancellationToken)
     {
@@ -1574,18 +1605,18 @@ public sealed class FlowCoordinator
             }
         }
 
-        _last = Finish();
-        return _last;
+        return Finish();
     }
 
     /// <summary>
-    /// The session's last record - the one owner of it, however the session ends: in order (<see cref="Finish"/>), or where
-    /// its cancellation token ends it once it went on - the run as the session leaves it, every spend it charged among it,
-    /// recorded and put on the disk before the session answers. A run its session leaves with a step still running - its
-    /// token ended it while one ran (<see cref="StillRunning"/>) - has not ended, and its records say so: no end time,
-    /// whatever its status says - <see cref="FlowRunStatus.Running"/>, or the pause's or the stop's own standing where one
-    /// is in force (<see cref="Status"/>), for a pause or a stop the session's token cut short is as much the run's as one
-    /// the loop saw through.
+    /// The session's last record - the one owner of it, however the session ends: in order (<see cref="Finish"/>), saying the
+    /// standing that end says, or where its cancellation token ends it once it went on - the run as the session leaves it,
+    /// every spend it charged among it, recorded and put on the disk before the session answers. A run its session leaves
+    /// with a step still running - its token ended it while one ran (<see cref="StillRunning"/>) - has not ended, and its
+    /// records say so: no end time, whatever its status says - <see cref="FlowRunStatus.Running"/>, or the pause's or the
+    /// stop's own standing where one is in force (<see cref="Status"/>), for a pause or a stop the session's token cut short
+    /// is as much the run's as one the loop saw through. One it leaves with nothing running has an end time, and its status
+    /// is never running (<see cref="Status"/>): the record never says a run is going on that nothing goes on with.
     /// </summary>
     /// <param name="summary">The session in words, as its record says it.</param>
     private void RecordTheSessionsEnd(string summary)
@@ -1601,15 +1632,30 @@ public sealed class FlowCoordinator
     /// The steps of the run still running, in the order they were made: a step in flight - a leaf, for a group is only
     /// bookkeeping over its members, and one whose member waits on a question runs nothing until it is answered - a
     /// stopped step whose runner is still ending among them, and one a wake is owed, its retry's time or its drain's bound
-    /// still to come. The one owner of whether anything runs: the loop waits while one does, a session's last record has
-    /// no end time while one does (<see cref="RecordTheSessionsEnd"/>), and a session its token ended names each
-    /// (<see cref="CancelledSummary"/>).
+    /// still to come. The one owner of whether anything runs: the loop waits while one does, the run's status says running
+    /// while one does (<see cref="Status"/>), a session's last record has no end time while one does
+    /// (<see cref="RecordTheSessionsEnd"/>), and a session its token ended names each (<see cref="CancelledSummary"/>).
     /// </summary>
     private IEnumerable<FlowInstance> StillRunning()
     {
         var owed = _wakes.Count == 0 ? null : _wakes.Select(wake => wake.Instance).ToHashSet(ReferenceEqualityComparer.Instance);
         return _created.Where(instance => !instance.Step.IsGroup && (instance.State is FlowInstanceState.Running || owed?.Contains(instance) == true));
     }
+
+    /// <summary>
+    /// What of the run is left unended, by id in the order made: an instance never started, still open or paused - a group
+    /// standing open over its members among them - then a step never drawn though its scope still draws. A handler is
+    /// drawn by its source's ending and a triage step by an issue, never by the schedule, so neither is owed a drawing. The
+    /// one owner of what keeps a run from done: a session never ends done over any of it (<see cref="Finish"/>), and the
+    /// run's status is never done while any is left (<see cref="Status"/>).
+    /// </summary>
+    private IEnumerable<string> Unended()
+        => _created
+            .Where(instance => instance.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused)
+            .Select(instance => instance.Id)
+            .Concat(_scopes.SelectMany(scope => DeclarationsOf(scope)
+                .Where(declaration => declaration.On is null && declaration.Raised is null && !IsPlannerOf(scope, declaration) && !scope.Instantiated.Contains(declaration.Name) && Draws(scope, declaration))
+                .Select(declaration => MemberId(scope, declaration))));
 
     /// <summary>
     /// What a session its cancellation token ended says of itself, as its last record words it: <c>cancelled</c>, with the
@@ -12844,10 +12890,11 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Ends the session in order, its last record written (<see cref="RecordTheSessionsEnd"/>), and says the run's status
-    /// with its failures, its passed-over steps, and the pause or stop that ended it. What never started is left as it is -
-    /// for the question it waits on, the pause's resume or the stop's - and a session that left a step unended is never
-    /// said done.
+    /// Ends the session in order and says the run's status with its failures, its passed-over steps, and the pause or stop
+    /// that ended it: that end is the run's standing from here on (<see cref="Status"/>), and its last record, written once
+    /// it is (<see cref="RecordTheSessionsEnd"/>), says it. What never started is left as it is - for the question it waits
+    /// on, the pause's resume or the stop's - and a session that left a step unended (<see cref="Unended"/>) is never said
+    /// done.
     /// </summary>
     private FlowSessionEnd Finish()
     {
@@ -12866,16 +12913,9 @@ public sealed class FlowCoordinator
             : open.Count > 0 || waiting.Count > 0 ? FlowRunStatus.Paused
             : FlowRunStatus.Done;
 
-        // Done says everything ended as asked: a step left unended - never started, still open, paused on nothing, or
-        // never even drawn though its scope still draws - makes the session failed, and says which, never done over
-        // work that never ran. A handler is drawn by its source's ending and a triage step by an issue, never by the
-        // schedule, so neither is owed a drawing.
-        var unended = status == FlowRunStatus.Done
-            ? [.. _created.Where(instance => instance.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused).Select(instance => instance.Id),
-                .. _scopes.SelectMany(scope => DeclarationsOf(scope)
-                    .Where(declaration => declaration.On is null && declaration.Raised is null && !IsPlannerOf(scope, declaration) && !scope.Instantiated.Contains(declaration.Name) && Draws(scope, declaration))
-                    .Select(declaration => MemberId(scope, declaration)))]
-            : new List<string>();
+        // Done says everything ended as asked: a step left unended makes the session failed, and says which, never done
+        // over work that never ran.
+        var unended = status == FlowRunStatus.Done ? Unended().ToList() : [];
 
         if (unended.Count > 0)
         {
@@ -12899,15 +12939,19 @@ public sealed class FlowCoordinator
             _ => $"paused; waiting on {string.Join(", ", open.Count > 0 ? open.Select(question => question.Id) : waiting)}",
         };
 
-        RecordTheSessionsEnd(summary);
-
-        return new FlowSessionEnd(
+        var end = new FlowSessionEnd(
             status,
             [.. passedOver.Select(instance => instance.Id)],
             [.. failed.Select(instance => instance.Id)],
             open,
             summary,
             _pause);
+
+        // The session's end is the run's standing from here on, its last record among it: that record says the standing
+        // the session ends with (Status), never one read again of what it left.
+        _last = end;
+        RecordTheSessionsEnd(summary);
+        return end;
 
         string PausedSummary(IReadOnlyList<FlowQuestion> openQuestions)
         {
@@ -12922,29 +12966,28 @@ public sealed class FlowCoordinator
                 : $"{handled.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} failures were handled: {string.Join(", ", handled.Select(instance => $"{instance.Step.Name}, by {instance.HandledBy}"))}";
     }
 
-    /// <summary>Waits for the next thing the run learns - a completion, an event of a leg, a retry's time coming, or the budget's tick - and takes it. One read of the channel is kept open across the waits a retry's turn takes, so no message is read by a wait that no longer stands.</summary>
+    /// <summary>
+    /// Waits for the next thing the run learns - a completion, an event of a leg, a retry's time coming, or the budget's
+    /// tick - and takes it. The loop's one read of the channel (<see cref="_pending"/>) is armed with no token and kept
+    /// across the waits it does not win and across sessions, so no message is read by a wait that no longer stands; the
+    /// wait itself is the session's, which its token ends at once, the read left armed for whoever waits next.
+    /// </summary>
+    /// <param name="cancellationToken">The session's token: ends this wait at once, and no other session's.</param>
     private async Task WaitNextAsync(CancellationToken cancellationToken)
     {
         // The pass ends here: what it wrote is on the disk before anything is waited for.
         EndThePass();
 
-        // A read cancelled by a session's end is dropped, not kept: the next session arms its own.
-        if (_pending is { IsCanceled: true } or { IsFaulted: true })
+        if (_pending is { IsCompleted: true } read)
         {
+            TakeMessage(read.Result);
             _pending = null;
+            return;
         }
 
-        if (_pending is null || _pending.IsCompleted)
-        {
-            if (_pending is { IsCompleted: true })
-            {
-                TakeMessage(_pending.Result);
-                _pending = null;
-                return;
-            }
-
-            _pending = _messages.Reader.ReadAsync(cancellationToken).AsTask();
-        }
+        // Armed with no token: a session's token ends its own wait, never the read, which outlives the wait and the
+        // session alike and is read by the next wait - so the token of a session that ended is never met by a later one.
+        _pending ??= _messages.Reader.ReadAsync(CancellationToken.None).AsTask();
 
         // The minutes a reason step runs count while it runs: the run wakes when those running now would bring the
         // budget to its reserve, so a long one pauses the run there and not only when its attempt ends.
@@ -12955,7 +12998,7 @@ public sealed class FlowCoordinator
         {
             if (_wakes.Count == 0 && tick is null)
             {
-                TakeMessage(await _pending.ConfigureAwait(false));
+                TakeMessage(await _pending.WaitAsync(cancellationToken).ConfigureAwait(false));
                 _pending = null;
                 return;
             }
@@ -12973,7 +13016,7 @@ public sealed class FlowCoordinator
                 waits.Add(tick);
             }
 
-            var done = await Task.WhenAny(waits).ConfigureAwait(false);
+            var done = await Task.WhenAny(waits).WaitAsync(cancellationToken).ConfigureAwait(false);
 
             if (done == tick)
             {
@@ -12992,7 +13035,7 @@ public sealed class FlowCoordinator
             tickEnds.Cancel();
         }
 
-        // Awaited, not read: a read the session's token cancelled ends the session cancelled, as every wait does.
+        // The read won the wait: what it read is taken.
         TakeMessage(await _pending.ConfigureAwait(false));
         _pending = null;
 
