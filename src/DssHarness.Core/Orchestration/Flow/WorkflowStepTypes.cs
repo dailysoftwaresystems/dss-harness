@@ -198,7 +198,7 @@ public static class WorkflowStepTypes
                 new("graphFrom", $"where the step's context pack starts from: {WorkflowStep.GraphFromTask} (the default: what its task names, and the working sets of the work the run holds for it), {WorkflowStep.GraphFromChanges} (what its tree holds differently from its base), or the reason step - of its own scope or one around it - whose working set seeds it, its instance in the step's own work item and iteration; a step named {string.Join(" or ", WorkflowStep.GraphFromWords)} cannot be named as a seed; a step that goes on with another's work may say it, for its pack is its own"),
                 new("graphPromptTokens", $"the size of the first page of the step's context pack pushed into its first message, in estimated tokens, from 0 (none pushed) to {WorkflowStep.MostGraphPromptTokens}; absent, {WorkflowStep.DefaultGraphPromptTokens} for a step at graph: map and 0 for one at tools, which asks the graph tool's pack for its pages from page 1, {WorkflowStep.DefaultGraphPromptTokens} a page where it pushes none; 0 on a step at map gives it no pack; nothing the pack reaches is left out: what passes the first page is on the pages after it, which the graph tool's pack operation reads by page; a step that goes on with another's work may say its own"),
                 new("graphReads", "whether the step's reads are narrowed to the graph: narrow (the default) or guide; the narrowing holds only a step given the tool (graph: tools)"),
-                new("writes", "the paths a writing step may write"),
+                new("writes", "the paths a writing step may write, each read from its worktree's root as a work item's ownedPaths are: a path names that one path, and what is beneath it only where it names a directory - one the worktree holds, or one ending in a separator - and a pattern is anchored at the root, ** for any depth"),
                 new("ask", "the step may put its questions to a person; one that may not writes its assumptions down"),
                 new("askRounds", "how often a step that asks may ask before it goes on with what it has, from 1 to 5; absent, 2"),
                 new("backoffSeconds", $"seconds the step waits before it is tried again after its agent failed, twice as long before each later try, at most {WorkflowStep.MostBackoffSeconds}; absent, the workflow's backoffSeconds"),
@@ -535,7 +535,7 @@ public static class WorkflowStepTypes
     [
         new("of", "the create-agent step whose agent the step works on, which it waits for through dependsOn") { Required = true },
         new("allow", "what it may carry, member for member the fold command's options") { Keys = AllowKeys },
-        new("within", "the paths, as patterns, its fold may write or delete in the main tree; a path outside them asks foldOutside, and the registries its rows change are never held to it"),
+        new("within", "the paths its fold may write or delete in the main tree, each read from its root as a reason step's writes are; a path outside them asks foldOutside, and the registries its rows change are never held to it"),
     ];
 
     /// <summary>What one <c>on</c> block takes.</summary>

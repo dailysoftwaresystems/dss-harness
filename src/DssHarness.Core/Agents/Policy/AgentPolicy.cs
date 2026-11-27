@@ -432,8 +432,11 @@ public sealed partial class AgentPolicy
         // A domain is held as the configuration's check reads it: trimmed, its root dot gone, as a
         // host is.
         _webDomains = [.. (ground.WebDomains ?? []).Select(domain => domain.Trim().TrimEnd('.'))];
+        // The step's writes are a list of its tree's own paths - a work item's owned paths flow into them - so each is
+        // read from the worktree's root, as the plan's check read it: a path names a directory's contents only where the
+        // worktree holds that directory.
         _writes = ground.Writes is { } writes
-            ? [.. writes.Select(pattern => (GlobPattern.Parse(pattern), pattern))]
+            ? [.. writes.Select(pattern => (GlobPattern.FromRoot(pattern, GlobPattern.DirectoriesIn(fileSystem, ground.WorkingDirectory)), pattern))]
             : [];
         _worktreeRunRules =
             [.. GitStateVerbs.Select(verb => AgentRule.Parse($"Run(git {verb} *)")),

@@ -740,6 +740,30 @@ public sealed class AgentPolicyTests
         Assert.False(ground.Policy().StepWrites("src/Storage/MemoryOrderStore.cs"));
     }
 
+    /// <summary>
+    /// A step's writes are read from its worktree's root, as the plan's check read the work item's owned paths that flow
+    /// into them: the root's Makefile is no Makefile beneath it, a path the worktree holds as a directory opens what is in
+    /// it, and one it does not hold - a file the step is to make - opens itself alone. So what the check found no two items
+    /// to share is what each item's agent may write.
+    /// </summary>
+    [Fact]
+    public void AStepsWrites_AreReadFromItsWorktreesRoot()
+    {
+        using var ground = Ground();
+        Directory.CreateDirectory(Path.Combine(ground.Worktree, "src", "click"));
+        var policy = ground.Policy(writes: ["Makefile", "src/click", "src/new"]);
+
+        Assert.True(policy.StepWrites("Makefile"));
+        Assert.False(policy.StepWrites("lib/Makefile"));
+        Assert.True(policy.StepWrites("src/click/types.py"));
+        Assert.True(policy.StepWrites("src/new"));
+        Assert.False(policy.StepWrites("src/new/a.py"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Write(Path.Combine(ground.Worktree, "Makefile")));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Write(Path.Combine(ground.Worktree, "src", "click", "types.py")));
+        Assert.Equal("the step's writes", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(Path.Combine(ground.Worktree, "lib", "Makefile"))).Rule);
+        Assert.Equal("the step's writes", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(Path.Combine(ground.Worktree, "src", "new", "a.py"))).Rule);
+    }
+
     /// <summary>The shipped protected-path list, pinned word for word: a change in it is a change someone made.</summary>
     [Fact]
     public void TheProtectedPathsArePinned()

@@ -117,6 +117,62 @@ public sealed class PlanValidatorTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Each path an item owns or must not touch is read from the repository's root, as its agent's writes and its fold's
+    /// within read it: the plans the live runs had refused pass - an item owning the root's calc.c, calc.h and main.c that
+    /// must not touch the root's Makefile, and one owning src/click's types.py and a test beside one owning the root's
+    /// pyproject.toml and uv.lock - for a root-level name meets no other root-level name and no nested file. What does meet
+    /// is refused still: a directory the tree holds and a file in it, a pattern and what it matches, and a path not yet
+    /// made and one beneath it.
+    /// </summary>
+    [Fact]
+    public async Task EachPathAnItemNames_IsReadFromTheRoot_SoARootLevelFileMeetsNoOtherPath()
+    {
+        var repository = new TempDirectory();
+        _made.Add(repository);
+
+        foreach (var file in new[] { "file.txt", "Makefile", "calc.c", "calc.h", "main.c", "pyproject.toml", "uv.lock", "src/click/testing.py", "src/click/types.py", "tests/test_types/test_Tuple.py" })
+        {
+            repository.WriteFile(file, "content\n");
+        }
+
+        var harness = new HarnessFactory();
+        await harness.InitializeHarnessAsync(repository.Path, Token);
+        await harness.CommitAllAsync(repository.Path, "initial", Token);
+
+        Assert.Empty(await CheckAsync(
+            repository,
+            Owning("add-mul", ["calc.c", "calc.h", "main.c"], forbidden: ["Makefile"]),
+            Owning("tuple-types", ["src/click/types.py", "tests/test_types/test_Tuple.py"], forbidden: ["src/click/testing.py"]),
+            Owning("packaging", ["pyproject.toml", "uv.lock"], forbidden: ["src/**"])));
+
+        Assert.Equal(
+            [
+                "work items 'package' and 'testing' both own what 'src/click' and 'src/click/testing.py' match: no file is written by two items, so give it to one",
+                "work items 'globbed' and 'built' both own what '*.c' and 'calc.c' match: no file is written by two items, so give it to one",
+                "work items 'made' and 'inside' both own what 'src/new' and 'src/new/a.py' match: no file is written by two items, so give it to one",
+                "work item 'kept' owns 'tests/test_types' and must not touch 'tests/test_types/test_Tuple.py', which match the same paths: an item's forbidden paths are kept by the paths it owns",
+            ],
+            await CheckAsync(
+                repository,
+                Owning("package", ["src/click"]),
+                Owning("testing", ["src/click/testing.py"]),
+                Owning("globbed", ["*.c"]),
+                Owning("built", ["calc.c"]),
+                Owning("made", ["src/new"]),
+                Owning("inside", ["src/new/a.py"]),
+                Owning("kept", ["tests/test_types"], forbidden: ["tests/test_types/test_Tuple.py"])));
+
+        static JsonObject Owning(string name, string[] owned, string[]? forbidden = null)
+        {
+            var item = Item(name);
+            item["ownedPaths"] = new JsonArray([.. owned.Select(path => (JsonNode?)path)]);
+            item["forbiddenPaths"] = new JsonArray([.. (forbidden ?? []).Select(path => (JsonNode?)path)]);
+
+            return item;
+        }
+    }
+
     /// <summary>A plan whose items carry sound classes - and one that decides nothing and says why - passes.</summary>
     [Fact]
     public async Task ASoundPlan_Passes()

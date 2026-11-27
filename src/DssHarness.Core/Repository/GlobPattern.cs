@@ -1,12 +1,14 @@
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Repository;
 
 /// <summary>
-/// One path pattern as the agent clients' rules take it - a restriction's path, a step's
-/// <c>writes</c>, the glob of a file search - and as a workflow's <c>codebaseGraph.include</c> and
-/// <c>codebaseGraph.exclude</c> say which paths are graphed: read once and matched against many paths.
+/// One path pattern as the agent clients' rules take it - a restriction's path, the glob of a file
+/// search - and as a workflow's <c>codebaseGraph.include</c> and <c>codebaseGraph.exclude</c> say which
+/// paths are graphed, or one entry of a list of a tree's own paths, read from its root - a step's
+/// <c>writes</c> among them (<see cref="FromRoot"/>): read once and matched against many paths.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -38,6 +40,15 @@ namespace DssHarness.Core.Repository;
 /// itself, as gitignore reads it: a rule refuses what is written <em>in</em> a place, and a rule
 /// that also matched the place would refuse a directory nobody can write.
 /// </para>
+/// <para>
+/// A list of a tree's own paths is read the other way, from the tree's root (<see cref="FromRoot"/>): a work item's owned
+/// and forbidden paths, the files an issue being fixed holds, a step's <c>writes</c> and a fold's <c>within</c> - the
+/// plan's ownedPaths flow into the last two, so what the plan's check found no two items to share is what each item's
+/// agent may write and its fold carry. There every entry is anchored at the root - a name with no separator is the
+/// root's own, never one at any depth - and a path, an entry holding no wildcard, names that one path, holding what is
+/// beneath it only where it names a directory: so the root's <c>Makefile</c> and <c>calc.c</c> never meet through a
+/// <c>Makefile/calc.c</c> no tree can hold.
+/// </para>
 /// </remarks>
 public sealed class GlobPattern
 {
@@ -45,17 +56,24 @@ public sealed class GlobPattern
     private readonly bool _anchored;
     private readonly bool _directoriesOnly;
 
-    private GlobPattern(string[] segments, bool anchored, bool directoriesOnly)
+    /// <summary>
+    /// Whether the pattern names its one path and nothing beneath it: a path read from the root (<see cref="FromRoot"/>)
+    /// that names no directory. Such a pattern is anchored, its segments hold no wildcard, and it names no directory.
+    /// </summary>
+    private readonly bool _exact;
+
+    private GlobPattern(string[] segments, bool anchored, bool directoriesOnly, bool exact = false)
     {
         _segments = segments;
         _anchored = anchored;
         _directoriesOnly = directoriesOnly;
+        _exact = exact;
     }
 
     /// <summary>
-    /// The pattern in the one spelling that reads back as the same matcher: its segments joined by
-    /// <c>/</c>, led by one where the pattern is anchored and its one segment would not say so, and
-    /// ended by one where it names a directory.
+    /// The pattern in the one spelling that reads back as the same matcher, by the reading that made it - <see cref="Parse"/>,
+    /// or <see cref="FromRoot"/> asked of the same tree: its segments joined by <c>/</c>, led by one where the pattern is
+    /// anchored and its one segment would not say so, and ended by one where it names a directory.
     /// </summary>
     public override string ToString()
         => (_anchored && _segments.Length == 1 ? "/" : string.Empty)
@@ -88,6 +106,72 @@ public sealed class GlobPattern
             Folded(PathPatterns.Normalize(pattern).Split('/')),
             anchored: written.TrimEnd('/').Contains('/', StringComparison.Ordinal),
             directoriesOnly: written.EndsWith('/'));
+    }
+
+    /// <summary>
+    /// Reads <paramref name="entry"/>, one entry of a list of a tree's own paths, from the root of that tree: a work item's
+    /// owned or forbidden paths, the files an issue being fixed holds, a step's <c>writes</c>, a fold's <c>within</c> - the
+    /// one reading of them all, for the plan's ownedPaths flow into the last two, and what the plan's check found no two
+    /// items to share must be what each may write and fold. The entry is anchored at the root whatever it holds, so a name
+    /// with no separator is the root's own, never one at any depth. A path - an entry holding no wildcard
+    /// (<see cref="IsPattern"/>) - names that one path, and holds what is beneath it only where it names a directory: one
+    /// <paramref name="namesDirectory"/> says the tree holds, or one written with a trailing separator, which names what is
+    /// beneath it alone, as <see cref="Parse"/> reads one. A pattern keeps its meaning, anchored at the root: a directory
+    /// it matches covers what is beneath it.
+    /// </summary>
+    /// <param name="entry">The entry, as the list writes it, with either separator.</param>
+    /// <param name="namesDirectory">
+    /// Whether a path relative to the tree's root, spelled with forward separators, names a directory there: the tree's
+    /// own answer (<see cref="DirectoriesIn"/>).
+    /// </param>
+    /// <exception cref="HarnessException">The entry cannot be read, as <see cref="Problem"/> says why.</exception>
+    public static GlobPattern FromRoot(string entry, Func<string, bool> namesDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(namesDirectory);
+
+        var problem = Problem(entry);
+
+        if (problem is not null)
+        {
+            throw new HarnessException(HarnessExit.ConfigInvalid, $"the pattern '{entry}' {problem}");
+        }
+
+        var segments = Folded(PathPatterns.Normalize(entry).Split('/'));
+        var directoriesOnly = entry.Replace('\\', '/').EndsWith('/');
+
+        return new GlobPattern(
+            segments,
+            anchored: true,
+            directoriesOnly,
+            exact: !directoriesOnly && !IsPattern(entry) && !namesDirectory(string.Join('/', segments)));
+    }
+
+    /// <summary>
+    /// The answer of the tree at <paramref name="tree"/> to <see cref="FromRoot"/>'s question: whether a path relative to it
+    /// names a directory there. A link, whatever it leads to, names none - git keeps one as a file, and what is written
+    /// through it lands where it leads - and neither does a path that cannot be asked of, a name its file system cannot
+    /// hold among them: the path then names itself alone, as it is written, the narrower reading, which lets a step write
+    /// and a fold carry nothing beneath it.
+    /// </summary>
+    /// <param name="fileSystem">Looks at the tree.</param>
+    /// <param name="tree">The tree's root.</param>
+    public static Func<string, bool> DirectoriesIn(IFileSystem fileSystem, string tree)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+
+        return path =>
+        {
+            try
+            {
+                // Joined, never combined: a path that reads as rooted on this system is still one inside the tree.
+                return fileSystem.KindOf(Path.Join(tree, path)) == PathKind.Directory;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                return false;
+            }
+        };
     }
 
     /// <summary>
@@ -177,7 +261,8 @@ public sealed class GlobPattern
     /// Whether <paramref name="relativePath"/> is matched: whole path from the root where the
     /// pattern is anchored, any one segment of it where it is not - and so everything beneath a
     /// matched name, as gitignore reads it, which matches a directory by matching what is written
-    /// inside it. A pattern naming a directory matches no path's last segment itself.
+    /// inside it. A pattern naming a directory matches no path's last segment itself; a path read
+    /// from the root that names no directory (<see cref="FromRoot"/>) matches itself alone.
     /// </summary>
     /// <param name="relativePath">
     /// A path relative to what the pattern is matched against, spelled either way: a leading
@@ -234,7 +319,9 @@ public sealed class GlobPattern
         // are not.
         var covers = new bool[_segments.Length + 1, deepest + 1];
 
-        for (var candidateIndex = 1; candidateIndex <= deepest; candidateIndex++)
+        // The pattern spent, what is left of the path is covered: all of it beneath a matched name, and none of it where
+        // the pattern names its one path and nothing beneath.
+        for (var candidateIndex = _exact ? deepest : 1; candidateIndex <= deepest; candidateIndex++)
         {
             covers[_segments.Length, candidateIndex] = true;
         }
@@ -290,6 +377,12 @@ public sealed class GlobPattern
 
         var above = progress.MatchedAbove || progress.MatchedHere;
 
+        if (above && _exact)
+        {
+            // A path that names nothing beneath it is past once a segment follows it: nothing deeper is matched.
+            return new Progress(string.Empty, MatchedAbove: false, MatchedHere: false);
+        }
+
         if (above)
         {
             // A matched directory is matched all the way down: nothing below it changes that.
@@ -330,7 +423,7 @@ public sealed class GlobPattern
     /// <summary>
     /// Whether the path read to <paramref name="progress"/> is matched, as <see cref="Matches"/> decides it: a directory
     /// above it matched, or - where the pattern does not name a directory, which matches only what lies beneath one - the
-    /// path itself.
+    /// path itself. A pattern that names its one path and nothing beneath it is never matched above.
     /// </summary>
     internal bool Ends(Progress progress) => progress.MatchedAbove || (!_directoriesOnly && progress.MatchedHere);
 
@@ -357,7 +450,9 @@ public sealed class GlobPattern
     /// <summary>
     /// Whether some path is matched by this pattern and by <paramref name="other"/> both - one that exists or one that
     /// does not yet - so two patterns that would each let a different owner write a file are told apart from two that
-    /// never meet.
+    /// never meet. A path read from the root that names no directory (<see cref="FromRoot"/>) holds nothing beneath it,
+    /// for no path is beneath a file - unless the other names only paths beneath it, by its own names, which are real only
+    /// where it is a directory: <c>src/new</c> and <c>src/new/a.cs</c> name one place, and meet.
     /// </summary>
     /// <param name="other">The other pattern.</param>
     /// <param name="comparison">How names are compared: the case rule of the tree the paths would be in.</param>
@@ -371,8 +466,8 @@ public sealed class GlobPattern
             throw new ArgumentException($"a path's names are compared ordinally, with or without case, never by {comparison}", nameof(comparison));
         }
 
-        var mine = Spelled();
-        var theirs = other.Spelled();
+        var mine = Spelled(holdsBeneath: !_exact || other.LiesBeneath(this, comparison));
+        var theirs = other.Spelled(holdsBeneath: !other._exact || LiesBeneath(other, comparison));
         var seen = new bool?[mine.Count + 1, theirs.Count + 1];
 
         return Meet(0, 0);
@@ -401,11 +496,25 @@ public sealed class GlobPattern
     }
 
     /// <summary>
+    /// Whether every path this pattern matches lies beneath the one path <paramref name="path"/> names, by names of its
+    /// own: anchored, and its first segments the path's own names, each written out - no wildcard among them - and
+    /// followed by more of it, or by the separator that says it names a directory.
+    /// </summary>
+    /// <param name="path">A pattern that names one path and nothing beneath it.</param>
+    /// <param name="comparison">How names are compared.</param>
+    private bool LiesBeneath(GlobPattern path, StringComparison comparison)
+        => _anchored
+            && (_segments.Length > path._segments.Length || (_segments.Length == path._segments.Length && _directoriesOnly))
+            && path._segments.Select((name, at) => !IsPattern(_segments[at]) && string.Equals(name, _segments[at], comparison)).All(same => same);
+
+    /// <summary>
     /// The paths this pattern matches, spelled whole from the root: each name a segment's pattern, and null for a run of
     /// any number of segments. A pattern that is not anchored is preceded by such a run; what a matched directory holds
-    /// follows, one segment or more where the pattern names a directory or ends in <c>**</c>, any number otherwise.
+    /// follows, one segment or more where the pattern names a directory or ends in <c>**</c>, any number otherwise - and
+    /// none where <paramref name="holdsBeneath"/> says the pattern holds nothing beneath its one path.
     /// </summary>
-    private List<string?> Spelled()
+    /// <param name="holdsBeneath">Whether what is beneath a matched path is matched too: false only for a pattern that names its one path.</param>
+    private List<string?> Spelled(bool holdsBeneath)
     {
         var spelled = new List<string?>();
 
@@ -436,7 +545,10 @@ public sealed class GlobPattern
             spelled.Add("*");
         }
 
-        spelled.Add(null);
+        if (holdsBeneath)
+        {
+            spelled.Add(null);
+        }
 
         return spelled;
     }

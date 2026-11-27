@@ -143,8 +143,8 @@ public sealed record AgentRestriction(string Text, AgentPolicySource Source);
 /// refuses one, and so does the ground.
 /// </param>
 /// <param name="Writes">
-/// The step's <c>writes</c>, its patterns relative to its worktree: the one source that narrows,
-/// for where a step has it, a write under its worktree to the paths its patterns name. Null where
+/// The step's <c>writes</c>, its entries read from its worktree's root (<see cref="Repository.GlobPattern.FromRoot"/>):
+/// the one source that narrows, for where a step has it, a write under its worktree to the paths its entries name. Null where
 /// the step narrows nothing; never empty, for an empty list would read as no narrowing - a flow
 /// refuses one, and so does the ground.
 /// </param>

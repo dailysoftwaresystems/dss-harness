@@ -493,6 +493,13 @@ public sealed class FlowCoordinator
     /// </summary>
     private readonly Func<string, bool>? _agentLive;
 
+    /// <summary>
+    /// Whether a path from the repository's root names a directory of the main tree, as the paths an issue being fixed
+    /// holds and those a work item owns are read (<see cref="FlowIssueHold"/>); no path names one where the session
+    /// answers none, a run held in memory alone.
+    /// </summary>
+    private readonly Func<string, bool> _mainTreeDirectories;
+
     /// <summary>Runs the orchestrator's advisor for a question the engine raises; null where none is named.</summary>
     private readonly IFlowAdvisorRunner? _advisor;
 
@@ -791,6 +798,11 @@ public sealed class FlowCoordinator
     /// Whether an agent of the run is live, as the run's records hold it, for a visit raised over work whose agent a
     /// session before deleted; null where the session answers none, and every agent is then taken as live.
     /// </param>
+    /// <param name="mainTreeDirectories">
+    /// Whether a path from the repository's root names a directory of the main tree, as the files an issue being fixed
+    /// holds and those a work item owns are read (<see cref="Repository.GlobPattern.DirectoriesIn"/>); null where the
+    /// session answers none, and no path then names one.
+    /// </param>
     /// <exception cref="HarnessException">An input the run needs is missing, or a value is outside the ones its input takes.</exception>
     public FlowCoordinator(
         WorkflowDefinition definition,
@@ -810,7 +822,8 @@ public sealed class FlowCoordinator
         Func<FlowUpdatesFile?>? updates = null,
         Func<string, string?>? workflowFileIfThere = null,
         Func<FlowInstance, string, string?>? runFacts = null,
-        Func<string, bool>? agentLive = null)
+        Func<string, bool>? agentLive = null,
+        Func<string, bool>? mainTreeDirectories = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(runner);
@@ -829,6 +842,7 @@ public sealed class FlowCoordinator
         _workflowFileIfThere = workflowFileIfThere;
         _runFacts = runFacts;
         _agentLive = agentLive;
+        _mainTreeDirectories = mainTreeDirectories ?? (_ => false);
         _deleteAgent = deleteAgent;
         _advisor = advisor;
         _streamAccount = streamAccount ?? (runner as IFlowStreamAccount);
@@ -8333,7 +8347,8 @@ public sealed class FlowCoordinator
     /// triage's <c>where</c> and the items each check of a visit at work read; and each joined to another's fix that is at
     /// work (<see cref="JoiningOf"/>), with its own <c>where</c>, under the visit that fixes it or that it waits for, whose
     /// items the fix it joined holds already. Read from the run's state alone, in one walk of its instances, so every
-    /// session reads the same holds from the records.
+    /// session reads the same holds from the records - and whether a path among them names a directory, which it holds
+    /// what is beneath only where it does, from the main tree.
     /// </summary>
     private IReadOnlyList<FlowIssueHold> IssueHolds()
     {
@@ -8366,14 +8381,14 @@ public sealed class FlowCoordinator
 
             if (visits is not null || _pendingFixes.Contains(triage) || triage.WaitingQuestion is not null)
             {
-                holds.Add(FlowIssueHold.Of(TitleOf(triage), visits?[^1].Id ?? triage.Id, triage.Output?["where"], (visits ?? []).SelectMany(CheckedItemsOf)));
+                holds.Add(FlowIssueHold.Of(TitleOf(triage), visits?[^1].Id ?? triage.Id, triage.Output?["where"], (visits ?? []).SelectMany(CheckedItemsOf), _mainTreeDirectories));
             }
             else if (CourseOf(triage) == JoinCourse && JoiningOf(triage) is { Fate: Joining.With or Joining.After or Joining.Due, Root: { } root } joining)
             {
                 // Its fix is the visit of the issue it joined that it goes with, or the one it waits for to end.
                 var with = joining.Fate == Joining.With;
                 var fixer = atWork.GetValueOrDefault(root)?.LastOrDefault(visit => IsWith(triage, visit) == with);
-                holds.Add(FlowIssueHold.Of(TitleOf(triage), fixer?.Id ?? root.Id, triage.Output?["where"], []));
+                holds.Add(FlowIssueHold.Of(TitleOf(triage), fixer?.Id ?? root.Id, triage.Output?["where"], [], _mainTreeDirectories));
             }
         }
 

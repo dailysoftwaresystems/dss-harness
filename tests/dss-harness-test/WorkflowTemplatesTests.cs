@@ -1317,6 +1317,51 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
+    /// The plan's schema and the planner, the help, the README and the architecture say how a list of a tree's own paths
+    /// is read - a work item's owned and forbidden paths, what an issue being fixed holds, a step's writes, a fold's
+    /// within: from the root, a path naming what is beneath it only where it names a directory, a pattern anchored there
+    /// too - and the architecture names its one owner and every reader of it.
+    /// </summary>
+    [Fact]
+    public void TheDocuments_SayAListOfATreesOwnPaths_IsReadFromItsRoot()
+    {
+        var item = JsonDocument.Parse(Read("schemas/plan.schema.json")).RootElement.GetProperty("$defs").GetProperty("workItem").GetProperty("properties");
+        var workflows = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+
+        Assert.StartsWith(
+            "The paths this item may write, each from the repository's root - a name with no slash is the root's own file, never one at any depth:",
+            item.GetProperty("ownedPaths").GetProperty("description").GetString(),
+            StringComparison.Ordinal);
+        Assert.Contains("A path names what is beneath it only where it names a directory, so the root's Makefile and calc.c meet nothing but themselves.", item.GetProperty("ownedPaths").GetProperty("description").GetString(), StringComparison.Ordinal);
+        Assert.StartsWith("Paths, written and read as ownedPaths are,", item.GetProperty("forbiddenPaths").GetProperty("description").GetString(), StringComparison.Ordinal);
+        Assert.Contains("each from the repository's root: a name with no slash is the root's own file and no other,", Prose.Words(Read("agents/planner.md")), StringComparison.Ordinal);
+        Assert.Contains(
+            "none an item owns that it must not touch - each entry read from the repository's root, as the item's agent's writes and its fold's within read it: a path names that one path, and what is beneath it only where it names a directory, one the tree holds or one ending in a separator, and a pattern is anchored there too, ** for any depth, so two entries meet only where some path a tree can hold matches both",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What it holds and what an item owns are read from the repository's root, as the plan's check reads an item's paths: a root-level file the fix holds keeps only the item owning that file waiting.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A step's writes are read from its worktree's root, as a work item's ownedPaths are ('help workflows'): a name with no separator is the root's own, and a path names what is beneath it only where it names a directory, one the worktree holds or one ending in a separator.",
+            Prose.Words(DssHarness.Core.Help.HelpTopics.Render("agent-clients")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Both are read from the repository's root, as the plan's check reads every path a work item owns or must not touch, its agent's writes and its fold's within:",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains("Its entries are read from the worktree's root, as a work item's owned paths are:", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            $"A list of a tree's own paths has one reading, `{nameof(GlobPattern)}.{nameof(GlobPattern.FromRoot)}`: a work item's `ownedPaths` and `forbiddenPaths` (`{nameof(PlanValidator)}`), "
+                + $"the files an issue being fixed holds (`{nameof(FlowIssueHold)}`), a reason step's `writes` (`{nameof(DssHarness.Core.Agents.Policy.AgentPolicy)}`, against its worktree) "
+                + $"and a fold's `within` (`{nameof(FoldWithin)}`, against the main tree)",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The workflows help, the README and the architecture say how issues of one root cause take one fix: the ids every
     /// step told the issues reads, the join a triage answers, refused where it names an issue taken after its own; the
     /// joined issue going with the fix it joined, read by its visit, settled by its end and said fixed with it; one that

@@ -721,7 +721,11 @@ recovery itself reported, which waits for that visit to end, and one a fix at wo
 which waits for that fix; a step two issues stop runs again once, after both are settled. While it is being fixed, the
 issue holds the files its triage names (never a command it names) and, once its diagnosis is checked, the files its
 remedy items own: a work item that has not begun and owns one of them starts once that fix is done, building on the
-tree it leaves, and `ask-orchestrator-status` says what it waits for; every other item goes on at once. The planner
+tree it leaves, and `ask-orchestrator-status` says what it waits for; every other item goes on at once. Both are read
+from the repository's root, as the plan's check reads every path a work item owns or must not touch, its agent's
+writes and its fold's within: a path names that one path, and what is beneath it only where it names a directory - one
+the tree holds, or one ending in `/` - and a pattern is anchored there too, `**` for any depth, so a root-level file
+such as `Makefile` or `pyproject.toml` meets no other path and keeps only the item that owns it waiting. The planner
 and the self-audit are told the same: no work item fixes an issue being fixed, or rewrites its lines.
 
 Issues of one root cause take one fix: a triage that finds its issue's cause is that of an issue taken before it,
@@ -1275,8 +1279,10 @@ what its own commands made anywhere in its worktree - a build's outputs - it may
 `delete_file`, by `delete_directory` where all a directory holds is that, and from a move's
 source, while a path git tracks or ignores, or one that was there, stays narrowed, and so does a
 write over the step's own making, which leaves a path standing outside them; a refusal of such a
-delete says so. The reporter's reads are narrowed to the run's directory alone, with no command,
-no write and no web at all. For Claude Code the same policy is rendered, never re-decided, into the launch's
+delete says so. Its entries are read from the worktree's root, as a work item's owned paths are: a
+name with no `/` is the root's own, and a path names what is beneath it only where it names a
+directory - one the worktree holds, or one ending in `/`. The reporter's reads are narrowed to the
+run's directory alone, with no command, no write and no web at all. For Claude Code the same policy is rendered, never re-decided, into the launch's
 settings: an ask rule for every tool, and the restrictions as deny rules, absolute once for each
 root in the POSIX form Claude Code matches (`//c/x` for `C:\x`), a `Write` rule as the `Edit` rule
 Claude Code holds its file tools' writes to, a read of each credential slot and Claude Code

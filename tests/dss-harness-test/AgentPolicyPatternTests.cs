@@ -175,8 +175,10 @@ public sealed class AgentPolicyPatternTests
     /// <summary>
     /// A pattern read a segment at a time (<c>GlobPattern.Begin</c>, <c>Next</c>, <c>Ends</c>) decides what reading the
     /// path whole decides, for every pattern shape - anchored or not, naming a directory or not, <c>**</c> leading, inside
-    /// and trailing - against every path of up to four segments over its names. Red with a trailing <c>**</c> matched by the
-    /// segment it begins at, or with a matched directory forgotten by the segments after it.
+    /// and trailing, and each read from the root too, as a step's writes are, where <c>a</c> names a directory and nothing
+    /// else does - against every path of up to four segments over its names. Red with a trailing <c>**</c> matched by the
+    /// segment it begins at, with a matched directory forgotten by the segments after it, or with a path that names no
+    /// directory matched beneath itself.
     /// </summary>
     [Fact]
     public void APatternReadASegmentAtATime_DecidesAsTheWholePath()
@@ -190,10 +192,11 @@ public sealed class AgentPolicyPatternTests
             paths.AddRange(paths.Where(path => path.Length == length - 1).SelectMany(path => names.Select(name => (string[])[.. path, name])).ToList());
         }
 
-        foreach (var text in patterns)
-        {
-            var pattern = DssHarness.Core.Repository.GlobPattern.Parse(text);
+        var read = patterns.Select(text => (Text: text, Pattern: DssHarness.Core.Repository.GlobPattern.Parse(text)))
+            .Concat(patterns.Select(text => (Text: $"{text} from the root", Pattern: DssHarness.Core.Repository.GlobPattern.FromRoot(text, path => path == "a"))));
 
+        foreach (var (text, pattern) in read)
+        {
             foreach (var path in paths.Where(path => path.Length > 0))
             {
                 foreach (var comparison in new[] { StringComparison.Ordinal, StringComparison.OrdinalIgnoreCase })

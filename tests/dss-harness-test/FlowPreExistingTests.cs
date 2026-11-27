@@ -1313,7 +1313,8 @@ public sealed class FlowPreExistingTests
     /// An issue the recovery is fixing holds the files its triage's where names, and - once its diagnosis is checked - the
     /// paths its remedy items own: a work item that owns any of them waits for the visit to end, its record saying which
     /// fix holds which file, and starts after it, on the tree the fix left; an item that owns none starts at once, never
-    /// held behind the one that waits. A command the where names holds no file.
+    /// held behind the one that waits - a root-level file it owns among them, which meets no path beneath another
+    /// directory. A command the where names holds no file.
     /// </summary>
     [Fact]
     public async Task AWorkItemOwningAFileAnIssueBeingFixedHolds_StartsOnceTheFixEnded_AndOneOwningNoneStartsAtOnce()
@@ -1341,7 +1342,7 @@ public sealed class FlowPreExistingTests
         await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
         _ = planning.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
         {
-            ["items"] = new JsonArray(WorkItem("a", "src/a/**"), WorkItem("b", "src/b/**"), WorkItem("c", "src/c/**")),
+            ["items"] = new JsonArray(WorkItem("a", "src/a/**"), WorkItem("b", "src/b/**", "README.md"), WorkItem("c", "src/c/**")),
         }));
         await watched.Until(snapshot => snapshot.Steps.Any(step => step.Instance == "items[1].build" && step.State == FlowInstanceState.Done)).WaitAsync(TimeSpan.FromSeconds(30), cancel);
         await coordinator.SettledAsync(cancel);
@@ -1439,6 +1440,39 @@ public sealed class FlowPreExistingTests
     [InlineData("", false)]
     public void AnEntryOfWhere_HoldsAFile_OnlyWhereItIsAPathFromTheRoot(string entry, bool path)
         => Assert.Equal(path, FlowIssueHold.IsPath(entry));
+
+    /// <summary>
+    /// What an issue being fixed holds is read from the repository's root, as the plan's check reads what an item owns: a
+    /// root-level file its where names, or its remedy owns, holds the item that owns that file and no other - an item
+    /// owning the root's calc.c, calc.h and main.c starts at once beside a fix of the Makefile, and one owning src/click's
+    /// types.py beside a fix whose remedy owns pyproject.toml, as the live runs' items did not - while a path the main tree
+    /// holds as a directory holds what is beneath it, a pattern reaching there among it.
+    /// </summary>
+    [Fact]
+    public void WhatAnIssueBeingFixedHolds_IsReadFromTheRoot_SoARootLevelFileHoldsOnlyTheItemOwningIt()
+    {
+        using var tree = new TempDirectory();
+
+        foreach (var file in new[] { "Makefile", "calc.c", "calc.h", "main.c", "pyproject.toml", "src/click/testing.py", "src/click/types.py" })
+        {
+            tree.WriteFile(file, "content\n");
+        }
+
+        var directories = DssHarness.Core.Repository.GlobPattern.DirectoriesIn(new HarnessFactory().FileSystem, tree.Path);
+        var makefile = FlowIssueHold.Of("the Makefile builds no mul", "recover", new JsonArray("Makefile"), [], directories);
+        var testing = FlowIssueHold.Of("the runner leaks a stream", "recover", new JsonArray("src/click/testing.py"), [WorkItem("bump", "pyproject.toml")], directories);
+        var package = FlowIssueHold.Of("the package imports itself", "recover", new JsonArray("src/click"), [], directories);
+
+        Assert.Empty(makefile.Meeting(WorkItem("add-mul", "calc.c", "calc.h", "main.c")));
+        Assert.Equal(["Makefile"], makefile.Meeting(WorkItem("build", "Makefile")));
+        Assert.Equal(["src/click/testing.py", "pyproject.toml"], testing.Paths);
+        Assert.Empty(testing.Meeting(WorkItem("tuple-types", "src/click/types.py", "tests/test_types/test_Tuple.py")));
+        Assert.Equal(["pyproject.toml"], testing.Meeting(WorkItem("release", "pyproject.toml")));
+        Assert.Equal(["src/click/testing.py"], testing.Meeting(WorkItem("click", "src/click/**")));
+        Assert.Equal(["src/click"], package.Meeting(WorkItem("tuple-types", "src/click/types.py")));
+        Assert.Equal(["src/click"], package.Meeting(WorkItem("pythons", "**/*.py")));
+        Assert.Empty(package.Meeting(WorkItem("packaging", "pyproject.toml")));
+    }
 
     /// <summary>
     /// Every issue a run is told is triaged, however many: a triage is raised once for each, and the visits of the
