@@ -202,13 +202,11 @@ public static class ServiceRegistration
         services.AddSingleton(provider => new FlowOutputLogs(
             provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<IRepositoryLocator>(),
-            provider.GetRequiredService<IHarnessContextLoader>(),
+            provider.GetRequiredService<IGitClient>(),
             provider.GetRequiredService<OrchestrationStore>(),
             provider.GetRequiredService<IHostPlatform>(),
             provider.GetRequiredService<IProcessContext>(),
             provider.GetRequiredService<IToolIdentityProvider>(),
-            provider.GetRequiredService<AgentKeyStore>(),
-            provider.GetRequiredService<Agents.Isolation.IAgentIsolation>(),
             provider.GetRequiredService<FlowRunReached>(),
             provider.GetService<OutputCapture>(),
             provider.GetRequiredService<TimeProvider>()));

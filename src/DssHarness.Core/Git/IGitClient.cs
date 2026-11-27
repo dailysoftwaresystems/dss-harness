@@ -448,8 +448,16 @@ public interface IGitClient
     /// <exception cref="HarnessException">git could not look.</exception>
     Task<bool> HasStashAsync(string gitDirectory, CancellationToken cancellationToken = default);
 
-    /// <summary>Whether a path is ignored by git's ignore rules.</summary>
-    Task<bool> IsIgnoredAsync(string directory, string path, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Whether a path is ignored by git's ignore rules: by the rules alone, whether git tracks it or not - or, where
+    /// <paramref name="asTheIndexHolds"/>, as git reads it for a status, a path the index tracks never ignored.
+    /// </summary>
+    /// <param name="directory">The work tree.</param>
+    /// <param name="path">The path, relative to it.</param>
+    /// <param name="cancellationToken">Stops the question.</param>
+    /// <param name="asTheIndexHolds">Whether a path the index tracks reads as not ignored, as git itself reads it.</param>
+    /// <exception cref="HarnessException">git could not say.</exception>
+    Task<bool> IsIgnoredAsync(string directory, string path, CancellationToken cancellationToken = default, bool asTheIndexHolds = false);
 
     /// <summary>
     /// Whether the repository at <paramref name="directory"/> ignores case in the names of its paths: its

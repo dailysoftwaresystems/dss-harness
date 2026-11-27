@@ -14,6 +14,9 @@ public sealed class GrowingMask(ActionValues began) : ILineMask
     private ActionValues _held = began ?? throw new ArgumentNullException(nameof(began));
     private int _added;
 
+    /// <summary>Every secret the mask holds now - those it began with, and each held since - as one mask.</summary>
+    public ActionValues Held => Volatile.Read(ref _held);
+
     /// <inheritdoc/>
     public string Redact(string? text) => Volatile.Read(ref _held).Redact(text);
 

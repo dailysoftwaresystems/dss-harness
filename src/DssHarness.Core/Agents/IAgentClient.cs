@@ -407,7 +407,8 @@ public sealed record AgentWebSearch(
     /// This search kept going over the machine's gh login while it runs, with the mask its run's records are kept through:
     /// where a source of it is signed by the login, renewing by <paramref name="logins"/> (<see cref="Renewal"/>) over a mask
     /// that begins as <paramref name="mask"/> and comes to hold each token read again before it is sent
-    /// (<see cref="Execution.GrowingMask"/>); else this search and <paramref name="mask"/> as they are.
+    /// (<see cref="Execution.GrowingMask"/>), held by the engine session's masks (<see cref="Execution.SessionMasks"/>); else
+    /// this search and <paramref name="mask"/> as they are.
     /// </summary>
     /// <param name="mask">The mask the run begins with; null where it carries no secret.</param>
     /// <param name="logins">The machine's gh logins, as the search's keys were read of them.</param>
@@ -423,6 +424,9 @@ public sealed record AgentWebSearch(
         }
 
         var growing = new Execution.GrowingMask(mask ?? Runners.ActionValues.Empty);
+
+        // Held by the engine session's masks as it grows, so the command's output logs are masked of each token it comes to hold.
+        Execution.SessionMasks.OfSession()?.Hold(growing);
 
         return (this with { Renewal = new Web.Search.WebSearchRenewal(logins, layout, growing) }, growing);
     }

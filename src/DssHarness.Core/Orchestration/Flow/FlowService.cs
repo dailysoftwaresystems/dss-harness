@@ -1696,6 +1696,34 @@ public sealed class FlowService(
     }
 
     /// <summary>
+    /// Begins the masks the session keeps its records through (<see cref="SessionMasks"/>), told to what the command leaves
+    /// at its end (<see cref="FlowRunReached.Masked"/>): first the secrets the configuration appoints that the key slot
+    /// answers, built as every launch's mask is (<see cref="ReasonLaunch.Mask"/>), which holds it - or why it could not be
+    /// built, which leaves the output logs without what only it would have masked. Never a failure of the session's: a
+    /// slot that cannot be read fails each step that reads it, as it always has.
+    /// </summary>
+    private void BeginMasks(HarnessContext context)
+    {
+        var masks = SessionMasks.OfSession()!;
+        reached?.Masked(masks);
+
+        if (Agents.AgentProviders.Resolve(context.Config).Providers is not { } providers)
+        {
+            masks.Unbuilt("the configuration's providers do not resolve, so it appoints no secret a mask could be built of");
+            return;
+        }
+
+        try
+        {
+            _ = new ReasonLaunch(_fileSystem, _platform, keyStore, updates, isolation).Mask(context.Layout, providers);
+        }
+        catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+        {
+            masks.Unbuilt($"the key slot could not be read: {ex.Message.TrimEnd('.')}");
+        }
+    }
+
+    /// <summary>
     /// One session of a run, from its owner claimed to its end: the engine built over the run's records, the answer it
     /// begins with, what was handed to an engine that ended before it took it, then driven - again, where an answer
     /// handed over as it ended settles the question it paused on - and the report written. However it ends - a
@@ -1722,6 +1750,7 @@ public sealed class FlowService(
         // The session holds its run from here to its end: what it finds of where its trees are, and of the machine's gh
         // login, it finds once, for every layer its work passes through.
         using var session = EngineSession.Begin();
+        BeginMasks(context);
 
         // What the session says before anything else: a dead owner it reclaimed, or what a start could not hold its
         // checkout to.

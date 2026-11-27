@@ -5292,7 +5292,11 @@ as typed) - the command line by `--output-logs <file>` on `run-orchestrator`, `r
 `answer-orchestrator` alone, with no configuration key and no default: no flag, no zip. The lifecycle
 every command shares (`CommandSession`) holds the path before anything is weighed - whole, read from
 the directory the process stands in; a directory, a path inside `.orchestrators/` (where every run
-keeps its own records, and a start names its run only as it starts) or one whose directory cannot be
+keeps its own records, and a start names its run only as it starts), one inside a work tree that does
+not ignore it - asked of git from the nearest directory on its way that is there, `check-ignore` read
+against the index (`IGitClient.IsIgnoredAsync`), so a path the tree tracks is never ignored: such a zip
+is one of the tree's uncommitted files, which every agent a run of it makes is handed with its seed, and
+the next zip would hold it once for each - or one whose directory cannot be
 made is refused with 13, nothing started - and at every end - the body's answer, a directory refused,
 a failure it caught - writes the zip before it says how the command ended: the events it ends with are
 kept as they will be written, so the zip holds its output as it ends, and then published, the zip named
@@ -5311,10 +5315,22 @@ them, the `--json` document apart. The run's directory is walked from it held (`
 key stores and dotenv files at any depth (the tool's slots' names, `.env.*` and `*.env`) and the shared
 copy of one a seed names, the run's `temp/`, the graph's caches (`FlowOutputLogs.GraphCaches`) and each
 agent's worktree are left out, each listed in `manifest.json` with why. Every byte is held to the mask
-the run's records are held to (`ReasonLaunch.Mask`), read byte for byte - Latin-1, which keeps every
-byte - by `ActionValues.ReadByteForByte`, which masks each secret's UTF-8 bytes read so beside the
-secret itself, a piece at a time cut where no secret parts (`ILineMask.Cut`); the manifest's strings
-are masked as text. A command line the parser refuses writes none: no command began.
+the command's sessions kept the run's records through, never built again at the end: each session
+begins its masks (`SessionMasks`, an owner of the engine's session) with the secrets its configuration
+appoints that the key slot answers, and holds every mask the one builder of a launch's mask makes while
+it runs (`ReasonLaunch.Mask`) - a step's web-search keys in every form they are sent in among them - and
+every mask that comes to hold the gh login read again (`GrowingMask`), read as it holds its tokens at
+the end; the sessions are told to `FlowRunReached`, whose `Masks` the zip reads. So a configuration
+edited or a slot changed since a session began masks nothing its records were not masked of. The mask
+is read byte for byte - Latin-1, which keeps every byte - by `ActionValues.ReadByteForByte`, which masks
+each secret's bytes in UTF-8 and in UTF-16 of either byte order read so beside the secret itself, a
+piece at a time cut where no secret parts (`ILineMask.Cut`); the manifest's strings are masked as text.
+Where no session built the mask - the command began none, or none could build the configuration's
+(its providers do not resolve, the slot could not be read) - the places of the run that hold files as
+they came, which no record's mask was applied to (`FlowOutputLogs.KeptAsTheyCame`: each agent's
+transcripts under `logs/`, the files an agent was handed and the rows it files, `work/`, `plans/`,
+`inputs/`, `artifacts/`), are left out whole, each named with why: never an unmasked copy. A command
+line the parser refuses writes none: no command began.
 
 ### The codebase graph
 
