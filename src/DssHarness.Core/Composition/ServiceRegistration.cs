@@ -210,6 +210,7 @@ public static class ServiceRegistration
             provider.GetRequiredService<FlowRunReached>(),
             provider.GetService<OutputCapture>(),
             provider.GetRequiredService<TimeProvider>()));
+        services.AddSingleton<IEndWrites>(provider => provider.GetRequiredService<FlowOutputLogs>());
 
         if (options.OutputLogs is not null)
         {

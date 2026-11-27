@@ -91,7 +91,7 @@ public sealed class FlowOutputLogs(
     IToolIdentityProvider tool,
     FlowRunReached reached,
     OutputCapture? capture = null,
-    TimeProvider? clock = null) : IDocumentFacts
+    TimeProvider? clock = null) : IDocumentFacts, IEndWrites
 {
     /// <summary>The option that asks for the zip.</summary>
     public const string Option = "--output-logs";
@@ -168,6 +168,19 @@ public sealed class FlowOutputLogs(
             lock (_gate)
             {
                 return _target;
+            }
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>The zip, from the check that held its path to the end that wrote it, or found it could not.</remarks>
+    public string? AtTheEnd
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _named ? _target : null;
             }
         }
     }

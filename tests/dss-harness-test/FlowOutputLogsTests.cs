@@ -922,7 +922,7 @@ public sealed class FlowOutputLogsTests
             Assert.Null(await logs.CheckAsync(zip, ["dssharness"], scene.Repository.Path, Token));
         }
 
-        var terminal = new FlowTerminal(output, FlowService.RunCommand, logs: logs);
+        var terminal = new FlowTerminal(output, FlowService.RunCommand, end: logs);
         terminal.Interrupted();
         terminal.Interrupted();
 

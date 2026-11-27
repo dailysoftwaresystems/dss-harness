@@ -70,7 +70,9 @@ its pipeline. That is read from the core's own metadata, not its source's text: 
 type below the layers names in its signatures, its locals and its bodies' instructions, however
 its source spells it. The layer's contracts are its use cases with their requests and results,
 and the few points it is open to below it, each reviewed with its reason - the facts every
-document of an operation says (`IDocumentFacts`), which the service that did them fills. The
+document of an operation says (`IDocumentFacts`), which the service that did them fills, and
+what an operation writes at its end once its work has stopped (`IEndWrites`), which the service
+that writes it answers and a terminal's second interrupt says is still to come. The
 one scan of the core for a contract's implementations (`CoreImplementations<T>`) is the
 core's own, at its root, so the registries below the layer that read it never reach into the
 composition root that registers what it finds. The command line builds no container: the registrations are the core's own
@@ -5302,7 +5304,7 @@ end, so the terminal never cuts off a session the engine is still ending in orde
 leaves, which a resume goes on from. A command given `--output-logs` then writes its zip before it
 ends, after the bound and with no bound of its own (no cap is put on it), for as long as packing the
 run's directory takes, the run in it as the engine left it then; the second interrupt's warning says
-so (`FlowTerminal`, told the command's `FlowOutputLogs`). A session cut off answers as every command over its run does:
+so (`FlowTerminal`, told what the command writes at its end through `IEndWrites`, which `FlowOutputLogs` answers). A session cut off answers as every command over its run does:
 the run and `resume-orchestrator <run>` named, every record listed in text and `--json`, and its line
 in the run's log. A hang-up keeps the process to pause the run but leaves nobody to read the
 terminal: from it on the terminal says nothing, and a line said while the session runs - an
