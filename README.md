@@ -952,7 +952,10 @@ the asking step works with its records and its own conversations under `advice/<
 step's own directory, numbered after those already there, its prompt reading the question
 (`{question.step}`, `{question.kind}`, `{question.problem}`, `{question.answers}`,
 `{question.record}`), the run's inputs and `{recommendations}`, its answer held to the engine's own
-schema - one of the question's answers, with a text where that answer takes one. Unlike a run's
+schema - one of the question's answers, with a text where that answer takes one. It is bounded by its
+own definition alone - `maxTurns`, `maxBudgetUsd`, `maxMinutes` - never by the run's budget or its
+reserve, so a question raised once the run is past its reserve, or advised at a resume, is
+recommended as any other is. Unlike a run's
 reasoning step, it only finds the Claude Code its model is reached through and never installs or
 updates it: where that is missing or too old, the advice was not obtained, and the question says
 why. The question is open while the advice runs, so a person who is there answers without waiting,
@@ -969,11 +972,12 @@ now - between sessions, or while a pause defers it - is refused (13), nothing an
 taken; `resume-orchestrator` seeks it first. The budget's own question is recommended too: once the
 budget's pause is complete, before the session ends, the advisor is asked of the run as a whole - its
 records under `steps/run/advice/<n>/`, `{question.step}` reading `run`, `{question.record}` the
-run's facts as `ask-orchestrator-status` gives them - held to its own definition's bounds alone, for
-the spent budget never stops the recommendation on spending more, and what it spends is the run's
-own, kept in `flow.json`'s `spent.advice` and counted in the run's spend. What every advice spent is
-counted against the run's budget, an ended one's among them, as it is taken: an advice that spends the
-run to its reserve pauses it at once. Where none was obtained - an advisor
+run's facts as `ask-orchestrator-status` gives them - held, as every advice is, to its own
+definition's bounds alone, and what it spends is the run's own, kept in `flow.json`'s `spent.advice`
+and counted in the run's spend. What every advice spent is counted against the run's budget, an ended
+one's among them, as it is taken - a step's question's on that step's measure (`measure.advice`): an
+advice that spends the run to its reserve pauses it at once, and one taken while the run pauses
+already asks no second pause. Where none was obtained - an advisor
 that failed past its retries, a bar that could not be read among the reasons - the question says
 why, and the person is asked all the same. Only an agent's own questions carry their recommendation
 within them and are not advised: a step's own agent's, and a `pause` step's that shows an upstream

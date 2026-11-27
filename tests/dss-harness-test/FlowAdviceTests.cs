@@ -8,7 +8,8 @@ namespace DssHarness.Tests;
 /// <summary>
 /// The run's advisor: every question the engine raises is recommended on before a person is asked it - never in the
 /// person's way - the budget's own among them; an answer, a pause and a stop each end an advice still running, what it
-/// spent counted all the same. Over a fake advisor, in memory.
+/// spent counted all the same. Over a fake advisor, in memory - and, where what an advice is given to spend is the
+/// question, over the advisor runner itself and a fake client that holds each launch to its bound as a client does.
 /// </summary>
 public sealed class FlowAdviceTests
 {
@@ -135,11 +136,14 @@ public sealed class FlowAdviceTests
         public IReadOnlyList<FlowRefusedAnswer> Refused { get; private set; } = [];
 
         /// <summary>Whether a change of <paramref name="kind"/> was written.</summary>
-        public bool Saw(FlowChangeKind kind)
+        public bool Saw(FlowChangeKind kind) => Count(kind) > 0;
+
+        /// <summary>How many changes of <paramref name="kind"/> were written.</summary>
+        public int Count(FlowChangeKind kind)
         {
             lock (_kinds)
             {
-                return _kinds.Contains(kind);
+                return _kinds.Count(written => written == kind);
             }
         }
 
@@ -165,13 +169,17 @@ public sealed class FlowAdviceTests
         }
     }
 
-    private static WorkflowDefinition Advised(string? budget = null)
+    /// <summary>
+    /// One reason step under the run's advisor, with <paramref name="budget"/> where one is given, and the input the
+    /// advisor runner's prompt reads (<c>request</c>) where <paramref name="input"/> says so.
+    /// </summary>
+    private static WorkflowDefinition Advised(string? budget = null, bool input = false)
         => Parse($"""
             name: flow
             advisor:
               agent: advisor
               prompt: prompts/recommend.md
-              tier: best{(budget is null ? string.Empty : $"\nbudget:\n  {budget}")}
+              tier: best{(budget is null ? string.Empty : $"\nbudget:\n  {budget}")}{(input ? "\ninputs:\n  - name: request" : string.Empty)}
             steps:
               - name: think
                 type: reason
@@ -490,18 +498,198 @@ public sealed class FlowAdviceTests
     }
 
     /// <summary>
-    /// An advice is held to what is left of the run's dollars before its reserve, the run's share handed with its call;
-    /// a run that budgets no dollars hands none.
+    /// An advice is held to its own definition's bounds and never to what is left of the run's dollars: a run whose
+    /// share before its reserve is less than the advisor's own bound launches the advisor on its own bound all the same,
+    /// as a run that budgets no dollars does.
     /// </summary>
     [Fact]
-    public async Task AnAdvice_IsHandedWhatIsLeftOfTheRunsDollars()
+    public async Task AnAdvice_IsHeldToItsOwnBounds_NeverToWhatIsLeftOfTheRunsDollars()
     {
-        var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice("retry", "it went wrong", null, Usd: 1.0)));
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAdvisorAsync(temp);
+        var spends = new FakeRunner().On("think", run =>
+        {
+            if (run.Attempt > 1)
+            {
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            }
 
-        _ = await TestAdvice.Coordinator(Advised(budget: "usd: 10"), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor).RunAsync(Token).WaitAsync(Bound, Token);
-        _ = await TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor).RunAsync(Token).WaitAsync(Bound, Token);
+            // A dollar is left of the run's share before its reserve of 9.00 USD: less than the advisor's own two, and
+            // more than the advice spends, so the advice pauses nothing.
+            run.Events.Used(new FlowTurnSpend(new DssHarness.Core.Agents.AgentUsage(1_000, 0, 0, 0, 0, 0), 8.0));
+            return FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true };
+        });
 
-        Assert.Equal(new double?[] { 9.0, null }, advisor.Asked.Select(call => call.BudgetLeftUsd));
+        var budgeted = await AdvisedByTheRunner(kit, agents, Advised(budget: "usd: 10", input: true), spends).RunAsync(Token).WaitAsync(Bound, Token);
+        var unbudgeted = await AdvisedByTheRunner(kit, agents, Advised(input: true), AtItsTurnsFirst()).RunAsync(Token).WaitAsync(Bound, Token);
+
+        // Neither run pauses for its budget: each waits on its step's question alone, recommended.
+        Assert.Equal((FlowRunStatus.Paused, (FlowPauseState?)null, FlowRunStatus.Paused), (budgeted.Status, budgeted.Pause, unbudgeted.Status));
+        Assert.Equal(["given", "given"], new[] { budgeted, unbudgeted }.Select(end => end.OpenQuestions.Single().Recommendation.State));
+        Assert.Equal<(int?, decimal?, TimeSpan?)>(
+            [AdvisorRunnerTests.BoundedAdvisorLimits, AdvisorRunnerTests.BoundedAdvisorLimits],
+            agents.Asked.Select(asked => (asked.Limits.MaxTurns, asked.Limits.MaxBudgetUsd, asked.Limits.MaxDuration)));
+    }
+
+    /// <summary>
+    /// A budget's pause, past its reserve, advises every question it leaves - one a machine step the pause left running
+    /// raised as it drained, and the budget's own - each on the advisor's own bounds, never on what is left of the run's
+    /// dollars, which is nothing: each recommendation is obtained, what each advice spent is counted on its own measure
+    /// and in the run's total, and that spend, taken while the run is pausing, asks for no second pause - the session ends
+    /// paused once, each question advised once. The advice that spent the run to its reserve, a question's before it, was
+    /// held to its own bounds too, though less was left of the run's share.
+    /// </summary>
+    [Fact]
+    public async Task EveryQuestionABudgetsPausePastItsReserveLeaves_IsRecommendedOnTheAdvisorsOwnBounds_ItsSpendCounted()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAdvisorAsync(temp);
+        var definition = Parse("""
+            name: flow
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            budget:
+              usd: 50
+            inputs:
+              - name: request
+            steps:
+              - name: work
+                type: create-agent
+                agent: worker.md
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [work]
+              - name: folding
+                type: fold
+                of: work
+                dependsOn: [think]
+              - name: approval
+                type: pause
+                question: 'Go on?'
+                options: [go, stay]
+                dependsOn: [think]
+            """);
+        var fold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("think", run =>
+            {
+                // Twenty cents are left of the run's share before its reserve of 45.00 USD: the approval's advice, asked
+                // while the fold runs, spends the run past it, so the budget's pause leaves the fold running.
+                run.Events.Used(new FlowTurnSpend(new DssHarness.Core.Agents.AgentUsage(1_000, 0, 0, 0, 0, 0), 44.80));
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            })
+            .OnAsync("folding", async _ =>
+            {
+                await fold.Task;
+                return FlowStepResult.Standing(new FlowDryRun(RequestStanding.Refused, [], [], [RefusalKind.Conflict], "1 path conflicts") { Conflicting = ["src/a.cs"] });
+            });
+        var records = new Records();
+        var coordinator = AdvisedByTheRunner(kit, agents, definition, runner, records);
+
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => records.Saw(FlowChangeKind.PauseCompleted));
+        fold.SetResult();
+        var end = await session.WaitAsync(Bound, Token);
+        var open = coordinator.OpenQuestions;
+        var asked = agents.Asked;
+
+        Assert.Equal((FlowRunStatus.Paused, "budget", 1), (end.Status, end.Pause!.Cause, records.Count(FlowChangeKind.PauseBegan)));
+        Assert.Equal([("q1", "pause"), ("q2", "foldConflicts"), ("q3", "runBudget")], open.Select(question => (question.Id, question.Kind)));
+
+        // The approval's advice first; the two the complete pause seeks after it, side by side, each once, in no order of
+        // their own.
+        Assert.Equal("approval", asked[0].StepInstance.Split('/')[0]);
+        Assert.Equal(["folding", FlowQuestions.RunsOwn], asked.Skip(1).Select(request => request.StepInstance.Split('/')[0]).Order(StringComparer.Ordinal));
+        Assert.All(asked, request => Assert.Equal(AdvisorRunnerTests.BoundedAdvisorLimits, (request.Limits.MaxTurns, request.Limits.MaxBudgetUsd, request.Limits.MaxDuration)));
+        Assert.Equal(
+            [
+                Recommended("go", asked[0]),
+                Recommended("retry", asked.Single(request => request.StepInstance.StartsWith("folding/", StringComparison.Ordinal))),
+                Recommended("more", asked.Single(request => request.StepInstance.StartsWith($"{FlowQuestions.RunsOwn}/", StringComparison.Ordinal))),
+            ],
+            open.Select(question => question.Recommendation));
+
+        // Each advice is charged where it was asked - the approval's and the fold's on their steps, the budget's on the
+        // run's own measure - and all three in the run's total, beside the step's own spend.
+        Assert.Equal([AdviceSpent, AdviceSpent], new[] { "approval", "folding" }.Select(step => coordinator.Instances[step].Measure!.Advice));
+        Assert.Equal((AdviceSpent, Math.Round(44.80 + (3 * AdviceUsd), 6), 1_000L + (3 * AdviceTurn.AllTokens)), (records.Last!.Spent.Advice, Math.Round(records.Last.Spent.Usd, 6), records.Last.Spent.Tokens));
+    }
+
+    /// <summary>
+    /// A resume of a run past its budget's reserve - its question still open, a build's failure owed to the resume by the
+    /// pause that drained it - raises the failure and advises it once, on the advisor's own bounds and never on what is
+    /// left of the run's dollars, which is nothing: the recommendation is obtained, what it spent is counted on the step
+    /// and in the run's total, the run is paused on its budget again, and the next resume seeks nothing more.
+    /// </summary>
+    [Fact]
+    public async Task AResumeOfARunPastItsReserve_AdvisesTheOwedFailureOnce_OnTheAdvisorsOwnBounds()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAdvisorAsync(temp);
+        var definition = Parse("""
+            name: flow
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            budget:
+              usd: 50
+            inputs:
+              - name: request
+            steps:
+              - name: gate
+                type: build
+                onFailure: pause
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var gateStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gateFails = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .OnAsync("gate", async _ =>
+            {
+                gateStarted.TrySetResult();
+                await gateFails.Task;
+                return FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "a leg failed");
+            })
+            .OnAsync("think", async run =>
+            {
+                await gateStarted.Task;
+                run.Events.Used(new FlowTurnSpend(new DssHarness.Core.Agents.AgentUsage(1_000, 0, 0, 0, 0, 0), 45.10));
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        var records = new Records();
+        var coordinator = AdvisedByTheRunner(kit, agents, definition, runner, records);
+
+        // The budget's pause drains the build, which fails while it does: its failure is owed to the resume, and the
+        // budget's own question is advised before the session ends.
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => records.Saw(FlowChangeKind.PauseCompleted));
+        gateFails.SetResult();
+        var first = await session.WaitAsync(Bound, Token);
+
+        Assert.Equal((FlowRunStatus.Paused, "budget"), (first.Status, first.Pause!.Cause));
+        Assert.Equal(["runBudget"], coordinator.OpenQuestions.Select(question => question.Kind));
+
+        // The resume raises the failure and advises it; the budget's open question pauses the run again, and the resume
+        // after it seeks nothing more.
+        var second = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+        var third = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+        var failure = coordinator.OpenQuestions.Single(question => question.Kind == "failure");
+        var asked = agents.Asked;
+
+        Assert.Equal((FlowRunStatus.Paused, "budget", FlowRunStatus.Paused, "budget"), (second.Status, second.Pause!.Cause, third.Status, third.Pause!.Cause));
+        Assert.Equal([FlowQuestions.RunsOwn, "gate"], asked.Select(request => request.StepInstance.Split('/')[0]));
+        Assert.All(asked, request => Assert.Equal(AdvisorRunnerTests.BoundedAdvisorLimits, (request.Limits.MaxTurns, request.Limits.MaxBudgetUsd, request.Limits.MaxDuration)));
+        Assert.Equal(Recommended("retry", asked[1]), failure.Recommendation);
+        Assert.Equal(AdviceSpent, coordinator.Instances["gate"].Measure!.Advice);
+        Assert.Equal((AdviceSpent, Math.Round(45.10 + (2 * AdviceUsd), 6), 1_000L + (2 * AdviceTurn.AllTokens)), (records.Last!.Spent.Advice, Math.Round(records.Last.Spent.Usd, 6), records.Last.Spent.Tokens));
     }
 
     /// <summary>
@@ -857,9 +1045,9 @@ public sealed class FlowAdviceTests
 
     /// <summary>
     /// The budget's own question is recommended as every question is, before a person is asked it: once the budget's
-    /// pause is complete the advisor is asked of the run as a whole - the run's own name, no agent's tree - held to no
-    /// share of the budget it asks about; what it spends is the run's own measure's, counted in the run's spend and kept
-    /// in its file's spent; and the session ends paused on the question, recommended.
+    /// pause is complete the advisor is asked of the run as a whole - the run's own name, no agent's tree - on its own
+    /// bounds, as every advice is; what it spends is the run's own measure's, counted in the run's spend and kept in its
+    /// file's spent; and the session ends paused on the question, recommended.
     /// </summary>
     [Fact]
     public async Task TheBudgetsOwnQuestion_IsRecommended_OnceItsPauseIsComplete()
@@ -878,7 +1066,7 @@ public sealed class FlowAdviceTests
         var call = advisor.Asked.Single();
 
         Assert.Equal((FlowRunStatus.Paused, "budget"), (end.Status, end.Pause!.Cause));
-        Assert.Equal(("runBudget", FlowQuestions.RunsOwn, (string?)null, (double?)null), (call.Kind, call.Instance, call.Agent, call.BudgetLeftUsd));
+        Assert.Equal(("runBudget", FlowQuestions.RunsOwn, (string?)null), (call.Kind, call.Instance, call.Agent));
         Assert.Equal("run 'r7' has spent 45.10 of 50.00 USD (its reserve of 10% was reached)", call.Problem);
         Assert.Equal(["more", "abort"], call.Answers.Select(option => option.Answer));
         Assert.Equal(
@@ -1033,6 +1221,69 @@ public sealed class FlowAdviceTests
 
         return (coordinator, records, advisor, fold, held);
     }
+
+    /// <summary>What every launch of the advisor the fake client answers reports it used: output alone, so its cost at the kit's price is exact.</summary>
+    private static readonly DssHarness.Core.Agents.AgentUsage AdviceTurn = new(0, 15_625, 0, 0, 0, 0);
+
+    /// <summary>What one launch of the advisor costs at the kit's price for its model: 15,625 output tokens at 50 USD a million.</summary>
+    private const double AdviceUsd = 0.78125;
+
+    /// <summary>What the advisor spent on one question, as the measure it is charged on keeps it.</summary>
+    private static FlowStepAdvice AdviceSpent => new("claude-opus-5-5", AdviceTurn.AllTokens, AdviceUsd);
+
+    /// <summary>Why the fake client recommends what it does.</summary>
+    private const string WithinItsBounds = "it was given its own bounds to weigh the question in";
+
+    /// <summary>
+    /// The advisor runner's kit, its advisor's definition bounded - seven turns, two dollars, three minutes
+    /// (<see cref="AdvisorRunnerTests.BoundedAdvisorLimits"/>) - and its fake client answering each launch as a client
+    /// does: within the launch's bound in dollars it reports its turn (<see cref="AdviceTurn"/>) and recommends the
+    /// question's first answer that takes no text, as the schema it was given spells them; under a bound that turn would
+    /// pass, the launch's budget is spent and nothing is recommended.
+    /// </summary>
+    private static async Task<(OrchestrationKit Kit, AdvisorRunnerTests.Agents Agents)> ReadyAdvisorAsync(TempDirectory temp)
+    {
+        var (kit, agents) = await AdvisorRunnerTests.ReadyAsync(temp);
+        AdvisorRunnerTests.WriteBoundedAdvisor(kit);
+        agents.Says.Add(new DssHarness.Core.Agents.UsageReported(AdviceTurn, AdviceTurn));
+        agents.Answer = request => request.Limits.MaxBudgetUsd is { } bound && bound < (decimal)AdviceUsd
+            ? new DssHarness.Core.Agents.AgentRunResult(DssHarness.Core.Agents.AgentRunStatus.BudgetSpent, Model: request.Model, Error: $"its budget of {bound.ToString(System.Globalization.CultureInfo.InvariantCulture)} USD was spent")
+            : new DssHarness.Core.Agents.AgentRunResult(DssHarness.Core.Agents.AgentRunStatus.Completed, StructuredOutput: new JsonObject { ["answer"] = FirstPlainAnswer(request), ["why"] = WithinItsBounds }.ToJsonString(), Model: request.Model);
+
+        return (kit, agents);
+
+        // The first answer of the shape that takes no text: a question whose answers are of both kinds offers its shapes
+        // as anyOf.
+        static string FirstPlainAnswer(DssHarness.Core.Agents.AgentStepRequest request)
+        {
+            var schema = JsonNode.Parse(request.Output!.Schema)!;
+            var shapes = (schema["anyOf"]?.AsArray() ?? new JsonArray(schema)).OfType<JsonObject>();
+            var plain = shapes.First(shape => shape["required"]!.AsArray().All(member => member!.GetValue<string>() != "text"));
+
+            return plain["properties"]!["answer"]!["enum"]!.AsArray()[0]!.GetValue<string>();
+        }
+    }
+
+    /// <summary>
+    /// A run of <paramref name="definition"/> in the advisor runner's kit, its questions recommended by the advisor runner
+    /// itself over the kit's fake client - the run held in memory, its advisor working in the kit's repository under the
+    /// kit's orchestrator, as a run's does in its own.
+    /// </summary>
+    private static FlowCoordinator AdvisedByTheRunner(OrchestrationKit kit, AdvisorRunnerTests.Agents agents, WorkflowDefinition definition, IFlowStepRunner runner, IFlowRecords? records = null)
+        => TestAdvice.Coordinator(
+            definition,
+            runner,
+            new RunnerFacts(),
+            new JumpingClock(),
+            inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["request"] = "build the login" },
+            records: records,
+            runName: kit.Layout.Name,
+            place: new FlowRunPlace(kit.Main, kit.Layout.Name, StartCommit: null, definition),
+            advisor: AdvisorRunnerTests.Runner(kit, agents));
+
+    /// <summary>The recommendation the fake client gives through the advisor runner, of <paramref name="answer"/>, with the model and the records of the launch <paramref name="asked"/>.</summary>
+    private static FlowRecommendation Recommended(string answer, DssHarness.Core.Agents.AgentStepRequest asked)
+        => new("given", answer, null, WithinItsBounds, "advisor", "advisor", asked.Model, asked.RecordDirectory);
 
     /// <summary>Waits a little at a time for <paramref name="done"/>, failing the test where it does not within ten seconds.</summary>
     private static async Task TestEventuallyAsync(Func<bool> done)

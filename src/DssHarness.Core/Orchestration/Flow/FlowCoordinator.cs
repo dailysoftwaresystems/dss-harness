@@ -2238,8 +2238,9 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// What is left of the run's budget in dollars before its reserve, as an agent starts now - the bound a launch of
-    /// it is held to where that is less than its own, or where it names none; null where the run budgets no dollars.
+    /// What is left of the run's budget in dollars before its reserve, as a reason step's agent starts now - the bound a
+    /// launch of it is held to where that is less than its own, or where it names none; null where the run budgets no
+    /// dollars. The advisor is never handed it, for an advice is held to its own definition's bounds alone.
     /// Where a part's cost could not be counted it is what is left as far as the dollars were counted, at most: such a
     /// part reaches the reserve for the grant it came under (<see cref="Spend"/>), so an agent is held to it only once a
     /// person, or the workflow's answers, allowed the amount once again knowing the dollars were not all counted.
@@ -2302,13 +2303,15 @@ public sealed class FlowCoordinator
     /// What a pause of any cause owes the person it leaves the run to, once it is complete and nothing of the run runs:
     /// every open question recommended before the session ends, as every question is before a person is asked it. Where
     /// the pause is the budget's, its own question is raised first, once - the workflow's answers were asked at the reserve
-    /// and gave none - and its advice is held to no share of the budget it asks about: the spent budget never stops the
-    /// recommendation on spending more, and what it spends is counted on the run's own measure. Then each open question
-    /// still owing its recommendation (<see cref="OwesAdvice"/>) - raised while the pause was under way, which deferred it,
-    /// or sought by a session a crash ended, or never sought in a questions file an earlier build wrote - is sought, past
-    /// the pause; one recommended, or whose advice runs, is left as it is, for a pause never ends an advice under way. The
-    /// one owner of the reasoning a complete pause starts. Whether it raised or sought anything, so the loop goes round to
-    /// wait for the advice.
+    /// and gave none - and what its advice spends is counted on the run's own measure. Then each open question still
+    /// owing its recommendation (<see cref="OwesAdvice"/>) - raised while the pause was under way, which deferred it, or
+    /// sought by a session a crash ended, or never sought in a questions file an earlier build wrote - is sought, past the
+    /// pause; one recommended, or whose advice runs, is left as it is, for a pause never ends an advice under way. Every
+    /// advice it seeks is held to its own definition's bounds alone, as every advice is, so the run past its reserve never
+    /// leaves a question it pauses on unrecommended; and what each spends, taken while the run is pausing, asks for no
+    /// second pause (<see cref="CheckBudget"/>), so the session ends paused once the advice has ended. The one owner of the
+    /// reasoning a complete pause starts. Whether it raised or sought anything, so the loop goes round to wait for the
+    /// advice.
     /// </summary>
     private bool AdviseThePause()
     {
@@ -11606,8 +11609,9 @@ public sealed class FlowCoordinator
         WriteQuestions();
 
         // The run's own question is asked of the run as a whole: the advice works in no agent's tree, its records under
-        // the run's own name among the steps' (FlowQuestions.RunsOwn, which no step may be named), and the budget's is
-        // held to no share of the budget it asks about - the spent budget never stops the recommendation on spending more.
+        // the run's own name among the steps' (FlowQuestions.RunsOwn, which no step may be named). No advice is handed
+        // any share of the run's budget, the budget's own or a step's raised past the reserve: each is held to its own
+        // definition's bounds alone, and what it spends is counted in the run's spend as it is taken (TakeAdviceAsync).
         var call = new FlowAdvisorCall(
             advisor,
             _runName ?? "run",
@@ -11625,7 +11629,6 @@ public sealed class FlowCoordinator
             bar,
             TextsAt(advising).ToDictionary(text => text.Key, text => new FlowAdvisorText(text.Value.Owner ?? _definition.Name, text.Value.File), StringComparer.Ordinal),
             _place,
-            asked.Kind == "runBudget" ? null : BudgetLeftUsd(),
             RunValues());
 
         var cancel = CancellationTokenSource.CreateLinkedTokenSource(_sessionToken, _adviceStop.Token);

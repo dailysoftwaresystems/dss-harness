@@ -4666,9 +4666,14 @@ a resume that comes back to a pause - the budget's, whose question is still open
 once; a stop ends it (`DeferAdvice` from `ApplyTheStop`, `BeginHardStop` through the session's advice stop), the
 question `deferred`, and a session's end ends and waits for whatever is left (`EndAdviceAsync`); a recommendation
 obtained is written with who gave it and where its records are, none obtained said so, and what every advice spent - an
-ended one's among them, counted from its turns (`AgentRunSpend`) - is counted in the run's spend, each held to what is
-left of the run's dollars as a step is, the loop going round once it takes one so an advice that spends the run to its
-budget's reserve pauses it at once (`TakeAdviceAsync` answering true, then `CheckBudget`); a bar that cannot be read leaves the question `notObtained` saying why, and a
+ended one's among them, counted from its turns (`AgentRunSpend`) - is counted in the run's spend, the loop going round
+once it takes one so an advice that spends the run to its budget's reserve pauses it at once (`TakeAdviceAsync` answering
+true, then `CheckBudget`), and one taken while the run pauses already asks no second pause (`CheckBudget` does nothing
+while the run is pausing). Every advice is held to its own definition's bounds alone - `maxTurns`, `maxBudgetUsd`,
+`maxMinutes` (`AdvisorRunner`'s `AgentLimits`) - never to what is left of the run's dollars, which a reason step's launch
+is held to (`FlowRunBudget.Bound`): an asking carries nothing of the run's budget (`FlowAdvisorCall`), so a question raised
+once the run is past its reserve - one a complete pause advises (`AdviseThePause`), or a failure owed to a resume - is
+recommended as any other is; a bar that cannot be read leaves the question `notObtained` saying why, and a
 default `recommendations.md` that could not be looked at is never taken for one that is not there
 (`WorkflowNamedFiles.ReadTextIfThere`); an advice owed at a resume - sought by a session a crash ended, deferred by a
 stop or by a pause a stop cut short, the budget's own among them - is sought once the session is known to go on
@@ -4686,9 +4691,8 @@ a person's answer (`TryAnswer`): between sessions, as a session begins and where
 while a pause under way defers it, naming the pause's completion; an answer given while the advisor works is taken and
 ends the asking. The budget's own question is asked of the run as a whole - `FlowQuestions.RunsOwn` its
 instance, so its records sit under `steps/run/advice/<n>/` and `{question.step}` reads `run`, no agent's tree held, and
-`{question.record}` the run's facts as `FlowStatus.Facts` gives them (`AdvisorRunner`); held to no share of the budget it
-asks about (`FlowAdvisorCall.BudgetLeftUsd` null), for the spent budget never stops the recommendation on spending
-more; and what it spends is charged on the run's own measure (`FlowBudgetSpent.RunsOwn`), kept in `flow.json` as
+`{question.record}` the run's facts as `FlowStatus.Facts` gives them (`AdvisorRunner`); held, as every advice is, to its
+own definition's bounds alone; and what it spends is charged on the run's own measure (`FlowBudgetSpent.RunsOwn`), kept in `flow.json` as
 `spent.advice` (`FlowBudgetRecord.Advice`), summed with the instances' at a resume and in the report's totals. An
 agent's own questions (`ask`, and a `pause` step's shown questions) carry their recommendation within them and are
 never advised, nor is one its `preAnswer` or its configuration answers at once (weighed before the advisor is sought),

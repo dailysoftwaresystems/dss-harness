@@ -18,11 +18,26 @@ public sealed class AdvisorRunnerTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
-    /// <summary>The agent runner as a fake, keeping every request it was asked and answering as a test says.</summary>
-    private sealed class Agents : IAgentRunner
+    /// <summary>
+    /// The agent runner as a fake, keeping every request it was asked and answering as a test says - shared with the
+    /// tests of a run's coordinator that drive the advisor runner itself, where what an advice is given to spend is the
+    /// question (<see cref="FlowAdviceTests"/>).
+    /// </summary>
+    internal sealed class Agents : IAgentRunner
     {
-        /// <summary>Every request the runner built, in order.</summary>
-        public List<AgentStepRequest> Asked { get; } = [];
+        private readonly List<AgentStepRequest> _asked = [];
+
+        /// <summary>Every request the runner built, in order: a run's coordinator asks two side by side.</summary>
+        public IReadOnlyList<AgentStepRequest> Asked
+        {
+            get
+            {
+                lock (_asked)
+                {
+                    return [.. _asked];
+                }
+            }
+        }
 
         /// <summary>How the run answers; a completed run with no output unless a test changes it.</summary>
         public Func<AgentStepRequest, AgentRunResult> Answer { get; set; } = _ => new AgentRunResult(AgentRunStatus.Completed, FinalText: "done");
@@ -35,7 +50,10 @@ public sealed class AdvisorRunnerTests
 
         public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
         {
-            Asked.Add(step);
+            lock (_asked)
+            {
+                _asked.Add(step);
+            }
 
             foreach (var said in Says)
             {
@@ -67,7 +85,7 @@ public sealed class AdvisorRunnerTests
     }
 
     /// <summary>The kit with a configuration whose providers resolve, whose model is priced, and whose slot holds the model's key.</summary>
-    private static async Task<(OrchestrationKit Kit, Agents Runner)> ReadyAsync(TempDirectory temp)
+    internal static async Task<(OrchestrationKit Kit, Agents Runner)> ReadyAsync(TempDirectory temp)
     {
         var kit = await OrchestrationKit.PrepareAsync(temp);
 
@@ -105,7 +123,8 @@ public sealed class AdvisorRunnerTests
         return (kit, runner);
     }
 
-    private AdvisorRunner Runner(OrchestrationKit kit, Agents agents, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null, DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null)
+    /// <summary>The advisor runner over the kit's repository and the fake agent runner, isolated as the tests' agents are unless a test says otherwise.</summary>
+    internal static AdvisorRunner Runner(OrchestrationKit kit, Agents agents, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null, DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null)
         => new(
             kit.Harness.ContextLoader,
             kit.Harness.Platform,
@@ -122,7 +141,7 @@ public sealed class AdvisorRunnerTests
     private static readonly IReadOnlyList<FlowQuestionOption> LimitAnswers =
         [new FlowQuestionOption("more", "one more of what was bounded"), new FlowQuestionOption("retry", "the step runs again as a new attempt")];
 
-    private static FlowAdvisorCall Call(OrchestrationKit kit, string? agent = "reader", string instance = "think", IReadOnlyList<FlowQuestionOption>? answers = null, double? budgetLeftUsd = null)
+    private static FlowAdvisorCall Call(OrchestrationKit kit, string? agent = "reader", string instance = "think", IReadOnlyList<FlowQuestionOption>? answers = null)
         => new(
             new FlowAdvisor("advisor", "prompts/recommend.md", Tier: "best", Model: null, Effort: "high", Client: null),
             "o1",
@@ -139,8 +158,7 @@ public sealed class AdvisorRunnerTests
             Record: null,
             Bar: "Prefer the cheaper answer.\n",
             Texts: null,
-            new FlowRunPlace(kit.Main, "o1", StartCommit: null, WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: orient\n    type: orient\n")),
-            budgetLeftUsd);
+            new FlowRunPlace(kit.Main, "o1", StartCommit: null, WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: orient\n    type: orient\n")));
 
     /// <summary>
     /// The advice is one reason step that only reads: its prompt the question - the step, the kind, the problem with
@@ -404,23 +422,35 @@ public sealed class AdvisorRunnerTests
     }
 
     /// <summary>
-    /// The advisor's launch is held to what is left of the run's dollars before its reserve where that is less than its
-    /// own bound - one long advice cannot spend through the reserve - and to its own where the run's is more.
+    /// The advisor's launch is held to its own definition's bounds - its turns, its dollars and its minutes - and to
+    /// nothing else: an advice is never given a share of the run's budget, so a question raised once the run is past its
+    /// reserve is recommended as any other is; and a definition that names no bound leaves the launch unbounded by it.
     /// </summary>
-    [Theory]
-    [InlineData(null, null)]
-    [InlineData(0.75, "0.75")]
-    [InlineData(-1.0, "0")]
-    public async Task TheAdvisorsLaunch_IsHeldToWhatIsLeftOfTheRunsDollars(double? left, string? bound)
+    [Fact]
+    public async Task TheAdvisorsLaunch_IsHeldToItsOwnDefinitionsBoundsAlone()
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
         await kit.CreateReadingAgentAsync("reader");
 
-        _ = await Runner(kit, agents).AdviseAsync(Call(kit, budgetLeftUsd: left), Token);
+        _ = await Runner(kit, agents).AdviseAsync(Call(kit), Token);
+        WriteBoundedAdvisor(kit);
+        _ = await Runner(kit, agents).AdviseAsync(Call(kit), Token);
 
-        Assert.Equal(bound is null ? null : decimal.Parse(bound, System.Globalization.CultureInfo.InvariantCulture), agents.Asked.Single().Limits.MaxBudgetUsd);
+        Assert.Equal<(int?, decimal?, TimeSpan?)>(
+            [(null, null, null), BoundedAdvisorLimits],
+            agents.Asked.Select(asked => (asked.Limits.MaxTurns, asked.Limits.MaxBudgetUsd, asked.Limits.MaxDuration)));
     }
+
+    /// <summary>
+    /// Writes the kit's advisor definition with bounds of its own - seven turns, two dollars, three minutes - the bounds
+    /// <see cref="BoundedAdvisorLimits"/> says, which every launch of it is held to.
+    /// </summary>
+    internal static void WriteBoundedAdvisor(OrchestrationKit kit)
+        => OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", "flow", "agents", "advisor.md"), "---\nname: advisor\ndescription: recommends\nmaxTurns: 7\nmaxBudgetUsd: 2\nmaxMinutes: 3\n---\nYou recommend.\n");
+
+    /// <summary>The bounds <see cref="WriteBoundedAdvisor"/> writes: its turns, its dollars and its minutes.</summary>
+    internal static (int? Turns, decimal? Usd, TimeSpan? Minutes) BoundedAdvisorLimits => (7, 2m, TimeSpan.FromMinutes(3));
 
     /// <summary>
     /// What the advice spent is counted from its turns as they are reported: every token of every kind, and the cost at

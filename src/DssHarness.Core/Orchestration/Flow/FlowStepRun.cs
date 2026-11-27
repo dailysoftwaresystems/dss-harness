@@ -815,7 +815,11 @@ public sealed record FlowStepResult
         => new() { Asked = null, Passed = false, Exit = HarnessExit.CommandFailed, Checks = checks, ChecksDetail = detail };
 }
 
-/// <summary>One asking of the run's advisor: the question it recommends on, with every text its prompt reads.</summary>
+/// <summary>
+/// One asking of the run's advisor: the question it recommends on, with every text its prompt reads - and nothing of the
+/// run's budget, for an advice is held to its own definition's bounds alone, whatever the run has spent: a question raised
+/// once the run is past its reserve, the budget's own among them, is recommended as any other is.
+/// </summary>
 /// <param name="Advisor">The orchestrator's advisor block, as the definition declares it.</param>
 /// <param name="Run">The orchestrator run's name.</param>
 /// <param name="Workflow">The workflow's name, whose folder holds the advisor's agent and prompt.</param>
@@ -845,11 +849,6 @@ public sealed record FlowStepResult
 /// it holds none of is refused, naming the workflow.
 /// </param>
 /// <param name="Place">Where the run works; null for a run held in memory alone.</param>
-/// <param name="BudgetLeftUsd">
-/// What is left of the run's budget in dollars before its reserve, which the advice's agent is held to where it is less
-/// than its own bound, or where it names none; null where the run budgets no dollars, and for the budget's own question,
-/// whose advice the spent budget never stops - it is held to its own definition's bounds alone.
-/// </param>
 /// <param name="RunValues">The run as its own <c>run</c> root reads it, as the asking left it: its name, what it has checked and what it knows to be red among it; null where the asking was made from no run.</param>
 public sealed record FlowAdvisorCall(
     FlowAdvisor Advisor,
@@ -868,7 +867,6 @@ public sealed record FlowAdvisorCall(
     string Bar,
     IReadOnlyDictionary<string, FlowAdvisorText>? Texts = null,
     FlowRunPlace? Place = null,
-    double? BudgetLeftUsd = null,
     System.Text.Json.Nodes.JsonObject? RunValues = null);
 
 /// <summary>One text an advisor's prompt reads by its name: the workflow whose directory holds it, and its file there.</summary>

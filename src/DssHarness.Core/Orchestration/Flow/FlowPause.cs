@@ -104,9 +104,10 @@ public sealed class FlowBudgetSpent
 }
 
 /// <summary>
-/// The bound in dollars an agent of the run is held to: its own, or what is left of the run's budget before its reserve
-/// where that is less - the one place the two meet, for a reason step's agent and the advisor's alike - so one long
-/// launch cannot spend through the reserve, which is what the handoffs are written in.
+/// The bound in dollars a reason step's agent is held to: its own, or what is left of the run's budget before its
+/// reserve where that is less - the one place the two meet - so one long launch cannot spend through the reserve, which
+/// is what the handoffs are written in. The advisor is never held to it: an advice is bounded by its own definition
+/// alone, so a question raised past the reserve is recommended as any other is (<see cref="AdvisorRunner"/>).
 /// </summary>
 public static class FlowRunBudget
 {
