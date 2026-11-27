@@ -1018,9 +1018,13 @@ public sealed class FlowPlanUpdateTests
         var runner = new FakeRunner();
         var planning = runner.Hold("planupdate");
 
+        // A clock whose timers fire only when the test moves it: the planning step's handoff turn passes its bound when
+        // the test says, at once, never after the real seconds it names.
+        var clock = new TimerClock();
+
         using (records)
         {
-            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -1032,10 +1036,15 @@ public sealed class FlowPlanUpdateTests
 
             // The session starts the planning step - held open by the test - and a pause is asked of the engine.
             var session = coordinator.RunAsync(Token);
-            await runner.StartedAsync("planning.planupdate");
+            await runner.StartedAsync("planning.planupdate").WaitAsync(Bound, Token);
+            var armed = clock.Waiting;
             coordinator.RequestPause("command");
 
-            var paused = await session;
+            // The held planner answers no turn: once the turn's bound is armed, the clock is moved past it - the 180 s a
+            // step that declares no handoffSeconds is given - and the attempt is ended, handed off.
+            await clock.WaitingAsync(armed + 1).WaitAsync(Bound, Token);
+            clock.Advance(TimeSpan.FromSeconds(180));
+            var paused = await session.WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Paused, paused.Status);
             Assert.Equal(FlowUpdateStates.UnderWay, harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().State);
