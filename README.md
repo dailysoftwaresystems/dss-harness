@@ -724,7 +724,7 @@ each one's id, what became of it, its title and where it is - and reports one ag
 the triage is told those taken before its own, and names by its id the issue its own repeats or whose root cause it
 shares - never one taken after it, which is triaged after it and names it where it repeats it, so of two raised
 together the later names the earlier, and neither is lost. A duplicate is settled by what becomes of the issue it
-repeats - a step it stops runs again once that issue's fix ends - save one met after that fix was done: the fix did not
+repeats - a step it stops runs again once that issue is settled - save one met after its fix was done: the fix did not
 hold, the triage is told so, and its issue is fixed again.
 
 An issue sent to fix is the recovery's at once, its fix beside any other at work - save one that a step of the

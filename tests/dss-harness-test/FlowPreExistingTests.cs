@@ -2837,6 +2837,52 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
+    /// A step two issues stop - one it shares with another step, whose triage is still deciding it, which the step's own
+    /// triage answers a duplicate of that one, and one of its own, sent to fix - waits once that fix is done, for the
+    /// duplicate may still be fixed; and once the triage of the issue it repeats ends deciding no fix, that decision
+    /// settles the duplicate too, and the step runs again after the fix of its other issue. The step that shared the
+    /// issue, none of whose issues was fixed, stays as it ended.
+    /// </summary>
+    [Fact]
+    public async Task AStepADuplicateAndAFixStop_RunsAgainOnceTheTriageOfTheIssueItRepeatsEndsDecidingNoFix()
+    {
+        var definition = Parse(TwoReporters);
+        var deciding = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("first", asked => asked == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the build is broken", blocks: true)])
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("second", asked => asked == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the build is broken", blocks: true), Issue("a test is red", blocks: true)])
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .OnAsync("triage", run => run.Instance == "triage"
+                ? deciding.Task
+                : Task.FromResult(run.Issue!.Title == "a test is red" ? Course("fix", run.Issue.Title) : Naming("duplicate", run.Issue.Title, "duplicates", "triage")));
+        var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "recover" && step.State == FlowInstanceState.Done));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var cancel = TestContext.Current.CancellationToken;
+
+        var session = coordinator.RunAsync(cancel);
+        await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+
+        // The second step's own issue is fixed, and the one it repeats is still being triaged: the step waits for it.
+        Assert.Equal(("triage", "the build is broken"), runner.Started.Single(started => started.Instance == "triage"));
+        Assert.Equal("duplicate", coordinator.Instances["triage+2"].Output!["course"]!.GetValue<string>());
+        Assert.Equal("fix", coordinator.Instances["triage+3"].Output!["course"]!.GetValue<string>());
+        Assert.False(coordinator.Instances.ContainsKey("second+2"));
+
+        _ = deciding.TrySetResult(Course("list", "the build is broken"));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["second+2"].State);
+        Assert.Equal("recover", coordinator.Instances["second"].LeftBy);
+        Assert.False(coordinator.Instances.ContainsKey("first+2"));
+        Assert.Equal(1, runner.Started.Count(started => started.Instance == "recover.mend"));
+    }
+
+    /// <summary>
     /// A step that meets an issue again after its fix was done raises a triage of it anew, and that triage is told the
     /// fix did not hold for its issue: the fixed issue is listed as fixed, and the triage is told that where its issue is
     /// that one the course is fix, never duplicate. An answer that names it a duplicate all the same is refused, its step

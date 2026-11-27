@@ -2599,8 +2599,10 @@ configured answer to that bound counted there too, so a fix that never holds end
 steps the one issue stopped side by side, each reporting it before its fix, each raise a triage of their own, told
 the first, which answers it a duplicate: what becomes of the issue it repeats settles it - its visits are that issue's
 (`FixesOf`), it may still be fixed while that one may (`MayStillFix`), through the chain of names it leads along
-(`RepeatSettledBy`, every one walked kept) - so the step it stops runs again once that fix ends, as a join's does
-(`RunTheReportersAgain`, over the triages a visit fixed, `TriagesFixedBy`); one that answers fix all the same waits
+(`RepeatSettledBy`, every one walked kept) - so the step it stops runs again once that fix ends, or once that issue's
+triage ends deciding no fix where another issue that stops the step was fixed, as a join's does (`RunTheReportersAgain`,
+over the triages a visit fixed, `TriagesFixedBy`, or the triage that ended, each with the duplicates it settles,
+`WithTheirDuplicates`, the one owner of what reaches a duplicate); one that answers fix all the same waits
 for that fix and has it fixed again with none spending another's bound - and keeps the list; `issue` is read only by the
 triage and the recovery, and `source` by them and by a handler. A reason step that names a triage is told, where it starts, every issue the
 run holds then (`FlowPreExistingReport.Known`, the part `<pre-existing>` wraps at the end of its prompt, read from
@@ -2691,7 +2693,7 @@ each through the chain of names it leads along - and `OwesATriageOfItsOwn`, read
 `MayStillFix` and `StateOf`, gives either its triage of its own; its words leave `{run.preExisting}` and the run's
 counts, which that triage's answer says, and a triage that began after the issue it would repeat had ended so is refused
 the duplicate (`NamedEndedBefore`). A visit fixes every issue that goes with it - the one it was sent for, each joined
-to it and gone with it, and each duplicate of one of those (`TriagesFixedBy`, `IssuesFixedBy`): a fix sent for one of
+to it and gone with it, and each duplicate of one of those (`TriagesFixedBy`, `IssuesFixedBy`, over `WithTheirDuplicates`): a fix sent for one of
 them waits for it as for its own (`FixWaitsFor`), a report of one met after it ended counts against the issue's own
 bound (`MetAfterItsFix`), and its end runs again every step one of them stops (`RunTheReportersAgain`). Each visit is admitted against the run's own limits,
 as every step is. The tally keeps a joined issue in the place it was taken, its state read where the fix it joined

@@ -8444,22 +8444,27 @@ public sealed class FlowCoordinator
     /// Every triage whose issue <paramref name="visit"/>, a visit of the recovery, fixes - those whose fixes hold it
     /// (<see cref="FixesOf"/>): the one its source is, where that sent its issue to fix; each joined to it that goes with
     /// this visit (<see cref="JoinedWith"/>); and each duplicate of one of those, settled by what that one's fix does
-    /// (<see cref="RepeatSettledBy"/>) - in that order, the duplicates in the order they ended; none where its source is a
-    /// step's failure. What the visit's end settles, every reporter one of them stops running again once its issues are
-    /// (<see cref="RunTheReportersAgain"/>), and what a fix of the same issue waits for (<see cref="FixWaitsFor"/>).
+    /// (<see cref="WithTheirDuplicates"/>) - in that order, the duplicates in the order they ended; none where its source
+    /// is a step's failure. What the visit's end settles, every reporter one of them stops running again once its issues
+    /// are (<see cref="RunTheReportersAgain"/>), and what a fix of the same issue waits for (<see cref="FixWaitsFor"/>).
     /// </summary>
     private List<FlowInstance> TriagesFixedBy(FlowInstance visit)
+        => visit.RaisedBy is { } source && IssueSentToFix(source) is not null
+            ? WithTheirDuplicates([source, .. JoinedWith(visit)])
+            : [];
+
+    /// <summary>
+    /// The triages what settles <paramref name="triages"/>' issues settles too: each of them, then each duplicate of one
+    /// of them - what the triage of the issue it repeats decides, and that issue's fix, settle it (<see cref="RepeatSettledBy"/>,
+    /// which walks the chain of names to its end, so a duplicate of a duplicate is reached at once) - in the order they
+    /// ended, each once. The one owner of what reaches a duplicate, which a visit's fixes (<see cref="TriagesFixedBy"/>) and
+    /// every reporter run again once its issues are settled (<see cref="RunTheReportersAgain"/>) both read.
+    /// </summary>
+    private List<FlowInstance> WithTheirDuplicates(IReadOnlyList<FlowInstance> triages)
     {
-        if (visit.RaisedBy is not { } source || IssueSentToFix(source) is null)
-        {
-            return [];
-        }
+        var given = new HashSet<FlowInstance>(triages, ReferenceEqualityComparer.Instance);
 
-        List<FlowInstance> fixing = [source, .. JoinedWith(visit)];
-        var settling = new HashSet<FlowInstance>(fixing, ReferenceEqualityComparer.Instance);
-
-        fixing.AddRange(NamingAnother().Where(named => CourseOf(named) == "duplicate" && RepeatSettledBy(named) is { } by && settling.Contains(by)));
-        return fixing;
+        return [.. triages.Distinct<FlowInstance>(ReferenceEqualityComparer.Instance), .. NamingAnother().Where(named => CourseOf(named) == "duplicate" && !given.Contains(named) && RepeatSettledBy(named) is { } by && given.Contains(by))];
     }
 
     /// <summary>The visit of the recovery <paramref name="step"/> is a step of, at any depth - one of its own, or one of a remedy it builds; null where it is none.</summary>
@@ -8561,20 +8566,15 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Runs again, each once (<see cref="RunTheReporterAgain"/>), every reporter whose work an issue <paramref name="settled"/>
     /// settles stops: the reporter of each triage among them whose issue stops it, and of each duplicate of one of them -
-    /// what that one's triage decides and its fix settle the duplicate too (<see cref="RepeatSettledBy"/>), so a step the
-    /// same issue stopped beside its first reporter runs again once that fix ends, as a join's reporter does. In the order
-    /// given, the duplicates after, in the order they ended.
+    /// what that one's triage decides and its fix settle the duplicate too (<see cref="WithTheirDuplicates"/>), so a step
+    /// the same issue stopped beside its first reporter runs again once that issue is settled, as a join's reporter does:
+    /// once its fix ends, or once its triage ends deciding no fix where another issue that stops the step was fixed. In
+    /// the order given, the duplicates after, in the order they ended.
     /// </summary>
     /// <param name="settled">Triages whose issue was just settled further: a triage that ended, or those a visit that ended done fixed (<see cref="TriagesFixedBy"/>).</param>
     private void RunTheReportersAgain(IReadOnlyList<FlowInstance> settled)
     {
-        var settling = new HashSet<FlowInstance>(settled, ReferenceEqualityComparer.Instance);
-        var reached = settled
-            .Concat(NamingAnother().Where(named => CourseOf(named) == "duplicate" && !settling.Contains(named) && RepeatSettledBy(named) is { } by && settling.Contains(by)))
-            .Distinct<FlowInstance>(ReferenceEqualityComparer.Instance)
-            .ToList();
-
-        foreach (var triage in reached)
+        foreach (var triage in WithTheirDuplicates(settled))
         {
             if (triage is { Issue.Blocks: true, RaisedBy: { } stopped })
             {

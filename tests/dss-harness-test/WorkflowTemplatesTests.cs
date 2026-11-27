@@ -1540,7 +1540,7 @@ public sealed class WorkflowTemplatesTests
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            "A duplicate is settled by what becomes of the issue it repeats - a step it stops runs again once that issue's fix ends, as a join's does - save where that fix was done before the duplicate's issue was met: it did not hold, the triage is told so, and an answer naming it a duplicate fails the step, for the issue is fixed again.",
+            "A duplicate is settled by what becomes of the issue it repeats - a step it stops runs again once that issue is settled, as a join's does - save where that issue's fix was done before the duplicate's issue was met: it did not hold, the triage is told so, and an answer naming it a duplicate fails the step, for the issue is fixed again.",
             help,
             StringComparison.Ordinal);
         Assert.Contains(

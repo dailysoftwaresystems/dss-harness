@@ -264,9 +264,9 @@ public static partial class HelpTopics
         builder.AppendLine("its issue repeats (duplicate, in duplicates) or whose root cause it shares (join, in joins) - only");
         builder.AppendLine("one taken before its own, or the step fails, so no two issues ever name each other, and of two");
         builder.AppendLine("raised together the later names the earlier. A duplicate is settled by what becomes of the issue");
-        builder.AppendLine("it repeats - a step it stops runs again once that issue's fix ends, as a join's does - save where");
-        builder.AppendLine("that fix was done before the duplicate's issue was met: it did not hold, the triage is told so,");
-        builder.AppendLine("and an answer naming it a duplicate fails the step, for the issue is fixed again.");
+        builder.AppendLine("it repeats - a step it stops runs again once that issue is settled, as a join's does - save where");
+        builder.AppendLine("that issue's fix was done before the duplicate's issue was met: it did not hold, the triage is");
+        builder.AppendLine("told so, and an answer naming it a duplicate fails the step, for the issue is fixed again.");
         builder.AppendLine();
         builder.AppendLine("An issue sent to fix is the recovery's at once, its visit beside any other at work - save one a");
         builder.AppendLine("step of a visit of the recovery reported, which waits for that visit to end, for the recovery");
