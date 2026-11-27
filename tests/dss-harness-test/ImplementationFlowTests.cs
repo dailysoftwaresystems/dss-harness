@@ -455,30 +455,71 @@ public sealed class ImplementationFlowTests
     /// </summary>
     private static void WithoutTheLoginModelOfTheReportersTier(HarnessConfig config)
     {
-        config.TierConfig["fast"].Remove("claude-haiku-5-5");
+        config.TierConfig[ReportersTier].Remove("claude-haiku-5-5");
         config.Providers.Single(entry => entry.Name == "anthropic").Models
             .Single(model => model.Code == "claude-haiku-5-5")
-            .Tiers.Remove("fast");
+            .Tiers.Remove(ReportersTier);
     }
 
-    /// <summary>Takes the fallback model's prices out of the configuration: a model whose cost cannot be counted.</summary>
+    /// <summary>The tier the shipped workflow's reporter works on, as its reporter block names it.</summary>
+    private const string ReportersTier = "fast";
+
+    /// <summary>The tier the item pipeline's implement step works on, as the step names it.</summary>
+    private const string ImplementersTier = "balanced";
+
+    /// <summary>
+    /// Takes the fallback models' prices out of the configuration - every Z.AI model's, the later model of each tier:
+    /// models whose cost cannot be counted.
+    /// </summary>
     private static void WithoutGlmPrices(HarnessConfig config)
     {
         var provider = config.Providers.Single(entry => entry.Name == "zai");
-        var glm = provider.Models.Single(model => model.Code == "glm-5.3");
+        var priced = provider.Models.ToList();
 
-        provider.Models.Remove(glm);
-        provider.Models.Add(
-            new AgentModelConfig
-            {
-                Code = glm.Code,
-                Name = glm.Name,
-                Tiers = glm.Tiers,
-                Efforts = glm.Efforts,
-                ContextTokens = glm.ContextTokens,
-                MaxOutputTokens = glm.MaxOutputTokens,
-                LargePrompt = glm.LargePrompt,
-            });
+        provider.Models.Clear();
+        provider.Models.AddRange(priced.Select(glm => new AgentModelConfig
+        {
+            Code = glm.Code,
+            Name = glm.Name,
+            Tiers = glm.Tiers,
+            Efforts = glm.Efforts,
+            ContextTokens = glm.ContextTokens,
+            MaxOutputTokens = glm.MaxOutputTokens,
+            LargePrompt = glm.LargePrompt,
+        }));
+    }
+
+    /// <summary>
+    /// The model of <paramref name="provider"/>'s that the template init writes names for <paramref name="tier"/>, read
+    /// from the template, so a test of a tier's models holds whichever models init writes.
+    /// </summary>
+    private static string TemplateModelOf(string tier, string provider)
+    {
+        var template = AgentProviderTemplates.Read();
+        var listed = template.Providers.Single(entry => entry.Name == provider);
+
+        return template.TierConfig[tier].Single(code => listed.Models.Exists(model => model.Code == code));
+    }
+
+    /// <summary>
+    /// The Z.AI model the template names for <paramref name="tier"/> (<see cref="TemplateModelOf"/>): the later model of
+    /// the tier, which a step falls back to where its Anthropic model cannot serve it.
+    /// </summary>
+    private static string ZaiModelOf(string tier) => TemplateModelOf(tier, "zai");
+
+    /// <summary>The Z.AI model the template names for <paramref name="step"/>'s own tier (<see cref="ZaiModelOf(string)"/>).</summary>
+    private static string ZaiModelOfItsTier(AgentStepRequest step)
+        => ZaiModelOf(step.Tier ?? throw new InvalidOperationException($"the step '{step.StepInstance}' names no tier of its own"));
+
+    /// <summary>
+    /// What a turn uses to cost <paramref name="usd"/> at the output price the template gives <paramref name="model"/>:
+    /// output tokens alone, so the cost is that price times their count, whatever the model's other prices.
+    /// </summary>
+    private static AgentUsage Costing(double usd, string model)
+    {
+        var price = AgentProviderTemplates.Read().Providers.SelectMany(provider => provider.Models).Single(entry => entry.Code == model).PriceOutput!.Value;
+
+        return new AgentUsage(InputTokens: 0, OutputTokens: (long)Math.Round(usd / price * 1_000_000), CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0);
     }
 
     /// <summary>Waits, a little at a time, for <paramref name="done"/>, and fails the test when it does not come within <see cref="Bound"/>.</summary>
@@ -537,11 +578,11 @@ public sealed class ImplementationFlowTests
         public Func<AgentStepRequest, IAgentEventSink?, Task>? Events { get; set; }
 
         /// <summary>
-        /// The model the script's agents serve on, where a test names it: the walk the script stands in for moves a step
-        /// to the first entry whose key the slot holds, and the script cannot see the slot. Null where the first usable
-        /// entry is the model that serves.
+        /// The model each of the script's agents serves on, where a test names it, asked of each request: the walk the
+        /// script stands in for moves a step to the first entry whose key the slot holds, and the script cannot see the
+        /// slot. Null where the first usable entry is the model that serves.
         /// </summary>
-        public string? ServingModel { get; set; }
+        public Func<AgentStepRequest, string>? ServingModel { get; set; }
 
         /// <summary>Queues <paramref name="answers"/> for the definition <paramref name="definition"/>, in order.</summary>
         public void Queue(string definition, params AgentRunResult[] answers)
@@ -676,7 +717,7 @@ public sealed class ImplementationFlowTests
                 // What the run's budget is charged with, as each turn reports it: the model the step serves on - the one
                 // the test names, the walk's own choice where the script bypasses it - then one turn per answer.
                 var serving = (step.Order ?? []).FirstOrDefault(entry => entry.Usable);
-                var model = ServingModel ?? serving?.Model ?? step.Model ?? (step.Order is [{ } first, ..] ? first.Model : null) ?? "scripted";
+                var model = ServingModel?.Invoke(step) ?? serving?.Model ?? step.Model ?? (step.Order is [{ } first, ..] ? first.Model : null) ?? "scripted";
 
                 await events.EmitAsync(new SessionStarted(serving?.Client ?? step.Client ?? "scripted", model, string.Empty, [], [], false));
                 await events.EmitAsync(new UsageReported(usage, usage));
@@ -855,6 +896,54 @@ public sealed class ImplementationFlowTests
             }
 
             return answered;
+        }
+    }
+
+    /// <summary>
+    /// The engine's own runner with every request it is handed kept: what each step asked - its own tier among it - for a
+    /// test to pair with the launches the walk made of it, by the step's directory (<see cref="AgentStepRequest.RecordDirectory"/>,
+    /// each launch's <see cref="AgentRun.StepDirectory"/>). The walk itself is the runner's, never this one's.
+    /// </summary>
+    private sealed class Asking(IAgentRunner runner) : IAgentRunner
+    {
+        private readonly Lock _kept = new();
+
+        private readonly List<AgentStepRequest> _asked = [];
+
+        /// <summary>Every request the runner was handed, in order.</summary>
+        public IReadOnlyList<AgentStepRequest> Asked
+        {
+            get
+            {
+                lock (_kept)
+                {
+                    return [.. _asked];
+                }
+            }
+        }
+
+        /// <inheritdoc/>
+        public Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
+        {
+            Keep(step);
+
+            return runner.RunAsync(step, events, cancellationToken);
+        }
+
+        /// <inheritdoc/>
+        public IAsyncEnumerable<AgentEvent> Stream(AgentStepRequest step, CancellationToken cancellationToken)
+        {
+            Keep(step);
+
+            return runner.Stream(step, cancellationToken);
+        }
+
+        private void Keep(AgentStepRequest step)
+        {
+            lock (_kept)
+            {
+                _asked.Add(step);
+            }
         }
     }
 
@@ -1599,7 +1688,7 @@ public sealed class ImplementationFlowTests
                     ("auditor", "claude-opus-5-5", "xhigh"),
                     ("implementer", "claude-sonnet-5-5", "xhigh"),
                     ("plan-auditor", "claude-opus-5-5", "xhigh"),
-                    ("planner", "claude-fable-5-1", "xhigh"),
+                    ("planner", "claude-fable-5-2", "xhigh"),
                     ("review-scope", "claude-haiku-5-5", "low"),
                     ("reviewer-correctness", "claude-opus-5-5", "xhigh"),
                     ("scribe", "claude-sonnet-5-5", "high"),
@@ -1825,7 +1914,9 @@ public sealed class ImplementationFlowTests
 
         /// <summary>
         /// Where the first provider's key is not in the slot, every step falls back to its tier's later models: a run with
-        /// only the Z.AI key works every step of the shipped flow on glm-5.3, each with its own effort.
+        /// only the Z.AI key works every step of the shipped flow, each step's order its tier's Claude model - reached
+        /// through claude-code by the machine's login, which reads no key - and after it the Z.AI model of its tier, signed
+        /// with the key the slot holds, both usable.
         /// </summary>
         [Fact]
         public async Task WhereNoAnthropicKeyIsHeld_EveryStepFallsBackToItsTiersLaterModels()
@@ -1839,9 +1930,17 @@ public sealed class ImplementationFlowTests
             Assert.Equal(
                 ["auditor", "implementer", "plan-auditor", "planner", "review-scope", "reviewer-correctness", "scribe", "triage"],
                 kit.Agents.Asked.Where(step => step.Order is { Count: > 0 }).Select(step => step.AgentDefinition).Order(StringComparer.Ordinal).ToArray());
+
+            // The order the engine resolved for each step, as the walk would go through it: a request of the flow carries
+            // its order and no entries of its own.
             Assert.All(
-                kit.Agents.Asked.Where(step => step.Entries is not null),
-                step => Assert.Equal(("glm-5.3", "zai"), (step.Entries!.Model.Code, step.Entries.Provider.Name)));
+                kit.Agents.Asked.Where(step => step.Order is { Count: > 0 }),
+                step => Assert.Equal<(string, string, string, string?, bool)>(
+                    [
+                        (TemplateModelOf(step.Tier!, "anthropic"), "anthropic", "claude-code", null, true),
+                        (ZaiModelOfItsTier(step), "zai", "glm", "ZAI_API_KEY", true),
+                    ],
+                    step.Order!.Select(entry => (entry.Model, entry.Provider, entry.Client, entry.Key, entry.Usable))));
         }
 
         /// <summary>
@@ -4287,10 +4386,13 @@ public sealed class ImplementationFlowTests
                     fallback,
                     adjust: config =>
                     {
-                        config.TierConfig["best"] = ["glm-5.3", "claude-fable-5-1"];
-                        config.TierConfig["balanced"] = ["glm-5.3", "claude-sonnet-5-5"];
-                        config.TierConfig["high"] = ["glm-5.3", "claude-opus-5-5"];
-                        config.TierConfig["fast"] = ["glm-5.3", "claude-haiku-5-5"];
+                        // Each tier the flow's steps work on names its Z.AI model first and its Claude model after it.
+                        foreach (var tier in new[] { "best", "balanced", "high", "fast" })
+                        {
+                            var zai = ZaiModelOf(tier);
+
+                            config.TierConfig[tier] = [zai, .. config.TierConfig[tier].Where(code => code != zai)];
+                        }
                     },
                     updates: none.Service());
 
@@ -4354,7 +4456,7 @@ public sealed class ImplementationFlowTests
                 var runsOn = (JsonArray)JsonNode.Parse(File.ReadAllText(policyFile))!["runsOn"]!;
 
                 Assert.Contains(runsOn, entry => entry!["model"]!.GetValue<string>() == "claude-sonnet-5-5" && entry["client"]!.GetValue<string>() == "claude-code");
-                Assert.Contains(runsOn, entry => entry!["model"]!.GetValue<string>() == "glm-5.3" && entry["client"]!.GetValue<string>() != "claude-code");
+                Assert.Contains(runsOn, entry => entry!["model"]!.GetValue<string>() == ZaiModelOf(ImplementersTier) && entry["client"]!.GetValue<string>() != "claude-code");
                 Assert.All(runsOn, entry => Assert.True(entry!["key"] is null || entry["key"]!.GetValue<string>() is "ANTHROPIC_API_KEY" or "ZAI_API_KEY", "a key was kept by its value"));
 
                 // Each reason step's stream holds its own conversation: the launch's turns, in order.
@@ -4364,10 +4466,12 @@ public sealed class ImplementationFlowTests
                 Assert.NotEmpty(kinds);
             }
 
-            // Every step on the fake provider: the same flow with the tiers naming glm alone, and no launch on Claude.
+            // Every step on the fake provider: the same flow with the tiers naming glm alone, and no launch on Claude - each
+            // launch on the Z.AI model its step's tier names.
             using (var provider = new TempDirectory())
             {
                 WalkingClient client = null!;
+                Asking asking = null!;
                 var kit = await PrepareAsync(
                     provider,
                     adjust: config =>
@@ -4382,14 +4486,16 @@ public sealed class ImplementationFlowTests
                             tier.RemoveAll(listed => listed.StartsWith("claude-", StringComparison.Ordinal));
                         }
                     },
-                    walking: harness => Walking(harness, new WalkingClient("claude-code", Answer), client = new WalkingClient("glm", Answer)));
+                    walking: harness => asking = new Asking(Walking(harness, new WalkingClient("claude-code", Answer), client = new WalkingClient("glm", Answer))));
 
                 var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
                 Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
 
+                var asked = asking.Asked;
+
                 Assert.NotEmpty(client.Launches);
-                Assert.All(client.Launches, launch => Assert.Equal("glm-5.3", launch.Model));
+                Assert.All(client.Launches, launch => Assert.Equal(ZaiModelOfItsTier(asked.First(step => step.RecordDirectory == launch.StepDirectory)), launch.Model));
             }
         }
 
@@ -6422,7 +6528,7 @@ public sealed class ImplementationFlowTests
 
             // The reporter serves the keyed model alone: its tier's first entry - the client that signs in with the
             // machine's login - is taken out, so a slot that holds no key holds none for it.
-            const string serving = "glm-5.3";
+            var serving = ZaiModelOf(ReportersTier);
 
             AgentRunResult Worded(string text) => new(AgentRunStatus.Completed, FinalText: text) { Model = serving };
 
@@ -6678,7 +6784,7 @@ public sealed class ImplementationFlowTests
             var kit = await PrepareAsync(budgeted, keys: "ZAI_API_KEY=sk-test-two\n");
 
             kit.Agents.DefaultUsage = new AgentUsage(InputTokens: 1_000_000, OutputTokens: 500_000, CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0);
-            kit.Agents.ServingModel = "glm-5.3";
+            kit.Agents.ServingModel = ZaiModelOfItsTier;
 
             await EditWorkflowAsync(
                 kit,
@@ -6719,17 +6825,20 @@ public sealed class ImplementationFlowTests
 
             var said = $"{refused.Message} | {string.Join(" | ", refused.Details ?? [])}";
 
+            // The model the intake's steps fall back to: the first the run works, so the first whose cost is not counted.
+            var intakes = ZaiModelOf("high");
+
             Assert.Equal(HarnessExit.ConfigInvalid, refused.ExitCode);
             Assert.Contains("runs under a budget in dollars through client 'glm'", said, StringComparison.Ordinal);
-            Assert.Contains("no price for 'glm-5.3' (providers 'zai', model 'glm-5.3'", said, StringComparison.Ordinal);
+            Assert.Contains($"no price for '{intakes}' (providers 'zai', model '{intakes}'", said, StringComparison.Ordinal);
             Assert.Contains("and a budget is charged with the cost counted from them", said, StringComparison.Ordinal);
 
-            // With no budget at all, the same unpriced model is worked and its cost is said as not known, the run going on.
+            // With no budget at all, the same unpriced models are worked and their cost is said as not known, the run going on.
             using var unbudgeted = new TempDirectory();
             var third = await PrepareAsync(unbudgeted, keys: "ZAI_API_KEY=sk-test-two\n", adjust: WithoutGlmPrices);
 
             third.Agents.DefaultUsage = new AgentUsage(InputTokens: 1_000_000, OutputTokens: 500_000, CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0);
-            third.Agents.ServingModel = "glm-5.3";
+            third.Agents.ServingModel = ZaiModelOfItsTier;
 
             var gone = await StartAsync(third, "request=Ship the orders report.", "preapproved=yes");
 
@@ -6738,7 +6847,7 @@ public sealed class ImplementationFlowTests
             var unknown = third.Harness.OrchestrationStore.ReadFlow(third.RunOf())!.Spent!;
 
             Assert.Equal(0, unknown.Usd);
-            Assert.Contains("no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss, priceOutput)", unknown.Uncounted, StringComparison.Ordinal);
+            Assert.Contains($"no price for '{intakes}' (providers 'zai', model '{intakes}': priceInputMiss, priceOutput)", unknown.Uncounted, StringComparison.Ordinal);
         }
 
         /// <summary>
@@ -7204,9 +7313,11 @@ public sealed class ImplementationFlowTests
                     script: agents =>
                     {
                         agents.Queue("planner", Completed(Plan(One("one", "src/one/**"), One("two", "src/two/**"))));
-                        agents.ServingModel = "glm-5.3";
+                        agents.ServingModel = ZaiModelOfItsTier;
+
+                        // The second item's review scope spends 39.60 USD at its model's price: past the reserve, within the budget.
                         agents.Usage = request => request.Attempt == 1 && request.AgentDefinition == "review-scope" && request.StepInstance.StartsWith("rounds#1.items[1]")
-                            ? new AgentUsage(11_000_000, 5_500_000, 0, 0, 0, 0)
+                            ? Costing(39.6, ZaiModelOfItsTier(request))
                             : new AgentUsage(1_000, 0, 0, 0, 0, 0);
                     },
                     machine: steps => steps.Queue("test", MachineSteps.Green(), MachineSteps.Green()));
@@ -7404,7 +7515,7 @@ public sealed class ImplementationFlowTests
                     kit.Harness.FileSystem.CreateDirectory(step.RecordDirectory!);
                     var stream = StoredStream.Open(kit.Harness.FileSystem, step.RecordDirectory!, new Masking());
                     stream.EmitAsync(new RunStarted(1));
-                    stream.EmitAsync(new SessionStarted("scripted", "glm-5.3", "hash", [], [], HandedConversation: false, Provider: "zai", SessionId: "session-one"));
+                    stream.EmitAsync(new SessionStarted("scripted", ZaiModelOfItsTier(step), "hash", [], [], HandedConversation: false, Provider: "zai", SessionId: "session-one"));
                     stream.EmitAsync(new TurnStarted(1));
                     stream.EmitAsync(new AssistantMessage("Built the report's frame.", []));
                     stream.EmitAsync(new RunFinished(AgentRunStatus.ContextExhausted));
@@ -7528,8 +7639,12 @@ public sealed class ImplementationFlowTests
             static bool Serving(AgentRun run, string model)
                 => string.Equals(run.Model, model, StringComparison.Ordinal) && run.Output?.Name == "implement";
 
-            // The implement step alone names its model outright, in place of its own tier - the first after its name, in
-            // the item pipeline that declares it; the flow's own file declares no implement step and is left as it is.
+            // The implement step's fallback: the Z.AI model of its tier.
+            var fallback = ZaiModelOf(ImplementersTier);
+
+            // The implement step alone names its model outright - its tier's Z.AI model - in place of its own tier, the
+            // first after its name, in the item pipeline that declares it; the flow's own file declares no implement step
+            // and is left as it is.
             static string[] ImplementNamingGlm(string[] lines)
             {
                 var step = Array.FindIndex(lines, line => line.Trim() == "- name: implement");
@@ -7539,9 +7654,9 @@ public sealed class ImplementationFlowTests
                     return lines;
                 }
 
-                var at = Array.FindIndex(lines, step, line => line.Trim() == "tier: balanced");
+                var at = Array.FindIndex(lines, step, line => line.Trim() == $"tier: {ImplementersTier}");
 
-                return [.. lines[..at], $"{lines[at][..^lines[at].TrimStart().Length]}model: glm-5.3", .. lines[(at + 1)..]];
+                return [.. lines[..at], $"{lines[at][..^lines[at].TrimStart().Length]}model: {ZaiModelOf(ImplementersTier)}", .. lines[(at + 1)..]];
             }
 
             // A request the step's model declines: the step goes on with its fallback, and its record names both models.
@@ -7560,7 +7675,7 @@ public sealed class ImplementationFlowTests
                 Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | plan output: {plan.Output?.ToJsonString() ?? "none"} | launched: {string.Join("; ", claude.Launches.Select(run => $"{run.Model}:{run.Output?.Name}"))} + {string.Join("; ", glm.Launches.Select(run => $"{run.Model}:{run.Output?.Name}"))} | {Shown(kit)}");
 
                 Assert.Contains(claude.Launches, run => Serving(run, "claude-sonnet-5-5"));
-                var moved = Assert.Single(glm.Launches, run => Serving(run, "glm-5.3"));
+                var moved = Assert.Single(glm.Launches, run => Serving(run, fallback));
 
                 var record = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "rounds#1.items[0].implement");
 
@@ -7570,7 +7685,7 @@ public sealed class ImplementationFlowTests
                     kit.Harness.FileSystem,
                     Path.Combine(moved.StepDirectory, AgentRunner.ResultFileName))!.Served;
 
-                Assert.Equal([("claude-sonnet-5-5", 1), ("glm-5.3", 2)], [.. served.Select(entry => (entry.Model, entry.FromTurn))]);
+                Assert.Equal([("claude-sonnet-5-5", 1), (fallback, 2)], [.. served.Select(entry => (entry.Model, entry.FromTurn))]);
                 Assert.Equal("Done", record.State);
             }
 
@@ -7601,7 +7716,7 @@ public sealed class ImplementationFlowTests
 
                 var both = ended.Served;
 
-                Assert.Equal([("claude-sonnet-5-5", 1), ("glm-5.3", 2)], [.. both.Select(entry => (entry.Model, entry.FromTurn))]);
+                Assert.Equal([("claude-sonnet-5-5", 1), (fallback, 2)], [.. both.Select(entry => (entry.Model, entry.FromTurn))]);
 
                 var asked = Assert.Single(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
 
@@ -7622,7 +7737,7 @@ public sealed class ImplementationFlowTests
 
                 Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
 
-                var carried = Assert.Single(glm.Launches, run => Serving(run, "glm-5.3"));
+                var carried = Assert.Single(glm.Launches, run => Serving(run, fallback));
 
                 // Another company's, in a new conversation: the limited provider's session is never handed across.
                 Assert.Null(carried.Conversation);
@@ -7633,7 +7748,7 @@ public sealed class ImplementationFlowTests
             {
                 var (kit, claude, glm) = await WalkingAsync(
                     ghost,
-                    run => AgentEndings.WrongModel(run.Model!, "claude-fable-5-1", "its turn 1", new Masking()),
+                    run => AgentEndings.WrongModel(run.Model!, "claude-fable-5-2", "its turn 1", new Masking()),
                     edit: lines => [.. lines.Select(line => line.Trim() == "backoffSeconds: 30" ? line.Replace("backoffSeconds: 30", "backoffSeconds: 1") : line)]);
 
                 var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
@@ -7643,8 +7758,8 @@ public sealed class ImplementationFlowTests
                 var failed = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "rounds#1.items[0].implement");
 
                 Assert.True(nameof(FlowInstanceState.Paused) == failed.State, $"the implement record: {failed.State} {failed.Error} | {Shown(kit)}");
-                Assert.Contains("glm-5.3", failed.Error, StringComparison.Ordinal);
-                Assert.Contains("claude-fable-5-1", failed.Error, StringComparison.Ordinal);
+                Assert.Contains(fallback, failed.Error, StringComparison.Ordinal);
+                Assert.Contains("claude-fable-5-2", failed.Error, StringComparison.Ordinal);
             }
 
             // A step that names a model outright: its provider, key and client are found from it, and it serves the step.
@@ -7660,10 +7775,10 @@ public sealed class ImplementationFlowTests
 
                 Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
 
-                var served = Assert.Single(glm.Launches, run => Serving(run, "glm-5.3"));
+                var served = Assert.Single(glm.Launches, run => Serving(run, fallback));
 
                 Assert.DoesNotContain(claude.Launches, run => run.Output?.Name == "implement");
-                Assert.DoesNotContain(served.Fallback, entry => entry.Usable && entry.Model != "glm-5.3");
+                Assert.DoesNotContain(served.Fallback, entry => entry.Usable && entry.Model != fallback);
             }
 
             // A first model none of whose keys is in the slot: the step's agent run is refused before it starts, naming the
@@ -7708,6 +7823,7 @@ public sealed class ImplementationFlowTests
             using var temp = new TempDirectory();
 
             // Both models of the step's tier answer at their limit on the first walk; the resume's walk is served.
+            var fallback = ZaiModelOf(ImplementersTier);
             var models = new List<string>();
             var kit = await PrepareAsync(
                 temp,
@@ -7720,7 +7836,7 @@ public sealed class ImplementationFlowTests
                         return models.Count <= 2
                             ? AgentEndings.AtLimit(
                                 "the provider",
-                                new AgentAccountLimit(BalanceSpent: true, Key: run.Model == "glm-5.3" ? "ZAI_API_KEY" : "ANTHROPIC_API_KEY"),
+                                new AgentAccountLimit(BalanceSpent: true, Key: run.Model == fallback ? "ZAI_API_KEY" : "ANTHROPIC_API_KEY"),
                                 "the balance is spent",
                                 new Masking())
                             : Completed(Implement());
@@ -7755,7 +7871,7 @@ public sealed class ImplementationFlowTests
             Assert.Empty(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
 
             // Both models were asked before the walk ran out: the tier's first, then its fallback.
-            Assert.Equal(["claude-sonnet-5-5", "glm-5.3"], [.. models]);
+            Assert.Equal(["claude-sonnet-5-5", fallback], [.. models]);
 
             var on = await ResumeAsync(kit);
 
