@@ -121,3 +121,12 @@ public enum FlowHandedOver
     /// <summary>The run's records already hold what it did with the inbox entry it came under - taken or refused before - so it was not weighed again, and nothing was written.</summary>
     RecordedAlready,
 }
+
+/// <summary>
+/// What became of an answer or an amendment handed over, as the session that weighed it settles it - with why it was not
+/// taken where it was refused, kept with the settling, so whoever handed it over says the run's why however long after it
+/// was weighed: an answer that waited for the advice a session's start seeks among them (<see cref="FlowCoordinator.WeighHandedOver"/>).
+/// </summary>
+/// <param name="How">What became of it.</param>
+/// <param name="Problem">Why it was not taken, where it was refused; null otherwise.</param>
+public sealed record FlowWeighed(FlowHandedOver How, string? Problem = null);

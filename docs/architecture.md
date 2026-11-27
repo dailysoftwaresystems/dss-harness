@@ -4715,10 +4715,18 @@ as the loop takes it, recorded on its own (`StopApplied`) where the pause said a
 live engine that is stopping from a pause whose advice is still to come (`OrchestratorService.EngineOf`). What a past
 session left of its engine - that stop, a complete pause, a question marked sought - says nothing of the engine that
 claims the run next: its claim marks the run `starting` (`flow.json`'s `starting`, written under the claim's lock by
-`FlowRunOwner.Claim` before the owner, taken back by `FlowRunOwner.Release`, and said by every write of the start), a mark
-read only beside a live owner, over every other state - one owner, so the status, the report and the engine's refusal
-agree in every state of a start without erasing the run's history - until the start goes on, or takes an abort, which
-is the stop it applies at once (`Carry`, `stoppingSince` from the abort's own record on); a recommendation
+`FlowRunOwner.Claim` before the owner, and said by every write of the start while the start takes an answer handed to it
+- no stop or pause asked of it, `FlowCoordinator.StartTakesAnswers`), a mark read only beside a live owner, over every
+other state - one owner, so the status, the report and the engine's refusal agree in every state of a start without
+erasing the run's history - until the start's own end, a `startEnded` change written once the start has made what it
+held, sought every recommendation the run owes and weighed what waited for them, so a session that then writes nothing
+for as long as an advice or room takes never leaves the state saying it starts; or until the start takes an abort, which
+is the stop it applies at once (`Carry`, `stoppingSince` from the abort's own record on). The order of the reads is the
+rule's too: every reader of a run's engine reads its owner, then `flow.json`, then its owner again, and judges the state
+only beside an owner that stood across its read, reading again where it changed (`OrchestratorService.EngineOf`, the one
+path `list-orchestrator`, the report, the status and the advisor's facts take); and a session's release removes the owner
+first, then takes the mark back inside the repository's one section, only where no owner has claimed the run since
+(`FlowRunOwner.Release`) - so a reader never pairs the past session's state with a live owner, at a claim or a release; a recommendation
 obtained is written with who gave it and where its records are, none obtained said so, and what every advice spent - an
 ended one's among them, counted from its turns (`AgentRunSpend`) - is counted in the run's spend, the loop going round
 once it takes one so an advice that spends the run to its budget's reserve pauses it at once (`TakeAdviceAsync` answering
@@ -5339,8 +5347,15 @@ the inbox, and said - where they never are, a refused resume writing nothing; so
 the inbox an answer the run's records do not hold. One that reaches a start that goes on - the command's own entry, one
 a past engine left in the inbox, one handed over before the first admit - answering a question owing the recommendation
 the start seeks, is weighed once that advice is under way (`FlowCoordinator.WeighHandedOver`), so it is taken and ends
-the asking; only a start that seeks none - a stop asked as it began - refuses it, naming the resume once the engine has
-gone. Once settled it is counted, and leaves the inbox
+the asking; only a start that seeks none for it - a stop asked as it began, after which it seeks none, or a pause, which
+defers it - refuses it, naming the resume once the engine has gone or the pause once it is complete. Whether the start
+takes such an answer is one rule (`FlowCoordinator.StartTakesAnswers`), which also decides whether the start's writes
+say `starting`. What became of a waiting answer is kept with what it is settled with, its why among it (`FlowWeighed`),
+and said once the start has weighed it: `answer-orchestrator`'s own answer so refused is the command's refusal (13) with
+the run's why, read from `questions.json` under its entry's id - whatever the session it began went on to do, said after
+it - by the one rule an answer the command handed over is answered by whichever session weighed it
+(`FlowService.OwnRefused`), and an inbox entry's line says it was taken once its recommendation was sought, or why not.
+Once settled it is counted, and leaves the inbox
 once the file lets it go: a removal that fails is tried again at the next poll or drive's end, and one
 the inbox still holds as the session ends - the removal failed to the last, or a crash came between the
 take and the removal - is settled by the run's records, so a later session that meets the entry only

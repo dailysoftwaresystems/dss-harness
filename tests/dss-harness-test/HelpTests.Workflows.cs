@@ -753,7 +753,10 @@ public sealed partial class HelpTests
                 + "where a live engine's pause defers it; and resume-orchestrator once the engine "
                 + "has gone where it is stopping - abort taken now wherever one is owed - and answer-orchestrator for every other. "
                 + "An answer handed over as a session starts, to a question owing the recommendation that start seeks, waits for it and is taken once it is sought, "
-                + "ending the asking; only a start that seeks none, a stop asked as it began, refuses it.",
+                + "ending the asking; only a start that seeks none for it, a stop or a pause asked as it began, refuses it - "
+                + "answer-orchestrator's own answer so refused its refusal (13) with the run's why, whatever the session went on to do, and every other "
+                + "said with what became of it - and a live engine's state says it is starting only while its start takes such an answer, until the "
+                + "start's own end is written.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(

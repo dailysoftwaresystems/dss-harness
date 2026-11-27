@@ -1067,7 +1067,7 @@ public sealed class FlowAdviceTests
         var deferred = coordinator.OpenQuestions.Single();
 
         Assert.NotNull(records.Last!.StoppingSince);
-        Assert.Equal(FlowHandedOver.Refused, await coordinator.OfferAnswerAsync(deferred.Id, "fail", inbox: "e1").WaitAsync(Bound, Token));
+        Assert.Equal(FlowHandedOver.Refused, (await coordinator.OfferAnswerAsync(deferred.Id, "fail", inbox: "e1").WaitAsync(Bound, Token)).How);
         Assert.Equal(
             ("e1", "question 'q1' still owes the recommendation it is answered with, so nothing was answered - the stop under way seeks none, and resume-orchestrator <run> seeks it first once the engine has gone; "
                 + "answer with answer-orchestrator <run> <answer> --question q1 then, and answer-orchestrator <run> abort --question q1 is taken now"),
@@ -1113,7 +1113,7 @@ public sealed class FlowAdviceTests
         await TestEventuallyAsync(() => records.Saw(FlowChangeKind.PauseCompleted));
         var open = coordinator.OpenQuestions.Single();
 
-        Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAnswerAsync(open.Id, "fail", inbox: "e1").WaitAsync(Bound, Token));
+        Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAnswerAsync(open.Id, "fail", inbox: "e1").WaitAsync(Bound, Token)).How);
         var end = await session.WaitAsync(Bound, Token);
         var answered = coordinator.Questions.Single();
 
@@ -1178,7 +1178,7 @@ public sealed class FlowAdviceTests
         Assert.Equal(
             new FlowRecommendation("deferred", Why: "the run is pausing, and no reason step is started before its pause is complete: the recommendation is sought then, or when the run is resumed where a stop came first"),
             deferred.Recommendation);
-        Assert.Equal(FlowHandedOver.Refused, await coordinator.OfferAnswerAsync(deferred.Id, "fail", inbox: "e1").WaitAsync(Bound, Token));
+        Assert.Equal(FlowHandedOver.Refused, (await coordinator.OfferAnswerAsync(deferred.Id, "fail", inbox: "e1").WaitAsync(Bound, Token)).How);
         Assert.Equal(
             ("e1", "q3", "fail", "question 'q3' of run 'r1' still owes the recommendation it is answered with, so nothing was answered - the run seeks it once its pause is complete; "
                 + "answer with answer-orchestrator r1 <answer> --question q3 then, and answer-orchestrator r1 abort --question q3 is taken now"),

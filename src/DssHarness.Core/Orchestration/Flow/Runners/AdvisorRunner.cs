@@ -337,17 +337,18 @@ public sealed class AdvisorRunner(
     /// <param name="layout">The run's own paths.</param>
     private string FactsOf(OrchestratorLayout layout)
     {
-        if (store.ReadFlow(layout) is not { } flow || store.ReadDefinition(layout) is not { } definition)
+        // The run's state is read with what its engine is doing, by the one path every reader of the two takes.
+        if (OrchestratorService.EngineOf(store, owner, layout) is not { } read || store.ReadDefinition(layout) is not { } definition)
         {
             return $"(the run's records hold no state yet: '{layout.FlowFile}' or '{layout.DefinitionFile}' is not there)";
         }
 
         var facts = FlowStatus.Facts(
             definition,
-            flow,
+            read.Flow,
             store.ReadFlowQuestions(layout),
             store.ReadFlowUpdates(layout),
-            OrchestratorService.EngineOf(store, owner, layout, flow),
+            read.Engine,
             (clock ?? TimeProvider.System).GetUtcNow());
 
         return string.Join("\n", facts);

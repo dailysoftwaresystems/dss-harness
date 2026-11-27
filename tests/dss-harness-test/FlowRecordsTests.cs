@@ -487,7 +487,7 @@ public sealed class FlowRecordsTests
     [Fact]
     public void EveryKindOfEventIsAKindOfChange_ByItsName()
     {
-        Assert.Equal(["sessionBegan", "resumed", "step", "pauseBegan", "handoff", "pauseCompleted", "stopApplied", "sessionEnded", "answer", "advised", "iterationAdded"], FlowEvent.Kinds);
+        Assert.Equal(["sessionBegan", "resumed", "step", "pauseBegan", "handoff", "pauseCompleted", "stopApplied", "sessionEnded", "answer", "advised", "iterationAdded", "startEnded"], FlowEvent.Kinds);
         Assert.Throws<ArgumentOutOfRangeException>(() => FlowEvent.KindOf((FlowChangeKind)99));
     }
 

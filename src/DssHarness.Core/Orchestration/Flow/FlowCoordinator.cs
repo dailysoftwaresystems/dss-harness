@@ -1351,9 +1351,17 @@ public sealed class FlowCoordinator
             }
 
             // What was handed over meanwhile to a question owing that advice is weighed now, in the order it was handed
-            // over: it meets the advice under way and is taken, ending the asking - and where the start sought none, a stop
-            // asked as it began, it is refused naming the resume once this engine has gone.
+            // over: it meets the advice under way and is taken, ending the asking - and where the start sought none for it,
+            // a stop or a pause asked as it began, it is refused naming the step that seeks it: the resume once this engine
+            // has gone, or the pause once it is complete.
             WeighWhatWaitedForTheStartsAdvice();
+
+            // The start is over, and says so in a write of its own: every write it held says the engine is starting, made
+            // only now, and seeking the advice writes no state of the run - so without it a session that writes nothing
+            // more until an advice is taken, or room is freed, would leave the run's state saying starting all that while.
+            // It comes once the hold is made, every recommendation sought and what waited for them weighed, so the state
+            // says the start until its questions say what it sought, and from here on what the engine does.
+            Record(FlowChangeKind.StartEnded);
 
             while (true)
             {
@@ -2740,16 +2748,17 @@ public sealed class FlowCoordinator
     /// <param name="question">The question's id.</param>
     /// <param name="answer">The answer, spelled as the question's options spell it.</param>
     /// <param name="text">The text given with the answer, where it takes one.</param>
-    /// <param name="problem">Why the answer was not taken, where it was weighed now and refused; null otherwise.</param>
     /// <param name="through">How a person gave it; <c>answer-orchestrator</c> where the command handed it over.</param>
     /// <param name="inbox">The id of the inbox entry it was handed over under.</param>
     /// <param name="again">Whether it changes an answer already given, which is weighed now (<see cref="AnswerHandedOver"/>).</param>
     /// <param name="at">The moment the answer was given to the tool.</param>
     /// <returns>
-    /// What became of it: settled at once where it was weighed now; where it waits, once the start has weighed it and
-    /// written what it did - cancelled where that start never gets there, so it stays in the inbox.
+    /// What became of it, with why where it was refused: settled at once where it was weighed now; where it waits, once the
+    /// start has weighed it and written what it did - refused where a stop or a pause was asked of the start meanwhile, which
+    /// then seeks no advice for it (<see cref="SeekAdvice"/>), and cancelled where that start never gets there, so it stays
+    /// in the inbox.
     /// </returns>
-    public Task<FlowHandedOver> WeighHandedOver(string question, string answer, string? text, out string? problem, string? through, string inbox, bool again = false, DateTimeOffset? at = null)
+    public Task<FlowWeighed> WeighHandedOver(string question, string answer, string? text, string? through, string inbox, bool again = false, DateTimeOffset? at = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(question);
         ArgumentException.ThrowIfNullOrWhiteSpace(answer);
@@ -2760,35 +2769,46 @@ public sealed class FlowCoordinator
         if (WaitsForTheStartsAdvice(offer))
         {
             _afterTheStartsAdvice.Add(offer);
-            problem = null;
             return offer.Completion.Task;
         }
 
-        return Task.FromResult(AnswerHandedOver(question, answer, text, out problem, through, inbox, again, at));
+        var handed = AnswerHandedOver(question, answer, text, out var problem, through, inbox, again, at);
+        return Task.FromResult(new FlowWeighed(handed, handed is FlowHandedOver.Refused ? problem : null));
     }
 
     /// <summary>
     /// Whether this engine's start is under way: from its making over the run's records - which a session's claim hands
     /// it, before its first session is driven - through that session's start, and each later session's start alike, until
-    /// the start has written what it held. What an answer handed over meanwhile meets (<see cref="WaitsForTheStartsAdvice"/>),
-    /// and what the run's state says its engine is doing (<see cref="FlowFile.Starting"/>). An engine between two sessions it
-    /// drove is not starting: the session that ended is over, and what it is handed then is weighed between sessions.
+    /// the start has made what it held. An engine between two sessions it drove is not starting: the session that ended is
+    /// over, and what it is handed then is weighed between sessions.
     /// </summary>
     private bool StartUnderWay => _starting || (!_inSession && _sessions == 0);
 
     /// <summary>
+    /// Whether the start under way takes what is handed to it as it seeks every recommendation the run owes: it is under way
+    /// (<see cref="StartUnderWay"/>) and goes on to seek them - no stop asked of it, after which it seeks none, and no pause,
+    /// which defers each (<see cref="SeekAdvice"/>). The one owner of both what an answer handed to the start meets
+    /// (<see cref="WaitsForTheStartsAdvice"/>) and whether the run's state says its engine is starting
+    /// (<see cref="FlowFile.Starting"/>, written by every write the start makes while it holds), so a reader names the answer
+    /// taken as the start seeks its recommendation (<see cref="FlowAnswerRules.NextStepOf"/>) exactly where the start takes
+    /// it - never where a stop or a pause asked of the start will refuse it.
+    /// </summary>
+    private bool StartTakesAnswers => StartUnderWay && !_hardStop && _stoppingSince is null && !_pausing && _pauseRequest is null;
+
+    /// <summary>
     /// Whether <paramref name="offer"/>, an answer handed over now, waits for the advice the session's start seeks
-    /// (<see cref="SeekOwedAdvice"/>) rather than being weighed at once: the start is under way and goes on to seek it - no
-    /// stop asked, after which it seeks none, and no pause, which defers it - the question is open and owes the
-    /// recommendation it is answered with, which no asking under way seeks yet and the start seeks (<see cref="RunSeeksAdviceFor"/>),
-    /// and the answer is a first one, one the question takes, and not <c>abort</c>, which is taken now wherever a
-    /// recommendation is owed. An entry the run's records already hold is never weighed again, and never waits. So an
-    /// answer handed to a starting engine - the step its run's records name for it (<see cref="FlowAnswerRules.NextStepOf"/>) -
-    /// meets the advice under way and is taken, ending the asking, never refused naming the resume this start is.
+    /// (<see cref="SeekOwedAdvice"/>) rather than being weighed at once: the start takes it (<see cref="StartTakesAnswers"/>)
+    /// - the question is open and owes the recommendation it is answered with, which no asking under way seeks yet and the
+    /// start seeks (<see cref="RunSeeksAdviceFor"/>), and the answer is a first one, one the question takes, and not
+    /// <c>abort</c>, which is taken now wherever a recommendation is owed. An entry the run's records already hold is never
+    /// weighed again, and never waits. So an answer handed to a starting engine - the step its run's records name for it
+    /// (<see cref="FlowAnswerRules.NextStepOf"/>) - meets the advice under way and is taken, ending the asking, never refused
+    /// naming the resume this start is. One that waits and meets a stop or a pause asked of the start since is refused as
+    /// the start weighs it (<see cref="WeighWhatWaitedForTheStartsAdvice"/>), its why kept with what it is settled with.
     /// </summary>
     private bool WaitsForTheStartsAdvice(Offer offer)
     {
-        if (!StartUnderWay || offer.Amendment is not null || offer.Again || offer.Answer == "abort" || _hardStop || _pausing || _pauseRequest is not null
+        if (!StartTakesAnswers || offer.Amendment is not null || offer.Again || offer.Answer == "abort"
             || offer.Inbox is { } inbox && Recorded(inbox) || !_open.Contains(offer.Question!))
         {
             return false;
@@ -2804,9 +2824,10 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Weighs each answer that waited for the advice the session's start seeks, in the order handed over, once the start
-    /// has sought it - each meets the advice under way and is taken, ending the asking, or, where the start sought none,
-    /// is refused as any answer to a question owing its recommendation is - and settles it as the loop settles every
-    /// offer, once what became of it is written.
+    /// has sought it - each meets the advice under way and is taken, ending the asking, or, where the start sought none for
+    /// it - a stop asked of it as it began, after which it seeks none, or a pause, which defers it - is refused as any
+    /// answer to a question owing its recommendation is - and settles it as the loop settles every offer, once what became
+    /// of it is written, with why where it was refused, for whoever handed it over to say.
     /// </summary>
     private void WeighWhatWaitedForTheStartsAdvice()
     {
@@ -13102,15 +13123,18 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Weighs one offer from outside the session - an answer, a change of one or an amendment - by the path each goes, and
-    /// settles it only once what became of it is written: at once, or after the writes of a session's start it was weighed
-    /// in; a start refused writes none of them, and hands it back.
+    /// settles it only once what became of it is written, with why where it was refused, so whoever handed it over says the
+    /// run's why however long it waited: at once, or after the writes of a session's start it was weighed in; a start
+    /// refused writes none of them, and hands it back.
     /// </summary>
     private void WeighOffer(Offer offered)
     {
+        string? problem;
         var handed = offered.Amendment is { } amendment
-            ? AmendmentHandedOver(amendment, offered.Through ?? "amend-orchestrator-request", out _, offered.Inbox, offered.At)
-            : AnswerHandedOver(offered.Question!, offered.Answer!, offered.Text, out _, offered.Through, offered.Inbox, offered.Again, offered.At);
-        Put(_ => offered.Completion.TrySetResult(handed), dropped: () => offered.Completion.TrySetCanceled());
+            ? AmendmentHandedOver(amendment, offered.Through ?? "amend-orchestrator-request", out problem, offered.Inbox, offered.At)
+            : AnswerHandedOver(offered.Question!, offered.Answer!, offered.Text, out problem, offered.Through, offered.Inbox, offered.Again, offered.At);
+        var weighed = new FlowWeighed(handed, handed is FlowHandedOver.Refused ? problem : null);
+        Put(_ => offered.Completion.TrySetResult(weighed), dropped: () => offered.Completion.TrySetCanceled());
     }
 
     /// <summary>Takes one message of the channel, as the loop alone does: an answer offered, what a step spent, or what a running attempt says.</summary>
@@ -15710,9 +15734,10 @@ public sealed class FlowCoordinator
             [.. _issues],
             NextRound: [.. _nextRound],
             StoppingSince: _stoppingSince,
-            // The start under way is what the engine does until it has written what it held, unless a stop it applies
-            // first is in force: the run's state then says the stop.
-            Starting: StartUnderWay && _stoppingSince is null);
+            // The start under way is what the engine does while it takes what it is handed - by the one rule that decides
+            // what an answer handed to it meets - until its own end is written: a stop or a pause asked of it, which it
+            // refuses such an answer over, never reads as starting.
+            Starting: StartTakesAnswers);
     }
 
     /// <summary>One instance, as its records read it, what it waits on as the admission walk said it.</summary>
@@ -16889,7 +16914,7 @@ public sealed class FlowCoordinator
     /// <param name="Again">Whether an answer changes one already given.</param>
     /// <param name="At">When it was given to the tool, where it was handed over: the moment a change's window is counted to, and an amendment is recorded at.</param>
     /// <param name="Amendment">The amendment's text, where this is one; null for an answer.</param>
-    /// <param name="Completion">Settled with what became of it once that is written; cancelled where no session weighed it.</param>
+    /// <param name="Completion">Settled with what became of it, and why where it was refused, once that is written; cancelled where no session weighed it.</param>
     private sealed record Offer(
         string? Question,
         string? Answer,
@@ -16899,7 +16924,7 @@ public sealed class FlowCoordinator
         bool Again,
         DateTimeOffset? At,
         string? Amendment,
-        TaskCompletionSource<FlowHandedOver> Completion);
+        TaskCompletionSource<FlowWeighed> Completion);
 
     /// <summary>
     /// Offers an answer to a running session from outside it - taken from the run's inbox while the engine runs, by
@@ -16919,8 +16944,8 @@ public sealed class FlowCoordinator
     /// <param name="inbox">The id of the inbox entry it was handed over under; null for an answer no inbox handed over.</param>
     /// <param name="again">Whether it changes an answer already given: a plan update, taken within its window and once, by the path every change goes (<see cref="AnswerHandedOver"/>).</param>
     /// <param name="at">The moment it was given to the tool, where it was handed over: the moment a change's window is counted to.</param>
-    /// <returns>What became of the answer, once the session has weighed it and written what it did; cancelled where no session weighed it, or none wrote it.</returns>
-    public Task<FlowHandedOver> OfferAnswerAsync(string question, string answer, string? text = null, string? through = "answer-orchestrator", string? inbox = null, bool again = false, DateTimeOffset? at = null)
+    /// <returns>What became of the answer, and why where it was refused, once the session has weighed it and written what it did; cancelled where no session weighed it, or none wrote it.</returns>
+    public Task<FlowWeighed> OfferAnswerAsync(string question, string answer, string? text = null, string? through = "answer-orchestrator", string? inbox = null, bool again = false, DateTimeOffset? at = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(question);
         ArgumentException.ThrowIfNullOrWhiteSpace(answer);
@@ -16939,8 +16964,8 @@ public sealed class FlowCoordinator
     /// <param name="through">How the person gave it: <c>amend-orchestrator-request</c> or <c>front-end</c>.</param>
     /// <param name="inbox">The id of the inbox entry it was handed over under; null where none was.</param>
     /// <param name="at">When it was given to the tool, which its entry records it at; where left out, when it is taken.</param>
-    /// <returns>What became of it, once the session has weighed it and written what it did; cancelled where no session weighed it, or none wrote it.</returns>
-    public Task<FlowHandedOver> OfferAmendmentAsync(string text, string through = "amend-orchestrator-request", string? inbox = null, DateTimeOffset? at = null)
+    /// <returns>What became of it, and why where it was refused, once the session has weighed it and written what it did; cancelled where no session weighed it, or none wrote it.</returns>
+    public Task<FlowWeighed> OfferAmendmentAsync(string text, string through = "amend-orchestrator-request", string? inbox = null, DateTimeOffset? at = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
 
@@ -16948,11 +16973,11 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>A completion an offer's taker settles off the loop's thread.</summary>
-    private static TaskCompletionSource<FlowHandedOver> NewCompletion()
+    private static TaskCompletionSource<FlowWeighed> NewCompletion()
         => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Hands <paramref name="offer"/> to the loop, which alone weighs it, and answers what became of it.</summary>
-    private Task<FlowHandedOver> Offered(Offer offer)
+    private Task<FlowWeighed> Offered(Offer offer)
     {
         _ = _messages.Writer.TryWrite(new Message(null!, null, null, null, 0, offer));
         return offer.Completion.Task;
