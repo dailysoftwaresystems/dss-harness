@@ -750,8 +750,8 @@ anchored there too, `**` for any depth, so a root-level file such as `Makefile` 
 path and keeps only the item that owns it waiting. A directory an earlier round made is one the start tree does not
 hold, so the plan's check refuses an item of a later round owning it with no trailing `/`, saying to write it with one,
 before its builder's every write beneath it is refused - an item keeping off it so is never refused, for no write is
-refused by what an item must not touch - and an update's check asks the main tree as it now is of the items it adds or
-changes alone, every other having been checked as its round opened; and a start tree that cannot be read is
+refused by what an item must not touch - and an update's check asks the main tree as it now is of no item a round
+already holds that the update leaves as it was, each having been checked as its round opened; and a start tree that cannot be read is
 warned of once a session, each refusal its reading causes saying why. The planner and the self-audit are told the same, once, by the
 workflow's text `fixes` (`fixes.md`): no work item fixes an issue being fixed, or rewrites its lines, and an item that
 needs its fix names it; the plan's check refuses a `needs` that names no issue the recovery is fixing or fixed, nor

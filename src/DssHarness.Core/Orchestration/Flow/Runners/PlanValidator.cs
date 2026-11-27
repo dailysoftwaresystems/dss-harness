@@ -26,9 +26,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// item's own paths say of them, and each universe to the two ways an axis is answered and to the cells its axes make (P-C1 to P-C8); and each names the tests its change affects, the units it is tested on
 /// alone, or says in <c>noTests</c> why it affects none (P-C9). The rules that read the main tree as it now is - an
 /// owned entry naming one of its directories, a path reused or replaced, a class's home and sites being there - hold
-/// only the items the check introduces or changes: an item a plan update's pieces leave as it was was checked when its
-/// round opened, against the tree of that moment, and what a fold has made of the tree since is no breach of it. Each
-/// breach is a problem of the plan, worded once here; none is a failure.
+/// only the items the check introduces or changes: an item a round of the run already holds that a plan update's pieces
+/// leave as it was was checked when its round opened, against the tree of that moment, and what a fold has made of the
+/// tree since is no breach of it (<see cref="CheckedBefore"/>). Each breach is a problem of the plan, worded once here;
+/// none is a failure.
 /// </summary>
 /// <param name="fileSystem">Reads the main tree for the paths the items reuse and replace, and the directories it holds.</param>
 /// <param name="pathBudget">Reckons the paths of the worktree each item would get.</param>
@@ -59,17 +60,16 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// round, the run has none before it, or the round builds none of the list's own items: one added to a work-item
     /// group with no loop around it carries the owed work alone, its own items built by the round before.
     /// </param>
-    /// <param name="introduced">
-    /// The names of the items the check introduces or changes, which alone the rules that read the main tree as it now is
-    /// hold (<see cref="DirectoryProblems"/>, and the paths <see cref="ListProblems"/> and <see cref="ClassesProblems"/>
-    /// look for there): a plan update's, the items its added and changed pieces place (<see cref="Introduced"/>).
-    /// Every other item of the list - one of the round's that no piece changes, or one the plan's list keeps as it was -
-    /// was checked when it entered a round, against the main tree of that moment, and a fold since that made a directory
-    /// of its bare entry or took away a path it reused is no breach of it. Null where the check introduces every item: a
-    /// plan's own check, and the check that opens a round.
+    /// <param name="checkedBefore">
+    /// The names of the items a round of the run already holds that the check neither introduces nor changes
+    /// (<see cref="CheckedBefore"/>), which the rules that read the main tree as it now is pass over
+    /// (<see cref="DirectoryProblems"/>, and the paths <see cref="ListProblems"/> and <see cref="ClassesProblems"/> look
+    /// for there): each was checked when its round opened, against the main tree of that moment, and a fold since that
+    /// made a directory of its bare entry or took away a path it reused is no breach of it. None where the check holds
+    /// every item to the tree: one of no plan update, and the check that opens a round.
     /// </param>
     /// <returns>Every problem of the plan, in the order of its items; none where it passes.</returns>
-    public IReadOnlyList<string> Check(IReadOnlyList<JsonNode?> items, HarnessContext context, string run, WorkflowDefinition definition, TreeDirectories startTree, bool noItems = true, IReadOnlyCollection<string>? carried = null, IReadOnlyCollection<string>? introduced = null)
+    public IReadOnlyList<string> Check(IReadOnlyList<JsonNode?> items, HarnessContext context, string run, WorkflowDefinition definition, TreeDirectories startTree, bool noItems = true, IReadOnlyCollection<string>? carried = null, IReadOnlyCollection<string>? checkedBefore = null)
     {
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(context);
@@ -123,8 +123,8 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
                 problems.Add($"work item '{item.Name}' owns '{owned}' and must not touch '{forbidden}', which match the same paths: an item's forbidden paths are kept by the paths it owns{kept}");
             }
 
-            // What the main tree holds now is asked of the items the check introduces or changes alone.
-            var asNow = introduced?.Contains(item.Name, StringComparer.Ordinal) ?? true;
+            // What the main tree holds now is asked of every item but one a round already holds that the check leaves as it was.
+            var asNow = checkedBefore?.Contains(item.Name, StringComparer.Ordinal) != true;
 
             if (asNow)
             {
@@ -264,30 +264,44 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             .Where(other => FlowWorkItems.NameOf(other) is not { } named || !namedByPieces.Contains(named, StringComparer.Ordinal))
             .Concat(held.Select(piece => piece.Item))];
 
-        // The main tree as it now is holds the items the update places alone: the round's own were checked as it opened.
-        problems.AddRange(Check(joined, context, run, definition, startTree, noItems: false, introduced: IntroducedOf(held)));
+        // The round's own items were checked against the main tree as it opened: the update's pieces alone are held to it now.
+        problems.AddRange(Check(joined, context, run, definition, startTree, noItems: false, checkedBefore: CheckedBeforeOf(held, round, carried)));
 
         return problems;
     }
 
     /// <summary>
-    /// The names of the work items the pieces of a plan update introduce or change - each <c>added</c> and each
-    /// <c>changed</c> piece's - which alone a check of the update holds to the main tree as it now is (<see cref="Check"/>):
-    /// a <c>removed</c> piece's item is taken back and builds on nothing, a <c>told</c> one carries none, and one that
-    /// does not read as a piece places nothing. The one owner of which items an update introduces, which the check of its
-    /// pieces and the check of the plan's own list both read.
+    /// The names of the work items a check of a plan update - one handed the pieces its <c>scope</c> yields, none among
+    /// them where the update answers no piece - passes over where it reads the main tree as it now is (<see cref="Check"/>):
+    /// each a round of the run already holds - an item of the round the update joins, or one an instance of the work-item
+    /// group carries over every round - that no <c>added</c> or <c>changed</c> piece places, a <c>removed</c> piece's item
+    /// among them, for an item taken back builds on nothing. Each was checked when its round opened, against the tree of
+    /// that moment; a plan's first check, before any round, passes none over. The one owner of which items an update's check
+    /// leaves to the check that opened their round, which the check of its pieces and the check of the plan's own list both read.
     /// </summary>
     /// <param name="pieces">The pieces, as the plan's scope yielded them.</param>
-    public static IReadOnlyList<string> Introduced(IReadOnlyList<JsonNode?> pieces)
+    /// <param name="round">The items of the round the pieces would join, as <see cref="CheckPieces"/> is handed them; null where the run has none.</param>
+    /// <param name="carried">The names every instance of the work-item group carries, over every round; null where it is handed none.</param>
+    public static IReadOnlyList<string> CheckedBefore(IReadOnlyList<JsonNode?> pieces, IReadOnlyList<JsonNode?>? round, IReadOnlyCollection<string>? carried)
     {
         ArgumentNullException.ThrowIfNull(pieces);
 
-        return IntroducedOf(pieces.Select(node => FlowUpdatePiece.Read(node, out _)).OfType<FlowUpdatePiece>());
+        return CheckedBeforeOf(pieces.Select(node => FlowUpdatePiece.Read(node, out _)).OfType<FlowUpdatePiece>(), round, carried);
     }
 
-    /// <summary>The names of the work items <paramref name="pieces"/>, each read as a piece, introduce or change (<see cref="Introduced"/>).</summary>
-    private static List<string> IntroducedOf(IEnumerable<FlowUpdatePiece> pieces)
-        => [.. pieces.Where(piece => piece.Kind is FlowUpdatePieceKinds.Added or FlowUpdatePieceKinds.Changed).Select(piece => piece.ItemName()).OfType<string>()];
+    /// <summary>The names of the work items a check of the update <paramref name="pieces"/>, each read as a piece, are, passes over (<see cref="CheckedBefore"/>).</summary>
+    private static List<string> CheckedBeforeOf(IEnumerable<FlowUpdatePiece> pieces, IReadOnlyList<JsonNode?>? round, IReadOnlyCollection<string>? carried)
+    {
+        var placed = pieces.Where(piece => piece.Kind is FlowUpdatePieceKinds.Added or FlowUpdatePieceKinds.Changed)
+            .Select(piece => piece.ItemName())
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
+
+        return [.. (round ?? []).Select(FlowWorkItems.NameOf).OfType<string>()
+            .Concat(carried ?? [])
+            .Where(name => !placed.Contains(name))
+            .Distinct(StringComparer.Ordinal)];
+    }
 
     /// <summary>
     /// A work item read whole: its name, the paths it owns and must not touch - read for whether they meet another's - the
@@ -477,7 +491,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// for everything it creates.
     /// </summary>
     /// <param name="item">The work item.</param>
-    /// <param name="root">The main tree's root, every path it reuses or replaces is looked for in; null where the item is not held to the tree as it now is (<see cref="Check"/>'s <c>introduced</c>).</param>
+    /// <param name="root">The main tree's root, every path it reuses or replaces is looked for in; null where the item is not held to the tree as it now is (<see cref="Check"/>'s <c>checkedBefore</c>).</param>
     /// <param name="problems">The problems of the plan, each breach added to.</param>
     private void ListProblems(Item item, string? root, List<string> problems)
     {
@@ -529,7 +543,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// one of the two ways an axis is answered, and counts the cells its axes that apply make.
     /// </summary>
     /// <param name="item">The work item, its classes read as they are given.</param>
-    /// <param name="root">The main tree's root, the paths of a home and a site are looked for in; null where the item is not held to the tree as it now is (<see cref="Check"/>'s <c>introduced</c>).</param>
+    /// <param name="root">The main tree's root, the paths of a home and a site are looked for in; null where the item is not held to the tree as it now is (<see cref="Check"/>'s <c>checkedBefore</c>).</param>
     /// <param name="comparison">How this machine compares paths.</param>
     /// <param name="problems">The problems of the plan, each breach added to.</param>
     private void ClassesProblems(Item item, string? root, StringComparison comparison, List<string> problems)

@@ -9,7 +9,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// The <c>validate-plan</c> step: the work items its <c>items</c> yields, checked by <see cref="PlanValidator"/>; its
 /// answer is an output - <c>ok</c>, each problem as a line, and the items it checked - never a failure. The pieces of a
 /// plan update its <c>scope</c> yields are checked with them, and with the items of the round they join, the main tree as
-/// it now is asked of the items the pieces add or change alone (<see cref="PlanValidator.Introduced"/>); where it opens
+/// it now is asked of no item a round of the run already holds that the pieces leave as it was
+/// (<see cref="PlanValidator.CheckedBefore"/>); where it opens
 /// a round, it checks one list - its own items and every work item plan updates owe it - and its output <c>items</c> is
 /// that list, so nothing joins a round unchecked. A work item is known by its name across the run, so no item a round
 /// builds but an owed one, and no added piece, takes a name an instance of the work-item group carries already: a round
@@ -126,6 +127,7 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
         // the plan's own: the update's work goes into that round, whatever the plan's items say.
         var updating = read.TryGetValue("scope", out var scope) && !scope.IsMissing;
         var pieces = updating ? scope.ToNode() : null;
+        IReadOnlyList<JsonNode?>? round = read.TryGetValue("round", out var joining) && !joining.IsMissing && joining.ToNode() is JsonArray joiningList ? [.. joiningList] : null;
 
         if (updating && pieces is not (JsonArray or null))
         {
@@ -155,24 +157,22 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
         }
         else
         {
-            // An update's check holds to the main tree as it now is the items its pieces place alone - none where it
-            // answers no piece: every other item of the plan's list was checked when it entered a round, against the
-            // tree of that moment, and what a fold has made of the tree since is no breach of it.
+            // An update's check passes over, where it reads the main tree as it now is, every item of the plan's list a
+            // round of the run already holds that its pieces leave as it was: each was checked when its round opened,
+            // against the tree of that moment, and what a fold has made of the tree since is no breach of it.
             problems.AddRange(validator.Check(
                 [.. items],
                 context,
                 place.Run,
                 place.Definition,
                 place.Directories,
-                introduced: updating ? PlanValidator.Introduced([.. pieces as JsonArray ?? []]) : null));
+                checkedBefore: updating ? PlanValidator.CheckedBefore([.. pieces as JsonArray ?? []], round, carried) : null));
         }
 
         IReadOnlyList<JsonNode?>? joinedRound = null;
 
         if (updating)
         {
-            IReadOnlyList<JsonNode?>? round = read.TryGetValue("round", out var joining) && !joining.IsMissing && joining.ToNode() is JsonArray joiningList ? [.. joiningList] : null;
-
             if (pieces is JsonArray { Count: > 0 } placed)
             {
                 problems.AddRange(validator.CheckPieces([.. placed], [.. items], round, Names(read, "known"), context, place.Run, place.Definition, place.Directories, out var joined, carried));

@@ -4013,11 +4013,13 @@ are read against, and a directory of the main tree: write it 'src/feature/'`, at
 it as at the check's own moment (`PlanValidator.DirectoryProblems`). An entry an item must not touch is never refused
 so, for nothing gates a write by one: the check weighs it for meeting the item's own owned paths, and its builder is
 told it. That rule, and every other that reads the main tree as it now is - a path an item reuses or replaces, a class's
-home and sites being there - holds only the items the check introduces or changes (`PlanValidator.Check`'s
-`introduced`): an update's check holds to it the items its added and changed pieces place alone
-(`PlanValidator.Introduced`), in the round they join and in the plan's own list, and one whose scope yields no piece
-none of its plan's, for every other item was checked when its round opened, against the tree of that moment - a round's
-own item a fold since made a directory under, or took a path it reused from, would otherwise fail every update after it.
+home and sites being there - holds only the items the check introduces or changes: an update's check - one whose
+`scope` is read, whether it yields pieces or none - passes over every item a round of the run already holds, of the round
+the update joins or carried by an instance of the work-item group, that no added or changed piece places
+(`PlanValidator.CheckedBefore`, handed to `PlanValidator.Check` as `checkedBefore`), in the round the pieces join and in
+the plan's own list alike, for each was checked when its round opened, against the tree of that moment - a round's own
+item a fold since made a directory under, or took a path it reused from, would otherwise fail every update after it; a
+plan's first check, before any round, holds every item to the tree.
 A start tree that cannot be read is never silent: the session
 warns once why (`TreeDirectories.UnreadWarning`, through the records' warner), and every refusal its reading causes
 says it too - the narrow reading's after how to write the entry (`TreeDirectories.UnreadForWriting`, carried by each
