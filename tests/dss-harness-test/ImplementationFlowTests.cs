@@ -3242,10 +3242,12 @@ public sealed class ImplementationFlowTests
 
         /// <summary>
         /// The remedy items a person's answer leads to are checked before any is built, and what the check refuses goes
-        /// back to the diagnostician within the visit: the diagnosis puts the failure to a person, the person answers
+        /// back to the diagnostician within its own step: the diagnosis puts the failure to a person, the person answers
         /// continue, the diagnosis said again on their answer sets out an item the plan check refuses - it declares no
-        /// class and says no reason - the diagnostician is given the check's problems and sets out the item again, the
-        /// check passes it, and that item, the one the check read, is the one built; the step that failed then runs again.
+        /// class and says no reason - and the check, made at that answer as the check after it would make it, hands the
+        /// diagnostician its problems in its own conversation; it sets out the item again, the check after it passes it,
+        /// and that item, the one the check read, is the one built, with no step after the check to say its problems again;
+        /// the step that failed then runs again.
         /// </summary>
         [Fact]
         public async Task TheRemediesAPersonsAnswerLeadsTo_AreChecked_TheirProblemsGoBackWithinTheVisit_AndWhatPassedIsBuilt()
@@ -3258,11 +3260,15 @@ public sealed class ImplementationFlowTests
             var kit = await PrepareAsync(
                 temp,
                 ground: new Ground(Legs: true),
-                script: agents => agents.Queue(
-                    "diagnostician",
-                    Completed(Diagnosis(course: "person", choices: [Choice("Rename the type the tool names", "the run builds the rename and the build runs again"), Choice("Restore the type", "a person restores it, and the build runs again")])),
-                    Completed(Diagnosis(course: "fix", items: [unclassed])),
-                    Completed(Diagnosis(course: "fix", items: [Remedy("frame", "src/frame/**")]))),
+                script: agents =>
+                {
+                    agents.Queue(
+                        "diagnostician",
+                        Completed(Diagnosis(course: "person", choices: [Choice("Rename the type the tool names", "the run builds the rename and the build runs again"), Choice("Restore the type", "a person restores it, and the build runs again")])));
+                    agents.Converse = step => step.AgentDefinition == "diagnostician" && step.Prompt.StartsWith("The person you asked has answered", StringComparison.Ordinal)
+                        ? [Completed(Diagnosis(course: "fix", items: [unclassed])), Completed(Diagnosis(course: "fix", items: [Remedy("frame", "src/frame/**")]))]
+                        : null;
+                },
                 machine: steps => steps.Queue("build", MachineSteps.Red(HarnessExit.CommandFailed, "the build is red: Tool.Frame is not defined")));
 
             var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
@@ -3275,29 +3281,23 @@ public sealed class ImplementationFlowTests
             Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {string.Join(" | ", end.Details ?? [])} | {Shown(kit)}");
             Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
 
-            // The diagnostician was asked three times: the diagnosis, its word on the person's answer, and its word on the
-            // check's problems, which it was given whole.
+            // The diagnostician was asked twice: the diagnosis, and its word on the person's answer - within which the
+            // check's problems were handed back, whole, and it answered again in the same conversation.
             var diagnoses = kit.Agents.Of("diagnostician");
 
-            Assert.Equal(3, diagnoses.Count);
+            Assert.Equal(2, diagnoses.Count);
             Assert.StartsWith("The person you asked has answered, with what the run is to do", diagnoses[1].Prompt, StringComparison.Ordinal);
             Assert.Contains("Rename the type the tool names.", diagnoses[1].Prompt, StringComparison.Ordinal);
-            Assert.StartsWith("The machine's plan check refused the work items you set out", diagnoses[2].Prompt, StringComparison.Ordinal);
+            Assert.Equal([("diagnostician", StructuredOutputGate.Correction([Refused]))], kit.Agents.SentBack);
 
-            // The problems as a prompt holds a list the engine reads: written as JSON with JSON's own escapes alone, so
-            // the apostrophes the check said are handed as they were said.
-            Assert.Contains($"[\"{Refused}\"]", diagnoses[2].Prompt, StringComparison.Ordinal);
-
-            // The check read the person's remedy and refused it; the check again read the one said on its problems, and
-            // passed it.
+            // The check read the remedy said again within the step, and passed it; no step after it said its problems again.
             var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps;
             var check = flow.Single(step => step.Step == "recover.remedy-check");
-            var recheck = flow.Single(step => step.Step == "recover.remedy-recheck");
 
-            Assert.Equal((false, Refused), (check.Output!["ok"]!.GetValue<bool>(), check.Output!["problems"]!.AsArray().Single()!.GetValue<string>()));
-            Assert.Equal("The frame, unclassed", check.Output!["items"]!.AsArray().Single()!["title"]!.GetValue<string>());
-            Assert.True(recheck.Output!["ok"]!.GetValue<bool>());
-            Assert.Empty(recheck.Output!["problems"]!.AsArray());
+            Assert.True(check.Output!["ok"]!.GetValue<bool>(), string.Join(" | ", check.Output["problems"]!.AsArray()));
+            Assert.Empty(check.Output!["problems"]!.AsArray());
+            Assert.Equal("frame", check.Output!["items"]!.AsArray().Single()!["name"]!.GetValue<string>());
+            Assert.DoesNotContain(flow, step => step.Step.StartsWith("recover.", StringComparison.Ordinal) && step.Step.Contains("remedy-", StringComparison.Ordinal) && step.Step != "recover.remedy-check");
 
             // The one remedy built is the one the check passed, on the remedy prompt, before the round's own item; the
             // build ran again, green.

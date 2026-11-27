@@ -456,7 +456,6 @@ public sealed class FlowUpdatesTests
         Assert.Equal("rounds.items", FlowUpdateGates.RoundOpenedBy(shipped, "rounds", rounds, rounds.Steps.Single(step => step.Name == "item-check")));
         Assert.Null(FlowUpdateGates.RoundOpenedBy(shipped, "planning", planning, planning.Steps.Single(step => step.Name == "check")));
         Assert.Null(FlowUpdateGates.RoundOpenedBy(shipped, FlowScope.Recovery, recovery, recovery.Steps.Single(step => step.Name == "remedy-check")));
-        Assert.Null(FlowUpdateGates.RoundOpenedBy(shipped, FlowScope.Recovery, recovery, recovery.Steps.Single(step => step.Name == "remedy-recheck")));
 
         var once = Definition("""
             name: flow
@@ -548,7 +547,6 @@ public sealed class FlowUpdatesTests
         Assert.True(FlowUpdateGates.ChecksTheItemsARoundOpensWith(shipped, "rounds", rounds, rounds.Steps.Single(step => step.Name == "item-check")));
         Assert.True(FlowUpdateGates.ChecksTheItemsARoundOpensWith(shipped, "planning", planning, planning.Steps.Single(step => step.Name == "check")));
         Assert.False(FlowUpdateGates.ChecksTheItemsARoundOpensWith(shipped, FlowScope.Recovery, recovery, recovery.Steps.Single(step => step.Name == "remedy-check")));
-        Assert.False(FlowUpdateGates.ChecksTheItemsARoundOpensWith(shipped, FlowScope.Recovery, recovery, recovery.Steps.Single(step => step.Name == "remedy-recheck")));
 
         var flow = Definition("""
             name: flow

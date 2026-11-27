@@ -2489,10 +2489,10 @@ checks, commits, pushes or waits - itself or through its group - and `onFailure:
 reasoning step; its recovery diagnoses the failure (`diagnose`, which goes on with its own conversation across
 the visits), asks a person only for what only a person can give (`direction`), holds the remedy items its last word
 sets out - the diagnosis's, or the one it gives on the person's answer (`redirect`) - to the plan's own check
-(`remedy-check`), gives what the check refuses back to the diagnostician within the visit (`remedy-revise`) and checks
-what it gives again (`remedy-recheck`), and builds, tests, folds and reviews the items those checks read as a round's
-work items are (`remedies`, expanding from them), the revised ones as they stand where the check still refuses them, as
-a round's are. A later round's items are audited before any is built (`item-audit`, which the round's `items` wait
+(`remedy-check`), whose problems the diagnostician is told within its own step as it answers
+(`FlowCoordinator.AnswerChecksOf`), so no step after the check sends them back again, and builds, tests, folds and
+reviews the items that check read as a round's work items are (`remedies`, expanding from them), as they stand where
+the check still refuses them, as a round's are. A later round's items are audited before any is built (`item-audit`, which the round's `items` wait
 for), and the round is judged by the self-audit that read that audit: its until reads the self-audit and the machine's
 checks, never the audit's own go, given before the build that may settle it. The flow builds first: its baseline is split
 in two - a `build` step, which fails red and is taken by the recovery and built again - and the
@@ -3649,7 +3649,7 @@ back within the plan step and never costs an audit or another planning iteration
 may share one, a place that decides more than one thing, which that item changes alone. What the check finds reaches
 the agent that gave the items within its own step: the engine holds the answer of every reason step whose output the
 `items` of a check of its scope reads - the plan and a plan update through `plan.latest`, a round's self-audit through
-`previous`, the diagnosis, its redirect and its revision through `diagnose.latest` - to that check at the answer
+`previous`, the diagnosis and its redirect through `diagnose.latest` - to that check at the answer
 (`FlowCoordinator.AnswerChecksOf`, over the types that judge an answer, `WorkflowStepTypes.StepType.JudgesAnswer`: each
 key read as the check's start reads it, `StartReadsOf` and `ReadExpressions`, with a plan check's own, `CheckReads`, and
 the judged one from the answer, `FlowAnswerCheck.ReadOf`), judged by `PlanCheckRunner.AnswerProblemsAsync`, the one

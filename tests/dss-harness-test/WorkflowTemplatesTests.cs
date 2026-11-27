@@ -217,7 +217,6 @@ public sealed class WorkflowTemplatesTests
             ("notes-cite", null, null),
             ("diagnose", null, "changes"),
             ("redirect", null, "changes"),
-            ("remedy-revise", null, "changes"),
             ("triage-pre-existing-issue", null, null),
         };
 
@@ -1117,7 +1116,7 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal(FlowRecover.PauseOnFailure, recover.OnFailure);
         Assert.Equal(5, recover.MaxVisits);
         Assert.Equal("diagnose", recover.Steps[0].Resume);
-        Assert.Equal(["diagnose", "direction", "redirect", "remedy-check", "remedy-revise", "remedy-recheck", "remedies", "publish"], [.. recover.Steps.Select(step => step.Name)]);
+        Assert.Equal(["diagnose", "direction", "redirect", "remedy-check", "remedies", "publish"], [.. recover.Steps.Select(step => step.Name)]);
 
         var passedOver = new List<string>();
         var untried = new List<string>();
@@ -1217,8 +1216,8 @@ public sealed class WorkflowTemplatesTests
     /// tree they are built on and the self-audit after the build reads what it found; the round is judged by that
     /// self-audit, so the item audit's go - said before the build that may settle it - is no term of the rounds' until.
     /// The recovery checks the diagnosis's items once the person's answer, where one was given, made its last word
-    /// (redirect); sends what the check refuses back to the diagnostician within the visit (remedy-revise); checks what
-    /// it gives again (remedy-recheck); and builds the items those checks read, never the diagnosis's own list.
+    /// (redirect) - the diagnostician told what the check finds within its own step, as it answers, so no step after the
+    /// check sends its problems back again - and builds the items that check read, never the diagnosis's own list.
     /// </summary>
     [Fact]
     public void WhatTheShippedFlowBuilds_IsWhatAPlanCheckRead_AfterTheLastWordOnIt()
@@ -1236,12 +1235,15 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal("(direction.answer ?? '') == 'continue'", StepAt(recover, "redirect").When);
         Assert.Equal(["redirect"], StepAt(recover, "remedy-check").DependsOn);
         Assert.Equal("diagnose.latest.items", StepAt(recover, "remedy-check").Items);
-        Assert.Equal(("diagnose", "!(remedy-check.ok ?? true)"), (StepAt(recover, "remedy-revise").Resume, StepAt(recover, "remedy-revise").When));
-        Assert.Equal(["remedy-check"], StepAt(recover, "remedy-revise").DependsOn);
-        Assert.Equal(["remedy-revise"], StepAt(recover, "remedy-recheck").DependsOn);
-        Assert.Equal("diagnose.latest.items", StepAt(recover, "remedy-recheck").Items);
-        Assert.Equal(["remedy-recheck"], StepAt(recover, "remedies").DependsOn);
-        Assert.Equal("remedy-recheck.items ?? remedy-check.items", StepAt(recover, "remedies").ForEach);
+        Assert.Equal(["remedy-check"], StepAt(recover, "remedies").DependsOn);
+        Assert.Equal("remedy-check.items", StepAt(recover, "remedies").ForEach);
+        Assert.Equal(["remedy-check"], [.. recover.Where(step => step.Type == "validate-plan").Select(step => step.Name)]);
+
+        // The diagnostician is told the check's problems within its own step, for the check reads the newest answer of
+        // the conversation the redirect goes on with - what it said first, or on the person's answer - and no other step
+        // goes on with it to say them again.
+        Assert.Equal(["diagnose", "redirect"], [.. recover.Where(step => step.Resume == "diagnose").Select(step => step.Name)]);
+        Assert.DoesNotContain("prompts/remedy-revise.md", WorkflowTemplates.Files);
     }
 
     /// <summary>
@@ -1409,15 +1411,15 @@ public sealed class WorkflowTemplatesTests
 
     /// <summary>
     /// The recovery's reasoning prompts give the issues joined to the one a visit fixes, which its fix settles too - the
-    /// diagnosis, its second word after a failure, the redirect on a person's answer and the revision on the check's
-    /// problems, each reading <c>{source.joined}</c> once - and the diagnosis, beside it, what the fix an issue waited for
+    /// diagnosis, its second word after a failure and the redirect on a person's answer, each reading
+    /// <c>{source.joined}</c> once - and the diagnosis, beside it, what the fix an issue waited for
     /// did (<c>{source.joinedTo}</c>); the triage's prompt reads no list of its own, for the engine tells it the issues it
     /// may name at its end, and asks for the id it joins.
     /// </summary>
     [Fact]
     public void TheRecoverysPrompts_GiveTheIssuesJoinedToTheOneItFixes_AndTheTriagesAsksWhichItJoins()
     {
-        string[] told = ["prompts/diagnose.md", "prompts/rediagnose.md", "prompts/redirect.md", "prompts/remedy-revise.md"];
+        string[] told = ["prompts/diagnose.md", "prompts/rediagnose.md", "prompts/redirect.md"];
 
         Assert.Equal<IEnumerable<string>>(
             told,
