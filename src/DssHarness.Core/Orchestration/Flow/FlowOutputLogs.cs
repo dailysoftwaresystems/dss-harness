@@ -51,8 +51,8 @@ public sealed record OutputLogsEnd(
 /// <c>--json</c> document (<see cref="IDocumentFacts"/>) as every record of a run is, on every end; a path the zip cannot
 /// be written at is refused before anything runs (<see cref="CheckAsync"/>), and so is one inside the repository's main
 /// checkout or one of its agents' trees where that tree does not ignore it, which would be handed to the run's agents as the
-/// tree's uncommitted state. A path in any other work tree - another project's checkout, a repository of dotfiles at the
-/// home - is no tree a run hands or folds from, and the zip is written there.
+/// tree's uncommitted state. A path in any other work tree - another project's checkout, a worktree of a bare repository,
+/// a repository of dotfiles at the home - is no tree a run hands or folds from, and the zip is written there.
 /// </para>
 /// <para>
 /// The run's directory is read as the tool reads a place an isolated process writes (<see cref="IFileSystem.Hold"/>): a
@@ -392,12 +392,11 @@ public sealed class FlowOutputLogs(
     }
 
     /// <summary>
-    /// Why <paramref name="target"/> is refused as a place in a tree of <paramref name="repository"/>'s - its main checkout,
-    /// or a tree of its own that names that checkout as its main one, an agent's among them, as the one locator of a tree's
-    /// repository reads it (<see cref="IRepositoryLocator"/>) - that does not ignore it, as git reads it, a path the tree
-    /// tracks never ignored; or that git could not be asked about; null where it is in no work tree, in one of another
-    /// repository, which no run of this one hands or folds from, or in one that ignores it. Asked from the nearest directory
-    /// on its way that is there, its links followed, for the zip's own may not be made yet.
+    /// Why <paramref name="target"/> is refused as a place in a tree of <paramref name="repository"/>'s (<see cref="IsTheRunsAsync"/>)
+    /// that does not ignore it, as git reads it, a path the tree tracks never ignored; or that git could not be asked about;
+    /// null where it is in no work tree, in one of another repository, which no run of this one hands or folds from, or in
+    /// one that ignores it. Asked from the nearest directory on its way that is there, its links followed, for the zip's
+    /// own may not be made yet.
     /// </summary>
     private async Task<string?> UnignoredInAsync(string target, HarnessLayout repository, CancellationToken cancellationToken)
     {
@@ -417,9 +416,8 @@ public sealed class FlowOutputLogs(
                 return null;
             }
 
-            // Only a tree the run hands its agents or folds from: the main checkout, or a tree that names it as its own.
-            if (await repositories.LocateAsync(tree, cancellationToken).ConfigureAwait(false) is not { } held
-                || !PathContainment.AreSame(Resolved(held.MainCheckoutRoot), Resolved(repository.MainCheckoutRoot), platform.PathComparison))
+            // Only a tree the run hands its agents or folds from: every other work tree takes the zip.
+            if (!await IsTheRunsAsync(tree, repository, cancellationToken).ConfigureAwait(false))
             {
                 return null;
             }
@@ -440,6 +438,30 @@ public sealed class FlowOutputLogs(
             return $"{Option} names '{target}', and git could not say whether a work tree holds it unignored: {Why(ex)}; name a "
                 + "path outside every work tree, or one git ignores. Nothing was started.";
         }
+    }
+
+    /// <summary>
+    /// Whether the work tree at <paramref name="tree"/> is one a run of <paramref name="repository"/> hands its agents or
+    /// folds from: its main checkout, or a worktree git keeps of it, which share that checkout's git common directory
+    /// (<see cref="AgentRepositoryMark.CommonDirectoryAsync"/>); or an agent's repository, a repository of its own whose
+    /// mark names that checkout (<see cref="AgentRepositoryMark.ReadAsync"/>), lent its objects or not. Asked of git and of
+    /// the tree's own configuration directly, never of the locator of a tree's repository, which refuses a tree it runs
+    /// nothing from - a worktree of a bare repository, another project's - where the question is only whose tree it is.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not say where either repository keeps its common directory, or the tree's configuration could not be read.</exception>
+    private async Task<bool> IsTheRunsAsync(string tree, HarnessLayout repository, CancellationToken cancellationToken)
+    {
+        var common = await AgentRepositoryMark.CommonDirectoryAsync(git, tree, "keeps its git directory", cancellationToken).ConfigureAwait(false);
+        var runs = await AgentRepositoryMark.CommonDirectoryAsync(git, repository.MainCheckoutRoot, "keeps its git directory", cancellationToken).ConfigureAwait(false);
+
+        if (PathContainment.AreSame(Resolved(common), Resolved(runs), platform.PathComparison))
+        {
+            return true;
+        }
+
+        return await AgentRepositoryMark.ReadAsync(git, fileSystem, tree, cancellationToken).ConfigureAwait(false) is { } mark
+            && Path.IsPathFullyQualified(mark.MainCheckout)
+            && PathContainment.AreSame(Resolved(mark.MainCheckout), Resolved(repository.MainCheckoutRoot), platform.PathComparison);
     }
 
     /// <summary>The repository <paramref name="directory"/> is in; null where it is in none, or git could not say.</summary>

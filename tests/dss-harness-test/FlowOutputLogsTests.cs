@@ -637,6 +637,51 @@ public sealed class FlowOutputLogsTests
         }
     }
 
+    /// <summary>
+    /// A path in a work tree the locator of a tree's repository refuses to run anything from - a worktree of another
+    /// project's bare repository, which has no main checkout - is none a run of this repository hands or folds from, and
+    /// takes the zip: whose tree it is is asked of git's common directory and the agent's mark, never of that refusal. A
+    /// worktree git keeps of the run's own main checkout shares its common directory, and is the run's.
+    /// </summary>
+    [Fact]
+    public async Task APathInAWorktreeOfABareRepository_TakesTheZip_AndOneInAWorktreeOfTheRunsCheckoutIsRefused()
+    {
+        var (repository, _) = await FlowServiceTests.RepositoryAsync(Paused);
+        using var disposed = repository;
+        var tree = repository.Path;
+
+        // Another project kept as a bare repository, worked on in a worktree of it.
+        using var other = new TempDirectory();
+        var project = other.Combine("project");
+        var bare = other.Combine("project.git");
+        var worktree = other.Combine("work");
+        Directory.CreateDirectory(project);
+        await repository.Harness.InitializeGitRepositoryAsync(project, Token);
+        File.WriteAllText(Path.Combine(project, "README.md"), "another project\n");
+        await repository.Harness.CommitAllAsync(project, "another project", Token);
+        await repository.Harness.RunGitAsync(other.Path, ["clone", "--quiet", "--bare", project, bare], Token);
+        await repository.Harness.RunGitAsync(other.Path, ["--git-dir", bare, "worktree", "add", "--quiet", "--detach", worktree], Token);
+        await Assert.ThrowsAsync<HarnessException>(async () => await repository.Harness.RepositoryLocator.LocateAsync(worktree, Token));
+
+        var kept = Path.Combine(worktree, "logs", "r1.zip");
+        var keeping = Logs(repository.Harness);
+
+        Assert.Null(await keeping.CheckAsync(kept, ["dssharness"], tree, Token));
+        Assert.Equal(kept, keeping.Target);
+
+        // A worktree of the run's own checkout shares its git, and is handed to the run as any tree of the checkout is.
+        var linked = other.Combine("linked");
+        await repository.Harness.RunGitAsync(tree, ["worktree", "add", "--quiet", "--detach", linked], Token);
+        var linkedRoot = await repository.Harness.GitClient.GetRepositoryRootAsync(linked, Token);
+        var refused = Path.Combine(linked, "r1.log");
+        var refusing = Logs(repository.Harness);
+
+        Assert.Equal(
+            $"--output-logs names '{refused}', inside the work tree '{linkedRoot}' of the repository's main checkout or an agent's, which does not ignore it: it would be handed to the run's agents as uncommitted state; name a path outside the tree or one git ignores. Nothing was started.",
+            await refusing.CheckAsync(refused, ["dssharness"], tree, Token));
+        Assert.Null(refusing.Target);
+    }
+
     /// <summary>A relative path is read from the directory the process stands in, whose directories on the way are made.</summary>
     [Fact]
     public async Task ARelativePath_IsReadFromTheDirectoryTheProcessStandsIn_ItsDirectoryMade()

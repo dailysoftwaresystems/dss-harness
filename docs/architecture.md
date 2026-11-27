@@ -5446,12 +5446,15 @@ every command shares (`CommandSession`) holds the path before anything is weighe
 the directory the process stands in; a directory, a path inside `.orchestrators/` (where every run
 keeps its own records, and a start names its run only as it starts), one inside the repository's main
 checkout or one of its agents' trees where that tree does not ignore it - the tree found by git from the
-nearest directory on its way that is there, and held to be the run's where the one locator of a tree's
-repository (`IRepositoryLocator`) names the command's main checkout as its own; `check-ignore` read
+nearest directory on its way that is there, and held to be the run's where it shares the command's main
+checkout's git common directory - that checkout and every worktree git keeps of it - or is an agent's
+repository whose mark names that checkout (`AgentRepositoryMark`), asked of git directly and never of
+the locator of a tree's repository, which refuses a tree it runs nothing from, such as a worktree of a
+bare repository, where the question is only whose tree it is; `check-ignore` read
 against the index (`IGitClient.IsIgnoredAsync`), so a path the tree tracks is never ignored: such a zip
 is one of the tree's uncommitted files, which every agent a run of it makes is handed with its seed, and
-the next zip would hold it once for each; any other work tree, another project's checkout or a
-repository of dotfiles at the home, is none a run hands or folds from, and takes the zip - or one whose directory cannot be
+the next zip would hold it once for each; any other work tree, another project's checkout, a worktree
+of a bare repository or a repository of dotfiles at the home, is none a run hands or folds from, and takes the zip - or one whose directory cannot be
 made is refused with 13, nothing started - and at every end - the body's answer, a directory refused,
 a failure it caught - writes the zip before it says how the command ended, the operation's own end and
 the ends handed to it run first, with `--json` or without, so the manifest holds the lines they say and
