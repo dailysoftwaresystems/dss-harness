@@ -4615,7 +4615,12 @@ are empty. `PlanValidator.CheckPieces` checks the pieces with the items where a 
 them - each of the four kinds and its texts, an `added` or `changed` item an item of the plan's list by name and member
 for member, no two pieces one work item, a `changed` or `removed` piece naming a work item the plan had, an `added`
 one naming none an instance of the work-item group carries - and the items an update places are checked with those of
-the round they join as one list. A work item is known by its name across
+the round they join as one list. Where the check that opens a round raised the update, that round has not opened and no
+instance carries its items - from the second round on a list the self-audit wrote, which no planner did - so the round
+the pieces join is the list that check was opening it with, its output's `items` (`FlowCoordinator.OpeningUnderWay`):
+the update's checks are handed it under `round`, a piece may change or withdraw any item of it (`known`), and the
+planner is shown its items among the run's work (`{update.work}`, `FlowCoordinator.WorkOf`), each as not begun. A
+problem two rules find - one pair of items meeting in the plan's list and in that round - is said once. A work item is known by its name across
 the run - `ItemInstanceNamed`, its tests' key in `affected-tests.json`, its updates - so the check that opens a round
 is handed the names every instance of the group carries (`carried`, read where it starts) and refuses a round's own
 item under one of them (`PlanValidator.Check`'s `carried`), an owed item excepted: a changed or a removed piece names

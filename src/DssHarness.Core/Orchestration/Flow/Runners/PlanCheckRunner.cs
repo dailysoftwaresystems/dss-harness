@@ -189,7 +189,9 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
             }
         }
 
-        return (problems, checkedItems, null);
+        // A problem two of its rules find - a pair of items that meet, found in the plan's list and again in the round the
+        // pieces join - is said once.
+        return ([.. problems.Distinct(StringComparer.Ordinal)], checkedItems, null);
     }
 
     /// <summary>The names the engine hands the step under <paramref name="key"/>, each a text; none where it hands none.</summary>

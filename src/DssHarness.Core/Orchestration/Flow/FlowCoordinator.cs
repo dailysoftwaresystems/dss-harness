@@ -2366,6 +2366,23 @@ public sealed class FlowCoordinator
         => _updates.Updates.FirstOrDefault(update => update.State == FlowUpdateStates.UnderWay);
 
     /// <summary>
+    /// The check that opens a round which raised the plan update under way, with the work items it was opening that round
+    /// with - its own list and the work updates owed it then, as it checked them (its output's <c>items</c>): the round
+    /// has not opened, for the check waits on the update, and those items are the round the update's pieces join - from
+    /// the second round on, a list no planner wrote and no instance of the work-item group carries yet. The one owner of
+    /// that list, which the update's checks join its pieces with and know its items' names by
+    /// (<see cref="CheckReads"/>), and the planner is shown among the work of the run (<see cref="WorkOf"/>). Null where no
+    /// update is under way, where the one under way was raised by anything else, and where that check's visit holds no
+    /// list.
+    /// </summary>
+    private (FlowInstance Check, JsonArray Items)? OpeningUnderWay()
+        => UnderWayUpdate is { Cause: FlowUpdateCauses.PlanCheck, Check: { } raiser }
+            && _instances.GetValueOrDefault(raiser) is { Output: JsonObject { } output } check
+            && output["items"] is JsonArray items
+                ? (check, items)
+                : null;
+
+    /// <summary>
     /// Raises the step the <c>amend</c> block names for <paramref name="update"/> - a new visit of it in the newest
     /// instance of its scope, the last iteration a <c>repeat</c> began, whether or not that scope had ended - the way a
     /// handler is raised by an ending, but by the update alone: nothing else raises it, and it takes no place in the
@@ -12651,8 +12668,9 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The work of the run, as the planning step's prompt reads it: each work item of the work-item group - the loop
     /// around the step <c>whenAddScope</c> names - in every round, by its name, with whether it waits, is under way
-    /// (and then which of its steps are in flight) or has ended and what it left; and each other step in flight, by
-    /// its id.
+    /// (and then which of its steps are in flight) or has ended and what it left; each item of the round the check that
+    /// raised the update under way opens, which has not begun (<see cref="OpeningUnderWay"/>); and each other step in
+    /// flight, by its id.
     /// </summary>
     private string WorkOf()
     {
@@ -12690,6 +12708,16 @@ public sealed class FlowCoordinator
                     }
 
                     lines.Add($"'{name}' of {round.Id}: {how}");
+                }
+            }
+
+            if (OpeningUnderWay() is { } opening)
+            {
+                // The round the check that raised the update opens has not opened, and no instance carries its items yet:
+                // they are the work the update's pieces change, withdraw or join all the same, each called by its name.
+                foreach (var name in opening.Items.Select(FlowWorkItems.NameOf).OfType<string>())
+                {
+                    lines.Add($"'{name}' of the round '{opening.Check.Id}' opens: not begun");
                 }
             }
         }
@@ -13430,13 +13458,20 @@ public sealed class FlowCoordinator
 
         if (_definition.Amend is { } amend && FlowUpdateGates.ParentOf(amend.WhenAddScope) is { } groupPath)
         {
-            // What the pieces of a plan update are checked with, and what they owe: the items of the round they join,
-            // where the run has one - and the names of the work items the plan had, which a piece that changes or
-            // withdraws one names; the names every instance of the work-item group carries, over every round, which no
-            // work item a round builds or an added piece makes may take, for the run knows a work item by its name
-            // alone; and, where this check opens the round, the items updates owe it, which join its own as one list,
-            // and whether the round carries them alone.
-            if (CurrentRound() is { } round)
+            // What the pieces of a plan update are checked with, and what they owe: the items of the round they join -
+            // the list the check that raised the update was opening its round with, where one did, for that round has not
+            // opened; else the round the run reached, where it has one - and the names of the work items the plan had,
+            // which a piece that changes or withdraws one names, those of that list among them; the names every instance
+            // of the work-item group carries, over every round, which no work item a round builds or an added piece
+            // makes may take, for the run knows a work item by its name alone; and, where this check opens the round, the
+            // items updates owe it, which join its own as one list, and whether the round carries them alone.
+            var opening = OpeningUnderWay();
+
+            if (opening is { Items: var joins })
+            {
+                read["round"] = FlowValue.Of(joins.DeepClone());
+            }
+            else if (CurrentRound() is { } round)
             {
                 read["round"] = FlowValue.Of(new JsonArray([.. LiveItemsOf(round).Select(item => item.Item.ToNode()?.DeepClone())]));
             }
@@ -13447,7 +13482,11 @@ public sealed class FlowCoordinator
                 .OfType<string>()
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
-            var known = carried.Concat(ItemsCheckedBefore(check, runsIn, self)).Distinct(StringComparer.Ordinal).ToList();
+            var known = carried
+                .Concat(ItemsCheckedBefore(check, runsIn, self))
+                .Concat(opening?.Items.Select(FlowWorkItems.NameOf).OfType<string>() ?? [])
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
 
             read["known"] = FlowValue.Of(new JsonArray([.. known.Select(name => (JsonNode?)name)]));
             read["carried"] = FlowValue.Of(new JsonArray([.. carried.Select(name => (JsonNode?)name)]));

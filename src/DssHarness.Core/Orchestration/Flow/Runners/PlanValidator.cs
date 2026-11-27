@@ -132,8 +132,12 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// </summary>
     /// <param name="pieces">The pieces, as the plan's scope yielded them.</param>
     /// <param name="items">The plan's items, as its <c>items</c> yielded them.</param>
-    /// <param name="round">The items of the round the pieces would join, every one it holds; null where the run has no round yet.</param>
-    /// <param name="known">The names of the work items the plan had before the update.</param>
+    /// <param name="round">
+    /// The items of the round the pieces would join, every one it holds: the list the check that opens that round was
+    /// opening it with, where that check raised the update - the round has not opened, and no instance carries them yet -
+    /// else the round the run reached; null where the run has neither.
+    /// </param>
+    /// <param name="known">The names of the work items the plan had before the update, those of the round the pieces join among them.</param>
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="run">The run's name.</param>
     /// <param name="definition">The workflow.</param>
