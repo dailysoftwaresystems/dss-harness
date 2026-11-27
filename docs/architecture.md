@@ -5362,9 +5362,15 @@ defers it - refuses it, naming the resume once the engine has gone or the pause 
 takes such an answer is one rule (`FlowCoordinator.StartTakesAnswers`), which also decides whether the start's writes
 say `starting`. What became of a waiting answer is kept with what it is settled with, its why among it (`FlowWeighed`),
 and said once the start has weighed it: `answer-orchestrator`'s own answer so refused is the command's refusal (13) with
-the run's why, read from `questions.json` under its entry's id - whatever the session it began went on to do, said after
-it - by the one rule an answer the command handed over is answered by whichever session weighed it
-(`FlowService.OwnRefused`), and an inbox entry's line says it was taken once its recommendation was sought, or why not.
+the run's why, read from `questions.json` under its entry's id - whatever the session it began went on to do, its own
+end, line and code, said after it and kept beside the command's in `--json`'s `session` (`FlowRunResult.Session`) - by
+the one rule an answer the command handed over is answered by whichever session weighed it (`FlowService.OwnRefused`),
+and an inbox entry's line says it was taken once its recommendation was sought, or why not. What became of what was
+handed to a session is said by one owner on every exit of it, its end in order and a refusal met inside it alike
+(`FlowService.SayWhatWasHandedOver`), the command's own answer read from what the run's records hold under its entry's
+id and otherwise from what the session settled it with, which it keeps past the entry's leaving the inbox
+(`Offered.Weighed`) - never from what it still offers, which forgets an entry as the inbox lets it go: refused, the
+command's refusal as above; taken, said so; never weighed or handed back, said to stay in the inbox.
 Once settled it is counted, and leaves the inbox
 once the file lets it go: a removal that fails is tried again at the next poll or drive's end, and one
 the inbox still holds as the session ends - the removal failed to the last, or a crash came between the

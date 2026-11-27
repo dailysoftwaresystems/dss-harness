@@ -57,6 +57,11 @@ public sealed record FlowRecordPath(string What, string Path);
 /// line says <c>all in --json named.&lt;list&gt;</c>: the staged paths a start is refused over among them; null where
 /// its line names none.
 /// </param>
+/// <param name="Session">
+/// The end of the session the command began, where the command's own end is not that session's: <c>answer-orchestrator</c>'s
+/// answer refused by the run as that session's start weighed it, the command's refusal, whatever the session went on to do
+/// - its line and its own code, kept beside the command's; null where the command's end is its session's, or it began none.
+/// </param>
 public sealed record FlowRunResult(
     string? Status,
     string? Run,
@@ -69,7 +74,8 @@ public sealed record FlowRunResult(
     FlowBudgetRecord? Spent,
     int ExitCode,
     IReadOnlyList<FlowRecordPath> Records,
-    IReadOnlyDictionary<string, IReadOnlyList<string>>? Named = null)
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? Named = null,
+    FlowSessionSaid? Session = null)
 {
     /// <summary>Where a line of a run's command says a list it names part of is whole: the member <paramref name="list"/> of the document's <c>named</c>.</summary>
     /// <param name="list">The list's name, as <see cref="Named"/> keys it.</param>
@@ -82,6 +88,15 @@ public sealed record FlowRunResult(
 
     /// <summary>The lines that name each record, as the command's text names them.</summary>
     public IEnumerable<string> RecordLines => Records.Select(record => $"{record.What}: {record.Path}");
+}
+
+/// <summary>A session's own end, where the command that began it ends otherwise (<see cref="FlowRunResult.Session"/>): its line and its code.</summary>
+/// <param name="Summary">The session's end in words, as it would have been the command's line.</param>
+/// <param name="ExitCode">The code the session ended with, as it would have been the command's.</param>
+public sealed record FlowSessionSaid(string Summary, int ExitCode)
+{
+    /// <summary>The session's end as the command's text says it: its line, then its code.</summary>
+    public string Said => $"{Summary} (exit {ExitCode.ToString(CultureInfo.InvariantCulture)})";
 }
 
 /// <summary>
@@ -138,8 +153,9 @@ public static class FlowReports
 
     /// <summary>
     /// The <c>--json</c> document of a command of a run - a session, a pause, a stop, an answer handed over, and the
-    /// same command stopped before it reached a run (<paramref name="result"/> empty): its code and its line, then the
-    /// run's own members, every one written whether or not it holds anything, so a script reads one shape whatever happened.
+    /// same command stopped before it reached a run (<paramref name="result"/> empty): its code and its line, the end of the
+    /// session it began where that is not the command's own (<see cref="FlowRunResult.Session"/>), then the run's own
+    /// members, every one written whether or not it holds anything, so a script reads one shape whatever happened.
     /// </summary>
     /// <param name="result">What the command ended with.</param>
     public static string Document(FlowRunResult result)
@@ -166,6 +182,9 @@ public static class FlowReports
             result.Summary,
             new JsonObject
             {
+                ["session"] = result.Session is { } session
+                    ? new JsonObject { ["summary"] = session.Summary, ["exitCode"] = session.ExitCode }
+                    : null,
                 ["run"] = result.Run,
                 ["status"] = result.Status,
                 ["questions"] = new JsonArray([.. result.Questions.Select(QuestionOf)]),

@@ -1774,6 +1774,12 @@ public sealed class FlowService(
         var offered = new Offered();
         var waited = new List<Waited>();
 
+        // Whether the session was driven past the answer it began with, whether what became of what was handed to it is
+        // said already, and what became of the command's own answer: what each exit of the session answers by.
+        var driven = false;
+        var told = false;
+        FlowWeighed? own = null;
+
         // The session holds its run from here to its end: what it finds of where its trees are, and of the machine's gh
         // login, it finds once, for every layer its work passes through.
         using var session = EngineSession.Begin();
@@ -1928,6 +1934,7 @@ public sealed class FlowService(
 
             FlowSessionEnd end;
             string? unemptied;
+            driven = true;
 
             while (true)
             {
@@ -1947,15 +1954,11 @@ public sealed class FlowService(
                 break;
             }
 
-            // What became of each answer that waited for the recommendation its question owes is said once the session's
-            // start has weighed it, as what became of every other one taken from the inbox is said as it is weighed: the
-            // command's own is answered below, from the run's records. An answer offered that the session never settled
-            // stays for the next session; one the session settled - taken, or refused and recorded - that the inbox would
-            // not let go is said apart, for it was weighed: the run's records hold it under its entry's id, so the next
-            // session only empties it from the inbox.
-            SayWhatWaited(waited, answered?.Inbox, said);
-            inbox |= SayUnsettled(layout, offered, said);
-            inbox |= SayUnemptied(layout, offered, unemptied, said);
+            // What became of what was handed to the session is said once it is over, by the one owner every exit of the
+            // session says it by - the command's own answer among it, read from what the session weighed.
+            (own, var settled) = SayWhatWasHandedOver(layout, answered, waited, offered, () => unemptied, said);
+            told = true;
+            inbox |= settled;
 
             var flow = _store.ReadFlow(layout)
                 ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.FlowFile}' is not there after the session of run '{layout.Name}', which writes it at every change");
@@ -1981,41 +1984,28 @@ public sealed class FlowService(
                 flow.Spent,
                 exit,
                 named);
-            var outcome = new CommandOutcome(exit, end.Summary, [.. said, .. left, .. result.RecordLines]);
+            var (outcome, answer) = SessionAnswer(layout.Name, answered, own, new FlowSessionSaid(end.Summary, exit), wentOn: true, result, said, [.. left, .. result.RecordLines]);
 
-            // The command's own answer, where the run refused it - it waited for the recommendation the session's start
-            // sought, and a stop or a pause asked as that start began sought none for it - is the command's refusal, by
-            // the one rule an answer it handed over is answered by whichever session weighed it (OwnRefused): 13 with the
-            // run's why, read from the run's records under its entry's id, whatever the session it began went on to do,
-            // which is said after it.
-            if (answered is { Inbox: { } own } mine && Weigh(layout, own).Refused is { } refusal)
-            {
-                outcome = OwnRefused(layout.Name, mine.Answer, mine.Question, refusal.Why, [.. said, $"the session it began went on without it: {end.Summary}", .. left, .. result.RecordLines]);
-                result = result with { Summary = outcome.Message, ExitCode = outcome.ExitCode };
-            }
-
-            return Ended(layout, command, outcome, result, json);
+            return Ended(layout, command, outcome, answer, json);
         }
         catch (HarnessException ex)
         {
             // A refusal met inside the session - an answer the run does not take, a state that cannot be taken up, a
-            // definition changed - is answered as a refusal, naming the run's records as they stand; the report is the
-            // last session's, for a refused session is none. An answer handed over that a refused start weighed was
-            // handed back, for the start wrote nothing: it stays in the inbox, said as one the session never settled.
-            // The command's own answer, handed over before its session began and never weighed - the session was refused
-            // first - stays there too; one weighed and refused is settled under its entry's id, and leaves the inbox now
-            // as what a session settled does at its end.
-            inbox |= SayUnsettled(layout, offered, said);
-
-            if (answered is { Inbox: { } own } unweighed && !offered.ContainsKey(own))
+            // definition changed, a record the session's end could not read - is answered as a refusal, naming the run's
+            // records as they stand; the report is the last session's, for a refused session is none. What became of
+            // what was handed to the session is said by the one owner its end in order says it by, where that end did not
+            // say it already: an answer a refused start weighed was handed back, for the start wrote nothing, and stays in
+            // the inbox; one weighed and settled leaves it now, as what a session settled does at its end; and the
+            // command's own answer, refused as the session's start weighed it, is the command's refusal here too, the
+            // session's own end said after it where the session went on.
+            if (!told)
             {
-                said.Add(StaysHandedOver(layout, unweighed.Answer, unweighed.Question));
+                (own, var handed) = SayWhatWasHandedOver(layout, answered, waited, offered, () => Empty(layout, offered), said);
+                inbox |= handed;
             }
 
-            inbox |= SayUnemptied(layout, offered, Empty(layout, offered), said);
             var flow = SafeRead(() => _store.ReadFlow(layout));
             IReadOnlyList<FlowRecordPath> records = flow is not null ? RecordsOf(layout, inbox) : inbox ? [new FlowRecordPath("inbox", layout.InboxFile)] : [];
-            var outcome = new CommandOutcome(ex.ExitCode, ex.Message, [.. said, .. records.Select(record => $"{record.What}: {record.Path}")]);
             var result = FlowRunResult.Empty(ex.ExitCode, ex.Message) with
             {
                 Run = layout.Name,
@@ -2023,8 +2013,9 @@ public sealed class FlowService(
                 Spent = flow?.Spent,
                 Records = records,
             };
+            var (outcome, answer) = SessionAnswer(layout.Name, answered, own, new FlowSessionSaid(ex.Message, ex.ExitCode), driven, result, said, [.. records.Select(record => $"{record.What}: {record.Path}")]);
 
-            return Ended(layout, command, outcome, result, json);
+            return Ended(layout, command, outcome, answer, json);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -2201,8 +2192,9 @@ public sealed class FlowService(
     }
 
     /// <summary>
-    /// The line saying an answer the command handed over that no session weighed - its own session refused before it
-    /// did - stays in the inbox, for the next session of the run to take.
+    /// The line saying an answer the command handed over that no session settled - never weighed, its session refused
+    /// before it was, or handed back by a start that wrote nothing - stays in the inbox, for the next session of the run to
+    /// take.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
     /// <param name="answer">The answer handed over.</param>
@@ -2228,10 +2220,115 @@ public sealed class FlowService(
     private sealed record Waited(string Id, string Answer, string Question, Task<FlowWeighed> Weighed);
 
     /// <summary>
+    /// Says, once the session is over - however it ended, in order or by a refusal met inside it - what became of what was
+    /// handed to it through the inbox: the one owner of it, which every exit of the session calls. Each answer that waited
+    /// for the recommendation the session's start sought (<see cref="SayWhatWaited"/>), those the session never settled
+    /// (<see cref="SayUnsettled"/>) and those it settled that the inbox would not let go (<see cref="SayUnemptied"/>); and of
+    /// the command's own answer (<see cref="OwnAnswerOf"/>) - read from what the run's records and the session hold of it,
+    /// never from what the session still offers, which forgets an entry once it leaves the inbox - taken as the session
+    /// began, said so; never weighed, or handed back by a start that wrote nothing, said to stay in the inbox for the next
+    /// session (<see cref="StaysHandedOver"/>); and refused, the command's own line (<see cref="SessionAnswer"/>).
+    /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="answered">The answer the session began with; null where it began with none.</param>
+    /// <param name="waited">The answers that waited for the start's advice, in the order handed over.</param>
+    /// <param name="offered">What the session holds of what was handed over.</param>
+    /// <param name="empty">
+    /// Empties the inbox of what the session settled - asked once what it never settled is said, for the emptying forgets
+    /// every offer completed - and says why it could not; null where it did, or nothing was left to empty.
+    /// </param>
+    /// <param name="said">What the session says.</param>
+    /// <returns>What became of the command's own answer - null where it handed none, or the session settled none of it - and whether the inbox is named among the session's records.</returns>
+    private (FlowWeighed? Own, bool Inbox) SayWhatWasHandedOver(
+        OrchestratorLayout layout,
+        (string Question, string Answer, string? Text, string? Inbox)? answered,
+        List<Waited> waited,
+        Offered offered,
+        Func<string?> empty,
+        List<string> said)
+    {
+        var entry = answered?.Inbox;
+        var own = entry is null ? null : OwnAnswerOf(layout, entry, offered);
+
+        SayWhatWaited(waited, entry, said);
+        var inbox = SayUnsettled(layout, offered, entry, said);
+
+        if (answered is { Inbox: { } mine } given)
+        {
+            if (own is null)
+            {
+                said.Add(StaysHandedOver(layout, given.Answer, given.Question));
+            }
+            else if (own.How == FlowHandedOver.Taken && !waited.Any(answer => string.Equals(answer.Id, mine, StringComparison.Ordinal)))
+            {
+                // One that waited for the start's advice is said taken with what waited.
+                said.Add($"{HandedOverAbout(given.Answer, given.Question)} was taken as the session began");
+            }
+        }
+
+        inbox |= SayUnemptied(layout, offered, empty(), said);
+        return (own, inbox);
+    }
+
+    /// <summary>
+    /// What became of the answer the command handed over under its own inbox entry <paramref name="entry"/>, once its session
+    /// is over: what the run's records hold under the entry's id - taken, or refused with the run's why - and otherwise what
+    /// the session settled it with, which it keeps past the entry's leaving the inbox (<see cref="Offered.WhatBecameOf"/>),
+    /// so a record the session's end could not read never turns an answer it weighed into one it never did. Null where
+    /// neither holds it - never weighed, or handed back by a start that wrote nothing - so it stays in the inbox.
+    /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="entry">The inbox entry's id.</param>
+    /// <param name="offered">What the session holds of what was handed over.</param>
+    private FlowWeighed? OwnAnswerOf(OrchestratorLayout layout, string entry, Offered offered)
+        => Weigh(layout, entry) switch
+        {
+            (_, { } refused) => new FlowWeighed(FlowHandedOver.Refused, refused.Why),
+            ({ }, _) => new FlowWeighed(FlowHandedOver.Taken),
+            _ => offered.WhatBecameOf(entry),
+        };
+
+    /// <summary>
+    /// The command's answer once its session is over, however the session ended - its end in order, or a refusal met
+    /// inside it: where the run refused the answer the command handed over under its own inbox entry (<paramref name="own"/>)
+    /// - it waited for the recommendation the session's start sought, and a stop or a pause asked as that start began
+    /// sought none for it, or the session weighed it refused at once - the command's refusal, by the one rule an answer it
+    /// handed over is answered by whichever session weighed it (<see cref="OwnRefused"/>): 13 with the run's why, whatever
+    /// the session went on to do, its own end - its line and its code - said after it and kept beside it in the command's
+    /// document (<see cref="FlowRunResult.Session"/>) where it went on. Otherwise the session's own end is the command's.
+    /// </summary>
+    /// <param name="run">The run's name.</param>
+    /// <param name="answered">The answer the session began with; null where it began with none.</param>
+    /// <param name="own">What became of the command's own answer (<see cref="SayWhatWasHandedOver"/>).</param>
+    /// <param name="session">The session's own end: its line and its code.</param>
+    /// <param name="wentOn">Whether the session was driven: false where the refusal of the answer it began with ended it first, so its end is that refusal's.</param>
+    /// <param name="result">The session's document.</param>
+    /// <param name="said">What the session said.</param>
+    /// <param name="after">What the command says after it: what is left for a person, and the records.</param>
+    private static (CommandOutcome Outcome, FlowRunResult Result) SessionAnswer(
+        string run,
+        (string Question, string Answer, string? Text, string? Inbox)? answered,
+        FlowWeighed? own,
+        FlowSessionSaid session,
+        bool wentOn,
+        FlowRunResult result,
+        IReadOnlyList<string> said,
+        IReadOnlyList<string> after)
+    {
+        if (answered is { Inbox: not null } mine && own is { How: FlowHandedOver.Refused, Problem: { } why })
+        {
+            var refused = OwnRefused(run, mine.Answer, mine.Question, why, [.. said, .. wentOn ? new[] { $"the session it began went on without it: {session.Said}" } : [], .. after]);
+            return (refused, result with { Summary = refused.Message, ExitCode = refused.ExitCode, Session = wentOn ? session : null });
+        }
+
+        return (new CommandOutcome(session.ExitCode, session.Summary, [.. said, .. after]), result);
+    }
+
+    /// <summary>
     /// Says what became of each answer handed over that waited for the recommendation its question owes - taken once it
     /// was sought, or not taken and why, a stop or a pause asked as the start began having sought none for it - once the
     /// session's start has weighed it, as what became of one weighed at once is said as it is weighed (<see cref="TakeInbox"/>).
-    /// The command's own is the command's answer (<see cref="OwnRefused"/>) where it was refused, and said here where it
+    /// The command's own is the command's answer (<see cref="SessionAnswer"/>) where it was refused, and said here where it
     /// was taken; one the start never weighed, handed back, is said as one the session never settled is.
     /// </summary>
     /// <param name="waited">The answers that waited, in the order handed over.</param>
@@ -2326,12 +2423,16 @@ public sealed class FlowService(
 
     /// <summary>
     /// Says the answers handed over that the session never settled - never weighed, or handed back by the loop, as a
-    /// refused start hands back what it weighed - each of which stays in the inbox for the next session of the run.
+    /// refused start hands back what it weighed - each of which stays in the inbox for the next session of the run; the
+    /// command's own (<paramref name="own"/>) apart, which its own line says (<see cref="SayWhatWasHandedOver"/>).
     /// </summary>
     /// <returns>Whether there was one, so the inbox is named among the session's records.</returns>
-    private static bool SayUnsettled(OrchestratorLayout layout, Offered offered, List<string> said)
+    private static bool SayUnsettled(OrchestratorLayout layout, Offered offered, string? own, List<string> said)
     {
-        var handed = offered.Where(pair => !pair.Value.IsCompletedSuccessfully).Select(pair => pair.Key).ToList();
+        var handed = offered
+            .Where(pair => !pair.Value.IsCompletedSuccessfully && !string.Equals(pair.Key, own, StringComparison.Ordinal))
+            .Select(pair => pair.Key)
+            .ToList();
 
         if (handed.Count == 0)
         {
@@ -2377,6 +2478,22 @@ public sealed class FlowService(
         /// <summary>The ids of the entries that are amendments of the request; every other is an answer.</summary>
         public HashSet<string> Amendments { get; } = new(StringComparer.Ordinal);
 
+        /// <summary>
+        /// What the session settled each entry it no longer holds with, by its id: kept as the entry is forgotten once the
+        /// inbox lets it go (<see cref="Settle"/>), so what is said of an entry the session weighed never reads it as one
+        /// it never weighed.
+        /// </summary>
+        public Dictionary<string, FlowWeighed> Weighed { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// What the session settled the entry <paramref name="id"/> with - an offer it still holds, completed, or one it
+        /// forgot as it left the inbox; null where it settled none: never weighed, still under way, or handed back.
+        /// </summary>
+        public FlowWeighed? WhatBecameOf(string id)
+            => TryGetValue(id, out var offer)
+                ? offer.IsCompletedSuccessfully ? offer.Result : null
+                : Weighed.GetValueOrDefault(id);
+
         /// <summary>The entries <paramref name="ids"/> counted by what each is: answers and amendments, each kind named once where any is.</summary>
         public string Counted(IReadOnlyCollection<string> ids)
         {
@@ -2414,7 +2531,8 @@ public sealed class FlowService(
     /// which it settles only once what became of it is written (a session's start holds its writes, and hands back what
     /// it weighed where it is refused), and one weighed between two drives (<see cref="TakeInbox"/>) - and forgets each
     /// offer the loop handed back, which stays in the inbox for whoever takes it next. The one owner of emptying a
-    /// settled answer: it is forgotten only once the inbox has let it go - a removal that fails leaves it settled, tried
+    /// settled answer: it is forgotten only once the inbox has let it go, what it was settled with kept
+    /// (<see cref="Offered.Weighed"/>) - a removal that fails leaves it settled, tried
     /// again at the next poll or the next drive's end, and never offered to the engine nor taken a second time; one the
     /// inbox still holds as the session ends is settled by the run's records, under its entry's id, so the next session
     /// only empties it.
@@ -2426,6 +2544,7 @@ public sealed class FlowService(
             if (!HandedBack(offer))
             {
                 _ = _store.RemoveFromInbox(layout, id);
+                offered.Weighed[id] = offer.Result;
             }
 
             _ = offered.Remove(id);
