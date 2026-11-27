@@ -742,7 +742,8 @@ remedy items own: a work item that has not begun and owns one of them, or names 
 builds on - starts once that fix is done, building on the tree it leaves, and `ask-orchestrator-status` says what it
 waits for; every other item goes on at once. Both are read from the repository's root, as the plan's check reads every
 path a work item owns or must not touch, its agent's writes and its fold's within: a path names that one path, and
-what is beneath it only where it names a directory - one the tree holds, or one ending in `/` - and a pattern is
+what is beneath it only where it names a directory - one the run's start tree holds, the commit it started from,
+which no fold of the run changes, or one ending in `/` - and a pattern is
 anchored there too, `**` for any depth, so a root-level file such as `Makefile` or `pyproject.toml` meets no other
 path and keeps only the item that owns it waiting. The planner and the self-audit are told the same, once, by the
 workflow's text `fixes` (`fixes.md`): no work item fixes an issue being fixed, or rewrites its lines, and an item that
@@ -1317,7 +1318,10 @@ source, while a path git tracks or ignores, or one that was there, stays narrowe
 write over the step's own making, which leaves a path standing outside them; a refusal of such a
 delete says so. Its entries are read from the worktree's root, as a work item's owned paths are: a
 name with no `/` is the root's own, and a path names what is beneath it only where it names a
-directory - one the worktree holds, or one ending in `/`. The reporter's reads are narrowed to the
+directory - one the run's start tree holds, or one ending in `/`. An entry whose meaning that
+reading changed says so where it refuses: a write beneath `docs/generated`, which names a file,
+is told a directory to be made is written `docs/generated/`, and one of `notes/a.md` under
+`*.md`, which names the root's own, that `**/*.md` names any depth. The reporter's reads are narrowed to the
 run's directory alone, with no command, no write and no web at all. For Claude Code the same policy is rendered, never re-decided, into the launch's
 settings: an ask rule for every tool, and the restrictions as deny rules, absolute once for each
 root in the POSIX form Claude Code matches (`//c/x` for `C:\x`), a `Write` rule as the `Edit` rule

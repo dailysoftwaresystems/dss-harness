@@ -2637,7 +2637,8 @@ path from the repository's root and never the command it may name instead (`Flow
 its visit has read the remedy items its diagnosis gives, every path those items own: `FlowIssueHold`, the one owner of
 what an issue holds and which of it a work item owns, over `FlowCoordinator.IssueHolds`, which reads the issues being
 fixed from the run's state - every path it holds, and each one an item owns, read from the repository's root as the
-plan's check reads an item's (`GlobPattern.FromRoot`, whether a path names a directory asked of the main tree), so a
+plan's check reads an item's (`GlobPattern.FromRoot`, whether a path names a directory asked of the run's start tree,
+`TreeDirectories.Meeting`), so a
 root-level file a fix holds keeps only the item that owns that file waiting. A work item - an instance of the
 work-item group - that has not begun and owns any of those paths, or names the issue among those whose fix it needs -
 its `needs`, read by `FlowWorkItems.NeedsOf` alone and met by `FlowIssueHold.NeededBy`, the issue's id
@@ -3949,13 +3950,26 @@ not read refuses the attempt that goes on with it.
 
 A list of a tree's own paths has one reading, `GlobPattern.FromRoot`: a work item's `ownedPaths` and `forbiddenPaths`
 (`PlanValidator`), the files an issue being fixed holds (`FlowIssueHold`), a reason step's `writes` (`AgentPolicy`,
-against its worktree) and a fold's `within` (`FoldWithin`, against the main tree) - the plan's `ownedPaths` flow into
-the last two, so what the plan's check found no two items to share is exactly what each item's agent may write and its
-fold carry. Every entry is anchored at the tree's root, so a name with no separator is the root's own, never one at any
+in its worktree) and a fold's `within` (`FoldWithin`, in the main tree) - the plan's `ownedPaths` flow into the last
+two. Every entry is anchored at the tree's root, so a name with no separator is the root's own, never one at any
 depth, as the rules' gitignore reading (`GlobPattern.Parse`) takes it. A path - an entry with no wildcard - names that
-one path, and what is beneath it only where it names a directory: one the tree holds (`GlobPattern.DirectoriesIn`; a
-link, or a path that cannot be asked of, names none) or one ending in a separator, which names what is beneath it
-alone. A pattern keeps its meaning, anchored at the root: a directory it matches covers what is beneath it. Two entries
+one path, and what is beneath it only where it names a directory: one ending in a separator, which names what is
+beneath it alone, or one the run's start tree holds. That tree is asked by every reader alike for the whole run - the
+tree of the commit the run started from (`orient`'s `startCommit`), its directories listed once a session through git
+(`TreeDirectories`, `IGitClient.ListDirectoriesAtCommitAsync`: every tree and every submodule's entry, never a link,
+which git keeps as a file) and handed to every step in the run's place (`FlowRunPlace.Directories`) - never a working
+tree the run's own folds rewrite: so what the plan's check found no two items to share is exactly what each item's
+agent may write and its fold carry, whatever order the folds come in, for an entry that named no directory when the
+plan was checked names none when it is written or folded. A tree that cannot be read - a run that names no start
+commit, a commit git cannot list - answers by the question: where it is whether two entries meet (the check's
+overlaps, the holds; `TreeDirectories.Meeting`) every path counts as a directory, the wide reading; where it is what a
+step may write or a fold carry (`TreeDirectories.Writing`), and what an item owns, none does, the narrow one. An entry
+whose meaning the reading changed - one name that once matched at any depth, a path that once named a directory still
+to be made - is told how to write what it meant at every refusal the reading causes, by its one owner
+(`GlobPattern.WrittenFor`): a step's writes denied, a fold's `foldOutside`, and the plan's check of a class's home and
+sites (P-C3, P-C4) - `'docs/generated' names a file: a directory to be made is written 'docs/generated/'`, and
+`'*.md' names the root's own: '**/*.md' names any depth`. A pattern keeps its meaning, anchored at the root: a
+directory it matches covers what is beneath it. Two entries
 meet (`GlobPattern.Overlaps`) only where some path a tree can hold matches both: a path naming no directory holds
 nothing beneath it, unless the other names only paths beneath it by its own names - `src/new` and `src/new/a.py` -
 which are real only where it is a directory. So the root's `Makefile`, `calc.c` and `pyproject.toml` meet no other

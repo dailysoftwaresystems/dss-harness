@@ -434,9 +434,11 @@ public sealed partial class AgentPolicy
         _webDomains = [.. (ground.WebDomains ?? []).Select(domain => domain.Trim().TrimEnd('.'))];
         // The step's writes are a list of its tree's own paths - a work item's owned paths flow into them - so each is
         // read from the worktree's root, as the plan's check read it: a path names a directory's contents only where the
-        // worktree holds that directory.
+        // run's start tree holds that directory, the one tree the check, the holds and the folds ask too.
         _writes = ground.Writes is { } writes
-            ? [.. writes.Select(pattern => (GlobPattern.FromRoot(pattern, GlobPattern.DirectoriesIn(fileSystem, ground.WorkingDirectory)), pattern))]
+            ? ground.WritesTree is { } tree
+                ? [.. writes.Select(pattern => (GlobPattern.FromRoot(pattern, tree.Writing), pattern))]
+                : throw new ArgumentException("the ground names writes and no tree they are read against", nameof(ground))
             : [];
         _worktreeRunRules =
             [.. GitStateVerbs.Select(verb => AgentRule.Parse($"Run(git {verb} *)")),
@@ -1974,6 +1976,12 @@ public sealed partial class AgentPolicy
             }
 
             var said = $"'{resolved}' is outside the paths this step may write: {string.Join(", ", _writes.Select(write => write.Text))}";
+
+            // An entry the reading from the root changed the meaning of says how to write what it meant.
+            if (GlobPattern.WrittenFor(_writes, relative, _platform.PathComparison) is { } written)
+            {
+                said += $"; {written}";
+            }
 
             // A delete of what the step made itself passes, by every spelling of it: a path git does not track that the
             // record of the step's start holds by none of them - which it holds in any case, so no spelling a file

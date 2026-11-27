@@ -240,6 +240,13 @@ public sealed class ReasonStepRunner(
             launch.CredentialPlaces(context.Config),
             handed: handed);
 
+        // A step's writes are read against the run's start tree, as the plan's check, the holds and the folds read theirs:
+        // never the worktree, which the run's own folds rewrite.
+        if (ground.Writes is not null)
+        {
+            ground = ground with { WritesTree = place.Directories };
+        }
+
         // What the step's worktree held untracked as the step first started, where its writes narrow what it writes there:
         // read from the step's directory where its first start wrote it, else taken now, before its agent is started - so a
         // path its own commands made since, and only such a path, is one it may take back whatever its writes say.

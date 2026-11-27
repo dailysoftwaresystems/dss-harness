@@ -627,6 +627,19 @@ public interface IGitClient
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The directories <paramref name="commit"/> holds, from the repository's root: every tree, an empty one among them,
+    /// and every submodule's entry, which a work tree holds as a directory; never a file nor a symbolic link.
+    /// </summary>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="commit">A commit id, as <see cref="ResolveCommitAsync"/> returns.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git could not list the commit.</exception>
+    Task<IReadOnlyList<GitName>> ListDirectoriesAtCommitAsync(
+        string directory,
+        string commit,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// The names a git command lists, in its <c>-z</c> form - separated by NUL, with nothing quoted -
     /// each as git holds it.
     /// </summary>

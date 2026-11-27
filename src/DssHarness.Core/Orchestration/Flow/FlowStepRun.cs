@@ -106,6 +106,25 @@ public sealed record FlowPreExistingReport(string Title, string Description, str
 public sealed record FlowRunPlace(string Repository, string Run, string? StartCommit, WorkflowDefinition Definition, string? Branch = null)
 {
     /// <summary>
+    /// The directories of the tree of <see cref="StartCommit"/>, read once as the session began: the one tree every reader
+    /// of the run's lists of a tree's own paths asks whether an entry names a directory - the plan's check, the holds of the
+    /// issues being fixed, a step's <c>writes</c> and a fold's <c>within</c> - so the four agree for the whole run, whatever
+    /// its folds make of the trees (<see cref="DssHarness.Core.Repository.TreeDirectories"/>). Null where no session read it: a place made
+    /// for what reads none of those lists.
+    /// </summary>
+    public DssHarness.Core.Repository.TreeDirectories? StartTree { get; init; }
+
+    /// <summary>
+    /// The directories every reader of the run's lists of paths asks (<see cref="StartTree"/>): those the session read, or,
+    /// for a run that names no commit it started from, a tree that could not be read (<see cref="DssHarness.Core.Repository.TreeDirectories.NoCommit"/>).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The run names a start commit and no session read its tree for this place.</exception>
+    public DssHarness.Core.Repository.TreeDirectories Directories
+        => StartTree ?? (StartCommit is null
+            ? DssHarness.Core.Repository.TreeDirectories.NoCommit
+            : throw new InvalidOperationException($"the place of run '{Run}' was made without the directories of its start commit '{StartCommit}', which every reader of its lists of paths asks"));
+
+    /// <summary>
     /// Why a step that publishes the run's work - a commit, a push, a pull request - is refused with the main checkout on
     /// <paramref name="branch"/>: it is not the branch the run started on - a person checked another out while the run was
     /// paused - and the run's work would go onto that one. The one guard of the three; null where the checkout is on the
@@ -555,6 +574,12 @@ public sealed record FlowDryRun(
 
     /// <summary>The paths it would write that the step's <c>within</c> leaves out; empty where the step names none, or it writes none.</summary>
     public IReadOnlyList<string> Outside { get; init; } = [];
+
+    /// <summary>
+    /// What the entries of the step's <c>within</c> say of how to write what they once meant, where a path it leaves out lies
+    /// where an entry reached before the reading from the root (<see cref="FoldWithin.Said"/>); null where they say nothing.
+    /// </summary>
+    public string? OutsideSaid { get; init; }
 
     /// <summary>The lines its dry run said under its summary.</summary>
     public IReadOnlyList<string> Lines { get; init; } = [];

@@ -371,6 +371,13 @@ public sealed class HarnessFactory
         await RunGitAsync(path, ["commit", "--quiet", "--allow-empty", "-m", message], cancellationToken);
     }
 
+    /// <summary>
+    /// The directories of the tree of HEAD of the repository at <paramref name="path"/>, as a run started there reads its
+    /// lists of paths against them (<see cref="TreeDirectories"/>).
+    /// </summary>
+    public async Task<TreeDirectories> StartTreeAsync(string path, CancellationToken cancellationToken)
+        => await TreeDirectories.AtAsync(GitClient, path, await GitClient.ResolveCommitAsync(path, "HEAD", cancellationToken), Platform.PathComparison, cancellationToken);
+
     /// <summary>Replaces the configuration of the repository at <paramref name="repositoryRoot"/>.</summary>
     public void WriteConfig(string repositoryRoot, HarnessConfig config)
         => ConfigStore.Save(ConfigPath(repositoryRoot), config);

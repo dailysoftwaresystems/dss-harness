@@ -57,7 +57,7 @@ public sealed class PlanValidatorTests : IDisposable
         var harness = new HarnessFactory();
 
         return new PlanValidator(harness.FileSystem, harness.PathBudget, harness.Platform)
-            .Check(items, await harness.ContextLoader.LoadAsync(repository.Path, Token), "r1", Flow);
+            .Check(items, await harness.ContextLoader.LoadAsync(repository.Path, Token), "r1", Flow, await harness.StartTreeAsync(repository.Path, Token));
     }
 
     /// <summary>
@@ -276,6 +276,35 @@ public sealed class PlanValidatorTests : IDisposable
         Assert.Equal(
             ["work item 'one''s C1 has its site at 'src/other/other.cs' (reads-home) outside the item: the item owns it, or the class belongs to the item that owns it"],
             await CheckAsync(repository, patched));
+    }
+
+    /// <summary>
+    /// A home or a site outside the item's owned paths only because the reading from the root changed what an entry meant
+    /// says how to write what it meant, in the words a step's writes and a fold's within say it: a directory to be made,
+    /// named with no trailing separator, names a file; a wildcard of one name names the root's own. Written so, they pass.
+    /// </summary>
+    [Fact]
+    public async Task AHomeOrASiteAnEntrysReadingLeftOut_SaysHowToWriteWhatItMeant()
+    {
+        var (_, repository) = await RepositoryAsync();
+        var made = Item("made", "src/fresh", classes: [Class("C1", "src/fresh/home.cs", exists: false, action: "consolidate", sites: [Site("src/one/home.cs", then: "reads-home")])]);
+        made["ownedPaths"] = new JsonArray("src/fresh", "src/one/**");
+        var wild = Item("wild", "*.cs", classes: [Class("C2", "src/two/home.cs", sites: [Site("src/two/home.cs"), Site("src/two/site.cs", then: "reads-home")], action: "consolidate")]);
+        wild["ownedPaths"] = new JsonArray("*.cs", "src/two/home.cs");
+
+        Assert.Equal(
+            [
+                "work item 'made''s C1 has its home at 'src/fresh/home.cs', which the item does not own: the home changes, and the item that changes it owns it; 'src/fresh' names a file: a directory to be made is written 'src/fresh/'",
+                "work item 'wild''s C2 has its site at 'src/two/site.cs' (reads-home) outside the item: the item owns it, or the class belongs to the item that owns it; '*.cs' names the root's own: '**/*.cs' names any depth",
+            ],
+            await CheckAsync(repository, made, wild));
+
+        made["ownedPaths"] = new JsonArray("src/fresh/", "src/one/**");
+        wild["ownedPaths"] = new JsonArray("**/*.cs");
+
+        // Each alone: '**/*.cs' owns what the other item owns too.
+        Assert.Empty(await CheckAsync(repository, made));
+        Assert.Empty(await CheckAsync(repository, wild));
     }
 
     /// <summary>

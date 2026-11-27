@@ -15,7 +15,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// every name valid and used once - in the list, and across the run where the list opens a round, for a work item is
 /// known by its name alone; no path owned by two items; each item's forbidden paths kept by its own owned
 /// paths - each entry read from the repository's root, as the item's agent's writes and its fold's within read it
-/// (<see cref="GlobPattern.FromRoot"/>), so two entries meet only where some path the tree can hold is matched by both;
+/// (<see cref="GlobPattern.FromRoot"/>), whether it names a directory asked of the run's start tree as they ask it
+/// (<see cref="TreeDirectories"/>), so two entries meet only where some path the tree can hold is matched by both;
 /// the path budget of the worktree each would get, with the copies and workers its legs keep inside it and the
 /// deepest file it owns; and the lists that hold an item to what the repository has - every path it reuses or replaces
 /// there in the main tree, something under one of the three, and a reason and a search for everything it creates. Each
@@ -41,6 +42,11 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="run">The run's name, which names its agents' worktrees' directory.</param>
     /// <param name="definition">The workflow, whose leg steps say which copies a worktree keeps.</param>
+    /// <param name="startTree">
+    /// The directories of the run's start tree (<see cref="FlowRunPlace.Directories"/>), which every entry is read against:
+    /// for whether two entries meet, a path the tree could not answer for counts as a directory; for what an item owns, as
+    /// none.
+    /// </param>
     /// <param name="noItems">Whether a list of no work item is a problem: one that carries only what updates placed is not.</param>
     /// <param name="carried">
     /// The names of the work items earlier rounds of the run carry, which no item of the list may take: a work item is
@@ -50,12 +56,13 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// group with no loop around it carries the owed work alone, its own items built by the round before.
     /// </param>
     /// <returns>Every problem of the plan, in the order of its items; none where it passes.</returns>
-    public IReadOnlyList<string> Check(IReadOnlyList<JsonNode?> items, HarnessContext context, string run, WorkflowDefinition definition, bool noItems = true, IReadOnlyCollection<string>? carried = null)
+    public IReadOnlyList<string> Check(IReadOnlyList<JsonNode?> items, HarnessContext context, string run, WorkflowDefinition definition, TreeDirectories startTree, bool noItems = true, IReadOnlyCollection<string>? carried = null)
     {
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(run);
         ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(startTree);
 
         if (items.Count == 0)
         {
@@ -64,11 +71,10 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
         var problems = new List<string>();
         var read = new List<Item>();
-        var directories = GlobPattern.DirectoriesIn(fileSystem, context.Layout.MainCheckoutRoot);
 
         foreach (var (node, at) in items.Select((node, at) => (node, at)))
         {
-            if (ItemOf(node, at, directories, problems) is { } item)
+            if (ItemOf(node, at, startTree, problems) is { } item)
             {
                 read.Add(item);
             }
@@ -144,6 +150,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="run">The run's name.</param>
     /// <param name="definition">The workflow.</param>
+    /// <param name="startTree">The directories of the run's start tree, which every entry is read against (<see cref="Check"/>).</param>
     /// <param name="carried">
     /// The names every instance of the work-item group carries, over every round: an added piece under one of them would
     /// make a second work item of a name the run knows one by - the one it would replace is done again by a changed piece.
@@ -161,6 +168,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
         HarnessContext context,
         string run,
         WorkflowDefinition definition,
+        TreeDirectories startTree,
         out IReadOnlyList<JsonNode?> joined,
         IReadOnlyCollection<string>? carried = null)
     {
@@ -168,9 +176,9 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(known);
         ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(startTree);
 
         var problems = new List<string>();
-        var directories = GlobPattern.DirectoriesIn(fileSystem, context.Layout.MainCheckoutRoot);
 
         // Each piece read by the one rule of a piece's shape the engine reads it by, its first breach said of it.
         var held = new List<FlowUpdatePiece>();
@@ -194,7 +202,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             {
                 // The item under the name it had, written for the step that takes it back: of a work item's shape,
                 // so the step that takes back owns the paths it may write.
-                _ = ItemOf(piece.Item, 0, directories, problems);
+                _ = ItemOf(piece.Item, 0, startTree, problems);
             }
             else if (!items.Any(other => string.Equals(FlowWorkItems.NameOf(other), name, StringComparison.Ordinal) && JsonNode.DeepEquals(other, piece.Item)))
             {
@@ -233,13 +241,21 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             .Where(other => FlowWorkItems.NameOf(other) is not { } named || !namedByPieces.Contains(named, StringComparer.Ordinal))
             .Concat(held.Select(piece => piece.Item))];
 
-        problems.AddRange(Check(joined, context, run, definition, noItems: false));
+        problems.AddRange(Check(joined, context, run, definition, startTree, noItems: false));
 
         return problems;
     }
 
-    /// <summary>A work item read whole: its name, the paths it owns and must not touch, and its three lists.</summary>
-    private sealed record Item(string Name, IReadOnlyList<(string Text, GlobPattern Pattern)> Owned, IReadOnlyList<(string Text, GlobPattern Pattern)> Forbidden, JsonObject Node);
+    /// <summary>
+    /// A work item read whole: its name, the paths it owns and must not touch - read for whether they meet another's - the
+    /// paths it owns read for what it may write (<paramref name="Writes"/>), and its three lists.
+    /// </summary>
+    /// <param name="Name">The item's name.</param>
+    /// <param name="Owned">Its owned paths, read for whether they meet (<see cref="TreeDirectories.Meeting"/>).</param>
+    /// <param name="Forbidden">Its forbidden paths, read for whether they meet.</param>
+    /// <param name="Writes">Its owned paths, read for what its agent may write and its fold carry (<see cref="TreeDirectories.Writing"/>).</param>
+    /// <param name="Node">The item as the plan gives it.</param>
+    private sealed record Item(string Name, IReadOnlyList<(string Text, GlobPattern Pattern)> Owned, IReadOnlyList<(string Text, GlobPattern Pattern)> Forbidden, IReadOnlyList<(string Text, GlobPattern Pattern)> Writes, JsonObject Node);
 
     /// <summary>
     /// The work item <paramref name="node"/> is, where it is of a work item's shape and its paths read from the
@@ -248,9 +264,9 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// </summary>
     /// <param name="node">The item, as the plan gives it.</param>
     /// <param name="at">Where it stands in its list, from 0.</param>
-    /// <param name="directories">Whether a path from the root names a directory of the main tree.</param>
+    /// <param name="startTree">The directories of the run's start tree, which every entry is read against.</param>
     /// <param name="problems">The problems of the plan, its own added to.</param>
-    private static Item? ItemOf(JsonNode? node, int at, Func<string, bool> directories, List<string> problems)
+    private static Item? ItemOf(JsonNode? node, int at, TreeDirectories startTree, List<string> problems)
     {
         var place = $"work item {(at + 1).ToString(CultureInfo.InvariantCulture)}";
 
@@ -282,8 +298,9 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             problems.Add($"{where} is not named in lowercase letters, digits and single hyphens, as a work item is");
         }
 
-        var owned = Patterns(item, "ownedPaths", "owns", where, directories, problems);
-        var forbidden = Patterns(item, "forbiddenPaths", "must not touch", where, directories, problems);
+        var owned = Patterns(item, "ownedPaths", "owns", where, startTree.Meeting, problems);
+        var forbidden = Patterns(item, "forbiddenPaths", "must not touch", where, startTree.Meeting, problems);
+        var writes = owned.Select(entry => (entry.Text, GlobPattern.FromRoot(entry.Text, startTree.Writing))).ToList();
 
         if (owned.Count == 0 && Texts(item["ownedPaths"])!.Count == 0)
         {
@@ -326,7 +343,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             problems.Add($"{where} names a test unit that is empty, or spaces alone: a runner reads it as no filter at all, or as one that matches every test - name the tests, or take it out");
         }
 
-        return new Item(name, owned, forbidden, item);
+        return new Item(name, owned, forbidden, writes, item);
     }
 
     /// <summary>The entries of <paramref name="member"/>, each read from the repository's root; one that does not read is a problem, and is left out.</summary>
@@ -347,6 +364,14 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
         return patterns;
     }
+
+    /// <summary>
+    /// What the item's owned paths say of how to write what they once meant, where <paramref name="path"/> is none of
+    /// theirs (<see cref="GlobPattern.WrittenFor(IEnumerable{ValueTuple{GlobPattern, string}}, string, StringComparison)"/>),
+    /// as a clause after a semicolon; empty where they say nothing.
+    /// </summary>
+    private static string WrittenFor(Item item, string path, StringComparison comparison)
+        => GlobPattern.WrittenFor(item.Writes.Select(entry => (entry.Pattern, entry.Text)), path, comparison) is { } said ? $"; {said}" : string.Empty;
 
     /// <summary>The first pattern of <paramref name="left"/> and of <paramref name="right"/> that some path matches both, in the order written; null where none meet.</summary>
     private static (string Left, string Right)? Meeting(
@@ -446,9 +471,9 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             if (homeAt is not null)
             {
                 // P-C3: the home is the item's to change, and where it exists it is in the tree.
-                if (!item.Owned.Any(pattern => pattern.Pattern.Matches(homeAt, comparison)))
+                if (!item.Writes.Any(pattern => pattern.Pattern.Matches(homeAt, comparison)))
                 {
-                    problems.Add($"{where}'s {id} has its home at '{homePath}', which the item does not own: the home changes, and the item that changes it owns it");
+                    problems.Add($"{where}'s {id} has its home at '{homePath}', which the item does not own: the home changes, and the item that changes it owns it{WrittenFor(item, homeAt, comparison)}");
                 }
 
                 if (homeExists && fileSystem.KindOf(Path.Combine(root, homeAt)) == PathKind.None)
@@ -499,9 +524,9 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
                 // marked reads-home or deleted, where it is not - so patching N-1 of N is refused.
                 var changes = homeAt is not null ? !isHome : then is "reads-home" or "deleted";
 
-                if (changes && !item.Owned.Any(pattern => pattern.Pattern.Matches(siteAt, comparison)))
+                if (changes && !item.Writes.Any(pattern => pattern.Pattern.Matches(siteAt, comparison)))
                 {
-                    problems.Add($"{where}'s {id} has its site at '{path}' ({then}) outside the item: the item owns it, or the class belongs to the item that owns it");
+                    problems.Add($"{where}'s {id} has its site at '{path}' ({then}) outside the item: the item owns it, or the class belongs to the item that owns it{WrittenFor(item, siteAt, comparison)}");
                 }
 
                 homeIsASite |= isHome;

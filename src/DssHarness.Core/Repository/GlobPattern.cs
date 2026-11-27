@@ -1,4 +1,3 @@
-using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
 
@@ -47,7 +46,9 @@ namespace DssHarness.Core.Repository;
 /// agent may write and its fold carry. There every entry is anchored at the root - a name with no separator is the
 /// root's own, never one at any depth - and a path, an entry holding no wildcard, names that one path, holding what is
 /// beneath it only where it names a directory: so the root's <c>Makefile</c> and <c>calc.c</c> never meet through a
-/// <c>Makefile/calc.c</c> no tree can hold.
+/// <c>Makefile/calc.c</c> no tree can hold. Whether it names one is asked of one tree for a whole run, its start commit's
+/// (<see cref="TreeDirectories"/>), and a refusal that reading causes says how to write what an entry once meant
+/// (<see cref="WrittenFor(string, string, StringComparison)"/>).
 /// </para>
 /// </remarks>
 public sealed class GlobPattern
@@ -121,8 +122,8 @@ public sealed class GlobPattern
     /// </summary>
     /// <param name="entry">The entry, as the list writes it, with either separator.</param>
     /// <param name="namesDirectory">
-    /// Whether a path relative to the tree's root, spelled with forward separators, names a directory there: the tree's
-    /// own answer (<see cref="DirectoriesIn"/>).
+    /// Whether a path relative to the tree's root, spelled with forward separators, names a directory there: of a run's
+    /// lists, the answer of the one tree the run reads them against, its start commit's (<see cref="TreeDirectories"/>).
     /// </param>
     /// <exception cref="HarnessException">The entry cannot be read, as <see cref="Problem"/> says why.</exception>
     public static GlobPattern FromRoot(string entry, Func<string, bool> namesDirectory)
@@ -147,31 +148,54 @@ public sealed class GlobPattern
     }
 
     /// <summary>
-    /// The answer of the tree at <paramref name="tree"/> to <see cref="FromRoot"/>'s question: whether a path relative to it
-    /// names a directory there. A link, whatever it leads to, names none - git keeps one as a file, and what is written
-    /// through it lands where it leads - and neither does a path that cannot be asked of, a name its file system cannot
-    /// hold among them: the path then names itself alone, as it is written, the narrower reading, which lets a step write
-    /// and a fold carry nothing beneath it.
+    /// How to write what <paramref name="written"/> - an entry this pattern was read from by <see cref="FromRoot"/> - meant
+    /// before the reading from the root, where <paramref name="path"/>, which it does not match, lies where the entry would
+    /// once have reached: beneath a path that names no directory - <c>'docs/generated' names a file: a directory to be made
+    /// is written 'docs/generated/'</c> - or at a depth below the root an entry of one name matched at -
+    /// <c>'*.md' names the root's own: '**/*.md' names any depth</c>. The one wording of the change, said by every refusal
+    /// the reading from the root causes: a step's writes, a fold's within and the plan's check of a class's home and sites.
     /// </summary>
-    /// <param name="fileSystem">Looks at the tree.</param>
-    /// <param name="tree">The tree's root.</param>
-    public static Func<string, bool> DirectoriesIn(IFileSystem fileSystem, string tree)
+    /// <param name="written">The entry as written.</param>
+    /// <param name="path">A path from the root the entry does not match.</param>
+    /// <param name="comparison">How names are compared: the case rule of the tree the path is in.</param>
+    /// <returns>The sentence; null where the entry matches the path, or would not have reached it either way.</returns>
+    public string? WrittenFor(string written, string path, StringComparison comparison = StringComparison.Ordinal)
     {
-        ArgumentNullException.ThrowIfNull(fileSystem);
-        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+        ArgumentNullException.ThrowIfNull(written);
 
-        return path =>
+        if (!Reads(path) || Matches(path, comparison))
         {
-            try
-            {
-                // Joined, never combined: a path that reads as rooted on this system is still one inside the tree.
-                return fileSystem.KindOf(Path.Join(tree, path)) == PathKind.Directory;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-            {
-                return false;
-            }
-        };
+            return null;
+        }
+
+        var segments = PathPatterns.Normalize(path).Split('/');
+        var entry = written.Replace('\\', '/');
+
+        if (_exact && segments.Length > _segments.Length && _segments.Select((name, at) => string.Equals(name, segments[at], comparison)).All(same => same))
+        {
+            return $"'{written}' names a file: a directory to be made is written '{entry.TrimEnd('/')}/'";
+        }
+
+        return _segments.Length == 1 && !entry.TrimEnd('/').Contains('/', StringComparison.Ordinal) && Parse(written).Matches(path, comparison)
+            ? $"'{written}' names the root's own: '**/{entry}' names any depth"
+            : null;
+    }
+
+    /// <summary>
+    /// What each of <paramref name="entries"/> - each read from the root (<see cref="FromRoot"/>), with the entry it was
+    /// read from - says of how to write what it once meant where <paramref name="path"/> is matched by none of them
+    /// (<see cref="WrittenFor(string, string, StringComparison)"/>), joined by <c>; </c>; null where none says anything.
+    /// </summary>
+    /// <param name="entries">The entries, each read and as written.</param>
+    /// <param name="path">A path from the root.</param>
+    /// <param name="comparison">How names are compared.</param>
+    public static string? WrittenFor(IEnumerable<(GlobPattern Read, string Written)> entries, string path, StringComparison comparison = StringComparison.Ordinal)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        var said = entries.Select(entry => entry.Read.WrittenFor(entry.Written, path, comparison)).OfType<string>().Distinct(StringComparer.Ordinal).ToList();
+
+        return said.Count == 0 ? null : string.Join("; ", said);
     }
 
     /// <summary>

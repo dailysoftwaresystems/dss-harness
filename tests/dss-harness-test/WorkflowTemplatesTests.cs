@@ -1469,7 +1469,7 @@ public sealed class WorkflowTemplatesTests
             workflows,
             StringComparison.Ordinal);
         Assert.Contains(
-            "A step's writes are read from its worktree's root, as a work item's ownedPaths are ('help workflows'): a name with no separator is the root's own, and a path names what is beneath it only where it names a directory, one the worktree holds or one ending in a separator.",
+            "A step's writes are read from its worktree's root, as a work item's ownedPaths are ('help workflows'): a name with no separator is the root's own, and a path names what is beneath it only where it names a directory, one the run's start tree holds - the tree of the commit the run started from, which no fold changes - or one ending in a separator; a write refused beneath an entry that names a file says a directory to be made is written with a trailing separator, and one at a depth an entry of one name no longer reaches says '**/' reaches any depth.",
             Prose.Words(DssHarness.Core.Help.HelpTopics.Render("agent-clients")),
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1479,8 +1479,20 @@ public sealed class WorkflowTemplatesTests
         Assert.Contains("Its entries are read from the worktree's root, as a work item's owned paths are:", readme, StringComparison.Ordinal);
         Assert.Contains(
             $"A list of a tree's own paths has one reading, `{nameof(GlobPattern)}.{nameof(GlobPattern.FromRoot)}`: a work item's `ownedPaths` and `forbiddenPaths` (`{nameof(PlanValidator)}`), "
-                + $"the files an issue being fixed holds (`{nameof(FlowIssueHold)}`), a reason step's `writes` (`{nameof(DssHarness.Core.Agents.Policy.AgentPolicy)}`, against its worktree) "
-                + $"and a fold's `within` (`{nameof(FoldWithin)}`, against the main tree)",
+                + $"the files an issue being fixed holds (`{nameof(FlowIssueHold)}`), a reason step's `writes` (`{nameof(DssHarness.Core.Agents.Policy.AgentPolicy)}`, in its worktree) "
+                + $"and a fold's `within` (`{nameof(FoldWithin)}`, in the main tree)",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "That tree is asked by every reader alike for the whole run - the tree of the commit the run started from (`orient`'s `startCommit`), its directories listed once a session through git "
+                + $"(`{nameof(TreeDirectories)}`, `{nameof(DssHarness.Core.Git.IGitClient)}.{nameof(DssHarness.Core.Git.IGitClient.ListDirectoriesAtCommitAsync)}`: every tree and every submodule's entry, never a link, which git keeps as a file) "
+                + $"and handed to every step in the run's place (`{nameof(FlowRunPlace)}.{nameof(FlowRunPlace.Directories)}`) - never a working tree the run's own folds rewrite",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"where it is whether two entries meet (the check's overlaps, the holds; `{nameof(TreeDirectories)}.{nameof(TreeDirectories.Meeting)}`) every path counts as a directory, the wide reading; "
+                + $"where it is what a step may write or a fold carry (`{nameof(TreeDirectories)}.{nameof(TreeDirectories.Writing)}`), and what an item owns, none does, the narrow one. "
+                + $"An entry whose meaning the reading changed - one name that once matched at any depth, a path that once named a directory still to be made - is told how to write what it meant at every refusal the reading causes, by its one owner (`{nameof(GlobPattern)}.{nameof(GlobPattern.WrittenFor)}`)",
             Prose.Document("docs", "architecture.md"),
             StringComparison.Ordinal);
     }
