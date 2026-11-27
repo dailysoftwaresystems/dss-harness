@@ -255,16 +255,19 @@ public static partial class HelpTopics
         builder.AppendLine("pull request's body and the handoff. Where a workflow has such a step, every other reasoning step");
         builder.AppendLine("names it, so no issue is lost; and each is told, at the end of its prompt, every issue the run");
         builder.AppendLine("holds where it starts - each one's id, what became of it, its title and where it is - and reports");
-        builder.AppendLine("one again only where it stops its own work. The triage is told them too, its own left out, with");
-        builder.AppendLine("the ids of those it may join, and names by its id the one its issue repeats (duplicate, in");
-        builder.AppendLine("duplicates) or whose root cause it shares (join, in joins) - only one taken before its own, or the");
-        builder.AppendLine("step fails, so no two issues ever name each other.");
+        builder.AppendLine("one again only where it stops its own work. The triage is told those taken before its own, with");
+        builder.AppendLine("the ids of those it may join - being triaged, being fixed or fixed - and names by its id the one");
+        builder.AppendLine("its issue repeats (duplicate, in duplicates) or whose root cause it shares (join, in joins) - only");
+        builder.AppendLine("one taken before its own, or the step fails, so no two issues ever name each other, and of two");
+        builder.AppendLine("raised together the later names the earlier.");
         builder.AppendLine();
         builder.AppendLine("An issue sent to fix is the recovery's at once, its visit beside any other at work - save one a");
         builder.AppendLine("step of a visit of the recovery reported, which waits for that visit to end, for the recovery");
         builder.AppendLine("never calls itself, and one a visit at work fixes already for another step it stopped, which");
-        builder.AppendLine("waits for that visit; a step two issues stop runs again once, after both are settled. From the");
-        builder.AppendLine("moment it is sent to fix until its visit ends, the issue holds the files its triage's where");
+        builder.AppendLine("waits for that visit, or for the one it joined to - so one defect has one fix at a time: a visit");
+        builder.AppendLine("that ended failed is at work until what its failure does is answered, and answered retry, the");
+        builder.AppendLine("fix waits for its next visit; a step two issues stop runs again once, after both are settled.");
+        builder.AppendLine("From the moment it is sent to fix until its visit ends, the issue holds the files its triage's where");
         builder.AppendLine("names - each a path from the repository's root, never a command - and, once a check of its");
         builder.AppendLine("visit has read the remedy items its diagnosis gives, the paths those items own: an instance of");
         builder.AppendLine("the work-item group that has not begun and owns one of them starts once that visit has ended,");
@@ -282,8 +285,9 @@ public static partial class HelpTopics
         builder.AppendLine("diagnosis began after the join reads every issue joined to it as source.joined, each with its");
         builder.AppendLine("id, its end settling all of them, run.preExisting saying each 'fixed with <id>' and a step one");
         builder.AppendLine("of them stopped running again. One that joined while a visit of that fix was diagnosing takes a");
-        builder.AppendLine("visit of its own once that visit has fixed it, which reads what it did as source.joinedTo; and");
-        builder.AppendLine("where the issue it joined ends without a fix, it is triaged again on its own. Each visit counts");
+        builder.AppendLine("visit of its own once that visit has fixed it, and one joined to an issue fixed already takes");
+        builder.AppendLine("one at once, each reading what that fix did as source.joinedTo; and where the issue it joined");
+        builder.AppendLine("ends without a fix, it is triaged again on its own. Each visit counts");
         builder.AppendLine("against the run's limits as every step does.");
         builder.AppendLine();
         builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");
@@ -733,7 +737,7 @@ public static partial class HelpTopics
             + "is text any template reads: {run.ran}, every check that ended so far, a line each with where it ran and its "
             + "verdict, each leg's for a step that runs legs; {run.notRun}, each check not run yet, by its step's name, and each "
             + "skipped or never reached, with why; and {run.red}, each red result not seen green since by a later visit of the "
-            + "same step - a red leg, with what its line said of the units its build failed where its own tool failed it, a "
+            + "same step checking the same - in the recovery, a visit for the same failure or issue - a red leg, with what its line said of the units its build failed where its own tool failed it, a "
             + "red check of CI, an anchor check's findings, a plan's problems, a failure - each 'none' "
             + "where it names nothing. The checks are the steps of type "
             + $"{string.Join(", ", WorkflowStepTypes.All.Where(type => type.Checks).Select(type => type.Type))} and a reason step "

@@ -17,6 +17,11 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="PassedOver">Whether the run passed its failure over.</param>
 /// <param name="HandledBy">The handler that took its failure, where one did.</param>
 /// <param name="EndedAt">When it ended; null while it has not.</param>
+/// <param name="Work">
+/// What it checks where its id alone does not say: within a visit of the recovery, the failure or the issue that visit
+/// takes - visits for different issues hold steps of one id but for the visit - so a later visit's green stands for this
+/// check only where it checks the same; null outside every visit.
+/// </param>
 public sealed record FlowCheck(
     string Instance,
     string Kind,
@@ -27,7 +32,8 @@ public sealed record FlowCheck(
     string? Why,
     bool PassedOver,
     string? HandledBy,
-    DateTimeOffset? EndedAt);
+    DateTimeOffset? EndedAt,
+    string? Work = null);
 
 /// <summary>
 /// What a run checked, did not check and knows to be red, in words: <c>{run.ran}</c>, <c>{run.notRun}</c> and
@@ -104,8 +110,9 @@ public static class FlowChecks
 
     /// <summary>
     /// Every red result of <paramref name="checks"/> not seen green since - a later visit or iteration of the same step
-    /// of the same work item that ended green - a line each: each red leg of a step that runs legs, each red check of a
-    /// wait for CI, the findings of an anchor check, the problems of a plan, and a failure that says no more.
+    /// of the same work item that ended green, checking the same (<see cref="FlowCheck.Work"/>): a visit of the recovery
+    /// for another issue checks another - a line each: each red leg of a step that runs legs, each red check of a wait for
+    /// CI, the findings of an anchor check, the problems of a plan, and a failure that says no more.
     /// </summary>
     /// <param name="checks">The checks the text is of.</param>
     public static string Red(IEnumerable<FlowCheck> checks)
@@ -116,7 +123,9 @@ public static class FlowChecks
 
         return Lines(ended
             .Where((check, at) => Passed(check) == false
-                && !ended.Skip(at + 1).Any(later => FlowInstanceId.SameStep(later.Instance, check.Instance) && Passed(later) != false))
+                && !ended.Skip(at + 1).Any(later => FlowInstanceId.SameStep(later.Instance, check.Instance)
+                    && string.Equals(later.Work, check.Work, StringComparison.Ordinal)
+                    && Passed(later) != false))
             .SelectMany(RedLines));
     }
 

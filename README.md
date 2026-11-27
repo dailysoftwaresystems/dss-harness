@@ -713,12 +713,15 @@ shown in the pull request's body and the handoff. Where a workflow has such a st
 engine raises the triage for each issue a reasoning step's answer reports under `preExisting`, as the shipped schemas spell it, and keeps the list. A
 reasoning step that names one is told, at the end of its prompt, every issue the run holds where it starts -
 each one's id, what became of it, its title and where it is - and reports one again only where it stops its own work;
-the triage is told them too, its own left out, and names by its id the issue its own repeats or whose root cause it
-shares.
+the triage is told those taken before its own, and names by its id the issue its own repeats or whose root cause it
+shares - never one taken after it, which is triaged after it and names it where it repeats it, so of two raised
+together the later names the earlier, and neither is lost.
 
 An issue sent to fix is the recovery's at once, its fix beside any other at work - save one that a step of the
 recovery itself reported, which waits for that visit to end, and one a fix at work already mends for another step,
-which waits for that fix; a step two issues stop runs again once, after both are settled. While it is being fixed, the
+which waits for that fix, as one joined to that fix's issue does: one defect has one fix at a time, and a fix whose
+failure is put to a person is at work until it is answered - on retry, the waiting one waits for its next visit; a
+step two issues stop runs again once, after both are settled. While it is being fixed, the
 issue holds the files its triage names (never a command it names) and, once its diagnosis is checked, the files its
 remedy items own: a work item that has not begun and owns one of them starts once that fix is done, building on the
 tree it leaves, and `ask-orchestrator-status` says what it waits for; every other item goes on at once. Both are read
@@ -729,12 +732,13 @@ such as `Makefile` or `pyproject.toml` meets no other path and keeps only the it
 and the self-audit are told the same: no work item fixes an issue being fixed, or rewrites its lines.
 
 Issues of one root cause take one fix: a triage that finds its issue's cause is that of an issue taken before it,
-being triaged or being fixed, answers `join` with that issue's id, and its issue takes no visit of its own. It goes with
-that issue's fix - waiting for its triage where it is still triaged - and the visit's diagnosis is told every issue
-joined to it, its remedies settling all of them, `{run.preExisting}` saying each joined one `fixed with <id>`. One that
-joins while a visit of that fix is already diagnosing takes a visit of its own once that visit has fixed it, told what
-it fixed; and where the issue it joined ends without a fix, it is triaged again on its own. A triage that names an
-issue taken after its own is refused, so no two issues ever name each other.
+being triaged, being fixed or fixed, answers `join` with that issue's id. Joined to one being triaged or being fixed,
+its issue takes no visit of its own: it goes with that issue's fix - waiting for its triage where it is still triaged -
+and the visit's diagnosis is told every issue joined to it, its remedies settling all of them, `{run.preExisting}`
+saying each joined one `fixed with <id>`. One that joins while a visit of that fix is already diagnosing takes a visit
+of its own once that visit has fixed it, told what it fixed, and one that joins an issue fixed already takes one at
+once, told the same; and where the issue it joined ends without a fix, it is triaged again on its own. A triage that
+names an issue taken after its own is refused, so no two issues ever name each other.
 
 A reasoning step's `effort` is one level for every model it may run on, or a map giving each its own -
 `all` for the rest and a model's code for one; the shipped workflow runs its heaviest steps at
@@ -2442,7 +2446,8 @@ the attempt goes on, and its agent told that what it wrote there is gone; no two
 once, for a reason step holds write on the tree of the agent it works in whatever its access, and an advice of the
 run's advisor holds the tree it works in while it runs - of two that go on with one step's work, two visits of one
 that goes on with its own among them, the second starts once the first has ended, or waits on a question with no
-advice on it still running, for a step that waits holds nothing: the step's model resolved with its agent definition
+advice on it still running, for a step that waits holds nothing (the recovery's visits go on with one another's work
+only for the same failure or issue: a visit for another issue diagnoses in an agent of its own, beside it): the step's model resolved with its agent definition
 below its own and its order built as
 entries of a model and one of its provider's keys, each entry's credential read from the slot; its prompt file read
 and filled where the step starts, each skill it names looked up again and the folder handed over in the agent's work

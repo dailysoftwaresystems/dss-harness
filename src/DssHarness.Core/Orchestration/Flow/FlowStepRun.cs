@@ -67,12 +67,13 @@ public sealed record FlowPreExistingReport(string Title, string Description, str
     /// The part a reason step that reports issues - its <c>onPreExisting</c> names a triage - is given at the end of
     /// its prompt: the issues that were there before the run which its steps reported already, each line one's id, what
     /// became of it, its title and where it is, so the step reports again only one that stops its own work, and a
-    /// repeat worded differently raises no triage of its own. A triage is given the same, its own issue left out, with
-    /// the ids of those it may join - each taken before its own, being triaged or being fixed - so it names the issue its
-    /// own repeats in <c>duplicates</c>, or the one whose root cause its own shares in <c>joins</c>, by its id. Null where
-    /// the run holds none, and the prompt is as its template fills.
+    /// repeat worded differently raises no triage of its own. A triage is given those it may name - each taken before its
+    /// own - with the ids of those it may join - being triaged, being fixed or fixed already - so it names the issue its
+    /// own repeats in <c>duplicates</c>, or the one whose root cause its own shares in <c>joins</c>, by its id, and never
+    /// one its answer would be refused for. Null where the run holds none it may be told, and the prompt is as its
+    /// template fills.
     /// </summary>
-    /// <param name="held">Each issue the run holds, as <c>{run.preExisting}</c> words it: its id, what became of it, then its title and where it is.</param>
+    /// <param name="held">Each issue the step may be told, as <c>{run.preExisting}</c> words it: its id, what became of it, then its title and where it is.</param>
     /// <param name="joinable">For a triage, the ids of the issues it may join; null for a step that reports issues.</param>
     public static string? Known(IReadOnlyList<string> held, IReadOnlyList<string>? joinable = null)
         => held.Count == 0
@@ -81,12 +82,12 @@ public sealed record FlowPreExistingReport(string Title, string Description, str
                 ? $"\n\n<{KnownTag}>\nThe issues that were there before this run which its steps have reported already, each with its id, what became of it, its title and where it is:\n\n"
                     + string.Concat(held.Select(line => $"- {line}\n"))
                     + $"\nReport none of these again under preExisting, however you would word it, unless it stops your own work: a step of the run holds each one already.\n</{KnownTag}>\n"
-                : $"\n\n<{KnownTag}>\nThe issues that were there before this run which it has taken already, yours left out, each with its id, what became of it, its title and where it is:\n\n"
+                : $"\n\n<{KnownTag}>\nThe issues that were there before this run which it took before yours, each with its id, what became of it, its title and where it is - one taken after yours is triaged after it, and names yours where it repeats it:\n\n"
                     + string.Concat(held.Select(line => $"- {line}\n"))
                     + "\nWhere yours is one of these, the course is duplicate, and duplicates names its id. "
                     + (joinable.Count == 0
-                        ? "No issue taken before yours is being triaged or being fixed, so yours joins none."
-                        : $"Where yours is another issue whose root cause is that of one taken before it that is being triaged or being fixed - {string.Join(", ", joinable)} - the course is join, and joins names that one's id: its fix is that issue's, which settles both.")
+                        ? "No issue taken before yours is being triaged, being fixed or fixed, so yours joins none."
+                        : $"Where yours is another issue whose root cause is that of one taken before it that is being triaged, being fixed or fixed - {string.Join(", ", joinable)} - the course is join, and joins names that one's id: its fix is that issue's, which settles both; where that fix is done already, yours is given a fix of its own, told what that one did.")
                     + $"\n</{KnownTag}>\n";
 }
 
@@ -244,8 +245,8 @@ public sealed record FlowStepRun(
 
     /// <summary>
     /// A reason step's: the earlier work its conversation goes on with, in the order that work went, oldest first - the
-    /// step its resume names, then its own earlier visits of the same work item, the newest last - each that began once
-    /// and no other. The one owner of what a step goes on with: its continuation record is the record of this work, the
+    /// step its resume names, then its own earlier visits of the same work item (within the recovery, of visits for the
+    /// same failure or issue), the newest last - each that began once and no other. The one owner of what a step goes on with: its continuation record is the record of this work, the
     /// last iterations of the newest of it word for word; its resume prompt is asked only where there is earlier work, this
     /// or an attempt of its own; and its graph tool reads the pages this work kept, the newest first, where its own keep
     /// none. Empty where the step resumes nothing - its conversation begins its own work, whatever it depends on - and for
