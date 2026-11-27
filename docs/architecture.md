@@ -4664,7 +4664,10 @@ recommendation `cancelled`), the asking step not admitted again until the advice
 leaves running does, the session waiting for it, and its recommendation is kept (`PauseInOrderAsync` ends no advice), so
 a resume that comes back to a pause - the budget's, whose question is still open (`CheckBudget`) - pays for each advice
 once; a stop ends it (`DeferAdvice` from `ApplyTheStop`, `BeginHardStop` through the session's advice stop), the
-question `deferred`, and a session's end ends and waits for whatever is left (`EndAdviceAsync`); a recommendation
+question `deferred` - a stop once the pause is complete among them, which is what `--all` is for the machine steps
+(`RequestStop` ending the session's advice stop and marking the stop, the loop's `DeferAdvice` taking each asking), and
+after which the complete pause starts no advice (`AdviseThePause` leaving each question owing one to the resume, deferred),
+so the stop never waits on an advisor - and a session's end ends and waits for whatever is left (`EndAdviceAsync`); a recommendation
 obtained is written with who gave it and where its records are, none obtained said so, and what every advice spent - an
 ended one's among them, counted from its turns (`AgentRunSpend`) - is counted in the run's spend, the loop going round
 once it takes one so an advice that spends the run to its budget's reserve pauses it at once (`TakeAdviceAsync` answering

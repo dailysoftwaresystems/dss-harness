@@ -965,8 +965,9 @@ the pause leaves running does, the session waiting for it, and its recommendatio
 that comes back to a pause - the budget's, whose question is still open - pays for each advice once. A
 question raised while the run is pausing says its recommendation is deferred, and once the pause is
 complete, whatever asked for it, every open question still owing its recommendation is advised before
-the session ends. A stop ends a running advice, its question saying the recommendation is sought at
-the resume, which seeks it - as it does one a crash left sought. A person answers a question
+the session ends. A stop ends a running advice - one once the pause is complete among them, which
+starts no advice after it either, so the stop never waits on an advisor - its question saying the
+recommendation is sought at the resume, which seeks it - as it does one a crash left sought. A person answers a question
 recommended: `answer-orchestrator` to a question still owing its recommendation that no advisor seeks
 now - between sessions, or while a pause defers it - is refused (13), nothing answered, and `abort` is
 taken; `resume-orchestrator` seeks it first. The budget's own question is recommended too: once the

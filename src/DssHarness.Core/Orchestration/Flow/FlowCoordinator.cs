@@ -612,6 +612,12 @@ public sealed class FlowCoordinator
 
     /// <summary>The safe pause of this session is complete - its last handoff written - so a later stop is what <c>--all</c> is.</summary>
     private volatile bool _pauseComplete;
+
+    /// <summary>
+    /// A stop was asked once this session's pause was complete (<see cref="RequestStop"/>): the machine steps it left
+    /// running are stopped as <c>--all</c> stops them, every advice under way is ended, and no advice is started after it.
+    /// </summary>
+    private volatile bool _stopPastThePause;
     private FlowPauseRequest? _pauseRequest;
     private FlowPauseState? _pause;
     private readonly FlowBudgetSpent _spent = new();
@@ -1019,14 +1025,19 @@ public sealed class FlowCoordinator
     /// turns with it, and ends <see cref="FlowInstanceState.Stopped"/> once its runner has ended; no handoff is kept, the
     /// <c>always</c> steps do not run, and the run ends <see cref="FlowRunStatus.Stopped"/>, as the answer <c>abort</c>
     /// ends it too. Once the pause is complete - every agent handed off - it is what <c>--all</c> is: the machine steps
-    /// the engine records are stopped, and the run stays <see cref="FlowRunStatus.Paused"/>. The loop applies it where a
-    /// session is running; between sessions the next one begins by applying it.
+    /// the engine records are stopped, and the run stays <see cref="FlowRunStatus.Paused"/>; and it ends every advice
+    /// under way, as every stop does - its token ended here, its question saying the recommendation is sought at the
+    /// resume once the loop takes it - and the complete pause starts no advice after it (<see cref="AdviseThePause"/>), so
+    /// the stop never waits on an advisor. The loop applies it where a session is running; between sessions the next one
+    /// begins by applying it.
     /// </summary>
     public void RequestStop()
     {
         if (_pauseComplete && !_hardStop)
         {
+            _stopPastThePause = true;
             _pauseAllAsked = true;
+            CancelAdvice();
             WakeTheLoop();
             return;
         }
@@ -1193,6 +1204,7 @@ public sealed class FlowCoordinator
         _inSession = true;
         _pausing = false;
         _pauseComplete = false;
+        _stopPastThePause = false;
         _pauseAllAsked = false;
         _alwaysPhase = false;
         _stopApplied = false;
@@ -1339,6 +1351,15 @@ public sealed class FlowCoordinator
                     {
                         Stop(instance);
                     }
+                }
+
+                if (_stopPastThePause)
+                {
+                    // A stop once the pause is complete ends every advice under way, as every stop does - its token was
+                    // ended as the stop was asked - each question it was sought for saying the recommendation is sought at
+                    // the resume; what each spent is counted as its runner ends, and no runner is waited for past the
+                    // drain's bound of its end.
+                    DeferAdvice("the run was stopped while the advisor ran");
                 }
 
                 if (_answeredAtOnce)
@@ -2309,9 +2330,11 @@ public sealed class FlowCoordinator
     /// pause; one recommended, or whose advice runs, is left as it is, for a pause never ends an advice under way. Every
     /// advice it seeks is held to its own definition's bounds alone, as every advice is, so the run past its reserve never
     /// leaves a question it pauses on unrecommended; and what each spends, taken while the run is pausing, asks for no
-    /// second pause (<see cref="CheckBudget"/>), so the session ends paused once the advice has ended. The one owner of the
-    /// reasoning a complete pause starts. Whether it raised or sought anything, so the loop goes round to wait for the
-    /// advice.
+    /// second pause (<see cref="CheckBudget"/>), so the session ends paused once the advice has ended. A stop asked once
+    /// the pause is complete starts none (<see cref="RequestStop"/>): each question still owing its recommendation is left
+    /// to the resume, which seeks it - one the pause deferred saying so already, and any other saying the stop left it -
+    /// so the stop never waits on an advisor it began. The one owner of the reasoning a complete pause starts. Whether it
+    /// raised or sought anything, so the loop goes round to wait for the advice.
     /// </summary>
     private bool AdviseThePause()
     {
@@ -2330,6 +2353,24 @@ public sealed class FlowCoordinator
             WaitOn(null, question);
             WriteQuestions();
             raised = true;
+        }
+
+        if (_stopPastThePause)
+        {
+            var left = false;
+
+            foreach (var (asked, _) in OwedUnsought().Where(owed => owed.Asked.Recommendation.State != "deferred"))
+            {
+                asked.Recommendation = SoughtAtTheResume("the run was stopped once its pause was complete");
+                left = true;
+            }
+
+            if (left)
+            {
+                WriteQuestions();
+            }
+
+            return raised;
         }
 
         foreach (var (asked, about) in OwedUnsought())
@@ -11765,9 +11806,10 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Ends every advice still running, where the run stops: an advisor is a reason step, and none runs past a hard stop -
-    /// a pause leaves it to finish. Each question it was sought for, still open, says the recommendation is sought when
-    /// the run is resumed; the asking is kept until its runner has ended, so what it spent is counted.
+    /// Ends every advice still running, where the run stops - a hard stop, or a stop once the pause is complete: an
+    /// advisor is a reason step, and none runs past a stop - a pause leaves it to finish. Each question it was sought for,
+    /// still open, says the recommendation is sought when the run is resumed; the asking is kept until its runner has
+    /// ended, so what it spent is counted.
     /// </summary>
     /// <param name="why">What ended it, as the question says it.</param>
     private void DeferAdvice(string why)
@@ -11780,7 +11822,7 @@ public sealed class FlowCoordinator
 
             if (_open.Contains(pending.Asked.Id))
             {
-                pending.Asked.Recommendation = new FlowRecommendation("deferred", Why: $"{why}: the recommendation is sought when the run is resumed with this question still open");
+                pending.Asked.Recommendation = SoughtAtTheResume(why);
                 deferred = true;
             }
         }
@@ -11790,6 +11832,14 @@ public sealed class FlowCoordinator
             WriteQuestions();
         }
     }
+
+    /// <summary>
+    /// The recommendation of an open question a stop left owing one: deferred, saying what ended or withheld its advice and
+    /// that the resume seeks it while the question is still open (<see cref="SeekOwedAdvice"/>).
+    /// </summary>
+    /// <param name="why">What ended or withheld the advice, as the question says it.</param>
+    private static FlowRecommendation SoughtAtTheResume(string why)
+        => new("deferred", Why: $"{why}: the recommendation is sought when the run is resumed with this question still open");
 
     /// <summary>
     /// Ends every advice the session leaves and waits for each runner to end, no longer than a stopped step's runner is

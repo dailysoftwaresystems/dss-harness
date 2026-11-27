@@ -764,6 +764,122 @@ public sealed class FlowAdviceTests
     }
 
     /// <summary>
+    /// A stop once a pause is complete ends the advice still under way, as every stop does - its token ended, the session
+    /// never waiting it out - what it spent is counted, its question says the recommendation is sought at the resume, the
+    /// run stays paused, and the resume seeks it again.
+    /// </summary>
+    [Fact]
+    public async Task AStopOnceAPauseIsComplete_EndsTheAdviceUnderWay_AndTheResumeSeeksItAgain()
+    {
+        var held = new HeldAdvisor();
+        held.TornDown.SetResult();
+        var calls = 0;
+        var advisor = new Advisor((_, token) => Interlocked.Increment(ref calls) == 1 ? held.AdviseAsync(token) : Task.FromResult(new FlowAdvice("more", "now", null)));
+        var records = new Records();
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
+
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => advisor.Asked.Count == 1);
+        coordinator.RequestPause("command");
+        await TestEventuallyAsync(() => records.Saw(FlowChangeKind.PauseCompleted));
+        coordinator.RequestStop();
+
+        var end = await session.WaitAsync(Bound, Token);
+
+        Assert.Equal((FlowRunStatus.Paused, "command"), (end.Status, end.Pause!.Cause));
+        Assert.True(advisor.Tokens.Single().IsCancellationRequested);
+        Assert.Equal(
+            new FlowRecommendation("deferred", Why: "the run was stopped while the advisor ran: the recommendation is sought when the run is resumed with this question still open"),
+            coordinator.OpenQuestions.Single().Recommendation);
+        Assert.Equal((0.02, 1500L), (records.Last!.Spent.Usd, records.Last.Spent.Tokens));
+
+        end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(2, advisor.Asked.Count);
+        Assert.Equal("given", coordinator.OpenQuestions.Single().Recommendation.State);
+    }
+
+    /// <summary>
+    /// A stop once a pause is complete starts no advice: a question a machine step the pause left running raised as it
+    /// drained, its recommendation deferred, is still deferred when the stop has stopped what ran and nothing runs - the
+    /// session ends paused without an advisor started - and the resume seeks it.
+    /// </summary>
+    [Fact]
+    public async Task AStopOnceAPauseIsComplete_StartsNoAdvice_ForAQuestionThePauseDeferred()
+    {
+        var definition = Parse("""
+            name: flow
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            steps:
+              - name: work
+                type: create-agent
+                agent: worker.md
+              - name: other
+                type: create-agent
+                agent: worker.md
+              - name: folding
+                type: fold
+                of: work
+                dependsOn: [work]
+              - name: slow
+                type: build
+                in: other
+                dependsOn: [other]
+            """);
+        var folding = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slowStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slow = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .OnAsync("folding", async _ =>
+            {
+                folding.TrySetResult();
+                await fold.Task;
+                return FlowStepResult.Standing(new FlowDryRun(RequestStanding.Refused, [], [], [RefusalKind.Conflict], "1 path conflicts") { Conflicting = ["src/a.cs"] });
+            })
+            .OnAsync("slow", async _ =>
+            {
+                slowStarted.TrySetResult();
+                await slow.Task;
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        var advisor = new Advisor(call => Task.FromResult(new FlowAdvice(call.Answers[0].Answer, $"advised for {call.Kind}", null)));
+        var records = new Records();
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
+
+        // The pause leaves both machine steps running; the fold's refusal, raised as it drains, is deferred, and nothing
+        // is advised while the build still runs.
+        var session = coordinator.RunAsync(Token);
+        await Task.WhenAll(folding.Task, slowStarted.Task).WaitAsync(Bound, Token);
+        coordinator.RequestPause("command");
+        await TestEventuallyAsync(() => records.Saw(FlowChangeKind.PauseCompleted));
+        fold.SetResult();
+        await TestEventuallyAsync(() => coordinator.OpenQuestions.Any(question => question.Kind == "foldConflicts"));
+
+        // The stop stops the build, as --all does; once its runner has ended, nothing runs.
+        coordinator.RequestStop();
+        await TestEventuallyAsync(() => records.Saw(FlowChangeKind.StopApplied));
+        slow.SetResult();
+        var end = await session.WaitAsync(Bound, Token);
+
+        Assert.Equal((FlowRunStatus.Paused, "command", true), (end.Status, end.Pause!.Cause, end.Pause.All));
+        Assert.Empty(advisor.Asked);
+        Assert.Equal(
+            new FlowRecommendation("deferred", Why: "the run is pausing, and no reason step is started before its pause is complete: the recommendation is sought then, or when the run is resumed where a stop came first"),
+            coordinator.OpenQuestions.Single().Recommendation);
+
+        end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(["foldConflicts"], advisor.Asked.Select(call => call.Kind));
+        Assert.Equal(new FlowRecommendation("given", "retry", null, "advised for foldConflicts", "advisor", "advisor"), coordinator.OpenQuestions.Single().Recommendation);
+    }
+
+    /// <summary>
     /// An answer a person gives within a live session while the advisor still works is taken, a pause under way or not:
     /// it ends the asking, the question saying it was answered while the advisor ran - the decision that a person who is
     /// there never waits for the recommendation stands beside the refusal of an answer nothing recommends.
