@@ -153,7 +153,7 @@ public sealed class AdvisorRunner(
         var agentRecord = working is null ? null : store.ReadAgent(layout, working);
         var directory = NextAdviceDirectory(layout, call);
         made(directory);
-        var workspace = launch.Workspace(agentRecord, context.Layout, Path.Combine(directory, "work"), layout.Directory);
+        var workspace = launch.Workspace(agentRecord, context.Layout, Path.Combine(directory, OrchestratorLayout.WorkDirectoryName), layout.Directory);
         var ground = AgentStepGround.Of(
             context.Config,
             definition,
@@ -307,7 +307,7 @@ public sealed class AdvisorRunner(
 
         return await new AgentContinuation(fileSystem, harnessOutput).RenderAsync(
             work,
-            Path.Combine(directory, "work"),
+            Path.Combine(directory, OrchestratorLayout.WorkDirectoryName),
             directory,
             cancellationToken).ConfigureAwait(false);
     }

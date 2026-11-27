@@ -169,12 +169,19 @@ what was left out and why. It is rewritten whole at every end - done, failed, pa
 reached or after, a failure the command caught - through a file beside it, so a resumed run's zip holds the whole run,
 and it is named in the text (`outputLogs: <file>`) and in `--json` (`records.outputLogs`). Links and junctions, never
 followed, key stores and dotenv files, the run's `temp/`, the codebase graph's caches and each agent's worktree are left
-out, and no secret the run's records were masked of lands in it: every byte is held to the mask the command's sessions
-kept them through - the configuration's secrets the key slot answers, each web-search key a step was given in every form
-it is sent in, and each gh login token a step came to hold - never built again at the end, each secret masked as itself
-and as its UTF-8 and UTF-16 bytes; where no session built that mask, the places that hold files as they came (each
-agent's transcripts, the files it was handed and its rows, `work/`, `plans/`, `inputs/`, `artifacts/`) are left out,
-each named. A path that is a directory, inside `.orchestrators/`, inside a work tree that does not ignore it - it would be
+out, and every byte is held to the mask this command's own sessions kept the run's records through - the configuration's
+secrets the key slot answers, each web-search key a step was given in every form it is sent in, and each gh login token a
+step came to hold - never built again at the end, each secret masked as itself and as its UTF-8 and UTF-16 bytes. A
+resumed run's zip is masked by this command's sessions alone: an earlier session's records were masked as they were
+written, but a file it kept as it came - an agent's transcript, say - may hold a secret since rotated out of the slot or
+taken out of the configuration, for nothing derived from a secret is kept from one session to the next. Where no session
+of the command built a mask - an answer handed to an engine running elsewhere, a resume refused - every place the run's
+layout marks as holding files as they came is left out, each named: `logs/*/` (each agent's transcripts), `work/`,
+`plans/`, `inputs/`, `artifacts/`, `remote-workflows/`, each agent's `shared/`, `rows/`, `evidence/` and `sessions/`,
+and in each step's directory, each advice's, ask's and analysis's, the red legs' and CI jobs' `logs/`, a measure call's
+`logs/`, `handed/`, a side agent's `work/` and `sessions/`, and the continuation record in `tool-results/`. A path that
+is a directory, inside `.orchestrators/`, inside the repository's main checkout or one of its agents'
+trees where that tree does not ignore it - it would be
 handed to the run's agents as uncommitted state - or in a directory that cannot be made is refused (13) before anything
 runs.
 

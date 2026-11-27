@@ -5409,11 +5409,14 @@ as typed) - the command line by `--output-logs <file>` on `run-orchestrator`, `r
 `answer-orchestrator` alone, with no configuration key and no default: no flag, no zip. The lifecycle
 every command shares (`CommandSession`) holds the path before anything is weighed - whole, read from
 the directory the process stands in; a directory, a path inside `.orchestrators/` (where every run
-keeps its own records, and a start names its run only as it starts), one inside a work tree that does
-not ignore it - asked of git from the nearest directory on its way that is there, `check-ignore` read
+keeps its own records, and a start names its run only as it starts), one inside the repository's main
+checkout or one of its agents' trees where that tree does not ignore it - the tree found by git from the
+nearest directory on its way that is there, and held to be the run's where the one locator of a tree's
+repository (`IRepositoryLocator`) names the command's main checkout as its own; `check-ignore` read
 against the index (`IGitClient.IsIgnoredAsync`), so a path the tree tracks is never ignored: such a zip
 is one of the tree's uncommitted files, which every agent a run of it makes is handed with its seed, and
-the next zip would hold it once for each - or one whose directory cannot be
+the next zip would hold it once for each; any other work tree, another project's checkout or a
+repository of dotfiles at the home, is none a run hands or folds from, and takes the zip - or one whose directory cannot be
 made is refused with 13, nothing started - and at every end - the body's answer, a directory refused,
 a failure it caught - writes the zip before it says how the command ended, the operation's own end and
 the ends handed to it run first, with `--json` or without, so the manifest holds the lines they say and
@@ -5442,16 +5445,30 @@ appoints that the key slot answers, and holds every mask the one builder of a la
 it runs (`ReasonLaunch.Mask`) - a step's web-search keys in every form they are sent in among them - and
 every mask that comes to hold the gh login read again (`GrowingMask`), read as it holds its tokens at
 the end; the sessions are told to `FlowRunReached`, whose `Masks` the zip reads. So a configuration
-edited or a slot changed since a session began masks nothing its records were not masked of. The mask
+edited or a slot changed since a session began masks nothing its records were not masked of. Those are
+this command's sessions alone: a resumed run's zip holds the records of earlier sessions too, which were
+masked as they were written, but a file an earlier session kept as it came may hold a secret this
+command's sessions no longer hold - a key since rotated out of the slot, a provider taken out of the
+configuration - for nothing derived from a secret (a digest, a length) is kept from one session to the
+next. The mask
 is read byte for byte - Latin-1, which keeps every byte - by `ActionValues.ReadByteForByte`, which masks
 each secret's bytes in UTF-8 and in UTF-16 of either byte order read so beside the secret itself, a
 piece at a time cut where no secret parts (`ILineMask.Cut`); the manifest's strings are masked as text.
-Where no session built the mask - the command began none, or none could build the configuration's
-(its providers do not resolve, the slot could not be read) - the places of the run that hold files as
-they came, which no record's mask was applied to (`FlowOutputLogs.KeptAsTheyCame`: each agent's
-transcripts under `logs/`, the files an agent was handed and the rows it files, `work/`, `plans/`,
-`inputs/`, `artifacts/`), are left out whole, each named with why: never an unmasked copy. A command
-line the parser refuses writes none: no command began.
+Where no session built the mask - the command began none, as an answer handed to an engine running
+elsewhere (`FlowService.AnswerAsync` waiting on its inbox entry) and a refused resume begin none, or
+none could build the configuration's (its providers do not resolve, the slot could not be read) - every
+place the run's layout marks as one whose writer keeps bytes as they came, which no record's mask was
+applied to, is left out whole, each named with why: never an unmasked copy. The layout that spells every
+place is the one owner of the mark (`OrchestratorLayout.IsKeptAsItCame`), read by the zip and by the
+help that lists it: the run's own (`OrchestratorLayout.RunPlacesKeptAsTheyCame` - each agent's
+transcripts under `logs/`, `work/`, `plans/`, `inputs/`, `artifacts/`, `remote-workflows/`, and each
+agent's `shared/`, `rows/`, `evidence/` (`AgentEvidence`'s copies of its worktree's evidence roots) and
+`sessions/` (the provider's messages as they came)), and in each attempt's directory
+(`OrchestratorLayout.AttemptDirectories`: every step's, each advice's, ask's and analysis's), what
+`OrchestratorLayout.AttemptPlacesKeptAsTheyCame` names - the red legs' and red CI jobs' `logs/`, which
+the runner's values alone masked, a measure call's `logs/`, `handed/`, a side agent's `work/` and
+`sessions/`, and the continuation record, which quotes red legs' lines as they came. A command line the
+parser refuses writes none: no command began.
 
 ### The codebase graph
 

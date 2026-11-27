@@ -42,10 +42,12 @@ public static partial class HelpTopics
             + "beside it that then replaces it, so a resumed run's zip holds the whole run and a crash never leaves half a zip; "
             + $"and it is named as every record of a run is, the last line naming them ({FlowOutputLogs.Record}: <file>) and "
             + $"{FlowReports.RecordsMember}.{FlowOutputLogs.Record} in --json. A path that is a directory, inside "
-            + $"{HarnessLayout.OrchestratorsDirectoryName}/, inside a work tree that does not ignore it - git's ignore rules read "
-            + "as a status reads them, a path the tree tracks never ignored: the zip would be one of the tree's uncommitted files, "
-            + "handed to every agent a run of it makes - or in a directory that cannot be made is refused "
-            + $"({HarnessExit.Refused}) before anything runs, nothing started. The zip holds {FlowOutputLogs.RunFolder}/ - the run's "
+            + $"{HarnessLayout.OrchestratorsDirectoryName}/, inside the repository's main checkout or one of its agents' trees "
+            + "where that tree does not ignore it - git's ignore rules read as a status reads them, a path the tree tracks never "
+            + "ignored: the zip would be one of the tree's uncommitted files, handed to every agent a run of it makes - or in a "
+            + $"directory that cannot be made is refused ({HarnessExit.Refused}) before anything runs, nothing started; any other "
+            + "work tree, another project's or a repository at the home, is none a run hands or folds from, and takes the zip. "
+            + $"The zip holds {FlowOutputLogs.RunFolder}/ - the run's "
             + $"whole directory, its folders kept - {FlowOutputLogs.ConfigName}, the configuration the run was read with, and "
             + $"{FlowOutputLogs.ManifestName}, the place to start reading: what was run and the command line, the build and the "
             + "system, how the command ended and why, the run's name, workflow, state and open questions, the command's own "
@@ -54,18 +56,28 @@ public static partial class HelpTopics
             + "store and dotenv file at any depth, and the shared copy of one an agent was handed; the run's "
             + $"{HarnessLayout.OrchestratorTempDirectoryName}/; the caches of its codebase graph made again from the tree "
             + $"({string.Join(", ", FlowOutputLogs.GraphCaches.Select(cache => $"{OrchestratorLayout.GraphDirectoryName}/{cache}"))}); "
-            + "and each agent's worktree, which is outside the run. No secret value lands in it: every byte of it is held to the "
-            + "mask the command's sessions kept the run's records through, never built again at the end - every secret the "
-            + "configuration appoints that the key slot answers, as each session began; every form each web-search key a step "
-            + "was given is sent in; and every gh login token a step came to hold - each masked as itself and as its bytes in "
-            + "UTF-8 and in UTF-16 of either byte order, the configuration, the command line and the output among it. Where no "
-            + "session built that mask - none began, or none could build it - the places of the run that hold files as they "
-            + "came, which no record's mask was applied to, are left out whole, each named with why: "
-            + $"{string.Join(", ", FlowOutputLogs.KeptAsTheyCame.Select(place => place + "/"))}. "
+            + "and each agent's worktree, which is outside the run. Every byte of it is held to the mask this command's own "
+            + "sessions kept the run's records through, never built again at the end - every secret the configuration appoints "
+            + "that the key slot answers, as each session began; every form each web-search key a step was given is sent in; "
+            + "and every gh login token a step came to hold - each masked as itself and as its bytes in UTF-8 and in UTF-16 of "
+            + "either byte order, the configuration, the command line and the output among it. A resumed run's zip is masked "
+            + "by this command's sessions alone: an earlier session's records were masked as they were written, but a file it "
+            + "kept as it came may hold a secret since rotated out of the slot or taken out of the configuration, for nothing "
+            + "derived from a secret is kept from one session to the next. Where no session of the command built a mask - none "
+            + "began, as where an answer is handed to an engine running elsewhere or a resume is refused, or none could build "
+            + "it - every place the run's layout marks as holding files as they came, which no record's mask was applied to, "
+            + "is left out whole, each named with why: "
+            + $"{string.Join(", ", OrchestratorLayout.RunPlacesKeptAsTheyCame.Select(PlaceSaid))}; and in each attempt's "
+            + $"directory ({string.Join(", ", OrchestratorLayout.AttemptDirectories.Select(attempt => attempt + "/"))}): "
+            + $"{string.Join(", ", OrchestratorLayout.AttemptPlacesKeptAsTheyCame.Select(PlaceSaid))}. "
             + "Nothing is capped or dropped: a file that could not be read whole is said "
             + "so. A zip that could not be written is said in its place and named nowhere, and the command's code stands - save "
             + $"a defect of this tool's, which ends it as one does ({HarnessExit.InternalError}). A command line the parser "
             + "refuses writes none, for no command began.";
+
+    /// <summary>A place of a run's directory as the help names it: a directory with its trailing separator, a file as it is, and what it holds.</summary>
+    internal static string PlaceSaid(RunPlace place)
+        => $"{place.Path}{(place.IsFile ? string.Empty : "/")} ({place.Holds})";
 
     private static string RenderOrchestrators()
     {
