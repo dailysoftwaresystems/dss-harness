@@ -233,17 +233,19 @@ public sealed class AgentModelTests
         Assert.NotNull(resolved);
         Assert.Equal("balanced", agentTier);
         Assert.Equal(["anthropic", "zai"], [.. providers.Select(provider => provider.Name)]);
-        Assert.Equal(5, providers.SelectMany(provider => provider.Models).Count());
+        Assert.Equal(6, providers.SelectMany(provider => provider.Models).Count());
 
         // Every Claude model holds a 1M context and a 128K output - 128000, the max_tokens Anthropic's own Models API
-        // reports and the API clients send, which a request over it is refused for - and GLM 5.3 its own 1M and 131072.
+        // reports and the API clients send, which a request over it is refused for - and each GLM model its own 1M and
+        // 131072.
         Assert.Equal(
             [
-                ("claude-fable-5-1", 1_000_000L, 128_000L),
+                ("claude-fable-5-2", 1_000_000L, 128_000L),
                 ("claude-opus-5-5", 1_000_000L, 128_000L),
                 ("claude-sonnet-5-5", 1_000_000L, 128_000L),
                 ("claude-haiku-5-5", 1_000_000L, 128_000L),
-                ("glm-5.3", 1_000_000L, 131_072L),
+                ("glm-5.4", 1_000_000L, 131_072L),
+                ("glm-5.3-flash", 1_000_000L, 131_072L),
             ],
             providers.SelectMany(provider => provider.Models).Select(model => (model.Code, model.ContextTokens, model.MaxOutputTokens)));
     }
@@ -254,11 +256,11 @@ public sealed class AgentModelTests
     {
         var (_, _, tierConfig) = AgentProviderTemplates.Read();
 
-        Assert.Equal(["claude-fable-5-1", "glm-5.3"], tierConfig["best"]);
-        Assert.Equal(["claude-opus-5-5", "glm-5.3"], tierConfig["high"]);
-        Assert.Equal(["claude-sonnet-5-5", "glm-5.3"], tierConfig["balanced"]);
-        Assert.Equal(["claude-haiku-5-5", "glm-5.3"], tierConfig["fast"]);
-        Assert.Equal(["claude-sonnet-5-5", "glm-5.3"], tierConfig["reporting"]);
+        Assert.Equal(["claude-fable-5-2", "glm-5.4"], tierConfig["best"]);
+        Assert.Equal(["claude-opus-5-5", "glm-5.4"], tierConfig["high"]);
+        Assert.Equal(["claude-sonnet-5-5", "glm-5.4"], tierConfig["balanced"]);
+        Assert.Equal(["claude-haiku-5-5", "glm-5.3-flash"], tierConfig["fast"]);
+        Assert.Equal(["claude-sonnet-5-5", "glm-5.3-flash"], tierConfig["reporting"]);
     }
 
 
