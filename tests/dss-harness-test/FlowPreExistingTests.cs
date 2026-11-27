@@ -403,9 +403,9 @@ public sealed class FlowPreExistingTests
         Assert.Equal([("think", null), ("triage", "the first hole"), ("triage+2", "the second hole"), ("triage+3", "the second hole")], runner.Started);
         Assert.Contains(("triage+2", "the issue 'the second hole' is triaged again on its own: 'triage', whose root cause it joined, ended without a fix"), said.Details);
         Assert.Equal(
-            "Triage it.\n\n<pre-existing>\nThe issues that were there before this run which it has taken already, yours left out, each with its id, what became of it, its title and where it is:\n\n"
+            "Triage it.\n\n<pre-existing>\nThe issues that were there before this run which it took before yours, each with its id, what became of it, its title and where it is - one taken after yours is triaged after it, and names yours where it repeats it:\n\n"
                 + "- pe-1: listed - the first hole (src/Parser.cs)\n\n"
-                + "Where yours is one of these, the course is duplicate, and duplicates names its id. No issue taken before yours is being triaged or being fixed, so yours joins none.\n</pre-existing>\n",
+                + "Where yours is one of these, the course is duplicate, and duplicates names its id. No issue taken before yours is being triaged, being fixed or fixed, so yours joins none.\n</pre-existing>\n",
             prompts["triage+3"]);
         Assert.Equal(
             "what was there before: pe-1: listed - the first hole (src/Parser.cs); pe-2: listed - the second hole (src/Parser.cs)",
@@ -541,14 +541,14 @@ public sealed class FlowPreExistingTests
 
     /// <summary>
     /// A triage names, as the issue its own repeats or the one whose root cause it shares, only an issue taken before its
-    /// own - so no two ever name each other and both vanish - and joins only an issue the run has taken: an answer that
-    /// names one taken after it, itself, or none the run holds fails the triage step, saying so.
+    /// own - so no two ever name each other and both vanish - and joins only an issue a triage of the run's holds: an
+    /// answer that names one taken after it, itself, or none the run triages fails the triage step, saying so.
     /// </summary>
     [Theory]
     [InlineData("join", "joins", "triage+2", "its answer's joins names 'triage+2', which was not taken before its own issue: an issue names only one taken before it")]
     [InlineData("duplicate", "duplicates", "triage+2", "its answer's duplicates names 'triage+2', which was not taken before its own issue: an issue names only one taken before it")]
     [InlineData("join", "joins", "triage", "its answer's joins names 'triage', which was not taken before its own issue: an issue names only one taken before it")]
-    [InlineData("join", "joins", "pe-7", "its answer joins 'pe-7', which is no issue the run has taken: joins names the id of one being triaged or being fixed")]
+    [InlineData("join", "joins", "pe-7", "its answer joins 'pe-7', which names no triage of the run's: joins names the id of an issue being triaged, being fixed or fixed")]
     [InlineData("join", "joins", "", "its answer joins no issue: joins names the id of the one whose root cause its own shares")]
     public async Task ATriageNamingAnIssueItMayNot_FailsTheTriageStep(string course, string field, string named, string error)
     {
@@ -615,7 +615,156 @@ public sealed class FlowPreExistingTests
         var joining = coordinator.Instances["triage+2"];
         Assert.Equal(FlowInstanceState.Failed, joining.State);
         Assert.Equal(HarnessExit.ConfigInvalid, joining.Exit);
-        Assert.Equal("its answer joins 'triage', which had ended without a fix before it began: an issue joins only one being triaged or being fixed", joining.Error);
+        Assert.Equal("its answer joins 'triage', which had ended without a fix before it began: an issue joins only one being triaged, being fixed or fixed", joining.Error);
+    }
+
+    /// <summary>The ids a triage's prompt offers it, in its order: each line of its <c>pre-existing</c> part that names an issue.</summary>
+    private static List<string> OfferedIds(string prompt)
+        => [.. prompt.Split('\n').Where(line => line.StartsWith("- ", StringComparison.Ordinal)).Select(line => line[2..line.IndexOf(':', StringComparison.Ordinal)])];
+
+    /// <summary>
+    /// A triage is offered only the issues it may name - each taken before its own - so it is never told an id its answer
+    /// would be refused for: of one issue reported twice in other words, the triages raised together, the earlier is
+    /// offered none, takes its own course and ends done, and the later names it as the issue its own repeats - the pair
+    /// resolves to the earlier, never two that name each other and both lost.
+    /// </summary>
+    [Fact]
+    public async Task ATriagesPrompt_OffersNoIdItsAnswerWouldBeRefusedFor_SoAPairRaisedTogetherResolvesToTheEarlier()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+                onFailure: continue
+            """);
+        var prompts = new Dictionary<string, string>(StringComparer.Ordinal);
+        var laterStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the first hole, worded otherwise")]))
+            .OnAsync("triage", async run =>
+            {
+                var prompt = FlowTemplate.Joined(run.Prompts!["prompt"]);
+
+                lock (prompts)
+                {
+                    prompts[run.Instance] = prompt;
+                }
+
+                // The earlier answers once the later is under way, so the later is told it being triaged.
+                if (run.Instance == "triage")
+                {
+                    await laterStarted.Task;
+                }
+                else
+                {
+                    laterStarted.TrySetResult();
+                }
+
+                // Each takes the first id it is offered as the issue its own repeats, as an agent told so would.
+                return OfferedIds(prompt) is [var offered, ..] ? Naming("duplicate", run.Issue!.Title, "duplicates", offered) : Course("list", run.Issue!.Title);
+            });
+        var watched = new Watched(null, BothTriaged);
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, _) => "Triage it.");
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal("Triage it.", prompts["triage"]);
+        Assert.Equal(
+            "Triage it.\n\n<pre-existing>\nThe issues that were there before this run which it took before yours, each with its id, what became of it, its title and where it is - one taken after yours is triaged after it, and names yours where it repeats it:\n\n"
+                + "- triage: being triaged - the first hole (src/Parser.cs)\n\n"
+                + "Where yours is one of these, the course is duplicate, and duplicates names its id. Where yours is another issue whose root cause is that of one taken before it that is being triaged, being fixed or fixed - triage - the course is join, and joins names that one's id: its fix is that issue's, which settles both; where that fix is done already, yours is given a fix of its own, told what that one did.\n</pre-existing>\n",
+            prompts["triage+2"]);
+
+        // Neither answer was refused: the earlier listed its issue, the later is its duplicate, and nothing is lost.
+        Assert.Equal((FlowInstanceState.Done, (string?)null), (coordinator.Instances["triage"].State, coordinator.Instances["triage"].Error));
+        Assert.Equal((FlowInstanceState.Done, (string?)null), (coordinator.Instances["triage+2"].State, coordinator.Instances["triage+2"].Error));
+        Assert.Equal(new WorkflowPreExisting(1, 0, 1, 0), watched.Last!.PreExisting);
+    }
+
+    /// <summary>
+    /// A join to an issue fixed already is offered and taken: the triage is told that issue's id among those it may join,
+    /// its join is accepted, and the joined issue is given a visit of its own, its diagnosis told what that fix did - the
+    /// issue it joined, the visit and the remedy items - the run's records saying why; both end fixed.
+    /// </summary>
+    [Fact]
+    public async Task AJoinToAnIssueFixedAlready_IsOfferedAndTaken_ItsIssueGivenAVisitOfItsOwnToldWhatThatFixDid()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: diagnose
+                  type: reason
+                  prompt: diagnose.md
+                  outputs: diagnosis.json
+                - name: mend
+                  type: orient
+                  dependsOn: [diagnose]
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var prompts = new Dictionary<string, string>(StringComparer.Ordinal);
+        string PromptOf(FlowStepRun run)
+        {
+            lock (prompts)
+            {
+                return prompts[run.Instance] = FlowTemplate.Joined(run.Prompts!["prompt"]);
+            }
+        }
+
+        var runner = new FakeRunner()
+            .On("think", asked => FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [asked == 1 ? Issue("the first hole", blocks: true) : Issue("the second hole")]))
+            .On("triage", run => OfferedIds(PromptOf(run)) is [var offered, ..] ? Joins(run.Issue!.Title, offered) : Course("fix", run.Issue!.Title))
+            .On("diagnose", run =>
+            {
+                _ = PromptOf(run);
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        var said = new Said();
+        var watched = new Watched(said, _ => false);
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => OneCausePrompt(named));
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(
+            "Triage it.\n\n<pre-existing>\nThe issues that were there before this run which it took before yours, each with its id, what became of it, its title and where it is - one taken after yours is triaged after it, and names yours where it repeats it:\n\n"
+                + "- triage: fixed - the first hole (src/Parser.cs)\n\n"
+                + "Where yours is one of these, the course is duplicate, and duplicates names its id. Where yours is another issue whose root cause is that of one taken before it that is being triaged, being fixed or fixed - triage - the course is join, and joins names that one's id: its fix is that issue's, which settles both; where that fix is done already, yours is given a fix of its own, told what that one did.\n</pre-existing>\n",
+            prompts["triage+2"]);
+        Assert.Equal((FlowInstanceState.Done, (string?)null), (coordinator.Instances["triage+2"].State, coordinator.Instances["triage+2"].Error));
+        Assert.Same(coordinator.Instances["triage+2"], coordinator.Instances["recover+2"].RaisedBy);
+        Assert.Equal("joined: []; after: ", prompts["recover.diagnose"]);
+        Assert.Equal(
+            """joined: []; after: {"id":"triage","title":"the first hole","where":"src/Parser.cs","visit":"recover","items":[]}""",
+            prompts["recover+2.diagnose"]);
+        Assert.Contains(("triage+2", "the issue 'the second hole' is given a visit of its own: 'triage', whose root cause it joined, was fixed by a visit whose diagnosis began before it joined"), said.Details);
+        Assert.Equal(new WorkflowPreExisting(0, 2, 0, 0), watched.Last!.PreExisting);
     }
 
     /// <summary>Each issue a reason step's answer reports raises one instance of the triage step, which is never scheduled.</summary>
@@ -1947,9 +2096,9 @@ public sealed class FlowPreExistingTests
     /// A step that reports issues is told, at the end of its prompt, every issue the run holds where it starts - each
     /// one's id, what became of it, its title and where it is, a duplicate left out for its issue is there under its own,
     /// and one whose triage has not ended being triaged - so a repeat it would word its own way raises no triage to merge
-    /// it; a step the run holds none for is given its prompt as filled. A triage is told the same issues, its own left
-    /// out, with the ids of those it may join - each taken before its own, being triaged or being fixed - so it names the
-    /// one its issue repeats, or the one whose root cause it shares, by its id.
+    /// it; a step the run holds none for is given its prompt as filled. A triage is told only the issues taken before its
+    /// own, with the ids of those it may join - being triaged, being fixed or fixed - so it names the one its issue
+    /// repeats, or the one whose root cause it shares, by its id; the first of those raised together is told none.
     /// </summary>
     [Fact]
     public async Task AStepThatReportsIssues_IsToldEveryIssueTheRunHoldsWhereItStarts()
@@ -2044,27 +2193,25 @@ public sealed class FlowPreExistingTests
                 + "Report none of these again under preExisting, however you would word it, unless it stops your own work: a step of the run holds each one already.\n</pre-existing>\n",
             prompts["later"]);
 
-        // Two reasoning agents at a time: the first two triages start together, each told the two others being triaged,
-        // and the third once the first has listed its issue - told that, and the second still being triaged, which it
-        // may join, as it may not the listed one.
+        // Two reasoning agents at a time: the first two triages start together - the first told none, for every other was
+        // taken after it, and the second the first, being triaged, which it may join - and the third once the first has
+        // listed its issue: told that, and the second still being triaged, which it may join, as it may not the listed one.
         string Told(string held, string joins)
-            => "Triage it.\n\n<pre-existing>\nThe issues that were there before this run which it has taken already, yours left out, each with its id, what became of it, its title and where it is:\n\n"
+            => "Triage it.\n\n<pre-existing>\nThe issues that were there before this run which it took before yours, each with its id, what became of it, its title and where it is - one taken after yours is triaged after it, and names yours where it repeats it:\n\n"
                 + held
                 + "\nWhere yours is one of these, the course is duplicate, and duplicates names its id. "
                 + joins
                 + "\n</pre-existing>\n";
-        Assert.Equal(
-            Told("- triage+2: being triaged - a stale document (src/Parser.cs)\n- triage+3: being triaged - a dead link (src/Parser.cs)\n", "No issue taken before yours is being triaged or being fixed, so yours joins none."),
-            prompts["triage"]);
+        Assert.Equal("Triage it.", prompts["triage"]);
         Assert.Equal(
             Told(
-                "- triage: being triaged - a broken test (src/Parser.cs)\n- triage+3: being triaged - a dead link (src/Parser.cs)\n",
-                "Where yours is another issue whose root cause is that of one taken before it that is being triaged or being fixed - triage - the course is join, and joins names that one's id: its fix is that issue's, which settles both."),
+                "- triage: being triaged - a broken test (src/Parser.cs)\n",
+                "Where yours is another issue whose root cause is that of one taken before it that is being triaged, being fixed or fixed - triage - the course is join, and joins names that one's id: its fix is that issue's, which settles both; where that fix is done already, yours is given a fix of its own, told what that one did."),
             prompts["triage+2"]);
         Assert.Equal(
             Told(
                 "- pe-1: listed - a broken test (src/Parser.cs)\n- triage+2: being triaged - a stale document (src/Parser.cs)\n",
-                "Where yours is another issue whose root cause is that of one taken before it that is being triaged or being fixed - triage+2 - the course is join, and joins names that one's id: its fix is that issue's, which settles both."),
+                "Where yours is another issue whose root cause is that of one taken before it that is being triaged, being fixed or fixed - triage+2 - the course is join, and joins names that one's id: its fix is that issue's, which settles both; where that fix is done already, yours is given a fix of its own, told what that one did."),
             prompts["triage+3"]);
     }
 

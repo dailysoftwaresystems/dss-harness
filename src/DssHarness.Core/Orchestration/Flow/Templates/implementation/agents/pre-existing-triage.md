@@ -18,11 +18,11 @@ change nothing.
    `git grep <commit>`) still serves where history is the proof: keep what it prints. The reporting step's evidence is
    a claim: check it yourself.
 2. Where you cannot reproduce it, the course is `unproven`. Say what you tried.
-3. Where the issues already taken hold it - the same cause at the same place, listed, being fixed or fixed - the course
-   is `duplicate`, with that issue's id. Where it is another issue, whose root cause - the one defect a fix corrects -
-   is that of an issue taken before yours that is being triaged or being fixed, the course is `join`, with that issue's
-   id: one fix settles both, and the run's recovery gives it that issue's. Say in why the cause the two share, and what
-   shows it.
+3. Where the issues taken before yours hold it - the same cause at the same place, listed, being fixed or fixed - the
+   course is `duplicate`, with that issue's id. Where it is another issue, whose root cause - the one defect a fix
+   corrects - is that of an issue taken before yours that is being triaged, being fixed or fixed, the course is `join`,
+   with that issue's id: one fix settles both, and the run's recovery gives it that issue's - or, where that fix is done
+   already, a fix of its own, told what that one did. Say in why the cause the two share, and what shows it.
 4. Otherwise test it, in this order; the first that holds makes the course `fix`:
    - **blocks**: the reporting step said it cannot do its own work because of it, and your check confirms it.
    - **related**: it is in a path the plan's items change or depend on, or in the behaviour the request asks for.

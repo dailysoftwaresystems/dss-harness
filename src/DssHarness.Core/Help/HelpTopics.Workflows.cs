@@ -255,10 +255,11 @@ public static partial class HelpTopics
         builder.AppendLine("pull request's body and the handoff. Where a workflow has such a step, every other reasoning step");
         builder.AppendLine("names it, so no issue is lost; and each is told, at the end of its prompt, every issue the run");
         builder.AppendLine("holds where it starts - each one's id, what became of it, its title and where it is - and reports");
-        builder.AppendLine("one again only where it stops its own work. The triage is told them too, its own left out, with");
-        builder.AppendLine("the ids of those it may join, and names by its id the one its issue repeats (duplicate, in");
-        builder.AppendLine("duplicates) or whose root cause it shares (join, in joins) - only one taken before its own, or the");
-        builder.AppendLine("step fails, so no two issues ever name each other.");
+        builder.AppendLine("one again only where it stops its own work. The triage is told those taken before its own, with");
+        builder.AppendLine("the ids of those it may join - being triaged, being fixed or fixed - and names by its id the one");
+        builder.AppendLine("its issue repeats (duplicate, in duplicates) or whose root cause it shares (join, in joins) - only");
+        builder.AppendLine("one taken before its own, or the step fails, so no two issues ever name each other, and of two");
+        builder.AppendLine("raised together the later names the earlier.");
         builder.AppendLine();
         builder.AppendLine("An issue sent to fix is the recovery's at once, its visit beside any other at work - save one a");
         builder.AppendLine("step of a visit of the recovery reported, which waits for that visit to end, for the recovery");
@@ -280,8 +281,9 @@ public static partial class HelpTopics
         builder.AppendLine("diagnosis began after the join reads every issue joined to it as source.joined, each with its");
         builder.AppendLine("id, its end settling all of them, run.preExisting saying each 'fixed with <id>' and a step one");
         builder.AppendLine("of them stopped running again. One that joined while a visit of that fix was diagnosing takes a");
-        builder.AppendLine("visit of its own once that visit has fixed it, which reads what it did as source.joinedTo; and");
-        builder.AppendLine("where the issue it joined ends without a fix, it is triaged again on its own. Each visit counts");
+        builder.AppendLine("visit of its own once that visit has fixed it, and one joined to an issue fixed already takes");
+        builder.AppendLine("one at once, each reading what that fix did as source.joinedTo; and where the issue it joined");
+        builder.AppendLine("ends without a fix, it is triaged again on its own. Each visit counts");
         builder.AppendLine("against the run's limits as every step does.");
         builder.AppendLine();
         builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");

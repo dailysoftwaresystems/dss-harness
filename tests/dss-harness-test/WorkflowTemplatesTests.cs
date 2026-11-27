@@ -1318,9 +1318,10 @@ public sealed class WorkflowTemplatesTests
 
     /// <summary>
     /// The workflows help, the README and the architecture say how issues of one root cause take one fix: the ids every
-    /// step told the issues reads, the join a triage answers, refused where it names an issue taken after its own; the
-    /// joined issue going with the fix it joined, read by its visit, settled by its end and said fixed with it; one that
-    /// joined while a visit was diagnosing taking its own after; and one whose joined fix ended without it triaged again.
+    /// step told the issues reads, a triage told only those taken before its own, the join a triage answers - to one being
+    /// triaged, being fixed or fixed - refused where it names an issue taken after its own; the joined issue going with the
+    /// fix it joined, read by its visit, settled by its end and said fixed with it; one that joined while a visit was
+    /// diagnosing, or to one fixed already, taking its own; and one whose joined fix ended without it triaged again.
     /// </summary>
     [Fact]
     public void TheHelpTheReadmeAndTheArchitecture_SayHowIssuesOfOneRootCauseTakeOneFix()
@@ -1330,20 +1331,24 @@ public sealed class WorkflowTemplatesTests
         var architecture = Prose.Document("docs", "architecture.md");
 
         Assert.Contains(
-            "The triage is told them too, its own left out, with the ids of those it may join, and names by its id the one its issue repeats (duplicate, in duplicates) or whose root cause it shares (join, in joins) - only one taken before its own, or the step fails, so no two issues ever name each other.",
+            "The triage is told those taken before its own, with the ids of those it may join - being triaged, being fixed or fixed - and names by its id the one its issue repeats (duplicate, in duplicates) or whose root cause it shares (join, in joins) - only one taken before its own, or the step fails, so no two issues ever name each other, and of two raised together the later names the earlier.",
             help,
             StringComparison.Ordinal);
         Assert.Contains(
             "An issue joined to another, being triaged or being fixed, takes no visit of its own: it goes with that issue's fix - waiting for its triage, where it is still triaged - and a visit whose diagnosis began after the join reads every issue joined to it as source.joined, each with its id, its end settling all of them, run.preExisting saying each 'fixed with <id>' and a step one of them stopped running again. "
-                + "One that joined while a visit of that fix was diagnosing takes a visit of its own once that visit has fixed it, which reads what it did as source.joinedTo; and where the issue it joined ends without a fix, it is triaged again on its own.",
+                + "One that joined while a visit of that fix was diagnosing takes a visit of its own once that visit has fixed it, and one joined to an issue fixed already takes one at once, each reading what that fix did as source.joinedTo; and where the issue it joined ends without a fix, it is triaged again on its own.",
             help,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Issues of one root cause take one fix: a triage that finds its issue's cause is that of an issue taken before it, being triaged or being fixed, answers `join` with that issue's id, and its issue takes no visit of its own.",
+            "Issues of one root cause take one fix: a triage that finds its issue's cause is that of an issue taken before it, being triaged, being fixed or fixed, answers `join` with that issue's id. Joined to one being triaged or being fixed, its issue takes no visit of its own:",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
-            "One that joins while a visit of that fix is already diagnosing takes a visit of its own once that visit has fixed it, told what it fixed; and where the issue it joined ends without a fix, it is triaged again on its own.",
+            "the triage is told those taken before its own, and names by its id the issue its own repeats or whose root cause it shares - never one taken after it, which is triaged after it and names it where it repeats it, so of two raised together the later names the earlier, and neither is lost.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "One that joins while a visit of that fix is already diagnosing takes a visit of its own once that visit has fixed it, told what it fixed, and one that joins an issue fixed already takes one at once, told the same; and where the issue it joined ends without a fix, it is triaged again on its own.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1352,6 +1357,10 @@ public sealed class WorkflowTemplatesTests
             StringComparison.Ordinal);
         Assert.Contains(
             "An issue whose triage answers `join` takes no visit of its own: it goes with the fix of the issue it joined, read from the run's state alone (`FlowCoordinator.JoiningOf`,",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A triage is told, where it starts, only those it may name - each taken before its own (`TakenBefore`), the tally's whose triage was and those being triaged - with the ids of those it may join (`JoinableBy`: of those, each whose issue had not ended without a fix as it began, `EndedWithoutAFixBefore` - being triaged, being fixed or fixed), both read from the rules its answer is refused by,",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1410,12 +1419,15 @@ public sealed class WorkflowTemplatesTests
 
         var diagnose = Prose.Words(WorkflowTemplates.TextOf("prompts/diagnose.md")!);
         Assert.Contains("which this visit's fix settles too - each with its id, title, description, where and proof; empty where none is: {source.joined}", diagnose, StringComparison.Ordinal);
+        Assert.Contains("Where its own triage joined it to another issue whose fix was already being diagnosed, or was done, that fix is done:", diagnose, StringComparison.Ordinal);
         Assert.Contains("start from the tree they left; empty otherwise: {source.joinedTo}", diagnose, StringComparison.Ordinal);
         Assert.Contains("that the proof no longer shows the issue - nor the proof of any issue joined to it.", diagnose, StringComparison.Ordinal);
 
         var triage = Prose.Words(WorkflowTemplates.TextOf("prompts/pre-existing.md")!);
         Assert.DoesNotContain("{run.preExisting}", triage, StringComparison.Ordinal);
-        Assert.Contains("is given at the end of this prompt, each with its id, what became of it, its title and where, with the ids of those yours may join", triage, StringComparison.Ordinal);
+        Assert.Contains("Every issue the run took before yours - those still being triaged among them - is given at the end of this prompt, each with its id, what became of it, its title and where, with the ids of those yours may join", triage, StringComparison.Ordinal);
+        Assert.Contains("An issue taken after yours is not among them: it is triaged after yours, and names yours where it repeats it.", triage, StringComparison.Ordinal);
+        Assert.Contains("is that of an issue taken before yours that is being triaged, being fixed or fixed, so that one fix settles both: its fix is that issue's, and the run fixes it there - or, where that fix is done already, gives yours a fix of its own, told what that one did;", triage, StringComparison.Ordinal);
         Assert.Contains("the id it duplicates, where it does; and the id it joins, where it does.", triage, StringComparison.Ordinal);
     }
 
