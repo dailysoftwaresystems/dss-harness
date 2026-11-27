@@ -4654,18 +4654,31 @@ one check of a schema's text. The question is raised at
 once with its recommendation marked sought, and the session does not end while the advice runs
 (`FlowCoordinator.TakeAdviceAsync`, the loop's wait); an answer ends the asking (`TakeAnswer` dropping it, the
 recommendation `cancelled`), the asking step not admitted again until the advice's runner has ended (the hold
-`FlowWaits.Advice`); a safe pause and a stop end it too (`DeferAdvice`, `BeginHardStop` through the session's advice stop), the
+`FlowWaits.Advice`); a safe pause never ends it, whatever asked for the pause: it finishes as a machine step the pause
+leaves running does, the session waiting for it, and its recommendation is kept (`PauseInOrderAsync` ends no advice), so
+a resume that comes back to a pause - the budget's, whose question is still open (`CheckBudget`) - pays for each advice
+once; a stop ends it (`DeferAdvice` from `ApplyTheStop`, `BeginHardStop` through the session's advice stop), the
 question `deferred`, and a session's end ends and waits for whatever is left (`EndAdviceAsync`); a recommendation
 obtained is written with who gave it and where its records are, none obtained said so, and what every advice spent - an
 ended one's among them, counted from its turns (`AgentRunSpend`) - is counted in the run's spend, each held to what is
-left of the run's dollars as a step is; a bar that cannot be read leaves the question `notObtained` saying why, and a
+left of the run's dollars as a step is, the loop going round once it takes one so an advice that spends the run to its
+budget's reserve pauses it at once (`TakeAdviceAsync` answering true, then `CheckBudget`); a bar that cannot be read leaves the question `notObtained` saying why, and a
 default `recommendations.md` that could not be looked at is never taken for one that is not there
-(`WorkflowNamedFiles.ReadTextIfThere`); an advice owed at a resume - sought by a session a crash ended, or deferred
-while the run was pausing or stopping - is sought once the session is known to go on (`SeekOwedAdvice` after
-`MakeTheHold`), never by a resume refused - a question an earlier build's questions file holds as `notSought` and still
-open among them (`FlowCoordinator.OwesAdvice`). The budget's own question, the run's, is advised once its pause is
-complete and nothing runs, before the session ends (`FlowCoordinator.AdviseTheBudget`): the one reasoning a complete
-pause starts, for the pause holds the question for a person; asked of the run as a whole - `FlowQuestions.RunsOwn` its
+(`WorkflowNamedFiles.ReadTextIfThere`); an advice owed at a resume - sought by a session a crash ended, deferred by a
+stop or by a pause a stop cut short, the budget's own among them - is sought once the session is known to go on
+(`SeekOwedAdvice` after `MakeTheHold`, over `FlowCoordinator.OwedUnsought`), never by a resume refused - a question an
+earlier build's questions file holds as `notSought` and still open among them (`FlowCoordinator.OwesAdvice`, by the one
+rule `FlowAnswerRules.OwesRecommendation`). A question raised while the run is pausing is `deferred`, and a pause of any
+cause, once complete and nothing runs, advises before the session ends every open question still owing its
+recommendation that no advice under way seeks (`FlowCoordinator.AdviseThePause`) - the one reasoning a complete pause
+starts, for the pause leaves those questions to a person - the budget's own question, the run's, raised there first where
+the pause is the budget's. A person's answer is held to the recommendation by the one rule the command and the engine
+share (`FlowAnswerRules.Unrecommended`): an answer to an open question still owing its recommendation that no advisor
+seeks now is refused, nothing answered, and `abort` taken - by `answer-orchestrator` before anything of the run is
+touched where no engine runs it (13, naming `resume-orchestrator`, which seeks it first), and by the engine as it weighs
+a person's answer (`TryAnswer`): between sessions, as a session begins and where a stop ends it, naming the resume, and
+while a pause under way defers it, naming the pause's completion; an answer given while the advisor works is taken and
+ends the asking. The budget's own question is asked of the run as a whole - `FlowQuestions.RunsOwn` its
 instance, so its records sit under `steps/run/advice/<n>/` and `{question.step}` reads `run`, no agent's tree held, and
 `{question.record}` the run's facts as `FlowStatus.Facts` gives them (`AdvisorRunner`); held to no share of the budget it
 asks about (`FlowAdvisorCall.BudgetLeftUsd` null), for the spent budget never stops the recommendation on spending
@@ -5201,8 +5214,8 @@ step that never ended, nor one its scope never drew. What the session's start wr
 order made and each with the run as it stood, until it is known the session goes on: a resume beside
 an open question is refused only where nothing can run until a question is answered, and then it has
 written nothing - no event, no attempt, no state; a session an answer began, one whose budget
-question is open, and one beside a question still owing its recommendation - deferred by a pause or a
-stop, left sought by a crash, or never sought in a questions file an earlier build wrote
+question is open, and one beside a question still owing its recommendation - deferred by a stop or by a
+pause a stop cut short, left sought by a crash, or never sought in a questions file an earlier build wrote
 (`FlowCoordinator.OwesAdvice`), which `SeekOwedAdvice` seeks - are never refused, and end paused on the
 question left. A stop asked between
 sessions - `abort` answered with no engine running the run - ends the session it begins where the run
@@ -5231,7 +5244,8 @@ next; what a step spent that came late is counted. Every answer handed over is w
 (`FlowCoordinator.AnswerHandedOver`), whether a session's loop or the inbox taken between two drives
 meets it, and what became of it is written into `questions.json` under its inbox entry's id before
 anything else is said of it: an answer taken carries the id in who gave it (`by.inbox`), and one the
-run does not take - its question no longer open, or it changes an answer already given - is kept in
+run does not take - its question no longer open, its question still owing its recommendation with no advisor
+seeking it (`FlowAnswerRules.Unrecommended`), or it changes an answer already given - is kept in
 the file's `refused` list, then recorded as an `answer` event naming why. An answer a session weighed
 leaves the inbox only once what became of it is written: one weighed at a session's start, whose writes
 are held until it is known the session goes on, is settled when they are made, and handed back - left in

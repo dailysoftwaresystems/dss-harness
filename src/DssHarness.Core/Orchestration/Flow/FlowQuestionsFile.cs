@@ -27,8 +27,9 @@ public sealed record FlowQuestionOption(string Answer, string Does, bool Text = 
 /// where there is none. Nothing is put in a person's place.
 /// </summary>
 /// <param name="State">
-/// <c>given</c>; <c>sought</c> while the advisor runs; <c>deferred</c> where a pause or a stop came first, sought again at
-/// the resume; <c>cancelled</c> where an answer came while the advisor ran; <c>notObtained</c> where it was sought and none
+/// <c>given</c>; <c>sought</c> while the advisor runs; <c>deferred</c> where the question was raised while the run was
+/// pausing - sought once the pause is complete - or a stop ended its advice or came first, sought again at the resume;
+/// <c>cancelled</c> where an answer came while the advisor ran; <c>notObtained</c> where it was sought and none
 /// was had; or <c>notSought</c> where none has been sought yet - a question its configuration or the run's input answered
 /// at once, which no person was asked. A <c>notSought</c> an earlier build wrote with why none was sought for a question
 /// still open - its orchestrator named no advisor, the advisor's kinds left the question's kind out, the budget's own -
@@ -289,6 +290,55 @@ public static class FlowAnswerRules
     /// <summary>The text an answer is given, as every record holds it: none where it is blank.</summary>
     /// <param name="text">The text as it was given.</param>
     public static string? TextOf(string? text) => string.IsNullOrWhiteSpace(text) ? null : text;
+
+    /// <summary>
+    /// Whether a question of <paramref name="kind"/> carries its recommendation within it and is never put to the advisor:
+    /// an agent's <c>ask</c>, and a <c>pause</c> step's that shows an upstream step's questions.
+    /// </summary>
+    /// <param name="kind">The question's kind.</param>
+    /// <param name="agentQuestions">How many questions an agent or a step's output wrote into it.</param>
+    public static bool CarriesItsOwn(string kind, int agentQuestions) => kind == "ask" || agentQuestions > 0;
+
+    /// <summary>
+    /// Whether a question still owes the recommendation it is to be answered with: none sought yet, one a session that
+    /// ended left sought, or one deferred by a pause under way or a stop - never one given, obtained or not, nor an
+    /// agent's own question, which carries its own (<see cref="CarriesItsOwn"/>). The one owner of the rule: the engine
+    /// seeks advice by it, and a person's answer is held to it (<see cref="Unrecommended"/>).
+    /// </summary>
+    /// <param name="kind">The question's kind.</param>
+    /// <param name="recommendation">The recommendation it carries; null, as an older questions file may hold it, reads as none sought.</param>
+    /// <param name="agentQuestions">How many questions an agent or a step's output wrote into it.</param>
+    public static bool OwesRecommendation(string kind, FlowRecommendation? recommendation, int agentQuestions)
+        => (recommendation ?? FlowRecommendation.NotSought).State is "notSought" or "sought" or "deferred"
+            && !CarriesItsOwn(kind, agentQuestions);
+
+    /// <summary>
+    /// Why a person's answer to the open question <paramref name="question"/> is not taken while it owes its recommendation
+    /// and no advisor is seeking it now; null where it is taken. Every question is answered recommended: an answer given
+    /// while the advisor works is taken, and ends the asking, but one given while nothing seeks the recommendation - between
+    /// sessions, where no advisor runs, or while a pause under way defers it - is refused, nothing answered, for the resume,
+    /// or the pause once it is complete, seeks it first. <c>abort</c> is taken whatever the recommendation's state: it
+    /// settles nothing of the question, which stays open with its recommendation owed. The command, before anything of the
+    /// run is touched, and the engine, as it weighs a person's answer, hold an answer to this one rule.
+    /// </summary>
+    /// <param name="run">The run's name, for the words; null where the run was given none.</param>
+    /// <param name="question">The question's id.</param>
+    /// <param name="answer">The answer given.</param>
+    /// <param name="owedUnsought">Whether the question owes its recommendation (<see cref="OwesRecommendation"/>) and no advisor is seeking it now.</param>
+    /// <param name="pausing">Whether a session of the run is pausing, which seeks the recommendation once its pause is complete; false between sessions, as a session begins, and where a stop ends it.</param>
+    public static string? Unrecommended(string? run, string question, string answer, bool owedUnsought, bool pausing)
+    {
+        if (!owedUnsought || answer == "abort")
+        {
+            return null;
+        }
+
+        var named = run is { Length: > 0 } ? $"question '{question}' of run '{run}'" : $"question '{question}'";
+
+        return pausing
+            ? $"{named} still owes the recommendation it is answered with, which the run seeks once its pause is complete, so nothing was answered; answer it then, and 'abort' is taken now"
+            : $"{named} still owes the recommendation it is answered with, and no advisor seeks one between sessions, so nothing was answered; resume-orchestrator seeks it first, and 'abort' is taken now";
+    }
 
     /// <summary>
     /// Why the set <paramref name="set"/> can have its answer changed no more; null where it can. A set is changed one

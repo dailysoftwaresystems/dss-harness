@@ -40,6 +40,13 @@ public sealed class FlowAdviceTests
             return this;
         }
 
+        /// <summary>Answers <paramref name="step"/> by its script, which sees the whole run and ends when the test lets it.</summary>
+        public FakeRunner OnAsync(string step, Func<FlowStepRun, Task<FlowStepResult>> script)
+        {
+            _scripts[step] = script;
+            return this;
+        }
+
         /// <inheritdoc/>
         public Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
             => _scripts.GetValueOrDefault(run.Step.Name, _ => Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)))(run);
@@ -116,18 +123,38 @@ public sealed class FlowAdviceTests
         public bool WritesTree(string runner) => false;
     }
 
-    /// <summary>The run's records as a test reads them: nothing kept but the last snapshot written, and every question as last written.</summary>
+    /// <summary>The run's records as a test reads them: the last snapshot written, the kind of every change, and the answers refused as last written.</summary>
     private sealed class Records : IFlowRecords
     {
+        private readonly List<FlowChangeKind> _kinds = [];
+
         /// <summary>The run as the last change wrote it.</summary>
         public FlowSnapshot? Last { get; private set; }
 
+        /// <summary>Every answer handed over that the run refused, as the questions were last written.</summary>
+        public IReadOnlyList<FlowRefusedAnswer> Refused { get; private set; } = [];
+
+        /// <summary>Whether a change of <paramref name="kind"/> was written.</summary>
+        public bool Saw(FlowChangeKind kind)
+        {
+            lock (_kinds)
+            {
+                return _kinds.Contains(kind);
+            }
+        }
+
         public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
-            => Last = snapshot;
+        {
+            lock (_kinds)
+            {
+                _kinds.Add(kind);
+            }
+
+            Last = snapshot;
+        }
 
         public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
-        {
-        }
+            => Refused = refused ?? [];
 
         public void Updates(FlowUpdatesFile updates)
         {
@@ -369,30 +396,42 @@ public sealed class FlowAdviceTests
     }
 
     /// <summary>
-    /// A question answered while its recommendation is still owed - deferred by a pause, or sought by a session a crash
-    /// ended - says it is owed no longer: no advice is sought for a question that is answered.
+    /// A person answers a question recommended: between sessions no advisor runs, so an answer to a question still owing
+    /// its recommendation - here one a stop deferred - is refused, nothing answered and the recommendation still owed, the
+    /// refusal naming resume-orchestrator, which seeks it first; abort is taken all the same, and settles nothing of the
+    /// question, which stays open owing its recommendation.
     /// </summary>
     [Fact]
-    public async Task AQuestionAnsweredWhileItsRecommendationIsOwed_SaysItIsOwedNoLonger()
+    public async Task AnAnswerBetweenSessions_ToAQuestionOwingItsRecommendation_IsRefused_AndAbortIsTaken()
     {
         var held = new HeldAdvisor();
         held.TornDown.SetResult();
         var advisor = new Advisor((_, token) => held.AdviseAsync(token));
-        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), runName: "r1", advisor: advisor);
 
         var session = coordinator.RunAsync(Token);
         await TestEventuallyAsync(() => advisor.Asked.Count == 1);
-        coordinator.RequestPause("command");
+        coordinator.RequestStop();
         _ = await session.WaitAsync(Bound, Token);
 
         var open = coordinator.OpenQuestions.Single();
         Assert.Equal("deferred", open.Recommendation.State);
 
-        Assert.True(coordinator.TryAnswer(open.Id, "retry", null, out _));
-
+        Assert.False(coordinator.TryAnswer(open.Id, "retry", null, out var problem));
         Assert.Equal(
-            new FlowRecommendation("cancelled", Why: "no recommendation: the question was answered by a person before one was obtained"),
-            coordinator.Questions.Single(question => question.Id == open.Id).Recommendation);
+            "question 'q1' of run 'r1' still owes the recommendation it is answered with, and no advisor seeks one between sessions, so nothing was answered; resume-orchestrator seeks it first, and 'abort' is taken now",
+            problem);
+
+        // Nothing was answered: the question is open as it was, its recommendation still owed.
+        var refused = coordinator.OpenQuestions.Single();
+        Assert.Equal((open.Id, 0, "deferred"), (refused.Id, refused.Given.Count, refused.Recommendation.State));
+
+        Assert.True(coordinator.TryAnswer(open.Id, "abort", null, out var none));
+        Assert.Null(none);
+
+        var aborted = coordinator.Questions.Single();
+        Assert.Equal(("open", "abort", "deferred"), (aborted.State, aborted.Given.Single().Answer, aborted.Recommendation.State));
+        Assert.Single(advisor.Asked);
     }
 
     /// <summary>What an advice spent - in dollars, and every token of every kind - is counted against the run's budget.</summary>
@@ -407,6 +446,28 @@ public sealed class FlowAdviceTests
 
         Assert.Equal(FlowRunStatus.Paused, end.Status);
         Assert.Equal((0.25, 4800L), (records.Last!.Spent.Usd, records.Last.Spent.Tokens));
+    }
+
+    /// <summary>
+    /// An advice that spends the run to its budget's reserve pauses the run as it is taken, while a machine step still
+    /// runs - never only once that step ends and wakes the loop: what it spent is weighed against the budget before the
+    /// loop waits again.
+    /// </summary>
+    [Fact]
+    public async Task AnAdviceThatSpendsTheRunToItsReserve_PausesItAtOnce_WhileAMachineStepStillRuns()
+    {
+        var (coordinator, records, _, fold, _) = DrainingBudgetPause(holding: false);
+
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => records.Saw(FlowChangeKind.PauseBegan));
+
+        Assert.Equal(FlowInstanceState.Running, coordinator.Instances["folding"].State);
+        Assert.Equal(45.10, records.Last!.Spent.Usd);
+
+        fold.SetResult();
+        var end = await session.WaitAsync(Bound, Token);
+
+        Assert.Equal((FlowRunStatus.Paused, "budget"), (end.Status, end.Pause!.Cause));
     }
 
     /// <summary>
@@ -477,28 +538,203 @@ public sealed class FlowAdviceTests
     }
 
     /// <summary>
-    /// A safe pause while the advisor runs ends it - an advisor is a reason step, and none runs past a pause - its question
-    /// saying the recommendation is sought at the resume.
+    /// A safe pause while the advisor runs never ends it: the advice finishes as a machine step the pause leaves running
+    /// does - its token never ended, the session waiting for it past the pause's completion - and its recommendation is
+    /// kept, so the question the pause leaves to a person is recommended before the session ends, and the person's
+    /// answer between sessions is taken.
     /// </summary>
     [Fact]
-    public async Task APauseWhileTheAdvisorRuns_EndsIt_ItsQuestionSayingItIsSoughtAtTheResume()
+    public async Task APauseWhileTheAdvisorRuns_LetsItFinish_AndTheQuestionIsRecommendedBeforeTheSessionEnds()
     {
-        var held = new HeldAdvisor();
-        held.TornDown.SetResult();
-        var advisor = new Advisor((_, token) => held.AdviseAsync(token));
-        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
+        var gate = new TaskCompletionSource<FlowAdvice>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var advisor = new Advisor((_, token) => gate.Task.WaitAsync(token));
+        var records = new Records();
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
 
         var session = coordinator.RunAsync(Token);
         await TestEventuallyAsync(() => advisor.Asked.Count == 1);
         coordinator.RequestPause("command");
+        await TestEventuallyAsync(() => records.Saw(FlowChangeKind.PauseCompleted));
 
+        // The pause is complete and the advice still runs: its token is not ended, and the session waits for it.
+        Assert.False(advisor.Tokens.Single().IsCancellationRequested);
+        Assert.False(session.IsCompleted);
+        Assert.Equal("sought", coordinator.OpenQuestions.Single().Recommendation.State);
+
+        gate.SetResult(new FlowAdvice("more", "the step was nearly done", null, Model: "claude-opus-5-5", Directory: "steps/think/advice/1"));
         var end = await session.WaitAsync(Bound, Token);
+        var question = coordinator.OpenQuestions.Single();
 
-        Assert.Equal(FlowRunStatus.Paused, end.Status);
-        Assert.True(advisor.Tokens.Single().IsCancellationRequested);
+        Assert.Equal((FlowRunStatus.Paused, "command"), (end.Status, end.Pause!.Cause));
+        Assert.Single(advisor.Asked);
         Assert.Equal(
-            new FlowRecommendation("deferred", Why: "the run paused while the advisor ran: the recommendation is sought when the run is resumed with this question still open"),
-            coordinator.OpenQuestions.Single().Recommendation);
+            new FlowRecommendation("given", "more", null, "the step was nearly done", "advisor", "advisor", "claude-opus-5-5", "steps/think/advice/1"),
+            question.Recommendation);
+
+        Assert.True(coordinator.TryAnswer(question.Id, "fail", null, out _));
+        Assert.Equal("fail", coordinator.Questions.Single().Given.Single().Answer);
+    }
+
+    /// <summary>
+    /// An answer a person gives within a live session while the advisor still works is taken, a pause under way or not:
+    /// it ends the asking, the question saying it was answered while the advisor ran - the decision that a person who is
+    /// there never waits for the recommendation stands beside the refusal of an answer nothing recommends.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerWhileAPausedRunsAdvisorWorks_IsTaken_AndEndsTheAsking()
+    {
+        var held = new HeldAdvisor();
+        held.TornDown.SetResult();
+        var advisor = new Advisor((_, token) => held.AdviseAsync(token));
+        var records = new Records();
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
+
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => advisor.Asked.Count == 1);
+        coordinator.RequestPause("command");
+        await TestEventuallyAsync(() => records.Saw(FlowChangeKind.PauseCompleted));
+        var open = coordinator.OpenQuestions.Single();
+
+        Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAnswerAsync(open.Id, "fail", inbox: "e1").WaitAsync(Bound, Token));
+        var end = await session.WaitAsync(Bound, Token);
+        var answered = coordinator.Questions.Single();
+
+        // The step ends failed by the answer, and the run stays paused, its failure owed to the resume.
+        Assert.Equal((FlowRunStatus.Paused, FlowInstanceState.Failed), (end.Status, coordinator.Instances["think"].State));
+        Assert.True(advisor.Tokens.Single().IsCancellationRequested);
+        Assert.Equal(("answered", "fail"), (answered.State, answered.Given.Single().Answer));
+        Assert.Equal(
+            new FlowRecommendation("cancelled", Why: "no recommendation: the question was answered by a person while the advisor ran, and its asking was ended"),
+            answered.Recommendation);
+        Assert.Empty(records.Refused);
+    }
+
+    /// <summary>
+    /// A budget whose pause drains: a question a machine step the pause left running raises meanwhile is deferred, and
+    /// once the pause is complete the budget's question is raised and every open question owing its recommendation is
+    /// advised before the session ends - the deferred one with it - so the person the pause leaves them to is asked each
+    /// recommended.
+    /// </summary>
+    [Fact]
+    public async Task EveryQuestionABudgetsPauseLeaves_IsRecommended_OnceThePauseIsComplete()
+    {
+        var (coordinator, records, advisor, fold, _) = DrainingBudgetPause(holding: false);
+
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => records.Saw(FlowChangeKind.PauseCompleted));
+        fold.SetResult();
+        var end = await session.WaitAsync(Bound, Token);
+        var open = coordinator.OpenQuestions;
+
+        Assert.Equal((FlowRunStatus.Paused, "budget"), (end.Status, end.Pause!.Cause));
+        Assert.Equal([("q1", "pause"), ("q2", "foldConflicts"), ("q3", "runBudget")], open.Select(question => (question.Id, question.Kind)));
+        Assert.Equal(
+            [
+                new FlowRecommendation("given", "go", null, "advised for pause", "advisor", "advisor"),
+                new FlowRecommendation("given", "retry", null, "advised for foldConflicts", "advisor", "advisor"),
+                new FlowRecommendation("given", "more", null, "advised for runBudget", "advisor", "advisor"),
+            ],
+            open.Select(question => question.Recommendation));
+        // The two the complete pause seeks are asked side by side, in no order of their own.
+        Assert.Equal("pause", advisor.Asked[0].Kind);
+        Assert.Equal(["foldConflicts", "runBudget"], advisor.Asked.Skip(1).Select(call => call.Kind).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// Within a live session that is pausing, an answer to a question whose recommendation the pause defers - no advisor
+    /// seeks it until the pause is complete - is refused, nothing answered, the refusal kept under its inbox entry and
+    /// saying the run seeks the recommendation once its pause is complete; once the advice the pause left running has
+    /// ended, the deferred question is advised, and the session ends with it recommended.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerWhileAPauseDefersItsRecommendation_IsRefused_UntilThePauseRecommendsIt()
+    {
+        var (coordinator, records, advisor, fold, held) = DrainingBudgetPause(holding: true);
+
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => records.Saw(FlowChangeKind.PauseCompleted));
+        fold.SetResult();
+        await TestEventuallyAsync(() => coordinator.OpenQuestions.Any(question => question.Kind == "foldConflicts"));
+        var deferred = coordinator.OpenQuestions.Single(question => question.Kind == "foldConflicts");
+
+        Assert.Equal(
+            new FlowRecommendation("deferred", Why: "the run is pausing, and no reason step is started before its pause is complete: the recommendation is sought then, or when the run is resumed where a stop came first"),
+            deferred.Recommendation);
+        Assert.Equal(FlowHandedOver.Refused, await coordinator.OfferAnswerAsync(deferred.Id, "fail", inbox: "e1").WaitAsync(Bound, Token));
+        Assert.Equal(
+            ("e1", "q3", "fail", "question 'q3' of run 'r1' still owes the recommendation it is answered with, which the run seeks once its pause is complete, so nothing was answered; answer it then, and 'abort' is taken now"),
+            (records.Refused.Single().Inbox, records.Refused.Single().Question, records.Refused.Single().Answer, records.Refused.Single().Why));
+        Assert.DoesNotContain(advisor.Asked, call => call.Kind == "foldConflicts");
+
+        held!.SetResult();
+        var end = await session.WaitAsync(Bound, Token);
+        var advised = coordinator.Questions.Single(question => question.Id == deferred.Id);
+
+        Assert.Equal((FlowRunStatus.Paused, "budget"), (end.Status, end.Pause!.Cause));
+        Assert.Equal(("open", "given", 0), (advised.State, advised.Recommendation.State, advised.Given.Count));
+    }
+
+    /// <summary>
+    /// A resume that comes back to the budget's pause - its question still open - pays for each advice it seeks once: a
+    /// failure the pause left owed is raised at the resume and its advisor started, the pause the budget's open question
+    /// asks for again never ends it, and its recommendation is kept, so the next resume seeks nothing.
+    /// </summary>
+    [Fact]
+    public async Task AResumeThatComesBackToTheBudgetsPause_PaysForEachAdviceOnce_AndKeepsIt()
+    {
+        var definition = Parse("""
+            name: flow
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            budget:
+              usd: 50
+            steps:
+              - name: gate
+                type: build
+                onFailure: pause
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var gateStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gateFails = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .OnAsync("gate", async _ =>
+            {
+                gateStarted.TrySetResult();
+                await gateFails.Task;
+                return FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "a leg failed");
+            })
+            .OnAsync("think", async run =>
+            {
+                await gateStarted.Task;
+                run.Events.Used(new FlowTurnSpend(new DssHarness.Core.Agents.AgentUsage(1_000, 0, 0, 0, 0, 0), 45.10));
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        var advisor = new Advisor(call => Task.FromResult(new FlowAdvice(call.Answers[0].Answer, $"advised for {call.Kind}", null)));
+        var records = new Records();
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
+
+        // The budget's pause drains the build, which fails while it does: its failure is owed to the resume.
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => records.Saw(FlowChangeKind.PauseCompleted));
+        gateFails.SetResult();
+        var first = await session.WaitAsync(Bound, Token);
+
+        Assert.Equal((FlowRunStatus.Paused, "budget"), (first.Status, first.Pause!.Cause));
+        Assert.Equal(["runBudget"], coordinator.OpenQuestions.Select(question => question.Kind));
+
+        // The resume raises the failure and seeks its advice; the budget's open question pauses the run again, twice.
+        var second = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+        var third = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+        var failure = coordinator.OpenQuestions.Single(question => question.Kind == "failure");
+
+        Assert.Equal((FlowRunStatus.Paused, "budget", FlowRunStatus.Paused, "budget"), (second.Status, second.Pause!.Cause, third.Status, third.Pause!.Cause));
+        Assert.Equal(["runBudget", "failure"], advisor.Asked.Select(call => call.Kind));
+        Assert.Equal(new FlowRecommendation("given", "retry", null, "advised for failure", "advisor", "advisor"), failure.Recommendation);
     }
 
     /// <summary>
@@ -740,6 +976,62 @@ public sealed class FlowAdviceTests
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Empty(advisor.Asked);
         Assert.Equal(FlowRecommendation.NotSought, coordinator.Questions.Single().Recommendation);
+    }
+
+    /// <summary>
+    /// A run named 'r1' whose budget's reserve the advice of a pause step's question meets while a fold still runs: the
+    /// budget's pause leaves the fold to finish, held until the test lets it end, and it then asks of its conflicting
+    /// merge. Where <paramref name="holding"/>, a second pause step asks beside the first, its advice held until the test
+    /// lets it answer, so the session lives on past the fold's question. The advisor recommends each other question's
+    /// first answer at once.
+    /// </summary>
+    private static (FlowCoordinator Coordinator, Records Records, Advisor Advisor, TaskCompletionSource Fold, TaskCompletionSource? Held) DrainingBudgetPause(bool holding)
+    {
+        var definition = Parse($"""
+            name: flow
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            budget:
+              usd: 50
+            steps:
+              - name: work
+                type: create-agent
+                agent: worker.md
+              - name: folding
+                type: fold
+                of: work
+                dependsOn: [work]
+              - name: approval
+                type: pause
+                question: 'Go on?'
+                options: [go, stay]
+                dependsOn: [work]{(holding ? "\n  - name: check\n    type: pause\n    question: 'Still?'\n    options: [yes, no]\n    dependsOn: [work]" : string.Empty)}
+            """);
+        var fold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = holding ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) : null;
+        var runner = new FakeRunner()
+            .OnAsync("folding", async _ =>
+            {
+                await fold.Task;
+                return FlowStepResult.Standing(new FlowDryRun(RequestStanding.Refused, [], [], [RefusalKind.Conflict], "1 path conflicts") { Conflicting = ["src/a.cs"] });
+            });
+
+        // The approval's advice spends the run to its reserve; the check's waits for the test.
+        var advisor = new Advisor(async call =>
+        {
+            if (call.Instance == "check")
+            {
+                await held!.Task;
+            }
+
+            return new FlowAdvice(call.Answers[0].Answer, $"advised for {call.Kind}", null, Usd: call.Instance == "approval" ? 45.10 : 0);
+        });
+        var records = new Records();
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records, runName: "r1", advisor: advisor);
+
+        return (coordinator, records, advisor, fold, held);
     }
 
     /// <summary>Waits a little at a time for <paramref name="done"/>, failing the test where it does not within ten seconds.</summary>

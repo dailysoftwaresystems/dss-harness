@@ -45,7 +45,11 @@ public interface IFlowService : IUseCase
     /// <param name="cancellationToken">A hard stop of the session: the run ends stopped, in order.</param>
     Task<CommandOutcome> ResumeAsync(string startDirectory, string run, bool json, FlowInterrupts? interrupts = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Answers a question of a run and goes on: handed to the engine where one is running it (<c>inbox.json</c>), else a session of the run's own.</summary>
+    /// <summary>
+    /// Answers a question of a run and goes on: handed to the engine where one is running it (<c>inbox.json</c>), else a
+    /// session of the run's own - refused (13) there, nothing touched, where the question still owes its recommendation,
+    /// which no advisor seeks between sessions: <c>resume-orchestrator</c> seeks it first, and <c>abort</c> is taken.
+    /// </summary>
     /// <param name="startDirectory">The directory the command acts on, and where <paramref name="textFile"/> is read from.</param>
     /// <param name="run">The run.</param>
     /// <param name="answer">The answer, spelled as the question's options spell it.</param>
@@ -595,6 +599,22 @@ public sealed class FlowService(
         }
 
         var takes = FlowAnswerRules.TextOf(text);
+        var engineRuns = _owner.Live(layout) is not null;
+
+        // A question is answered recommended, by the one rule the engine holds a person's answer to: with no engine
+        // running the run no advisor seeks a recommendation, so an answer to a question still owing one is refused
+        // before anything of the run is touched - abort taken - and the resume seeks it first. A running engine weighs
+        // an answer handed to it by the same rule, an advice of its own under way or not.
+        if (!engineRuns
+            && FlowAnswerRules.Unrecommended(
+                run,
+                asked.Id,
+                answer,
+                FlowAnswerRules.OwesRecommendation(asked.Kind, asked.Recommendation, (asked.Questions ?? []).Count),
+                pausing: false) is { } owed)
+        {
+            return Refuse(layout, AnswerCommand, owed, json);
+        }
 
         // Where an engine is running the run, the answer is handed to it and the command returns: it lands in the
         // inbox under an id of its own, the engine takes it at its poll, and no second engine is started. An engine
@@ -603,7 +623,7 @@ public sealed class FlowService(
         // read the inbox, this command is that next session itself, and its answer is the entry it handed over.
         string? handedUnder = null;
 
-        if (_owner.Live(layout) is not null)
+        if (engineRuns)
         {
             handedUnder = FlowInboxAnswer.NewId();
             _store.AddToInbox(layout, new FlowInboxAnswer(handedUnder, asked.Id, answer, _clock.GetUtcNow(), takes));

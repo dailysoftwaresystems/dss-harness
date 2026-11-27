@@ -1586,6 +1586,58 @@ public sealed class FlowServiceTests
         Assert.Equal("'stay' is an answer 'q1' takes with no text; give none", text.Message);
     }
 
+    /// <summary>
+    /// A person answers a question recommended: with no engine running the run no advisor seeks a recommendation, so an
+    /// answer to a question still owing one - here one a crash left sought - is refused (13) before anything of the run is
+    /// touched, its --json the run's document, naming resume-orchestrator, which seeks it first; abort is taken all the
+    /// same, by a session of its own.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerBetweenSessions_ToAQuestionOwingItsRecommendation_IsRefusedBeforeAnythingIsTouched_AndAbortIsTaken()
+    {
+        var (repository, service, _) = await ServiceAsync("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+            """);
+        using var disposed = repository;
+
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        // The questions as a crash while the advisor ran leaves them: the recommendation marked sought.
+        var run = RunOf(repository);
+        var file = JsonNode.Parse(File.ReadAllText(run.QuestionsFile))!;
+        file["questions"]![0]!["recommendation"] = new JsonObject { ["state"] = "sought", ["why"] = "a recommendation is being sought from the advisor" };
+        File.WriteAllText(run.QuestionsFile, file.ToJsonString());
+        var questionsBefore = File.ReadAllText(run.QuestionsFile);
+        var flowBefore = File.ReadAllText(run.FlowFile);
+
+        var refused = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: true, cancellationToken: Token).WaitAsync(Bound, Token);
+        var document = JsonNode.Parse(Assert.Single(refused.Data))!.AsObject();
+        const string Owed = "question 'q1' of run 'r1' still owes the recommendation it is answered with, and no advisor seeks one between sessions, so nothing was answered; resume-orchestrator seeks it first, and 'abort' is taken now";
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(Owed, refused.Message);
+        Assert.Equal((HarnessExit.Refused, Owed, "r1"), (document["exitCode"]!.GetValue<int>(), document["summary"]!.GetValue<string>(), document["run"]!.GetValue<string>()));
+        Assert.Equal(["q1"], document["questions"]!.AsArray().Select(question => question!["id"]!.GetValue<string>()));
+
+        // Nothing of the run was touched: its questions and its state are as they were, and no session began - the
+        // command names its log line alone, never a session's records.
+        Assert.Equal(questionsBefore, File.ReadAllText(run.QuestionsFile));
+        Assert.Equal(flowBefore, File.ReadAllText(run.FlowFile));
+        Assert.Equal([("log", run.LogFile("r1"))], document["records"]!.AsObject().Select(record => (record.Key, record.Value!.GetValue<string>())));
+
+        var aborted = await service.AnswerAsync(repository.Path, "r1", "abort", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var question = Assert.Single(repository.Harness.OrchestrationStore.ReadFlowQuestions(run)!.Questions);
+
+        Assert.Equal(("abort", "person", "answer-orchestrator"), (question.Answers.Single().Answer, question.Answers.Single().By!.Who, question.Answers.Single().By!.Through));
+        Assert.Equal("Stopped", repository.Harness.OrchestrationStore.ReadFlow(run)!.Status);
+        Assert.Equal(HarnessExit.Cancelled, aborted.ExitCode);
+    }
+
     /// <summary>An answer's text file is read relative to the directory the command acts on; one that is not there, and a text given two ways, are usage errors.</summary>
     [Fact]
     public async Task AnAnswersTextFile_IsReadFromTheCommandsDirectory_AndOneMissingIsAUsageError()
