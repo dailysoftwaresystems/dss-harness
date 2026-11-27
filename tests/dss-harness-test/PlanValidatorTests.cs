@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Repository;
 
 namespace DssHarness.Tests;
 
@@ -53,11 +54,15 @@ public sealed class PlanValidatorTests : IDisposable
 
     /// <summary>The check of a plan's items, as the validate-plan step makes it.</summary>
     private async Task<IReadOnlyList<string>> CheckAsync(TempDirectory repository, params JsonNode?[] items)
+        => await CheckAsync(repository, await new HarnessFactory().StartTreeAsync(repository.Path, Token), items);
+
+    /// <summary>The check of a plan's items against <paramref name="startTree"/>, as the validate-plan step of a run that started there makes it.</summary>
+    private static async Task<IReadOnlyList<string>> CheckAsync(TempDirectory repository, TreeDirectories startTree, params JsonNode?[] items)
     {
         var harness = new HarnessFactory();
 
         return new PlanValidator(harness.FileSystem, harness.PathBudget, harness.Platform)
-            .Check(items, await harness.ContextLoader.LoadAsync(repository.Path, Token), "r1", Flow, await harness.StartTreeAsync(repository.Path, Token));
+            .Check(items, await harness.ContextLoader.LoadAsync(repository.Path, Token), "r1", Flow, startTree);
     }
 
     /// <summary>
@@ -305,6 +310,73 @@ public sealed class PlanValidatorTests : IDisposable
         // Each alone: '**/*.cs' owns what the other item owns too.
         Assert.Empty(await CheckAsync(repository, made));
         Assert.Empty(await CheckAsync(repository, wild));
+    }
+
+    /// <summary>
+    /// An entry an item owns or must not touch, written with no trailing separator, that names a directory of the main tree
+    /// the run's start tree does not hold - one an earlier round's fold made - names that one path to every reader of the
+    /// item's paths: the builder's every write beneath it would be refused, and its fold would carry none of it. So the
+    /// check refuses it, in the words every refusal of the reading uses, saying to write it with a trailing separator; a
+    /// directory both trees hold, and the same entry written so, pass.
+    /// </summary>
+    [Fact]
+    public async Task AnEntryNamingADirectoryOnlyTheMainTreeHolds_IsAProblem_SayingToWriteItEndingInASeparator()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var startTree = await harness.StartTreeAsync(repository.Path, Token);
+
+        // The first round's fold made src/feature in the main tree since the run began.
+        repository.WriteFile("src/feature/made.cs", "made by the first round\n");
+        await harness.CommitAllAsync(repository.Path, "the first round", Token);
+
+        var made = Item("made", "src/feature");
+        var kept = Item("kept", "src/two/**");
+        kept["forbiddenPaths"] = new JsonArray("src/feature");
+        var there = Item("there", "src/other");
+
+        const string Said = "'src/feature' names a file of the run's start tree, which the run's lists of paths are read against, and a directory of the main tree: write it 'src/feature/'";
+
+        Assert.Equal(
+            [
+                $"work item 'made' owns 'src/feature', which names nothing beneath it: {Said}",
+                $"work item 'kept' must not touch 'src/feature', which names nothing beneath it: {Said}",
+            ],
+            await CheckAsync(repository, startTree, made, kept, there));
+
+        made["ownedPaths"] = new JsonArray("src/feature/");
+        kept["forbiddenPaths"] = new JsonArray("src/feature/");
+
+        Assert.Empty(await CheckAsync(repository, startTree, made, kept, there));
+    }
+
+    /// <summary>
+    /// Against a start tree that could not be read, every refusal its reading causes says why: an entry read as naming no
+    /// directory - what may be written beneath it - that the main tree holds as one, and a class's home and site beneath
+    /// it, say it after how to write the entry; two items' entries that meet only because every path was taken for a
+    /// directory - where two entries are weighed for meeting - say it too. A refusal the tree did not cause says nothing of it.
+    /// </summary>
+    [Fact]
+    public async Task AgainstAStartTreeThatCouldNotBeRead_EveryRefusalItsReadingCauses_SaysWhy()
+    {
+        var (_, repository) = await RepositoryAsync();
+        var unread = TreeDirectories.NoCommit;
+        var narrow = "no path is taken for a directory of the run's start tree, which could not be read: the run names no commit it started from";
+        var wide = "every path is taken for a directory of the run's start tree, which could not be read: the run names no commit it started from";
+        var classed = Item("a", "src/one", classes: [Class(sites: [Site(), Site("src/one/second.cs", then: "reads-home")], action: "consolidate")]);
+        var wild = Item("b", "src/**/*.cs");
+        var file = Item("c", "src/created/home.cs");
+
+        Assert.Equal(
+            [
+                $"work items 'a' and 'b' both own what 'src/one' and 'src/**/*.cs' match: no file is written by two items, so give it to one; {wide}",
+                $"work item 'a' owns 'src/one', which names nothing beneath it: 'src/one' names a file of the run's start tree, which the run's lists of paths are read against, and a directory of the main tree: write it 'src/one/'; {narrow}",
+                $"work item 'a''s C1 has its home at 'src/one/home.cs', which the item does not own: the home changes, and the item that changes it owns it; 'src/one' names a file: a directory to be made is written 'src/one/'; {narrow}",
+                $"work item 'a''s C1 has its site at 'src/one/second.cs' (reads-home) outside the item: the item owns it, or the class belongs to the item that owns it; 'src/one' names a file: a directory to be made is written 'src/one/'; {narrow}",
+
+                // A file a pattern matches meets it whatever the tree holds: the tree caused none of it.
+                "work items 'b' and 'c' both own what 'src/**/*.cs' and 'src/created/home.cs' match: no file is written by two items, so give it to one",
+            ],
+            await CheckAsync(repository, unread, classed, wild, file));
     }
 
     /// <summary>

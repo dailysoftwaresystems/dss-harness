@@ -63,12 +63,20 @@ public sealed class GlobPattern
     /// </summary>
     private readonly bool _exact;
 
-    private GlobPattern(string[] segments, bool anchored, bool directoriesOnly, bool exact = false)
+    /// <summary>
+    /// What the reading from the root says of the tree it asked, where that tree could not be read and so made the pattern
+    /// name no directory (<see cref="FromRoot"/>): said once after every sentence of <see cref="WrittenFor(IEnumerable{ValueTuple{GlobPattern, string}}, IEnumerable{string}, StringComparison)"/>
+    /// that reading caused; null where the tree was read, or the question was not what may be written beneath it.
+    /// </summary>
+    private readonly string? _unread;
+
+    private GlobPattern(string[] segments, bool anchored, bool directoriesOnly, bool exact = false, string? unread = null)
     {
         _segments = segments;
         _anchored = anchored;
         _directoriesOnly = directoriesOnly;
         _exact = exact;
+        _unread = exact ? unread : null;
     }
 
     /// <summary>
@@ -125,8 +133,14 @@ public sealed class GlobPattern
     /// Whether a path relative to the tree's root, spelled with forward separators, names a directory there: of a run's
     /// lists, the answer of the one tree the run reads them against, its start commit's (<see cref="TreeDirectories"/>).
     /// </param>
+    /// <param name="unread">
+    /// Where that tree could not be read, and <paramref name="namesDirectory"/> answers no for every path - the reading of
+    /// what may be written beneath an entry (<see cref="TreeDirectories.Writing"/>) - what is said of it after every
+    /// sentence of <see cref="WrittenFor(string, string, StringComparison)"/> that reading caused
+    /// (<see cref="TreeDirectories.UnreadForWriting"/>); null where it was read.
+    /// </param>
     /// <exception cref="HarnessException">The entry cannot be read, as <see cref="Problem"/> says why.</exception>
-    public static GlobPattern FromRoot(string entry, Func<string, bool> namesDirectory)
+    public static GlobPattern FromRoot(string entry, Func<string, bool> namesDirectory, string? unread = null)
     {
         ArgumentNullException.ThrowIfNull(namesDirectory);
 
@@ -144,7 +158,8 @@ public sealed class GlobPattern
             segments,
             anchored: true,
             directoriesOnly,
-            exact: !directoriesOnly && !IsPattern(entry) && !namesDirectory(string.Join('/', segments)));
+            exact: !directoriesOnly && !IsPattern(entry) && !namesDirectory(string.Join('/', segments)),
+            unread);
     }
 
     /// <summary>
@@ -154,12 +169,60 @@ public sealed class GlobPattern
     /// is written 'docs/generated/'</c> - or at a depth below the root an entry of one name matched at -
     /// <c>'*.md' names the root's own: '**/*.md' names any depth</c>. The one wording of the change, said by every refusal
     /// the reading from the root causes: a step's writes, a fold's within and the plan's check of a class's home and sites.
+    /// Where the entry names a file because the tree it was read against could not be read, what was said of that tree
+    /// follows (<see cref="FromRoot"/>'s <c>unread</c>).
     /// </summary>
     /// <param name="written">The entry as written.</param>
     /// <param name="path">A path from the root the entry does not match.</param>
     /// <param name="comparison">How names are compared: the case rule of the tree the path is in.</param>
     /// <returns>The sentence; null where the entry matches the path, or would not have reached it either way.</returns>
     public string? WrittenFor(string written, string path, StringComparison comparison = StringComparison.Ordinal)
+        => Said(Saying(written, path, comparison) is { } saying ? [saying] : []);
+
+    /// <summary>
+    /// What each of <paramref name="entries"/> - each read from the root (<see cref="FromRoot"/>), with the entry it was
+    /// read from - says of how to write what it once meant where a path of <paramref name="paths"/> is matched by none of
+    /// them (<see cref="WrittenFor(string, string, StringComparison)"/>), each sentence once, joined by <c>; </c>, and then
+    /// once each what was said of a tree that could not be read, where a sentence was caused by it; null where none says
+    /// anything.
+    /// </summary>
+    /// <param name="entries">The entries, each read and as written.</param>
+    /// <param name="paths">Paths from the root, each one the entries leave out.</param>
+    /// <param name="comparison">How names are compared.</param>
+    public static string? WrittenFor(IEnumerable<(GlobPattern Read, string Written)> entries, IEnumerable<string> paths, StringComparison comparison = StringComparison.Ordinal)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var read = entries.ToList();
+
+        return Said([.. paths.SelectMany(path => read.Select(entry => entry.Read.Saying(entry.Written, path, comparison))).OfType<(string, string?)>()]);
+    }
+
+    /// <summary>
+    /// How to write <paramref name="written"/> - an entry this pattern was read from by <see cref="FromRoot"/>, a path that
+    /// names no directory of the tree it was read against - where it names a directory of another tree its writer meets:
+    /// <c>'src/feature' names a file of the run's start tree, which the run's lists of paths are read against, and a
+    /// directory of the main tree: write it 'src/feature/'</c>, followed by what was said of the start tree where it could
+    /// not be read. What the plan's check says of an entry naming a directory the run made since it began, or one the start
+    /// tree could not say it holds, before a builder's every write beneath it is refused. Null where the entry names a
+    /// directory as it was read, ends in a separator, or is a pattern.
+    /// </summary>
+    /// <param name="written">The entry as written.</param>
+    public string? WrittenForDirectory(string written)
+    {
+        ArgumentNullException.ThrowIfNull(written);
+
+        return _exact
+            ? Said([($"'{written}' names a file of the run's start tree, which the run's lists of paths are read against, and a directory of the main tree: write it '{written.Replace('\\', '/')}/'", _unread)])
+            : null;
+    }
+
+    /// <summary>
+    /// The sentence <see cref="WrittenFor(string, string, StringComparison)"/> says of <paramref name="path"/>, with what
+    /// was said of the tree it was read against where the sentence was caused by that tree being unread; null where it says none.
+    /// </summary>
+    private (string Sentence, string? Unread)? Saying(string written, string path, StringComparison comparison)
     {
         ArgumentNullException.ThrowIfNull(written);
 
@@ -173,33 +236,22 @@ public sealed class GlobPattern
 
         if (_exact && segments.Length > _segments.Length && _segments.Select((name, at) => string.Equals(name, segments[at], comparison)).All(same => same))
         {
-            return $"'{written}' names a file: a directory to be made is written '{entry.TrimEnd('/')}/'";
+            return ($"'{written}' names a file: a directory to be made is written '{entry.TrimEnd('/')}/'", _unread);
         }
 
         return _segments.Length == 1 && !entry.TrimEnd('/').Contains('/', StringComparison.Ordinal) && Parse(written).Matches(path, comparison)
-            ? $"'{written}' names the root's own: '**/{entry}' names any depth"
+            ? ($"'{written}' names the root's own: '**/{entry}' names any depth", null)
             : null;
     }
 
     /// <summary>
-    /// What each of <paramref name="entries"/> - each read from the root (<see cref="FromRoot"/>), with the entry it was
-    /// read from - says of how to write what it once meant where a path of <paramref name="paths"/> is matched by none of
-    /// them (<see cref="WrittenFor(string, string, StringComparison)"/>), each sentence once, joined by <c>; </c>; null where
-    /// none says anything.
+    /// <paramref name="sayings"/> said as one: each sentence once, joined by <c>; </c>, then each thing said of a tree that
+    /// could not be read once, after them; null where there is none.
     /// </summary>
-    /// <param name="entries">The entries, each read and as written.</param>
-    /// <param name="paths">Paths from the root, each one the entries leave out.</param>
-    /// <param name="comparison">How names are compared.</param>
-    public static string? WrittenFor(IEnumerable<(GlobPattern Read, string Written)> entries, IEnumerable<string> paths, StringComparison comparison = StringComparison.Ordinal)
-    {
-        ArgumentNullException.ThrowIfNull(entries);
-        ArgumentNullException.ThrowIfNull(paths);
-
-        var read = entries.ToList();
-        var said = paths.SelectMany(path => read.Select(entry => entry.Read.WrittenFor(entry.Written, path, comparison))).OfType<string>().Distinct(StringComparer.Ordinal).ToList();
-
-        return said.Count == 0 ? null : string.Join("; ", said);
-    }
+    private static string? Said(IReadOnlyList<(string Sentence, string? Unread)> sayings)
+        => sayings.Count == 0
+            ? null
+            : string.Join("; ", sayings.Select(saying => saying.Sentence).Concat(sayings.Select(saying => saying.Unread).OfType<string>()).Distinct(StringComparer.Ordinal));
 
     /// <summary>
     /// <paramref name="segments"/> with each run of <c>**</c> made one: two runs of any number of segments side by side

@@ -1472,7 +1472,7 @@ public sealed class WorkflowTemplatesTests
             workflows,
             StringComparison.Ordinal);
         Assert.Contains(
-            "A step's writes are read from its worktree's root, as a work item's ownedPaths are ('help workflows'): a name with no separator is the root's own, and a path names what is beneath it only where it names a directory, one the run's start tree holds - the tree of the commit the run started from, which no fold changes - or one ending in a separator; a write refused beneath an entry that names a file says a directory to be made is written with a trailing separator, and one at a depth an entry of one name no longer reaches says '**/' reaches any depth.",
+            "A step's writes are read from its worktree's root, as a work item's ownedPaths are ('help workflows'): a name with no separator is the root's own, and a path names what is beneath it only where it names a directory, one the run's start tree holds - the tree of the commit the run started from, which no fold changes - or one ending in a separator; a write refused beneath an entry that names a file says a directory to be made is written with a trailing separator, and one at a depth an entry of one name no longer reaches says '**/' reaches any depth; where the entry names a file because the start tree could not be read, the refusal says why.",
             Prose.Words(DssHarness.Core.Help.HelpTopics.Render("agent-clients")),
             StringComparison.Ordinal);
         Assert.Contains(

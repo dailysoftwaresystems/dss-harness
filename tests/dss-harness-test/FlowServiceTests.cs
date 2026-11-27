@@ -986,6 +986,65 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
+    /// A session whose run's start tree cannot be read - its commit's tree gone from the store, as a pruned commit's or a
+    /// partial clone's that cannot fetch it - warns once why, through the records' warner, and every step is handed that
+    /// tree, which takes no path for a directory where it is what a step may write, every path where two entries meet, and
+    /// says why in each refusal that reading causes. A session that read it warns of nothing.
+    /// </summary>
+    [Fact]
+    public async Task AStartTreeThatCannotBeRead_IsWarnedOfOnce_AndEveryRefusalItCausesSaysWhy()
+    {
+        var (repository, runner) = await RepositoryAsync("""
+            name: flow
+            steps:
+              - name: first
+                type: orient
+              - name: hold
+                type: orient
+                dependsOn: [first]
+              - name: second
+                type: orient
+                dependsOn: [hold]
+            """);
+        using var disposed = repository;
+        repository.Tree.WriteFile("src/click/types.py", "types\n");
+        await repository.Harness.CommitAllAsync(repository.Path, "a directory", Token);
+        var start = (await repository.Harness.RunGitAsync(repository.Path, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
+        var warned = new Warned(repository.Harness.Output);
+        var service = Service(repository.Harness, runner, output: warned);
+        runner.Holds("hold", new TaskCompletionSource().Task);
+
+        var driving = service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token);
+        await runner.WaitStartedAsync("hold");
+        Assert.Equal(HarnessExit.Success, (await service.StopAsync(repository.Path, "r1", now: false, json: false, Token).WaitAsync(Bound, Token)).ExitCode);
+        Assert.Equal(HarnessExit.Cancelled, (await driving.WaitAsync(Bound, Token)).ExitCode);
+        Assert.DoesNotContain(warned.Warnings, warning => warning.StartsWith("the run's start tree", StringComparison.Ordinal));
+
+        // The main tree moves on, and the tree of the commit the run started from is lost from the store.
+        repository.Tree.WriteFile("later.txt", "later\n");
+        await repository.Harness.CommitAllAsync(repository.Path, "later", Token);
+        await repository.Harness.LoseObjectAsync(repository.Path, $"{start}^{{tree}}", Token);
+        runner.Holds("hold", Task.CompletedTask);
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.True(resumed.ExitCode == HarnessExit.Success, $"{resumed.Message} {string.Join(" | ", resumed.Details ?? [])}");
+        var tree = runner.Asked.Last().Place!.Directories;
+        Assert.Equal(start, tree.Commit);
+        Assert.StartsWith($"git could not list the directories of '{start}': ", tree.Unread, StringComparison.Ordinal);
+        Assert.Equal(
+            $"the run's start tree, which its lists of paths are read against, could not be read: {tree.Unread}; until a session reads it, no path is taken for one of its directories where it is what a step may write or a fold carry, and every path where two entries are weighed for meeting, and each refusal that causes says so",
+            Assert.Single(warned.Warnings, warning => warning.StartsWith("the run's start tree", StringComparison.Ordinal)));
+        Assert.False(tree.Writing("src/click"));
+        Assert.True(tree.Meeting("README.md"));
+
+        // A refusal that reading causes - a fold's within leaving out a path beneath an entry it read as a file - says why.
+        Assert.Equal(
+            $"'src' names a file: a directory to be made is written 'src/'; no path is taken for a directory of the run's start tree, which could not be read: {tree.Unread}",
+            FoldWithin.Said(["src/click/types.py"], ["src"], tree, StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// The branch a run's start holds the checkout to is its pull request's base, filled from the run's inputs, where its
     /// pull-request step names one: refused on it, started off it.
     /// </summary>

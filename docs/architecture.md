@@ -3995,7 +3995,17 @@ whose meaning the reading changed - one name that once matched at any depth, a p
 to be made - is told how to write what it meant at every refusal the reading causes, by its one owner
 (`GlobPattern.WrittenFor`): a step's writes denied, a fold's `foldOutside`, and the plan's check of a class's home and
 sites (P-C3, P-C4) - `'docs/generated' names a file: a directory to be made is written 'docs/generated/'`, and
-`'*.md' names the root's own: '**/*.md' names any depth`. A pattern keeps its meaning, anchored at the root: a
+`'*.md' names the root's own: '**/*.md' names any depth`. A later round's plan update, self-audit or diagnosis is
+written beside a main tree that holds what earlier rounds folded, so the plan's check refuses an entry an item owns or
+must not touch, written with no trailing separator, that names a directory of the main tree the start tree does not
+hold - every reader would read it as that one path, and its builder's every write beneath it would be refused - in the
+same owner's words (`GlobPattern.WrittenForDirectory`): `'src/feature' names a file of the run's start tree, which the
+run's lists of paths are read against, and a directory of the main tree: write it 'src/feature/'`, at the answer within
+the step that gives it as at the check's own moment. A start tree that cannot be read is never silent: the session
+warns once why (`TreeDirectories.UnreadWarning`, through the records' warner), and every refusal its reading causes
+says it too - the narrow reading's after how to write the entry (`TreeDirectories.UnreadForWriting`, carried by each
+entry read for what may be written beneath it, `TreeDirectories.ForWriting`), and an overlap of the check's that the wide
+reading alone made (`TreeDirectories.UnreadForMeeting`). A pattern keeps its meaning, anchored at the root: a
 directory it matches covers what is beneath it. Two entries
 meet (`GlobPattern.Overlaps`) only where some path a tree can hold matches both: a path naming no directory holds
 nothing beneath it, unless the other names only paths beneath it by its own names - `src/new` and `src/new/a.py` -
