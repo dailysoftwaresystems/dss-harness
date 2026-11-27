@@ -2666,7 +2666,11 @@ and its reconcile meet the fix as any two changes meet. Every check whose items 
 the issues the recovery takes (`fixes`, `FlowCoordinator.IssuesTheRecoveryTakes`: each sent to fix or joined to a fix,
 being fixed or fixed, or joined to one still being triaged - the one owner of which issues an item may need, which
 `IssueHolds` reads too, so an item is held for every issue its check let it name: one joined to an issue being triaged
-holds no file, and keeps an item that needs it waiting under that triage, then under the fix it goes with), and
+holds no file, and keeps an item that needs it waiting under that triage, then under the fix it goes with - and where
+that issue ends without a fix and the join is triaged again on its own, the id the item named is followed to the
+triage that holds the issue now, by the one walk a duplicate's settling makes too (`HolderNow`, over `HolderFrom`,
+every triage walked kept), the item waiting under that triage, then under the fix it sends or goes with, whose one
+hold the named id meets too, `FlowIssueHold.NeededAlsoBy`), and
 `PlanCheckRunner` refuses an item whose `needs` names another, for no fix of another is made to wait for; a recovery's
 check is handed none, and refuses every `needs` and every `settles` saying so - its remedies are never held for a fix
 and settle no issue. The planner's prompts and the self-audit read the rule once, the

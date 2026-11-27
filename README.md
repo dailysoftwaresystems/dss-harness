@@ -751,7 +751,9 @@ path and keeps only the item that owns it waiting. The planner and the self-audi
 workflow's text `fixes` (`fixes.md`): no work item fixes an issue being fixed, or rewrites its lines, and an item that
 needs its fix names it; the plan's check refuses a `needs` that names no issue the recovery is fixing or fixed, nor
 one joined to an issue still being triaged - an item that needs one of those waits for that triage, and then for the
-fix it goes with - and a recovery's check refuses every `needs`, for its remedies are never held for a fix.
+fix it goes with, or, where that triage ends without a fix and the joined issue is triaged again on its own, for that
+new triage and the fix it sends - and a recovery's check refuses every `needs`, for its remedies are never held for a
+fix.
 
 Issues of one root cause take one fix: a triage that finds its issue's cause is that of an issue taken before it,
 being triaged, being fixed or fixed, answers `join` with that issue's id. Joined to one being triaged or being fixed,

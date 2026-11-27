@@ -282,7 +282,9 @@ public static partial class HelpTopics
         builder.AppendLine("leaves, its record naming the fix it waits for - the issue's title and its visit - and the files");
         builder.AppendLine("it holds, or that the item needs it; every other item goes on at once. An issue joined to one");
         builder.AppendLine("still being triaged holds no file yet, but an item that needs it waits for that triage, and then");
-        builder.AppendLine("for the fix it goes with. What it holds and what an item owns are read from the repository's");
+        builder.AppendLine("for the fix it goes with - or, where that triage ends without a fix and the joined issue is triaged");
+        builder.AppendLine("again on its own, for that new triage, and then for the fix it sends or goes with, the item's needs");
+        builder.AppendLine("followed from the id it names. What it holds and what an item owns are read from the repository's");
         builder.AppendLine("root, as the plan's check reads an item's paths: a root-level file the fix holds keeps only the");
         builder.AppendLine("item owning that file waiting. The plan's check refuses a needs that names no issue the recovery");
         builder.AppendLine("is fixing or fixed, nor one joined to an issue still being triaged; a recovery's check refuses");
