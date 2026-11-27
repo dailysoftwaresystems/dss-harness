@@ -64,9 +64,9 @@ public sealed class FlowServiceTests
         var harness = new HarnessFactory();
 
         temp.WriteFile("file.txt", "content\n");
-        await harness.InitializeHarnessAsync(temp.Path, Token, config ?? new HarnessConfig { Workflows = [Workflow] });
+        await harness.InitializeHarnessAsync(temp.Path, Token, config ?? TestAdvice.Config(Workflow));
         await harness.CommitAllAsync(temp.Path, "initial", Token);
-        temp.WriteFile($".harness-config/workflows/{Workflow}/{Workflow}.yml", flow);
+        TestAdvice.WriteWorkflow(temp, Workflow, flow);
 
         if (files is not null)
         {
@@ -774,7 +774,7 @@ public sealed class FlowServiceTests
                 type: orient
                 dependsOn: [one]
             """,
-            new HarnessConfig { Workflows = [Workflow], Defaults = new HarnessDefaults { Report = new FlowReportThresholds(Top: 1) } });
+            new HarnessConfig { Workflows = [Workflow], Defaults = new HarnessDefaults { Report = new FlowReportThresholds(Top: 1), AgentTier = TestAdvice.AgentTier }, Providers = TestAdvice.Providers, TierConfig = TestAdvice.TierConfig });
         using var disposed = repository;
 
         // Each step takes time the clock can tell, so each is among the slowest the signals could name.
@@ -1361,7 +1361,7 @@ public sealed class FlowServiceTests
               - name: one
                 type: orient
             """,
-            new HarnessConfig { Workflows = [Workflow], Worktrees = new WorktreeSettings { MaxNameLength = Longest } });
+            new HarnessConfig { Workflows = [Workflow], Worktrees = new WorktreeSettings { MaxNameLength = Longest }, Defaults = new HarnessDefaults { AgentTier = TestAdvice.AgentTier }, Providers = TestAdvice.Providers, TierConfig = TestAdvice.TierConfig });
         using var disposed = repository;
         var service = Service(repository.Harness, runner);
         var name = new string('a', Longest + 1);
@@ -1383,7 +1383,7 @@ public sealed class FlowServiceTests
               - name: one
                 type: orient
             """,
-            new HarnessConfig { Workflows = [Workflow], Worktrees = new WorktreeSettings { PathLimit = 40 } });
+            new HarnessConfig { Workflows = [Workflow], Worktrees = new WorktreeSettings { PathLimit = 40 }, Defaults = new HarnessDefaults { AgentTier = TestAdvice.AgentTier }, Providers = TestAdvice.Providers, TierConfig = TestAdvice.TierConfig });
         using var disposed = repository;
 
         var outcome = await Service(repository.Harness, runner).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token);
@@ -3296,6 +3296,9 @@ public sealed class FlowServiceTests
         {
             Workflows = [Workflow],
             AgentPolicy = new AgentPolicyConfig { HiddenPlaces = [$"{keys}{Path.DirectorySeparatorChar}"], Restrictions = ["Read(private/**)"] },
+            Defaults = new HarnessDefaults { AgentTier = TestAdvice.AgentTier },
+            Providers = TestAdvice.Providers,
+            TierConfig = TestAdvice.TierConfig,
         });
         repository.Tree.WriteFile(Path.Combine("deploy", "keys", "id.txt"), "a key kept out of every agent's reach\n");
         repository.Tree.WriteFile(Path.Combine("private", "plan.md"), "a plan no agent may read\n");
@@ -3908,7 +3911,7 @@ public sealed class FlowServiceTests
                 type: orient
             """);
         var runner = new SteppedRunner();
-        var coordinator = new FlowCoordinator(definition, runner, new WritesNothing(), new ManualClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new WritesNothing(), new ManualClock());
         var interrupts = new FlowInterrupts();
 
         interrupts.BoundTo(coordinator);
@@ -4226,7 +4229,7 @@ public sealed class FlowServiceTests
         var run = RunOf(repository);
         var before = File.ReadAllText(run.FlowFile);
 
-        repository.Tree.WriteFile($".harness-config/workflows/{Workflow}/{Workflow}.yml", """
+        repository.Tree.WriteFile($".harness-config/workflows/{Workflow}/{Workflow}.yml", TestAdvice.Named("""
             name: flow
             steps:
               - name: holding
@@ -4235,7 +4238,7 @@ public sealed class FlowServiceTests
                 options: [stay, go]
               - name: added
                 type: orient
-            """);
+            """));
 
         var refused = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
@@ -4925,7 +4928,7 @@ public sealed class FlowServiceTests
 
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, run, context))
         {
-            var coordinator = new FlowCoordinator(definition, new AskingRunner(), new WritesNothing(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, new AskingRunner(), new WritesNothing(), records: records);
             var paused = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Paused, paused.Status);

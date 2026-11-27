@@ -4506,7 +4506,7 @@ critical path is named). Its sections are the run (its sessions, its wall time, 
 time - the union of every attempt's runs, two steps at once counted once - its pauses between sessions, its waits for a
 person, each question's to its first answer or, still open, to the last record, and its budget), the totals (tokens by
 kind, the cache's share of input, the dollars grouped - `dollarsBy`, by the model that served each part of each attempt
-and each step's advice by its advisor's, or by provider, step, agent or type - the retries and the fallbacks), one row
+and each advice by its advisor's (by step, the run's own question's under `run`), or by provider, step, agent or type - the retries and the fallbacks), one row
 per step (its state, attempts, waits by cause - a wait on the machine's dispatch queue naming the class of it and each
 tenant waited behind, joined over the whole wait, so a reader can tell its own run's units from another repository's -
 run time, model, tokens, dollars, exit, error, handler and why it did
@@ -4627,8 +4627,14 @@ answer answers them together. What the person gave the run answers first (`Answe
 `preAnswer` entry whose `when` holds answers at once by the one answer path with `by: input` and the values its when
 read, and an entry that quotes words holds only where they are not empty and stand in the input they are said to be of
 (`StandsIn`, every run of white space compared as one space) - reported words the input does not hold answer nothing,
-the event log says so, and the person is asked. The advisor: before a person is left with a
-question the engine raises itself, `FlowCoordinator.SeekAdvice` runs the orchestrator's `advisor` block through
+the event log says so, and the person is asked. The advisor: every question the engine raises is recommended before a
+person is asked it, so every workflow a run is started of names an `advisor` - `WorkflowValidator` refuses one that names
+none (V43), the refusal naming the block `init` writes as its fix (`WorkflowTemplates.ShippedAdvisor`, read from the
+shipped definition), and the advisor's retired `kinds` is refused by the reader (`WorkflowFileParser.RetiredAdvisorKey`)
+and read forever from a frozen definition an earlier release wrote, never applied (`FlowAdvisor.Kinds`); and every
+session of a run is given the advisor's runner (`FlowService`), so a question no advisor could be started for is a
+defect that fails the session (`InvalidOperationException`), never one asked unrecommended. `FlowCoordinator.SeekAdvice`
+runs the orchestrator's `advisor` block through
 `IFlowAdvisorRunner` (`Runners\AdvisorRunner.cs`) - one reason step that only reads, wherever the asking step works,
 its model resolved and its order built as a step's is, the Claude Code its order starts only found and never installed
 or updated (`ReasonLaunch.ProgramAsync` with `change: false`, as the reporter's is: one missing or too old leaves the
@@ -4656,9 +4662,19 @@ left of the run's dollars as a step is; a bar that cannot be read leaves the que
 default `recommendations.md` that could not be looked at is never taken for one that is not there
 (`WorkflowNamedFiles.ReadTextIfThere`); an advice owed at a resume - sought by a session a crash ended, or deferred
 while the run was pausing or stopping - is sought once the session is known to go on (`SeekOwedAdvice` after
-`MakeTheHold`), never by a resume refused. No advisor named, the question says so plainly; a kind only a person or an
-agent answers (`runBudget`, `ask`), a `pause` step's own shown questions, one its `preAnswer` answers (weighed before
-the advisor is sought), and a kind the advisor's `kinds` leaves out, are never advised.
+`MakeTheHold`), never by a resume refused - a question an earlier build's questions file holds as `notSought` and still
+open among them (`FlowCoordinator.OwesAdvice`). The budget's own question, the run's, is advised once its pause is
+complete and nothing runs, before the session ends (`FlowCoordinator.AdviseTheBudget`): the one reasoning a complete
+pause starts, for the pause holds the question for a person; asked of the run as a whole - `FlowQuestions.RunsOwn` its
+instance, so its records sit under `steps/run/advice/<n>/` and `{question.step}` reads `run`, no agent's tree held, and
+`{question.record}` the run's facts as `FlowStatus.Facts` gives them (`AdvisorRunner`); held to no share of the budget it
+asks about (`FlowAdvisorCall.BudgetLeftUsd` null), for the spent budget never stops the recommendation on spending
+more; and what it spends is charged on the run's own measure (`FlowBudgetSpent.RunsOwn`), kept in `flow.json` as
+`spent.advice` (`FlowBudgetRecord.Advice`), summed with the instances' at a resume and in the report's totals. An
+agent's own questions (`ask`, and a `pause` step's shown questions) carry their recommendation within them and are
+never advised, nor is one its `preAnswer` or its configuration answers at once (weighed before the advisor is sought),
+which no person is asked; an advisor that fails past its retries leaves the question `notObtained` saying why, and the
+person is asked all the same.
 The handoff, the checks and the stream's account: where an agent gave no handoff of its own - the pause's
 turn gave none, a limit ended its run, or a resume found the attempt cut off by a crash or a stop - the engine writes
 one from the stored stream of the step (`FlowCoordinator.EngineHandoffOf` over `IFlowStreamAccount`, routed by
@@ -5038,7 +5054,7 @@ is each run fact (`WorkflowExpressions.RunFacts`), which a template reads and an
 A `pushCheckpoints` with no push step that is a checkpoint, two handlers one ending raises that
 both name a `then`, a fallback that is its agent's own model or is named twice, a gathered name
 given twice, named for an engine's fact or for a member, `times` or `then` beside a `pause`
-answer, and an advisor whose `kinds` are given empty or name `ask` or `runBudget` are each refused.
+answer, and a workflow that names no advisor (V43) are each refused.
 
 `export-workflow <workflow> --to <dir>` is a use case of Core (`WorkflowExportService`): it copies
 a workflow - its yml and every file it names, the one list `validate-workflow` and `init` read
@@ -5184,8 +5200,11 @@ raised twice, and an ending whose handlers all ended is settled. A session is ne
 step that never ended, nor one its scope never drew. What the session's start writes is held, in the
 order made and each with the run as it stood, until it is known the session goes on: a resume beside
 an open question is refused only where nothing can run until a question is answered, and then it has
-written nothing - no event, no attempt, no state; a session an answer began, and one whose budget
-question is open, are never refused, and end paused on the question left. A stop asked between
+written nothing - no event, no attempt, no state; a session an answer began, one whose budget
+question is open, and one beside a question still owing its recommendation - deferred by a pause or a
+stop, left sought by a crash, or never sought in a questions file an earlier build wrote
+(`FlowCoordinator.OwesAdvice`), which `SeekOwedAdvice` seeks - are never refused, and end paused on the
+question left. A stop asked between
 sessions - `abort` answered with no engine running the run - ends the session it begins where the run
 stands, stopped, as a stop in a session ends it: nothing it found stopped runs again or is given the
 engine's handoff in place of its own, nothing owed is made and nothing starts; the session after it

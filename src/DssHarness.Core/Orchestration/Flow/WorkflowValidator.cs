@@ -440,9 +440,15 @@ public static class WorkflowValidator
                 }
             }
 
-            if (_definition.Advisor is { } advisor)
+            // V43: every question the engine raises is recommended by the advisor before a person is asked it, so the
+            // workflow a run is started of names one; a used workflow's own is optional, for the run's recommends for its
+            // steps where its use does not govern itself.
+            if (_definition.Advisor is null)
             {
-                AdvisorKinds(advisor, lead: string.Empty);
+                _problems.Add(
+                    "the workflow names no advisor; every question the engine raises is recommended by the advisor before a person is asked it, "
+                    + $"so a workflow a run is started of names one. Write the block init writes at the file's top level - {WorkflowTemplates.ShippedAdvisor} - "
+                    + $"with its agent's file and its prompt in the workflow's directory, as '{Hosts.ToolPackage.Command} {WorkflowExportService.CommandName} {WorkflowTemplates.ShippedWorkflowName} --shipped --to <dir>' writes them");
             }
         }
 
@@ -489,8 +495,8 @@ public static class WorkflowValidator
 
         /// <summary>
         /// V66: what a use that governs itself (<c>useParentLimits: false</c>) applies to its steps holds to every rule the
-        /// run's own key of that name does - its limits, its <c>maxInstances</c>, its advisor's tier, model, tries and
-        /// kinds, its answers, and the shape it gives the run's graph - for a use cannot declare what a run could not. Its
+        /// run's own key of that name does - its limits, its <c>maxInstances</c>, its advisor's tier, model and tries, its
+        /// answers, and the shape it gives the run's graph - for a use cannot declare what a run could not. Its
         /// budget and its reporter are carried and applied to nothing yet, so nothing is held of them here. Each refusal
         /// names the used workflow and the step that uses it.
         /// </summary>
@@ -509,7 +515,6 @@ public static class WorkflowValidator
                 ModelRules(advisor.Tier, advisor.Model, $"{lead}advisor");
                 Within(advisor.Retries, 1, 20, $"{lead}advisor.retries");
                 Within(advisor.BackoffSeconds, 1, WorkflowStep.MostBackoffSeconds, $"{lead}advisor.backoffSeconds");
-                AdvisorKinds(advisor, lead);
             }
 
             // Its answers are consulted for its steps' questions, after their own and before the run's: they answer as a
@@ -3150,8 +3155,6 @@ public static class WorkflowValidator
             return true;
         }
 
-        private static string IsAre(int count) => count == 1 ? "is" : "are";
-
         /// <summary>
         /// The roots of the run's own names that only a prompt reads, each with why: a step's own keys - its templates and
         /// its expressions - and a pull request's body, which the engine fills and no agent reads, read none of them; each
@@ -3227,38 +3230,6 @@ public static class WorkflowValidator
             AdvisorPrompt,
             StatusPrompt,
             AskPrompt,
-        }
-
-        /// <summary>
-        /// The kinds an advisor is asked about are question kinds; and V43: the advisor recommends on the questions the
-        /// engine raises itself, and two kinds are none of them: an agent that asks gives its own recommendation with its
-        /// question, and a run at its budget's reserve spends nothing more on reasoning, which the advisor is.
-        /// </summary>
-        /// <param name="advisor">The run's own advisor, or a governing use's.</param>
-        /// <param name="lead">What each refusal starts with: nothing for the run's own, the governing use for a use's.</param>
-        private void AdvisorKinds(FlowAdvisor advisor, string lead)
-        {
-            if (advisor.Kinds.Count == 0)
-            {
-                return;
-            }
-
-            var unknown = advisor.Kinds.Where(kind => !QuestionKinds.Contains(kind, StringComparer.Ordinal)).ToList();
-
-            if (unknown.Count > 0)
-            {
-                _problems.Add($"{lead}advisor.kinds names {string.Join(", ", unknown.Select(kind => $"'{kind}'"))}, which {IsAre(unknown.Count)} no question kind. Known: {string.Join(", ", QuestionKinds.Select(kind => $"'{kind}'"))}.");
-            }
-
-            if (advisor.Kinds.Contains("ask", StringComparer.Ordinal))
-            {
-                _problems.Add($"{lead}advisor is to recommend for 'ask': an agent that asks gives its own recommendation");
-            }
-
-            if (advisor.Kinds.Contains("runBudget", StringComparer.Ordinal))
-            {
-                _problems.Add($"{lead}advisor is to recommend for 'runBudget': a run at its budget's reserve spends nothing more on reasoning, and the advisor reasons");
-            }
         }
 
         /// <summary>

@@ -115,6 +115,7 @@ public sealed class AdvisorRunnerTests
             new AgentKeyStore(kit.Harness.FileSystem, kit.Harness.FilePermissions, kit.Harness.Platform),
             kit.Harness.Output,
             isolation ?? new TestIsolation(),
+            new FlowRunOwner(kit.Harness.OrchestrationStore, kit.Harness.Identity),
             updates);
 
     /// <summary>The two answers a turn limit's question takes, neither with a text.</summary>
@@ -123,7 +124,7 @@ public sealed class AdvisorRunnerTests
 
     private static FlowAdvisorCall Call(OrchestrationKit kit, string? agent = "reader", string instance = "think", IReadOnlyList<FlowQuestionOption>? answers = null, double? budgetLeftUsd = null)
         => new(
-            new FlowAdvisor("advisor", "prompts/recommend.md", Tier: "best", Model: null, Effort: "high", Client: null, Kinds: []),
+            new FlowAdvisor("advisor", "prompts/recommend.md", Tier: "best", Model: null, Effort: "high", Client: null),
             "o1",
             "flow",
             "q1",

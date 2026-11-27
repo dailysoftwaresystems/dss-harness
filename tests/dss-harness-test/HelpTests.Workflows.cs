@@ -526,7 +526,8 @@ public sealed partial class HelpTests
         var topic = HelpText.Of("workflows").StandardOutput;
 
         Assert.Contains(
-            "Worked examples, each a whole workflow as a file holds it: the two ways a step is raised by another step's ending - a repair that goes back to what failed, and a check that runs whenever a builder ends - and two loops a repository can build its own work around. Each holds as it is printed, read by the same reader that reads a workflow's own file.",
+            "Worked examples, each a whole workflow as a file holds it: the two ways a step is raised by another step's ending - a repair that goes back to what failed, and a check that runs whenever a builder ends - and two loops a repository can build its own work around. Each holds as it is printed, read by the same reader that reads a workflow's own file. "
+                + "Each names the advisor init writes beside the shipped workflow, as every workflow a run is started of names one: every question its steps raise is recommended before it is asked.",
             Prose.Words(topic),
             StringComparison.Ordinal);
 
@@ -728,9 +729,19 @@ public sealed partial class HelpTests
             "the question is open while the advice runs - an answer ends the asking, the question saying so, and the step that asked starts again only once the advice's runner has ended; "
                 + "a pause or a stop ends it too, the question saying the recommendation is sought at the resume - the recommendation written to the question with who gave it and where its records are, "
                 + "and none obtained said so, a bar that could not be read among the reasons; what every advice spent, an ended one's among them, is counted against the run's budget; "
-                + "and where the orchestrator names no advisor the question says so plainly. The advisor takes no question of a step that may ask (its agent recommends within its own), "
-                + "nor a pause step's that shows an upstream step's questions (they carry their recommendations), nor one the run's input answers, nor the budget's own, nor a kind its kinds leave out, "
-                + "and while the run is pausing the question says the recommendation is sought at the resume.",
+                + "and an advisor that obtains none - it failed past its retries among the reasons - leaves the question saying why, and the person is asked all the same. "
+                + "The budget's own question is recommended too, once the budget's pause is complete and before the session ends: the advisor is asked of the run as a whole - "
+                + "its records under steps/run/advice/<n>/, {question.step} reading run, {question.record} the run's facts as ask-orchestrator-status gives them - held to its own "
+                + "definition's bounds alone, for the spent budget never stops the recommendation on spending more, and what it spends is the run's own, kept in flow.json's "
+                + "spent.advice and counted in the run's spend. Only an agent's own questions carry their recommendation within them and are not advised - a step's own agent's, "
+                + "and a pause step's that shows an upstream step's questions - nor is one the run's input or its configuration answers, which no person is asked; and while the "
+                + "run is pausing for anything but its budget the question says the recommendation is sought at the resume.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Every question the engine raises is recommended before a person is asked it, so every workflow a run is started of names an advisor - "
+                + "validate-workflow and a run's start refuse one that names none, naming the block init writes as the fix, and its retired kinds is refused, "
+                + "for every kind of question is recommended.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("params - its own knobs, defaulted in the file and read as param.<name>", prose, StringComparison.Ordinal);

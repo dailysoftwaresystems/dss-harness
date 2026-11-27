@@ -825,16 +825,18 @@ public sealed record FlowStepResult
 /// <param name="Tried">What the run tried before it asked.</param>
 /// <param name="Means">What the answer changes; null where the run has not said.</param>
 /// <param name="Answers">The answers it takes, each with what it does and whether it takes a text.</param>
-/// <param name="Agent">The agent the asking step works as, whose directory and workspace the advice shares; null where it names none.</param>
+/// <param name="Agent">The agent the asking step works as, whose directory and workspace the advice shares; null where it names none, and for the run's own question.</param>
 /// <param name="Instance">
 /// The asking step's instance id, as its records name it: the step the prompt's <c>{question.step}</c> reads, and the one
 /// under whose own directory each advice keeps its records in <c>advice/&lt;n&gt;/</c>, numbered after those already there.
+/// <see cref="FlowQuestions.RunsOwn"/> for the run's own question, its budget's, which no step asked - a name no step may
+/// have, so its advices sit beside the steps' and never among one's.
 /// </param>
 /// <param name="Inputs">
 /// The inputs of the workflow whose advisor is asked, as its prompt reads them by <c>{input.&lt;name&gt;}</c>: what the use
 /// filled where a use that governs itself declares the advisor, and else the run's own, as its person gave them.
 /// </param>
-/// <param name="Record">What the run stored of the asking step, rendered as a continuation record renders a step.</param>
+/// <param name="Record">What the run stored of the asking step, rendered as a continuation record renders a step - for the run's own question, the run's facts; null where the advisor's runner renders it.</param>
 /// <param name="Bar">The repository's bar for a recommendation, read where the question was raised.</param>
 /// <param name="Texts">
 /// The texts the advisor's prompt reads by <c>{text.&lt;name&gt;}</c>, each by its name with the workflow whose directory
@@ -843,7 +845,11 @@ public sealed record FlowStepResult
 /// it holds none of is refused, naming the workflow.
 /// </param>
 /// <param name="Place">Where the run works; null for a run held in memory alone.</param>
-/// <param name="BudgetLeftUsd">What is left of the run's budget in dollars before its reserve, which the advice's agent is held to where it is less than its own bound, or where it names none; null where the run budgets no dollars.</param>
+/// <param name="BudgetLeftUsd">
+/// What is left of the run's budget in dollars before its reserve, which the advice's agent is held to where it is less
+/// than its own bound, or where it names none; null where the run budgets no dollars, and for the budget's own question,
+/// whose advice the spent budget never stops - it is held to its own definition's bounds alone.
+/// </param>
 /// <param name="RunValues">The run as its own <c>run</c> root reads it, as the asking left it: its name, what it has checked and what it knows to be red among it; null where the asking was made from no run.</param>
 public sealed record FlowAdvisorCall(
     FlowAdvisor Advisor,
@@ -899,8 +905,8 @@ public sealed record FlowAdvice(
 }
 
 /// <summary>
-/// The engine's advisor: one reason step that only reads, run for a question the engine raises before a person is left
-/// with it. Never between a person and an answer - the caller raises the question at once, and an answer ends the
+/// The engine's advisor: one reason step that only reads, run for every question the engine raises before a person is
+/// asked it. Never between a person and an answer - the caller raises the question at once, and an answer ends the
 /// asking, its record kept.
 /// </summary>
 public interface IFlowAdvisorRunner

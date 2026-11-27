@@ -432,6 +432,10 @@ public sealed class FlowOutputLogsTests
                 ("run/logs/a1", unmasked),
                 ("run/plans", unmasked),
                 ("run/remote-workflows", unmasked),
+
+                // The advice the run's advisor was asked of the question the run is paused on, as every question is.
+                ($"run/steps/ask/advice/1/tool-results/{continuation}", unmasked),
+                ("run/steps/ask/advice/1/work", unmasked),
                 ("run/steps/ci/logs", unmasked),
                 ("run/temp", FlowOutputLogs.TempWhy),
                 ("run/work", unmasked),

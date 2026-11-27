@@ -542,7 +542,7 @@ public sealed class FlowStatusTests
                     type: orient
                     onFailure: recover
             """);
-        Assert.Empty(WorkflowValidator.Validate(definition, hasCommitTemplate: false));
+        Assert.Empty(WorkflowValidator.Validate(TestAdvice.Named(definition), hasCommitTemplate: false));
         var flow = File(
             nameof(FlowRunStatus.Running),
             [
@@ -593,7 +593,7 @@ public sealed class FlowStatusTests
                     type: orient
                     onFailure: recover
             """);
-        Assert.Empty(WorkflowValidator.Validate(definition, hasCommitTemplate: false));
+        Assert.Empty(WorkflowValidator.Validate(TestAdvice.Named(definition), hasCommitTemplate: false));
         var flow = File(
             nameof(FlowRunStatus.Running),
             [

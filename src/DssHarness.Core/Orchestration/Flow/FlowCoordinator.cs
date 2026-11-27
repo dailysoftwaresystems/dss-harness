@@ -778,8 +778,9 @@ public sealed class FlowCoordinator
     /// (<c>IAgentService.DeleteAsync</c>); null where the run deletes none, which a run held in memory alone never does.
     /// </param>
     /// <param name="advisor">
-    /// Runs the orchestrator's advisor for a question the engine raises, before a person is left with it; null where no
-    /// advisor is named, which every question then says.
+    /// Runs the orchestrator's advisor for every question the engine raises, before a person is asked it - the run's own
+    /// budget's among them: every session of a run is given it. Null only for a run that asks nothing; a question raised
+    /// with none is never put to a person unrecommended, and fails the session as the defect it is.
     /// </param>
     /// <param name="streamAccount">
     /// Reads the engine's account of a stopped or cut-off step's stored stream, the body of the handoff it writes where
@@ -1269,9 +1270,10 @@ public sealed class FlowCoordinator
             // began is taken by it, and what a step spent is counted.
             EachQueued(TakeMessage);
 
-            // A resume beside an open question is not refused where something can run - a step that starts, or a
-            // redirect the run owes that can be made now, which draws its steps again and may take the question back;
-            // it is refused only where nothing can until the question is answered - before anything of its own is
+            // A resume beside an open question is not refused where something can run - a step that starts, a
+            // redirect the run owes that can be made now, which draws its steps again and may take the question back,
+            // or the recommendation an open question still owes, which a person is never left to answer without; it
+            // is refused only where nothing can until the question is answered - before anything of its own is
             // written, for the held writes are never made. A session an answer began goes on, as does one whose budget
             // question is open: it is paused again on that question, which a person answers.
             if (_resume is not null
@@ -1280,6 +1282,7 @@ public sealed class FlowCoordinator
                 && OpenBudgetQuestion is null
                 && NextIds().Count == 0
                 && RedirectToMake() is null
+                && !OpenQuestions.Any(asked => OwesAdvice(asked) && _answerable.ContainsKey(asked.Id))
                 && _created.FirstOrDefault(instance => instance.WaitingQuestion is not null) is { } waitsOnOne)
             {
                 throw new HarnessException(
@@ -1291,8 +1294,9 @@ public sealed class FlowCoordinator
             _starting = false;
             MakeTheHold();
 
-            // The advice each open question still owes is sought once it is known the session goes on - a resume
-            // refused above starts no advisor, for the advisor is a paid run and the refusal writes nothing of itself.
+            // The advice each open question still owes is sought once it is known the session goes on - a question
+            // owing one is what keeps a resume beside it from being refused above, and a resume refused there owes
+            // none, so it starts no advisor and writes nothing of itself.
             if (!stopPending)
             {
                 SeekOwedAdvice();
@@ -1407,6 +1411,13 @@ public sealed class FlowCoordinator
                 // limit nothing will free - can never start, and fails as any step does, so the session never ends
                 // done over it.
                 if (FailStalled())
+                {
+                    continue;
+                }
+
+                // The budget's pause is complete and nothing runs: its question is raised, once, and recommended before
+                // the session ends, so the person the pause holds it for is asked it recommended.
+                if (AdviseTheBudget())
                 {
                     continue;
                 }
@@ -2006,19 +2017,31 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Charges what one asking of the advisor spent on the step that asked - the other place the run's total grows, kept
     /// on the step's measure beside its attempts', never in one, and the run's total charged with the same numbers at once.
+    /// The run's own question, which no step asked, is charged on the run's own measure (<see cref="FlowBudgetSpent.RunsOwn"/>),
+    /// which its file keeps beside its steps' and a resume counts again with them.
     /// </summary>
-    /// <param name="instance">The step that asked.</param>
+    /// <param name="instance">The step that asked; null for the run's own question.</param>
     /// <param name="advice">What the asking spent, as its answer carried it.</param>
-    private void ChargeAdvice(FlowInstance instance, FlowAdvice advice)
+    private void ChargeAdvice(FlowInstance? instance, FlowAdvice advice)
     {
-        var measure = instance.Measure ?? new FlowStepMeasure();
+        var measure = instance is null ? _spent.RunsOwn ?? new FlowStepMeasure() : instance.Measure ?? new FlowStepMeasure();
         var advised = measure.Advised(advice);
 
-        if (!ReferenceEquals(advised, measure))
+        if (ReferenceEquals(advised, measure))
+        {
+            return;
+        }
+
+        if (instance is null)
+        {
+            _spent.RunsOwn = advised;
+        }
+        else
         {
             instance.Measure = advised;
-            Spend(advice.Tokens ?? 0, advice.Dollars);
         }
+
+        Spend(advice.Tokens ?? 0, advice.Dollars);
     }
 
     /// <summary>
@@ -2271,6 +2294,61 @@ public sealed class FlowCoordinator
 
         return null;
     }
+
+    /// <summary>
+    /// The budget's own question, once its pause is complete and nothing of the run runs: raised once - the workflow's
+    /// answers were asked at the reserve and gave none - and recommended before the session ends, as every question is
+    /// before a person is asked it. Its advice is the one reasoning a complete pause starts, for the pause holds the
+    /// question for a person, and it is held to no share of the budget it asks about: the spent budget never stops the
+    /// recommendation on spending more, and what it spends is counted on the run's own measure. A question still owing
+    /// its recommendation - raised just now, sought by a session a crash ended, deferred by a pause or a stop, or never
+    /// sought in a questions file an earlier build wrote - is sought again; one recommended, or whose advice runs, is
+    /// left as it is. Whether it raised or sought anything, so the loop goes round to wait for the advice.
+    /// </summary>
+    private bool AdviseTheBudget()
+    {
+        if (_pause is not { Cause: "budget", CompletedAt: not null } || _hardStop)
+        {
+            return false;
+        }
+
+        var raised = false;
+
+        if (OpenBudgetQuestion is not { } question)
+        {
+            var reached = ReachedOf(_definition.Budget!);
+            question = BudgetQuestion(reached ?? ("usd", "its budget"));
+            _questions.Add(question);
+            WaitOn(null, question);
+            WriteQuestions();
+            raised = true;
+        }
+
+        if (!OwesAdvice(question) || _advising.Any(pending => ReferenceEquals(pending.Asked, question) && !pending.Dropped))
+        {
+            return raised;
+        }
+
+        SeekAdvice(null, question, pastThePause: true);
+        return true;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="asked"/>, open, still owes the recommendation it is to be asked with: none sought yet, one
+    /// a session a crash ended left sought, or one a pause or a stop deferred - never one given, obtained or not, nor an
+    /// agent's own questions, which carry theirs.
+    /// </summary>
+    private bool OwesAdvice(FlowQuestion asked)
+        => _open.Contains(asked.Id)
+            && asked.Recommendation.State is "notSought" or "sought" or "deferred"
+            && !CarriesItsOwn(asked);
+
+    /// <summary>
+    /// Whether <paramref name="asked"/> is an agent's own, which carries its recommendation within it and is never put to
+    /// the advisor: an agent's <c>ask</c>, and a <c>pause</c> step's that shows an upstream step's questions.
+    /// </summary>
+    private static bool CarriesItsOwn(FlowQuestion asked)
+        => asked.Kind == "ask" || asked.AgentQuestions.Count > 0;
 
     /// <summary>The question the run's budget asks at its reserve, worded as the run's person reads it: the run by its name, where it was given one.</summary>
     private FlowQuestion BudgetQuestion((string Kind, string SpentOf) reached)
@@ -11438,17 +11516,22 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Sets the recommendation a question starts with, and starts the run's advisor where one is to run: never for a
-    /// kind only a person or an agent answers (`runBudget`, `ask`), for a `pause` step that shows questions of its own
-    /// (they carry their recommendation within them), for a kind the advisor's `kinds` leaves out, nor while the run is
-    /// pausing - no reason step is started then, and the question says the advice is sought at the resume. Where the
-    /// orchestrator names no advisor, the question says so plainly; nothing is put in its place.
+    /// Sets the recommendation a question starts with, and starts the run's advisor for it: every question the engine
+    /// raises is recommended before a person is asked it - the budget's own among them - save an agent's own, which carry
+    /// their recommendation within them (<c>ask</c>, and a <c>pause</c> step that shows an upstream step's questions).
+    /// While the run is pausing no reason step is started, and the question says the recommendation is sought at the
+    /// resume - save the budget's own question once its pause is complete (<paramref name="pastThePause"/>), which that
+    /// pause holds for a person and which is advised before the session ends (<see cref="AdviseTheBudget"/>). A question
+    /// no advisor could be started for is never put to a person: a run's workflow names one (V43) and every session is
+    /// given the runner that runs it, so one missing is a defect of the tool, never a question asked unrecommended.
     /// </summary>
-    /// <param name="instance">The instance the question is about; null for the run's own.</param>
+    /// <param name="instance">The instance the question is about; null for the run's own, its budget's.</param>
     /// <param name="asked">The question, open.</param>
-    private void SeekAdvice(FlowInstance? instance, FlowQuestion asked)
+    /// <param name="pastThePause">Whether this is the budget's own question, advised once its pause is complete.</param>
+    /// <exception cref="InvalidOperationException">The run has no advisor to start: a defect, for its workflow's check and its session give it one.</exception>
+    private void SeekAdvice(FlowInstance? instance, FlowQuestion asked, bool pastThePause = false)
     {
-        if (asked.Recommendation is { State: "given" })
+        if (asked.Recommendation is { State: "given" } || CarriesItsOwn(asked))
         {
             // An agent's own questions carry their recommendation with them; the advisor never runs for them.
             return;
@@ -11458,48 +11541,25 @@ public sealed class FlowCoordinator
         // which replaces the run's for its steps - its files read in its own directory, its prompt reading the inputs the
         // use filled and the texts it sees - and the run's where none does.
         var governing = instance is null ? null : GoverningOf(instance, FlowUseKey.Advisor);
-        var useAdvisor = governing?.Own.Advisor;
-        var advisor = useAdvisor ?? _definition.Advisor;
+        var advisor = governing?.Own.Advisor ?? _definition.Advisor;
 
         if (advisor is null || _advisor is null)
         {
-            asked.Recommendation = _definition.Advisor is null && useAdvisor is null
-                ? new FlowRecommendation("notSought", Why: $"no recommendation was sought: orchestrator '{_definition.Name}' names no advisor")
-                : new FlowRecommendation("notSought", Why: "no recommendation was sought: this run starts no advisor");
-            WriteQuestions();
-            return;
+            throw new InvalidOperationException(
+                $"question {asked.Id} ({asked.Kind}) is to be recommended before a person is asked it, and this run {(advisor is null ? $"is of workflow '{_definition.Name}', which names no advisor" : "was started with no advisor to run")}: "
+                + "a run's workflow is refused without one, and every session is given its runner");
         }
 
-        if (asked.Kind is "runBudget" or "ask"
-            || asked.AgentQuestions.Count > 0)
-        {
-            // A kind only a person or an agent answers: the budget's question is the run's own, and an agent that asks
-            // recommends within each of its questions.
-            return;
-        }
-
-        if (advisor.Kinds.Count > 0 && !advisor.Kinds.Contains(asked.Kind, StringComparer.Ordinal))
-        {
-            asked.Recommendation = new FlowRecommendation("notSought", Why: $"no recommendation was sought: the advisor's kinds leave out '{asked.Kind}'");
-            WriteQuestions();
-            return;
-        }
-
-        if (_pausing || _hardStop || _pauseRequest is not null)
+        if (!pastThePause && (_pausing || _hardStop || _pauseRequest is not null))
         {
             asked.Recommendation = new FlowRecommendation("deferred", Why: "the run is pausing, and no reason step is started: the recommendation is sought when the run is resumed with this question still open");
             WriteQuestions();
             return;
         }
 
-        if (instance is null)
-        {
-            return;
-        }
-
         // Where the advisor's own workflow stands: the scope the governing use's steps run in, whose inputs and texts its
-        // prompt reads; the run's own, outside every use, for the run's advisor.
-        var advising = AdvisorScopeOf(instance, governing);
+        // prompt reads; the run's own, outside every use, for the run's advisor and for the run's own question.
+        var advising = instance is null ? null : AdvisorScopeOf(instance, governing);
 
         // The bar is read where the question is raised, as the prompt reads it: one that cannot be read - a file the
         // orchestrator names gone, one the file system would not let be looked at - leaves the question saying why, and
@@ -11521,6 +11581,9 @@ public sealed class FlowCoordinator
         asked.Recommendation = new FlowRecommendation("sought", Why: "a recommendation is being sought from the advisor");
         WriteQuestions();
 
+        // The run's own question is asked of the run as a whole: the advice works in no agent's tree, its records under
+        // the run's own name among the steps' (FlowQuestions.RunsOwn, which no step may be named), and the budget's is
+        // held to no share of the budget it asks about - the spent budget never stops the recommendation on spending more.
         var call = new FlowAdvisorCall(
             advisor,
             _runName ?? "run",
@@ -11531,14 +11594,14 @@ public sealed class FlowCoordinator
             asked.Tried,
             asked.Means,
             asked.Held,
-            WorksInOf(instance) ?? instance.Made,
-            instance.Id,
+            instance is null ? null : WorksInOf(instance) ?? instance.Made,
+            instance?.Id ?? FlowQuestions.RunsOwn,
             advising is null ? Inputs() : advising.UseInputs ?? [],
             Record: null,
             bar,
             TextsAt(advising).ToDictionary(text => text.Key, text => new FlowAdvisorText(text.Value.Owner ?? _definition.Name, text.Value.File), StringComparer.Ordinal),
             _place,
-            BudgetLeftUsd(),
+            asked.Kind == "runBudget" ? null : BudgetLeftUsd(),
             RunValues());
 
         var cancel = CancellationTokenSource.CreateLinkedTokenSource(_sessionToken, _adviceStop.Token);
@@ -11644,7 +11707,7 @@ public sealed class FlowCoordinator
 
         // The advice's spend is the asking step's own measure's, beside its attempts': never in an attempt, for the
         // advisor's turns are its own, in its own records - and the run's total is the sum of its instances', this
-        // among them, so the one charge reaches both.
+        // among them, so the one charge reaches both. The run's own question's is the run's own measure's.
         ChargeAdvice(pending.Instance, advice);
 
         return advice;
@@ -11735,18 +11798,15 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Seeks the advice each open question still owes at a session's start: one marked sought by a session a crash or a
-    /// stop ended, and one deferred while the run was pausing or stopping - the run is resumed now, and the question
-    /// still open.
+    /// Seeks the advice each open question of a step still owes at a session's start (<see cref="OwesAdvice"/>): one
+    /// marked sought by a session a crash or a stop ended, one deferred while the run was pausing or stopping, and one an
+    /// earlier build's questions file holds as never sought - the run is resumed now, and the question still open. The
+    /// budget's own question is left to its pause, which this session takes again and which advises it once complete
+    /// (<see cref="AdviseTheBudget"/>): an advisor started for it now would only be ended by that pause.
     /// </summary>
     private void SeekOwedAdvice()
     {
-        if (_advisor is null || _definition.Advisor is null)
-        {
-            return;
-        }
-
-        foreach (var asked in OpenQuestions.Where(asked => asked.Recommendation.State is "sought" or "deferred").ToList())
+        foreach (var asked in OpenQuestions.Where(OwesAdvice).ToList())
         {
             if (_answerable.GetValueOrDefault(asked.Id) is { } instance)
             {
@@ -12220,10 +12280,11 @@ public sealed class FlowCoordinator
     /// The tree an advice of <paramref name="instance"/>'s question works in, as claims name it: the agent the asking step
     /// works in - the one the advisor's call names (<see cref="SeekAdvice"/>) - by the name the step's own claims give it
     /// (<see cref="ClaimedAgentOf"/>), so every step that would bring that tree elsewhere meets the advice's claim; null
-    /// where the step works in no agent, and the advice in a directory of its own.
+    /// where the step works in no agent, and for the run's own question, which no step asked: the advice then works in a
+    /// directory of its own.
     /// </summary>
-    private string? AdvisedTreeOf(FlowInstance instance)
-        => (WorksInOf(instance) ?? instance.Made) is { } agent ? ClaimedAgentOf(instance) ?? agent : null;
+    private string? AdvisedTreeOf(FlowInstance? instance)
+        => instance is not null && (WorksInOf(instance) ?? instance.Made) is { } agent ? ClaimedAgentOf(instance) ?? agent : null;
 
     /// <summary>Gives back every claim <paramref name="instance"/> still holds.</summary>
     private void Release(FlowInstance instance)
@@ -12359,18 +12420,6 @@ public sealed class FlowCoordinator
     /// </summary>
     private FlowSessionEnd Finish()
     {
-        if (_pause is { Cause: "budget" } && !_hardStop && OpenBudgetQuestion is null)
-        {
-            // The budget's pause has ended: the run holds its question, once, which a person settles - more allows each
-            // amount once again, abort ends the run. The workflow's own answers were asked at the reserve, and gave
-            // none.
-            var reached = ReachedOf(_definition.Budget!);
-            var question = BudgetQuestion(reached ?? ("usd", "its budget"));
-            _questions.Add(question);
-            WaitOn(null, question);
-            WriteQuestions();
-        }
-
         var waiting = _created
             .Where(instance => instance.WaitingQuestion is not null)
             .Select(instance => instance.WaitingQuestion!)
@@ -15981,7 +16030,11 @@ public sealed class FlowCoordinator
             _spent.Dollars = _spent.Unmeasured is { } unmeasured ? new FlowDollars(unmeasured.Usd, unmeasured.Uncounted) : default;
             _spent.Tokens = _spent.Unmeasured?.Tokens ?? 0;
 
-            foreach (var measured in _created.Select(instance => instance.Measure).OfType<FlowStepMeasure>())
+            // The run's own measure - what the advisor spent on its own question, which no step asked - is the run's
+            // file's, the one place it is kept, and is counted with the instances'.
+            _spent.RunsOwn = resume.File.Spent.Advice is { } advised ? new FlowStepMeasure(Advice: advised) : null;
+
+            foreach (var measured in _created.Select(instance => instance.Measure).Append(_spent.RunsOwn).OfType<FlowStepMeasure>())
             {
                 var (dollars, tokens) = measured.Spent;
                 _spent.Charge(tokens, dollars);
@@ -16487,11 +16540,14 @@ public sealed class FlowCoordinator
 
     /// <summary>One asking of an advisor the session began: its question, the step that asked, the advisor asked, how to end it, and its answer.</summary>
     /// <param name="Asked">The question advised on.</param>
-    /// <param name="Instance">The step that asked, which is not started again while the asking's runner has not ended.</param>
+    /// <param name="Instance">
+    /// The step that asked, which is not started again while the asking's runner has not ended; null for the run's own
+    /// question, its budget's, which no step asked.
+    /// </param>
     /// <param name="Advisor">The advisor asked - the run's, or a governing use's - which a recommendation it gives is credited to.</param>
     /// <param name="Cancel">Ends the asking.</param>
     /// <param name="Task">The asking, answering the advice.</param>
-    private sealed record Advising(FlowQuestion Asked, FlowInstance Instance, FlowAdvisor Advisor, CancellationTokenSource Cancel, Task<FlowAdvice> Task)
+    private sealed record Advising(FlowQuestion Asked, FlowInstance? Instance, FlowAdvisor Advisor, CancellationTokenSource Cancel, Task<FlowAdvice> Task)
     {
         /// <summary>Whether the asking was ended - an answer was given, or the run paused or stopped - and its advice is not the question's.</summary>
         public bool Dropped { get; private set; }

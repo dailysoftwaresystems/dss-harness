@@ -1036,8 +1036,9 @@ public sealed class AnalyzeReportTests
             TierConfig = tiers,
         });
         await harness.CommitAllAsync(temp.Path, "initial", Token);
-        temp.WriteFile(
-            $".harness-config/workflows/{Workflow}/{Workflow}.yml",
+        TestAdvice.WriteWorkflow(
+            temp,
+            Workflow,
             "name: flow\n"
             + "steps:\n"
             + "  - name: gate\n"
@@ -1076,8 +1077,11 @@ public sealed class AnalyzeReportTests
     /// <summary>The agent runner as a fake, keeping every request it was asked and answering as a test says.</summary>
     private sealed class Agents : IAgentRunner
     {
-        /// <summary>Every request the runner built, in order.</summary>
+        /// <summary>Every request the runner built, in order, but the run's advisor's.</summary>
         public List<AgentStepRequest> Asked { get; } = [];
+
+        /// <summary>Every request of the run's advisor, asked of the questions the run raised, in order: kept apart, and recommending nothing.</summary>
+        public List<AgentStepRequest> Advised { get; } = [];
 
         /// <summary>How the run answers; a completed run with no output unless a test changes it.</summary>
         public Func<AgentStepRequest, AgentRunResult> Answer { get; set; } = _ => new AgentRunResult(AgentRunStatus.Completed);
@@ -1102,6 +1106,12 @@ public sealed class AnalyzeReportTests
 
         public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
         {
+            if (step.AgentDefinition == TestAdvice.Advisor.Agent)
+            {
+                Advised.Add(step);
+                return new AgentRunResult(AgentRunStatus.Completed);
+            }
+
             Asked.Add(step);
 
             foreach (var said in SaysFirst(step).Concat(Says))

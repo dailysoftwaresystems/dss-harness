@@ -1838,7 +1838,7 @@ public sealed class FlowService(
 
                     return outcome;
                 },
-                new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output, isolation, updates),
+                new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output, isolation, _owner, updates, _clock),
                 updates: () => _store.ReadFlowUpdates(layout),
                 workflowFileIfThere: named => WorkflowNamedFiles.OfRun(_fileSystem, _platform.PathComparison, layout).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"),
                 runFacts: (instance, fact) => RunFactOf(context, layout, instance, fact),

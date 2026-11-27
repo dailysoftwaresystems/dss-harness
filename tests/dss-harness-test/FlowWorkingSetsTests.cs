@@ -289,7 +289,7 @@ public sealed class FlowWorkingSetsTests
             runner.On(step, script);
         }
 
-        var end = await new FlowCoordinator(WorkflowFileParser.Parse("workflows/flow/flow.yml", text), runner, new ConfiguredRunnerFacts(new HarnessConfig()), new JumpingClock(), runName: "r1").RunAsync(Token);
+        var end = await TestAdvice.Coordinator(WorkflowFileParser.Parse("workflows/flow/flow.yml", text), runner, new ConfiguredRunnerFacts(new HarnessConfig()), new JumpingClock(), runName: "r1").RunAsync(Token);
         Assert.Equal(FlowRunStatus.Done, end.Status);
         return runner;
     }

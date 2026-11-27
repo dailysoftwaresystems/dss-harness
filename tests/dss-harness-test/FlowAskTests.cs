@@ -100,7 +100,7 @@ public sealed class FlowAskTests
                 AgentQuestions = [Asked("which way?", "left")],
             })
             : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "left"}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -153,7 +153,7 @@ public sealed class FlowAskTests
                 AgentQuestions = [Asked("which way?", "left")],
             })
             : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
         var open = coordinator.OpenQuestions.Single();
@@ -193,7 +193,7 @@ public sealed class FlowAskTests
             {
                 Assumptions = [new AgentAssumption("the framework", "the newest", "the plan names none")],
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -226,7 +226,7 @@ public sealed class FlowAskTests
                 dependsOn: [think]
             """);
         var runner = new FakeRunner();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         runner.On("think", FlowStepResult.SafelyPausing("still limited after 4 tries: every account is at its limit"));
 
@@ -283,7 +283,7 @@ public sealed class FlowAskTests
         // The person's pause --all is asked on the run's own thread the moment the step's handoff is recorded - before
         // the step asks for its own pause, and before the loop can take the person's.
         var records = new HandoffWatch(() => coordinator!.RequestPause("command", all: true));
-        coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+        coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         gate.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
@@ -336,7 +336,7 @@ public sealed class FlowAskTests
                 outputs: work.json
             """);
         var runner = new FakeRunner();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         runner.On("think", FlowStepResult.SafelyPausing("the provider's service failed past its 4 tries: unreachable"));
 

@@ -68,7 +68,7 @@ public sealed class FlowCommitReadsTests
             .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"list": ["x", "y"]}""")))
             .On("check", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["ok"] = ++checks == 2 }));
 
-        var end = await new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
+        var end = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
 
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal(["prep", "items[0].fold"], FoldsOf(runner, "items[0].checkpoint"));
@@ -115,7 +115,7 @@ public sealed class FlowCommitReadsTests
             .On("lint", _ => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the lint failed"))
             .On("gate", _ => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "1 test failed"));
 
-        var end = await new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
+        var end = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
 
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal(
@@ -154,7 +154,7 @@ public sealed class FlowCommitReadsTests
             ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "red")
             : FlowStepResult.Ended(passed: true, HarnessExit.Success));
 
-        var end = await new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
+        var end = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
 
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal("gate (test) in the main tree: done", MessageOf(runner, "save"));
@@ -194,7 +194,7 @@ public sealed class FlowCommitReadsTests
             """);
         var runner = new FakeRunner();
 
-        var end = await new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock()).RunAsync(Token);
+        var end = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock()).RunAsync(Token);
 
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal("one (test) in the main tree: done", MessageOf(runner, "first"));
@@ -229,7 +229,7 @@ public sealed class FlowCommitReadsTests
             """);
         var runner = new FakeRunner().On("first", _ => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "a hook refused"));
 
-        var end = await new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
+        var end = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
 
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal("one (test) in the main tree: done\ntwo (test) in the main tree: done", MessageOf(runner, "second"));
@@ -273,7 +273,7 @@ public sealed class FlowCommitReadsTests
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success);
             });
 
-        var end = await new FlowCoordinator(definition, runner, new RunnerFacts(), clock).RunAsync(Token).WaitAsync(TimeSpan.FromSeconds(30), Token);
+        var end = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock).RunAsync(Token).WaitAsync(TimeSpan.FromSeconds(30), Token);
 
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal("one (test) in the main tree: done", MessageOf(runner, "first"));
@@ -312,7 +312,7 @@ public sealed class FlowCommitReadsTests
             """);
         var runner = new FakeRunner();
 
-        var end = await new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
+        var end = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
 
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal(["close"], FoldsOf(runner, "commit"));
@@ -370,7 +370,7 @@ public sealed class FlowCommitReadsTests
              "red": [{"leg": "win", "verdict": "failed", "phase": "test", "detail": "1 failed", "tail": []}], "runDirectory": null}
             """)));
 
-        var end = await new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
+        var end = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
 
         Assert.Equal(FlowRunStatus.Done, end.Status);
 
@@ -416,7 +416,7 @@ public sealed class FlowCommitReadsTests
                 {"passed": true, "exitCode": 0, "verdicts": [{"leg": "leg{{run.Index}}", "verdict": "passed"}], "red": [], "runDirectory": null}
                 """)));
 
-        _ = await new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
+        _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
 
         Assert.Equal("items[0].gate (build) in the main tree: passed - leg0 passed", MessageOf(runner, "items[0].checkpoint"));
         Assert.Equal("items[1].gate (build) in the main tree: passed - leg1 passed", MessageOf(runner, "items[1].checkpoint"));
@@ -462,7 +462,7 @@ public sealed class FlowCommitReadsTests
             .On("audit", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""
                 {"passed": true, "exitCode": 0, "verdicts": [], "red": [], "runDirectory": null}
                 """)));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(Token);
 
@@ -513,7 +513,7 @@ public sealed class FlowCommitReadsTests
             {"passed": true, "exitCode": 0, "verdicts": [], "red": [], "runDirectory": null}
             """)));
 
-        _ = await new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
+        _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token);
 
         Assert.Equal("late (test)", MessageOf(runner, "save"));
     }

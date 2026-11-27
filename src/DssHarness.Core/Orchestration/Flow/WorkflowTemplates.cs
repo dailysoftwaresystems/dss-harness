@@ -240,6 +240,59 @@ public static class WorkflowTemplates
     });
 
     /// <summary>
+    /// The advisor the implementation workflow names, as one line a workflow's file can hold at its top level - YAML's
+    /// flow style, each key the block gives in the order a file writes them: what the refusal of a workflow that names no
+    /// advisor gives as its fix, so the block it names is the one init writes, read from this build's own embedded
+    /// definition by the reader's own rules. Read once.
+    /// </summary>
+    /// <exception cref="HarnessException">This build's own embedded definition is missing, does not read, or names no advisor: exit 70.</exception>
+    public static string ShippedAdvisor => ShippedAdvisorRead.Value;
+
+    /// <summary>The advisor the implementation workflow names, said once (<see cref="ShippedAdvisor"/>).</summary>
+    private static readonly Lazy<string> ShippedAdvisorRead = new(() =>
+    {
+        var file = $"{ShippedWorkflowName}{HarnessLayout.WorkflowFileExtension}";
+
+        if (TextOf(file) is not { } definition)
+        {
+            throw new HarnessException(HarnessExit.InternalError, $"this build embeds no '{file}'; the implementation workflow is incomplete in it");
+        }
+
+        FlowAdvisor? advisor;
+
+        try
+        {
+            advisor = WorkflowFileParser.Parse(file, definition).Advisor;
+        }
+        catch (HarnessException exception)
+        {
+            throw new HarnessException(HarnessExit.InternalError, $"this build's own implementation workflow does not read:{Environment.NewLine}{exception.Message}", exception);
+        }
+
+        if (advisor is null)
+        {
+            throw new HarnessException(HarnessExit.InternalError, "this build's own implementation workflow names no advisor");
+        }
+
+        var effort = advisor.EffortByModel is { } byModel
+            ? $"{{{string.Join(", ", byModel.Select(entry => $"{entry.Key}: {entry.Value}"))}}}"
+            : advisor.Effort;
+        string?[] keys =
+        [
+            $"agent: {advisor.Agent}",
+            advisor.Tier is { } tier ? $"tier: {tier}" : null,
+            advisor.Model is { } model ? $"model: {model}" : null,
+            effort is { } level ? $"effort: {level}" : null,
+            advisor.Client is { } client ? $"client: {client}" : null,
+            $"prompt: {advisor.Prompt}",
+            advisor.Retries is { } retries ? $"retries: {retries.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : null,
+            advisor.BackoffSeconds is { } seconds ? $"backoffSeconds: {seconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : null,
+        ];
+
+        return $"advisor: {{{string.Join(", ", keys.OfType<string>())}}}";
+    });
+
+    /// <summary>
     /// The implementation workflow's definition, read back from this build's own embedded set, parsed and held to
     /// <see cref="WorkflowValidator"/>'s rules as for a configuration with no <c>commit.template</c>, each embedded schema
     /// held to the subset the engine reads, its paths typed by those schemas and its prompts' placeholders checked. What only a repository can answer - that its files

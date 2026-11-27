@@ -30,7 +30,7 @@ public static class WorkflowKeys
         new("budget", "what a whole run's reasoning may cost, and the reserve that pauses the run first") { Keys = Budget },
         new("recommendations", "the file holding the repository's bar for recommendations, in this directory"),
         new("texts", $"the workflow's texts: each name a markdown file in this directory, read in a prompt as {{text.<name>}}; the shipped flow declares {ShippedTextsSaid} here"),
-        new("advisor", "the agent that recommends an answer to a question the engine raises itself") { Keys = Advisor },
+        new("advisor", "the agent that recommends an answer to every question the engine raises before a person is asked it; a workflow a run is started of names one") { Keys = Advisor },
         new("reporter", "the agent that words what a run is doing for a person who asks") { Keys = Reporter },
         new("amend", "everything the workflow says about a request amended, or an answer changed, while a run works") { Keys = Amend },
         new("answers", "the answers the configuration gives to question kinds, beforehand") { Keys = WorkflowStepTypes.AnswerKeys },
@@ -122,7 +122,6 @@ public static class WorkflowKeys
         new("model", "the model outright, whose provider, key and client follow from it"),
         new("effort", "the effort the model is asked for: one level for every model it may run on, or a map of all and models' codes giving each its own"),
         new("client", "the client, where the provider is reached two ways"),
-        new("kinds", "the question kinds this advisor is asked about; absent, every one"),
         new("retries", "how often its agent is tried again where it failed, on each model it may use; absent, maxRetries"),
         new("backoffSeconds", $"seconds it waits before it is tried again, twice as long before each later try, at most {WorkflowStep.MostBackoffSeconds}; absent, the workflow's backoffSeconds"),
     ];

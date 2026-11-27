@@ -6368,7 +6368,7 @@ public sealed class ImplementationFlowTests
         /// The advisor's recommendation arrives while the question is still open: it is in the record with who gave it, and
         /// in list-orchestrator's saying of the open question; an advisor that ends without an answer leaves the question
         /// saying one was sought and not obtained, and the bound is still asked of the person, who answers it; and an entry
-        /// that names no advisor at all says none was sought.
+        /// that names no advisor at all is never started, the refusal naming the block init writes.
         /// </summary>
         [Fact]
         public async Task TheAdvisorsRecommendationArrivesIntoTheOpenQuestion_AnAdvisorWithoutAnAnswerIsSoughtAndNotObtained_AndAnEntryThatNamesNone_SaysSo()
@@ -6451,25 +6451,23 @@ public sealed class ImplementationFlowTests
 
             Assert.Equal(nameof(FlowRunStatus.Done), other.Harness.OrchestrationStore.ReadFlow(other.RunOf())!.Status);
 
-            // An entry that names no advisor says none was sought, and asks the person all the same.
+            // An entry that names no advisor is never started: every question is recommended before a person is asked
+            // it, so the run's start refuses the workflow, naming the block init writes, and nothing of a run is made.
             using var withoutAdvisor = new TempDirectory();
             var third = await PrepareAsync(withoutAdvisor);
 
             await EditWorkflowAsync(third, lines => lines.TakeWhile(line => !line.Equals("advisor:", StringComparison.Ordinal))
                 .Concat(lines.SkipWhile(line => !line.Equals("reporter:", StringComparison.Ordinal))).ToArray());
 
-            var asked = await StartAsync(third, "request=Ship the orders report.");
+            var refused = await StartAsync(third, "request=Ship the orders report.");
 
-            Assert.Equal(FlowExit.Paused, asked.ExitCode);
-            var approval = third.Harness.OrchestrationStore.ReadFlowQuestions(third.RunOf())!.Open.Single(question => question.RaisedBy?.Step?.EndsWith(".approval", StringComparison.Ordinal) == true);
-
-            Assert.Equal(("notSought", null), (approval.Recommendation!.State, approval.Recommendation.Answer));
-            Assert.Contains("orchestrator 'implementation' names no advisor", approval.Recommendation.Why, StringComparison.Ordinal);
+            Assert.Equal(HarnessExit.ConfigInvalid, refused.ExitCode);
+            Assert.Contains(
+                $"the workflow names no advisor; every question the engine raises is recommended by the advisor before a person is asked it, so a workflow a run is started of names one. Write the block init writes at the file's top level - {WorkflowTemplates.ShippedAdvisor} - ",
+                string.Join("\n", refused.Details ?? []),
+                StringComparison.Ordinal);
+            Assert.Null(third.Harness.OrchestrationStore.ReadFlow(third.RunOf()));
             Assert.Empty(third.Agents.Of("advisor"));
-
-            _ = await AnswerAsync(third, "approve");
-
-            Assert.Equal(nameof(FlowRunStatus.Done), third.Harness.OrchestrationStore.ReadFlow(third.RunOf())!.Status);
         }
 
         /// <summary>
@@ -7368,10 +7366,17 @@ public sealed class ImplementationFlowTests
 
                 Assert.Equal(nameof(FlowRunStatus.Paused), parked.Status);
                 Assert.Equal(nameof(FlowInstanceState.Done), parked.Steps.Single(step => step.Instance == "rounds#1.items[0].verify").State);
-                Assert.Equal(atPause.Spent!.Usd, parked.Spent!.Usd);
+
+                // What the run spent once its pause was complete is the recommendation of the budget's own question alone,
+                // kept on the run's own measure: the build the pause left running spent none of it.
+                Assert.NotNull(parked.Spent!.Advice);
+                Assert.Equal(atPause.Spent!.Usd - (atPause.Spent.Advice?.Usd ?? 0), parked.Spent.Usd - (parked.Spent.Advice.Usd ?? 0), 6);
 
                 var asked = Assert.Single(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
 
+                // The budget's own question was put to the advisor before the person was left with it, as every question is.
+                Assert.Contains(asked.Recommendation!.State, new[] { "given", "notObtained" });
+                Assert.True(Directory.Exists(Path.Combine(kit.RunOf().Directory, "steps", FlowQuestions.RunsOwn, "advice", "1")), Shown(kit));
                 Assert.Equal("runBudget", asked.Kind);
                 Assert.Equal(["more", "abort"], asked.Options.Select(option => option.Answer).ToArray());
                 Assert.Contains("of 40.00 USD", asked.ProblemShown!.Happened, StringComparison.Ordinal);

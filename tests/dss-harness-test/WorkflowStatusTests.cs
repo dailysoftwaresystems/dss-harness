@@ -49,7 +49,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new DoneRunner(), new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, new DoneRunner(), new RunnerFacts(), clock, records: records);
             await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
 
@@ -92,7 +92,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("gate");
 
@@ -138,7 +138,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(
+            var coordinator = TestAdvice.Coordinator(
                 definition,
                 new DoneRunner().On("plan", run => FlowStepResult.Ended(passed: true, 0, output: JsonNode.Parse("""{"list": ["a", "b"]}"""))),
                 new RunnerFacts(),
@@ -174,7 +174,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("gate");
             coordinator.RequestPause("interrupt");
@@ -214,7 +214,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
 
@@ -254,7 +254,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             await runner.StartedAsync("build").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
@@ -304,7 +304,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("gate");
 
@@ -317,7 +317,7 @@ public sealed class WorkflowStatusTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new DoneRunner(), new RunnerFacts(), clock, resume: taken, records: again);
+            var coordinator = TestAdvice.Coordinator(definition, new DoneRunner(), new RunnerFacts(), clock, resume: taken, records: again);
             var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -360,7 +360,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            await new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records).RunAsync(TestContext.Current.CancellationToken);
+            await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records).RunAsync(TestContext.Current.CancellationToken);
         }
 
         var status = harness.OrchestrationStore.ReadWorkflowStatus(layout)!;

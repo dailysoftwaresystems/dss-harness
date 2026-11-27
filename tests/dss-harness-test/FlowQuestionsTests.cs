@@ -192,7 +192,7 @@ public sealed class FlowQuestionsTests
                 ["row 12", "cell x"],
                 [],
                 "2 new rows, 1 lost cell"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -220,7 +220,7 @@ public sealed class FlowQuestionsTests
         var conflictRunner = new FakeRunner().On(
             "fold",
             Dry(RequestStanding.Refused, [], ["src/A.cs", "src/B.cs"], [RefusalKind.Conflict, RefusalKind.Conflict], "2 paths conflict"));
-        var conflict = new FlowCoordinator(conflicts, conflictRunner, new RunnerFacts(), new JumpingClock());
+        var conflict = TestAdvice.Coordinator(conflicts, conflictRunner, new RunnerFacts(), new JumpingClock());
 
         var end = await conflict.RunAsync(TestContext.Current.CancellationToken);
 
@@ -244,7 +244,7 @@ public sealed class FlowQuestionsTests
         var refusedRunner = new FakeRunner().On(
             "fold",
             Dry(RequestStanding.Refused, [], [], [RefusalKind.Conflict, RefusalKind.Other], "a path is refused"));
-        var failed = new FlowCoordinator(refused, refusedRunner, new RunnerFacts(), new JumpingClock());
+        var failed = TestAdvice.Coordinator(refused, refusedRunner, new RunnerFacts(), new JumpingClock());
 
         var other = await failed.RunAsync(TestContext.Current.CancellationToken);
 
@@ -274,7 +274,7 @@ public sealed class FlowQuestionsTests
                     type: orient
             """);
         var runner = new FakeRunner().On("done", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": false}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -306,7 +306,7 @@ public sealed class FlowQuestionsTests
                   loopBound: accept
             """);
         var runner = new FakeRunner().On("done", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": false}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -341,7 +341,7 @@ public sealed class FlowQuestionsTests
                     type: orient
             """);
         var runner = new FakeRunner().On("done", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": false}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -384,7 +384,7 @@ public sealed class FlowQuestionsTests
             "fold",
             Dry(RequestStanding.NeedsConsent, [ConsentKind.FoldNewRows], ["row 12"], [], "1 new row"),
             FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"rows": ["12"]}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -422,7 +422,7 @@ public sealed class FlowQuestionsTests
         var runner = new FakeRunner().Queue(
             "fold",
             Dry(RequestStanding.NeedsConsent, [ConsentKind.FoldLostRows], ["cell x"], [], "1 lost cell"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -456,7 +456,7 @@ public sealed class FlowQuestionsTests
                 dependsOn: [think]
             """);
         var runner = new FakeRunner().On("think", FlowStepResult.AtLimit("turns", "12 turns"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -507,7 +507,7 @@ public sealed class FlowQuestionsTests
                 question: the second?
                 options: [go, stay]
             """);
-        var coordinator = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new ManualClock());
+        var coordinator = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new ManualClock());
 
         await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -541,7 +541,7 @@ public sealed class FlowQuestionsTests
                 question: may it go ahead?
                 options: [approve, revise]
             """);
-        var coordinator = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
 
         await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "approve", out _));
@@ -572,7 +572,7 @@ public sealed class FlowQuestionsTests
                 when: think.question == 'turnLimit'
             """);
         var runner = new FakeRunner().On("think", FlowStepResult.AtLimit("turns", "12 turns"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -606,7 +606,7 @@ public sealed class FlowQuestionsTests
             FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true },
             FlowStepResult.AtLimit("context", "the conversation filled it") with { StoredConversation = true },
             FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -660,7 +660,7 @@ public sealed class FlowQuestionsTests
             "think",
             FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true },
             FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -686,7 +686,7 @@ public sealed class FlowQuestionsTests
                 answers:
                   noChecks: fail
             """);
-        var noneCoordinator = new FlowCoordinator(
+        var noneCoordinator = TestAdvice.Coordinator(
             none,
             new FakeRunner().On("wait", FlowStepResult.Found("none", "no check appeared in 300 s")),
             new RunnerFacts(),
@@ -707,7 +707,7 @@ public sealed class FlowQuestionsTests
                 answers:
                   checksPending: fail
             """);
-        var pendingCoordinator = new FlowCoordinator(
+        var pendingCoordinator = TestAdvice.Coordinator(
             pending,
             new FakeRunner().On("wait", FlowStepResult.Found("pending", "still running at 60 minutes")),
             new RunnerFacts(),
@@ -740,7 +740,7 @@ public sealed class FlowQuestionsTests
                 when: approval.text != null
             """);
         var runner = new FakeRunner();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), new Dictionary<string, string> { ["request"] = "the parser item" });
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), new Dictionary<string, string> { ["request"] = "the parser item" });
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -783,7 +783,7 @@ public sealed class FlowQuestionsTests
                 answers:
                   pause: approve
             """);
-        var coordinator = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -813,7 +813,7 @@ public sealed class FlowQuestionsTests
                 answers:
                   pause: approve
             """);
-        var coordinator = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -828,7 +828,7 @@ public sealed class FlowQuestionsTests
                 question: may it go ahead?
                 options: [approve, revise]
             """);
-        var aborting = new FlowCoordinator(abortable, new FakeRunner(), new RunnerFacts(), new JumpingClock());
+        var aborting = TestAdvice.Coordinator(abortable, new FakeRunner(), new RunnerFacts(), new JumpingClock());
 
         await aborting.RunAsync(TestContext.Current.CancellationToken);
 
@@ -884,7 +884,7 @@ public sealed class FlowQuestionsTests
             Dry(RequestStanding.Refused, [], ["src/A.cs"], [RefusalKind.Conflict], "1 path conflicts"),
             Dry(RequestStanding.Refused, [], ["src/A.cs"], [RefusalKind.Conflict], "1 path conflicts"),
             Dry(RequestStanding.Refused, [], ["src/A.cs"], [RefusalKind.Conflict], "1 path conflicts"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         // Two conflicts were retried by the configuration, across the attempts its answers created; the third, with
         // the count spent and no then, is a person's.
@@ -912,7 +912,7 @@ public sealed class FlowQuestionsTests
                 options: [approve]
                 onFailure: continue
             """);
-        var coordinator = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -941,7 +941,7 @@ public sealed class FlowQuestionsTests
                 dependsOn: [approval]
             """);
         var runner = new FakeRunner();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -969,7 +969,7 @@ public sealed class FlowQuestionsTests
                 dependsOn: [work]
             """);
         var runner = new FakeRunner();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -996,7 +996,7 @@ public sealed class FlowQuestionsTests
                     type: orient
             """);
         var runner = new FakeRunner().On("done", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": false}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1046,7 +1046,7 @@ public sealed class FlowQuestionsTests
                "options": ["yours", "mine"], "recommended": "theirs", "why": "a person said so"}
             ]}
             """)));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1087,7 +1087,7 @@ public sealed class FlowQuestionsTests
                 options: [continue]
             """);
         var runner = new FakeRunner().On("intake", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"stops": ["just a string"]}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1135,7 +1135,7 @@ public sealed class FlowQuestionsTests
         // The first entry's when holds outright: answered at once, no person asked, the input named with its value -
         // and the run goes on, the pause step done with the answer as its output.
         var runner = new FakeRunner().On("intake", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: approved));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["preapproved"] = "yes", ["request"] = "do it" });
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["preapproved"] = "yes", ["request"] = "do it" });
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1151,7 +1151,7 @@ public sealed class FlowQuestionsTests
 
         // A quote that stands in the input holds: the person's own words, white space runs as one space - and the run
         // goes on with the answer as it did with the first entry's.
-        coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["preapproved"] = "maybe", ["request"] = "Please   Build it without waiting\n for me to approve the plan. Thanks." });
+        coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["preapproved"] = "maybe", ["request"] = "Please   Build it without waiting\n for me to approve the plan. Thanks." });
 
         end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1165,7 +1165,7 @@ public sealed class FlowQuestionsTests
         Assert.Contains("Build it without waiting for me to approve the plan.", quoted.Given.Single().Input, StringComparison.Ordinal);
 
         // Reported words the input does not hold answer nothing: the person is asked.
-        coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["preapproved"] = "maybe", ["request"] = "something else entirely" });
+        coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["preapproved"] = "maybe", ["request"] = "something else entirely" });
 
         end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1215,7 +1215,7 @@ public sealed class FlowQuestionsTests
         // in the value as given, never in an amendment: the quote does not hold, the person is asked, and the question
         // itself shows the request with its amendment.
         var runner = new FakeRunner().On("intake", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"sentence": "in fact, build the parser and nothing else"}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, updates: () => taken);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, updates: () => taken);
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1228,7 +1228,7 @@ public sealed class FlowQuestionsTests
         // The quoted words of the value as given hold as they always did, amendments beside them or not.
         FlowUpdatesFile none = new(1, "r1", DateTimeOffset.UtcNow, []);
         runner = new FakeRunner().On("intake", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"sentence": "Build the parser   and nothing else, please"}""")));
-        coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "Build the parser   and nothing else, please" }, updates: () => none);
+        coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "Build the parser   and nothing else, please" }, updates: () => none);
 
         end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1255,7 +1255,7 @@ public sealed class FlowQuestionsTests
             """);
 
         // A run held in memory reads no files: no bar is there, and the placeholder says so, naming the orchestrator.
-        var coordinator = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 

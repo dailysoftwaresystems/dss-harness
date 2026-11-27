@@ -715,7 +715,12 @@ public sealed record FlowHoldRecord(string Update, [property: JsonConverter(type
 /// What the run spent before its steps' measures were kept - a run a build that recorded the run's spend alone began -
 /// which no instance's measure holds and the totals above carry whole; left out where every part was measured.
 /// </param>
-public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes, string? Uncounted = null, int? ReserveMetAt = null, FlowUnmeasuredSpend? Unmeasured = null)
+/// <param name="Advice">
+/// What the advisor spent recommending on the run's own question - its budget's - which no step asked, so no instance's
+/// measure holds it and the totals above carry it beside theirs; left out where none was spent, as a record written
+/// before the run's own question was recommended is read.
+/// </param>
+public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes, string? Uncounted = null, int? ReserveMetAt = null, FlowUnmeasuredSpend? Unmeasured = null, FlowStepAdvice? Advice = null)
 {
     /// <summary>The dollars as the one fold holds them: what was counted, and why the rest is not known where it is not.</summary>
     [JsonIgnore]

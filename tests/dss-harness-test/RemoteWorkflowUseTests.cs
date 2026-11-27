@@ -1532,7 +1532,7 @@ public sealed class RemoteWorkflowUseTests
             TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase),
         });
         System.IO.Directory.CreateDirectory(temp.Combine(".harness-config", "workflows", "flow"));
-        await File.WriteAllTextAsync(temp.Combine(".harness-config", "workflows", "flow", "flow.yml"), $"name: flow\nsteps:\n  - name: scan\n    use: {Source}\n", Token);
+        TestAdvice.WriteWorkflowFile(temp.Combine(".harness-config", "workflows", "flow", "flow.yml"), $"name: flow\nsteps:\n  - name: scan\n    use: {Source}\n");
 
         var report = await new WorkflowValidationService(
             harness.ContextLoader,
@@ -1991,7 +1991,7 @@ public sealed class RemoteWorkflowUseTests
         await remote.TagAsync("v1", commit);
         var (repository, _) = await FlowServiceTests.RepositoryAsync(
             $"name: flow\nsteps:\n  - name: scan\n    use: {Source}\n",
-            new HarnessConfig { Workflows = [FlowServiceTests.Workflow], WorkflowSources = Allowed() });
+            new HarnessConfig { Workflows = [FlowServiceTests.Workflow], WorkflowSources = Allowed(), Defaults = new HarnessDefaults { AgentTier = TestAdvice.AgentTier }, Providers = TestAdvice.Providers, TierConfig = TestAdvice.TierConfig });
         using var disposed = repository;
         var harness = repository.Harness;
         var validation = new WorkflowValidationService(
@@ -2039,7 +2039,7 @@ public sealed class RemoteWorkflowUseTests
         await remote.TagAsync("v1", await remote.CommitAsync(("security-review.yml", Paused)));
         var (repository, _) = await FlowServiceTests.RepositoryAsync(
             $"name: flow\nsteps:\n  - name: scan\n    use: {Source}\n",
-            new HarnessConfig { Workflows = [FlowServiceTests.Workflow], WorkflowSources = Allowed() });
+            new HarnessConfig { Workflows = [FlowServiceTests.Workflow], WorkflowSources = Allowed(), Defaults = new HarnessDefaults { AgentTier = TestAdvice.AgentTier }, Providers = TestAdvice.Providers, TierConfig = TestAdvice.TierConfig });
         using var disposed = repository;
         var harness = repository.Harness;
         var validation = new WorkflowValidationService(
@@ -2489,7 +2489,7 @@ public sealed class RemoteWorkflowUseTests
             System.IO.Directory.CreateDirectory(temp.Combine(".harness-config", "workflows", "flow"));
         }
 
-        await File.WriteAllTextAsync(temp.Combine(".harness-config", "workflows", "flow", "flow.yml"), $"name: flow\nsteps:\n  - name: scan\n    use: {source}\n", Token);
+        TestAdvice.WriteWorkflowFile(temp.Combine(".harness-config", "workflows", "flow", "flow.yml"), $"name: flow\nsteps:\n  - name: scan\n    use: {source}\n");
 
         return await new WorkflowValidationService(
             harness.ContextLoader,

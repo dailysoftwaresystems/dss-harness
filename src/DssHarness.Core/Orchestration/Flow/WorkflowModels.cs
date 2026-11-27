@@ -226,14 +226,21 @@ public sealed record FlowRecover(
 /// </remarks>
 public sealed record FlowBudget(double? Usd = null, long? Tokens = null, double? Minutes = null, int? ReservePercent = null);
 
-/// <summary>The agent that recommends an answer to a question the engine raises itself.</summary>
+/// <summary>
+/// The agent that recommends an answer to every question the engine raises, before a person is asked it: a workflow a
+/// run is started of names one, and a used workflow's own recommends for its steps where its use governs itself.
+/// </summary>
 /// <param name="Agent">The agent definition, as a file under the workflow's <c>agents</c> directory.</param>
 /// <param name="Prompt">The prompt file the recommendation is asked with.</param>
 /// <param name="Tier">A name for a class of model, resolved by the configuration's tiers.</param>
 /// <param name="Model">The model outright, whose provider, key and client follow from it.</param>
 /// <param name="Effort">The effort the model is asked for: one level, or <see langword="null"/> where <see cref="FlowAdvisor.EffortByModel"/> holds the map.</param>
 /// <param name="Client">The client, where the provider is reached two ways.</param>
-/// <param name="Kinds">The question kinds this advisor is asked about; every one, where the file says nothing.</param>
+/// <param name="Kinds">
+/// The retired <c>kinds</c>, as a frozen definition of an earlier release holds it: read so that run's definition still
+/// reads back, and never applied - every kind of question is recommended - nor written, for no file gives it
+/// (<see cref="WorkflowFileParser.RetiredAdvisorKey"/>).
+/// </param>
 public sealed record FlowAdvisor(
     string Agent,
     string Prompt,
@@ -241,7 +248,7 @@ public sealed record FlowAdvisor(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Model,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Effort,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Client,
-    IReadOnlyList<string> Kinds)
+    IReadOnlyList<string>? Kinds = null)
 {
     /// <summary>How often its agent is tried again where it failed, on each model it may use, where the file says.</summary>
     public int? Retries { get; init; } = null;

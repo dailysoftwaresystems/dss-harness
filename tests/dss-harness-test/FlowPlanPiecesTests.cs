@@ -316,7 +316,7 @@ public sealed class FlowPlanPiecesTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // To the first item's probe, where the round is under way.
             _ = await coordinator.RunAsync(Token);
@@ -390,7 +390,7 @@ public sealed class FlowPlanPiecesTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // To the first item's probe: the second item waits, its agent held back by the run's one open agent.
             _ = await coordinator.RunAsync(Token);
@@ -451,7 +451,7 @@ public sealed class FlowPlanPiecesTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -504,7 +504,7 @@ public sealed class FlowPlanPiecesTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // To the item's probe, where the instance has begun: its agent is made and its builder has run.
             _ = await coordinator.RunAsync(Token);
@@ -572,7 +572,7 @@ public sealed class FlowPlanPiecesTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
             var plan = runner.Hold("plan");
 
             // To the planning step, held open by the test: the scope an update is planned in has begun, and no round
@@ -696,7 +696,7 @@ public sealed class FlowPlanPiecesTests
 
     /// <summary>A coordinator over the run's records, as every test of this class makes one.</summary>
     private static FlowCoordinator CoordinatorOf(WorkflowDefinition definition, IFlowStepRunner runner, IFlowRecords records, HarnessFactory harness, OrchestratorLayout layout, FlowResumeState? resume = null)
-        => new(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, resume: resume, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+        => TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, resume: resume, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
     /// <summary>The run as its records stand on disk, for a coordinator that takes it up.</summary>
     private static FlowResumeState ResumeOf(HarnessFactory harness, OrchestratorLayout layout, WorkflowDefinition definition)
@@ -932,7 +932,7 @@ public sealed class FlowPlanPiecesTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -978,7 +978,7 @@ public sealed class FlowPlanPiecesTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -1903,7 +1903,7 @@ public sealed class FlowPlanPiecesTests
         using (records)
         {
             // A clock that ends no handoff turn by its bound: each turn ends as its agent answers.
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new TimerClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -2555,7 +2555,7 @@ public sealed class FlowPlanPiecesTests
             });
 
         using var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition));
-        var coordinator = new FlowCoordinator(
+        var coordinator = TestAdvice.Coordinator(
             definition,
             runner,
             new RunnerFacts(),

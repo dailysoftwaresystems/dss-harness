@@ -550,7 +550,7 @@ public sealed class FlowSessionsTests
         // The run pauses with an agent still open: its state file says Paused, and its agent holds a worktree.
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, other, context))
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new Facts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new Facts(), records: records);
             var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -650,7 +650,7 @@ public sealed class FlowSessionsTests
 
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, other, context))
         {
-            _ = await new FlowCoordinator(definition, new Runner(), new Facts(), records: records).RunAsync(TestContext.Current.CancellationToken);
+            _ = await TestAdvice.Coordinator(definition, new Runner(), new Facts(), records: records).RunAsync(TestContext.Current.CancellationToken);
         }
 
         harness.OrchestrationStore.WriteFlow(other, harness.OrchestrationStore.ReadFlow(other)! with { Status = "Paused" });
