@@ -116,7 +116,9 @@ public static partial class HelpTopics
         builder.AppendLine("                 model's API address, its keys' variable names (apiKeyNames, in the");
         builder.AppendLine("                 order they are tried), its client, its efforts, its sizes and its");
         builder.AppendLine("                 prices, with the date they were read - nothing of a model is in the");
-        builder.AppendLine("                 tool's code ('help agent-clients')");
+        builder.AppendLine("                 tool's code ('help agent-clients'); as init writes them, GLM 5.4");
+        builder.AppendLine("                 costs what GLM 5.3 does, for Z.AI has published no price of its");
+        builder.AppendLine("                 own for it yet");
         builder.AppendLine("  tierConfig     each tier's models in the order they are tried: the first serves a");
         builder.AppendLine("                 step on the tier, the rest are its fallback; defaults.agentTier");
         builder.AppendLine("                 (balanced, as init writes it) is the tier of a step naming neither");

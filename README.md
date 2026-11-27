@@ -985,7 +985,8 @@ round runs `run.affectedTests`, the units of every item built in the run, where 
 
 The models a step runs on are the configuration's, under `providers`: each provider is a company
 whose models the tool will reach - its API's address, its keys' names, its client - and each model's
-entry says what it takes, holds and costs, with the date its numbers were read. A provider's keys
+entry says what it takes, holds and costs, with the date its numbers were read - in what `init`
+writes, GLM 5.4 costs what GLM 5.3 does, for Z.AI has published no price of its own for it yet. A provider's keys
 are `apiKeyNames`, the names of the variables that hold them in the git-ignored slot
 `.harness-config/workflows/.env/`, in the order they are tried; a second key of one company is a
 second name in the list, and no key is read from the process environment - a CI machine writes the

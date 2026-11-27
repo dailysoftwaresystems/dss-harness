@@ -16,13 +16,13 @@ namespace DssHarness.Core.Agents.ClaudeApi;
 /// one owner of what a client's <c>requestExtras</c> may add to it, and of the copy of a schema the API is sent.
 /// </summary>
 /// <remarks>
-/// The tool sends no prefill, no tool choice and no thinking budget of its own, and never turns thinking off - a client's
-/// <c>requestExtras</c> may add a tool choice and <c>thinking.budget_tokens</c>, each where the step's model takes it: the
-/// Claude 4.7 and later models refuse a thinking budget, and Claude Fable 5.1, Claude Opus 5.5 and Claude Sonnet 5.5 a
-/// forced tool choice. No sampling parameter is ever sent, nor may <c>requestExtras</c> add one: the API version every
-/// request is sent on refuses them on every model (<see cref="SamplingRefused"/>). No tool of the provider's own is
-/// declared: the web is the harness's own (values 365 and 382). No request carries <c>fallbacks</c> or a
-/// <c>server-side-fallback-</c> header: the engine's fallback is the only one a step has.
+/// The tool sends no prefill, no tool choice and no thinking budget of its own, and never turns thinking off - a
+/// client's <c>requestExtras</c> may add a tool choice and <c>thinking.budget_tokens</c>, each where the step's model
+/// takes it: the Claude 4.7 and later models refuse a thinking budget, and Claude Fable 5.1 and 5.2, Claude Opus 5.5 and
+/// Claude Sonnet 5.5 a forced tool choice. No sampling parameter is ever sent, nor may <c>requestExtras</c> add one: the
+/// API version every request is sent on refuses them on every model (<see cref="SamplingRefused"/>). No tool of the
+/// provider's own is declared: the web is the harness's own (values 365 and 382). No request carries <c>fallbacks</c> or
+/// a <c>server-side-fallback-</c> header: the engine's fallback is the only one a step has.
 /// </remarks>
 public static class ClaudeApiRequest
 {

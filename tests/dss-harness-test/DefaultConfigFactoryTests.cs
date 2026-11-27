@@ -43,13 +43,13 @@ public sealed class DefaultConfigFactoryTests
         Assert.Equal("balanced", config.Defaults.AgentTier);
         Assert.Equal(agentTier, config.Defaults.AgentTier);
         Assert.Equal(
-            ["anthropic: claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5", "zai: glm-5.3"],
+            ["anthropic: claude-fable-5-2, claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5", "zai: glm-5.4, glm-5.3-flash"],
             config.Providers.Select(provider => $"{provider.Name}: {string.Join(", ", provider.Models.Select(model => model.Code))}"));
         Assert.Equal(providers.Select(provider => provider.Name), config.Providers.Select(provider => provider.Name));
         // The tier the analysis of a run's report runs on is seeded as every other tier is, so a configuration init wrote
         // analyses a run as it stands.
         Assert.Equal(["best", "high", "balanced", "fast", "reporting"], config.TierConfig.Keys);
-        Assert.Equal(["claude-sonnet-5-5", "glm-5.3"], config.TierConfig["reporting"]);
+        Assert.Equal(["claude-sonnet-5-5", "glm-5.3-flash"], config.TierConfig["reporting"]);
         Assert.All(tierConfig, tier => Assert.Equal(tier.Value, config.TierConfig[tier.Key]));
         Assert.Null(config.BalanceKeyUsage);
         Assert.Empty(config.AgentClients);

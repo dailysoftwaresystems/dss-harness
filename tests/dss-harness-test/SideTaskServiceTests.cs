@@ -68,14 +68,14 @@ public sealed class SideTaskServiceTests
             // The first message as the API clients send it: the conversation so far before the person's, where the
             // conversation is a new one.
             await events.EmitAsync(new MessageSent(AgentPromptParts.FirstMessage(run, newConversation: run.Conversation is null), AgentMessageKind.FirstPrompt));
-            await events.EmitAsync(new SessionStarted(run.Conversation?.Client ?? ClientName, run.Model ?? "glm-5.3", "hash", [], [], HandedConversation: run.Conversation is not null, Provider: run.Provider ?? "zai", SessionId: session));
+            await events.EmitAsync(new SessionStarted(run.Conversation?.Client ?? ClientName, run.Model ?? "glm-5.4", "hash", [], [], HandedConversation: run.Conversation is not null, Provider: run.Provider ?? "zai", SessionId: session));
             await events.EmitAsync(new TurnStarted(1));
 
             // The provider began its answer: the conversation is begun, as the API clients tell it.
             await events.ConversationBegunAsync();
             await events.EmitAsync(new TextDelta(text));
             await events.EmitAsync(new AssistantMessage(text, []));
-            await events.EmitAsync(new TurnFinished(1, run.Model ?? "glm-5.3", new AgentUsage(10, 5, 0, 0, 0, 0), "end_turn"));
+            await events.EmitAsync(new TurnFinished(1, run.Model ?? "glm-5.4", new AgentUsage(10, 5, 0, 0, 0, 0), "end_turn"));
         }
 
         public static async Task<AgentRunResult> Answered(AgentRun run, IAgentEventSink events, string text)
@@ -85,7 +85,7 @@ public sealed class SideTaskServiceTests
             return new AgentRunResult(AgentRunStatus.Completed, FinalText: text, Model: run.Model)
             {
                 Turns = 1,
-                Usage = new AgentUsageReport(new AgentUsage(10, 5, 0, 0, 0, 0), [new AgentModelUsage(run.Model ?? "glm-5.3", new AgentUsage(10, 5, 0, 0, 0, 0))]),
+                Usage = new AgentUsageReport(new AgentUsage(10, 5, 0, 0, 0, 0), [new AgentModelUsage(run.Model ?? "glm-5.4", new AgentUsage(10, 5, 0, 0, 0, 0))]),
             };
         }
 
@@ -453,7 +453,7 @@ public sealed class SideTaskServiceTests
         var (_, temp, service, stored, _) = await RepoAsync(graphs: RealGraph);
         OrchestrationKit.Write(temp.Path, "Greeter.cs", "public class Greeter\n{\n    public string Hello() => \"hi\";\n}\n");
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: Message, Model: "glm-5.3", Json: false), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: Message, Model: "glm-5.4", Json: false), Token);
 
         Assert.Equal(0, outcome.ExitCode);
         var task = Assert.Single(Directory.EnumerateDirectories(temp.Path, ".side-tasks", SearchOption.AllDirectories));
@@ -566,7 +566,7 @@ public sealed class SideTaskServiceTests
         OrchestrationKit.Write(temp.Path, "Greeter.cs", "public class Greeter { }\n");
 
         var outcome = await service.RunAsync(
-            new SideTaskCall(temp.Path, Prompt: "hello there", Model: "glm-5.3", Json: false) { NoGraph = true },
+            new SideTaskCall(temp.Path, Prompt: "hello there", Model: "glm-5.4", Json: false) { NoGraph = true },
             Token);
 
         Assert.Equal(0, outcome.ExitCode);
@@ -590,7 +590,7 @@ public sealed class SideTaskServiceTests
         OrchestrationKit.Write(temp.Path, "Greeter.cs", "public class Greeter { }\n");
         var typed = new Typed(["hello", "where is `Greeter`"], until: "the answer");
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Chat: typed.Chat()), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.4", Chat: typed.Chat()), Token);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal(["hello", "where is `Greeter`"], stored.Runs.Select(run => run.UserPrompt));
@@ -649,7 +649,7 @@ public sealed class SideTaskServiceTests
         var (harness, temp, service, stored, _) = await RepoAsync(graphs: _ => new UnopenableGraph(failure));
         using var tree = temp;
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "hello there", Model: "glm-5.3", Name: "blind"), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "hello there", Model: "glm-5.4", Name: "blind"), Token);
 
         var directory = LayoutOf(temp, "blind").Directory;
         var why = failure.Message.TrimEnd('.');
@@ -672,7 +672,7 @@ public sealed class SideTaskServiceTests
         using var tree = temp;
         var typed = new Typed(["hello"], until: "the answer");
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "blind", Chat: typed.Chat()), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.4", Name: "blind", Chat: typed.Chat()), Token);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal(
@@ -807,12 +807,12 @@ public sealed class SideTaskServiceTests
             model.Tiers.Add("claudes");
         }
 
-        foreach (var model in agents.Providers.SelectMany(provider => provider.Models).Where(model => model.Code is "claude-sonnet-5-5" or "claude-opus-5-5" or "glm-5.3"))
+        foreach (var model in agents.Providers.SelectMany(provider => provider.Models).Where(model => model.Code is "claude-sonnet-5-5" or "claude-opus-5-5" or "glm-5.4"))
         {
             model.Tiers.Add("trio");
         }
 
-        foreach (var model in agents.Providers.SelectMany(provider => provider.Models).Where(model => model.Code is "claude-sonnet-5-5" or "glm-5.3"))
+        foreach (var model in agents.Providers.SelectMany(provider => provider.Models).Where(model => model.Code is "claude-sonnet-5-5" or "glm-5.4"))
         {
             model.Tiers.Add("api-first");
         }
@@ -822,7 +822,7 @@ public sealed class SideTaskServiceTests
         {
             Defaults = new() { AgentTier = agents.AgentTier },
             Providers = [.. agents.Providers, narrow],
-            TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase) { ["narrow"] = ["narrow-1"], ["pair"] = ["narrow-2", "narrow-1"], ["claudes"] = ["claude-sonnet-5-5", "claude-opus-5-5"], ["trio"] = ["claude-sonnet-5-5", "claude-opus-5-5", "glm-5.3"], ["api-first"] = ["glm-5.3", "claude-sonnet-5-5"] },
+            TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase) { ["narrow"] = ["narrow-1"], ["pair"] = ["narrow-2", "narrow-1"], ["claudes"] = ["claude-sonnet-5-5", "claude-opus-5-5"], ["trio"] = ["claude-sonnet-5-5", "claude-opus-5-5", "glm-5.4"], ["api-first"] = ["glm-5.4", "claude-sonnet-5-5"] },
             AgentClients = clients ?? new(StringComparer.OrdinalIgnoreCase),
         });
 
@@ -930,11 +930,11 @@ public sealed class SideTaskServiceTests
         var (harness, temp, service, stored, _) = await RepoAsync();
         using var tree = temp;
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "add a search source", Model: "glm-5.3", Name: "one"), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "add a search source", Model: "glm-5.4", Name: "one"), Token);
 
         var directory = LayoutOf(temp, "one").Directory;
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
-        Assert.Equal("side-task 'one' answered on glm-5.3", outcome.Message);
+        Assert.Equal("side-task 'one' answered on glm-5.4", outcome.Message);
         Assert.Equal(["the answer"], outcome.Data);
         Assert.Equal([$"Records: {directory}"], outcome.Details);
 
@@ -953,9 +953,9 @@ public sealed class SideTaskServiceTests
 
         var record = RecordOf(harness, temp, directory)!;
         Assert.Equal(SideTaskStatus.Ended, record.Status);
-        Assert.Equal(new SideTaskRunsOn(Model: "glm-5.3"), record.RunsOn);
+        Assert.Equal(new SideTaskRunsOn(Model: "glm-5.4"), record.RunsOn);
         var turn = Assert.Single(record.Turns);
-        Assert.Equal(("glm", "glm-5.3", SideTaskPolicy.Said, (AgentRunStatus?)AgentRunStatus.Completed), (turn.Client, turn.Model, turn.Policy, turn.Status));
+        Assert.Equal(("glm", "glm-5.4", SideTaskPolicy.Said, (AgentRunStatus?)AgentRunStatus.Completed), (turn.Client, turn.Model, turn.Policy, turn.Status));
         Assert.NotNull(record.Conversation);
         Assert.True(Directory.Exists(Path.Combine(directory, "sessions")), "the conversation is stored under the task's own sessions, in the shape every stored conversation keeps");
 
@@ -977,7 +977,7 @@ public sealed class SideTaskServiceTests
         var (refusedHarness, refusedTemp, refusedService, refusedStored, _) = await RepoAsync(isolation: unavailable);
         using var refusedTree = refusedTemp;
 
-        var refused = await refusedService.RunAsync(new SideTaskCall(refusedTemp.Path, Prompt: "add a search source", Model: "glm-5.3", Name: "one"), Token);
+        var refused = await refusedService.RunAsync(new SideTaskCall(refusedTemp.Path, Prompt: "add a search source", Model: "glm-5.4", Name: "one"), Token);
 
         Assert.Equal(
             (HarnessExit.ToolMissing, "'run-side-task' is refused: agentPolicy.isolation is \"required\" and bubblewrap is not here, so no agent that may run a command starts here; install it. Nothing was started."),
@@ -993,7 +993,7 @@ public sealed class SideTaskServiceTests
         var (harness, temp, service, stored, _) = await RepoAsync(isolation: new TestIsolation((_, _) => under));
         using var tree = temp;
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "add a search source", Model: "glm-5.3", Name: "one"), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "add a search source", Model: "glm-5.4", Name: "one"), Token);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal(under.Processes, Assert.Single(stored.Runs).Isolation);
@@ -1009,7 +1009,7 @@ public sealed class SideTaskServiceTests
         var (_, temp, service, _, _) = await RepoAsync();
         using var tree = temp;
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "how big is the tree?", Model: "glm-5.3", Name: "sized", Json: true), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "how big is the tree?", Model: "glm-5.4", Name: "sized", Json: true), Token);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         var document = JsonNode.Parse(Assert.Single(outcome.Data))!.AsObject();
@@ -1018,12 +1018,12 @@ public sealed class SideTaskServiceTests
             ["exitCode", "summary", "task", "records", "status", "client", "provider", "model", "served", "usage", "cost", "turns", "toolCalls", "filesWritten", "webRequests", "denials", "finalText"],
             document.Select(member => member.Key));
         Assert.Equal(HarnessExit.Success, (int)document["exitCode"]!);
-        Assert.Equal("side-task 'sized' answered on glm-5.3", (string)document["summary"]!);
+        Assert.Equal("side-task 'sized' answered on glm-5.4", (string)document["summary"]!);
         Assert.Equal("sized", (string)document["task"]!);
         Assert.Equal(LayoutOf(temp, "sized").Directory, (string)document["records"]!);
         Assert.Equal("the answer", (string)document["finalText"]!);
         Assert.Equal("Completed", (string)document["status"]!);
-        Assert.Equal("glm-5.3", (string)document["model"]!);
+        Assert.Equal("glm-5.4", (string)document["model"]!);
         Assert.Equal("glm", (string)document["client"]!);
         Assert.Equal(1, (int)document["turns"]!);
         Assert.Equal(10, (int)document["usage"]!["inputTokens"]!);
@@ -1040,7 +1040,7 @@ public sealed class SideTaskServiceTests
         var (_, temp, service, stored, _) = await RepoAsync();
         using var tree = temp;
 
-        var json = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Json: true, Chat: new Typed([]).Chat()), Token);
+        var json = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.4", Json: true, Chat: new Typed([]).Chat()), Token);
         var both = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Resume: "a", Name: "b"), Token);
         var effort = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Efforts: ["high", "high"]), Token);
 
@@ -1069,7 +1069,7 @@ public sealed class SideTaskServiceTests
         var (_, temp, service, stored, _) = await RepoAsync(environment: name => name == AgentChildEnvironment.AgentMarker ? marked : null);
         using var tree = temp;
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "start another", Model: "glm-5.3", Name: "nested"), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "start another", Model: "glm-5.4", Name: "nested"), Token);
 
         Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
         Assert.Equal(
@@ -1103,7 +1103,7 @@ public sealed class SideTaskServiceTests
         var (_, temp, service, stored, _) = await RepoAsync(tree: UnderTheEngine);
         using var tree = temp;
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "start another", Model: "glm-5.3", Name: "nested"), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "start another", Model: "glm-5.4", Name: "nested"), Token);
 
         Assert.Equal(
             (HarnessExit.Refused, $"'run-side-task' is refused: {SideTaskService.NoAgentStartsOne}, and this command is taken for an agent's: the process 'dssharness' (id 10) above it in the process tree is a process of this tool's, as an agent's engine is, and a command any process of this tool's starts is taken for an agent's, a leg's, a check's or a machine step's as much, for an agent's child can take its mark away but not its place in the tree. A person starts one from a shell of the person's own, which no process of this tool's started and which carries no DSSHARNESS_UNDER_AGENT. Nothing was started."),
@@ -1113,7 +1113,7 @@ public sealed class SideTaskServiceTests
         var (_, unreadTemp, unread, _, _) = await RepoAsync(tree: current => new ProcessTableReading([new SampledProcess(current, null, "dssharness", null, null)], "the process table came back empty, which no running machine's is"));
         using var unreadTree = unreadTemp;
 
-        var refused = await unread.RunAsync(new SideTaskCall(unreadTemp.Path, Prompt: "start another", Model: "glm-5.3", Name: "nested"), Token);
+        var refused = await unread.RunAsync(new SideTaskCall(unreadTemp.Path, Prompt: "start another", Model: "glm-5.4", Name: "nested"), Token);
 
         Assert.Equal(
             (HarnessExit.Refused, $"'run-side-task' is refused: {SideTaskService.NoAgentStartsOne}, and this command is taken for an agent's: which processes started this one could not be read - the process table came back empty, which no running machine's is - so whether an agent started it could not be told. A person starts one from a shell of the person's own, which no process of this tool's started and which carries no DSSHARNESS_UNDER_AGENT. Nothing was started."),
@@ -1145,7 +1145,7 @@ public sealed class SideTaskServiceTests
             File.WriteAllLines(ignore, File.ReadAllLines(ignore).Where(line => !line.Contains(".side-tasks", StringComparison.Ordinal)));
         }
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: "unignored"), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.4", Name: "unignored"), Token);
 
         Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
         Assert.Equal(
@@ -1173,10 +1173,10 @@ public sealed class SideTaskServiceTests
             return StoredClient.Answered(run, events, "the answer");
         };
 
-        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: "early"), Token);
+        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.4", Name: "early"), Token);
 
         Assert.NotNull(during);
-        Assert.Equal(("early", SideTaskStatus.Open, 0, new SideTaskRunsOn(Model: "glm-5.3")), (during!.Name, during.Status, during.Turns.Count, during.RunsOn));
+        Assert.Equal(("early", SideTaskStatus.Open, 0, new SideTaskRunsOn(Model: "glm-5.4")), (during!.Name, during.Status, during.Turns.Count, during.RunsOn));
     }
 
     /// <summary>
@@ -1190,8 +1190,8 @@ public sealed class SideTaskServiceTests
         var (harness, temp, service, _, _) = await RepoAsync(clock);
         using var tree = temp;
 
-        var first = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "Hello there, agent!", Model: "glm-5.3"), Token);
-        var second = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "Hello there, agent!", Model: "glm-5.3"), Token);
+        var first = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "Hello there, agent!", Model: "glm-5.4"), Token);
+        var second = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "Hello there, agent!", Model: "glm-5.4"), Token);
 
         var name = clock.GetUtcNow().LocalDateTime.ToString("yyyy-MM-dd-HHmmss", System.Globalization.CultureInfo.InvariantCulture) + "-hello-there-agent";
 
@@ -1244,7 +1244,7 @@ public sealed class SideTaskServiceTests
         var name = new string('n', 200);
         var layout = LayoutOf(temp, name);
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: name), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.4", Name: name), Token);
 
         var owner = new PathBudget(harness.Platform).Check(layout.OwnerFile, 0, 0);
 
@@ -1282,7 +1282,7 @@ public sealed class SideTaskServiceTests
 
         var outcome = await ClockDrive.UntilEndedAsync(
             clock,
-            service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: "failing"), Token),
+            service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.4", Name: "failing"), Token),
             SideTaskService.RetryFirstWait,
             mostSteps: 10,
             Token);
@@ -1322,7 +1322,7 @@ public sealed class SideTaskServiceTests
         using var tree = temp;
         var typed = new Typed(["what is here?", "and now?"]);
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "talk", Chat: typed.Chat()), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.4", Name: "talk", Chat: typed.Chat()), Token);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal("side-task 'talk' ended, 2 turn(s) in all", outcome.Message);
@@ -1709,13 +1709,13 @@ public sealed class SideTaskServiceTests
     /// </summary>
     [Theory]
     [InlineData("claudes", "claude-opus-5-5")]
-    [InlineData("balanced", "glm-5.3")]
+    [InlineData("balanced", "glm-5.4")]
     public async Task AFallbackInAChat_GoesOnFromTheConversation_NeverFromTheLaunchsFirstMessage(string tier, string movedTo)
     {
         var (harness, temp, service, stored, rendered) = await RepoAsync();
         using var tree = temp;
         rendered.FailsOnTurn = 2;
-        var rendersIt = movedTo != "glm-5.3";
+        var rendersIt = movedTo != "glm-5.4";
         var typed = new Typed(["first", "second"], until: rendersIt ? "about: second" : "the answer");
 
         var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Tier: tier, Name: "moved", Chat: typed.Chat()), Token);
@@ -2053,7 +2053,7 @@ public sealed class SideTaskServiceTests
             [
                 "claude-sonnet-5-5 -> claude-opus-5-5 (failed, with no retries)",
                 "the agent's launch ended Failed: the API failed; the next message begins a new launch, going on from the conversation so far",
-                "claude-sonnet-5-5 -> glm-5.3 (failed, with no retries)",
+                "claude-sonnet-5-5 -> glm-5.4 (failed, with no retries)",
                 "the agent's launch ended NotStarted: client 'claude-code' was not started: the model has no maxOutputTokens; the next message begins a new launch, going on from the conversation so far",
                 "the answer",
                 "the answer",
@@ -2273,8 +2273,8 @@ public sealed class SideTaskServiceTests
         var rest = new Typed(["/model narrow-1", "after the model"]);
         var none = new Typed(["/model narrow-1", "after the model"]);
 
-        var keptRest = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "rest", Efforts: ["glm-5.3=low", "all=high"], Chat: rest.Chat()), Token);
-        var keptNone = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "none", Efforts: ["glm-5.3=high"], Chat: none.Chat()), Token);
+        var keptRest = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.4", Name: "rest", Efforts: ["glm-5.4=low", "all=high"], Chat: rest.Chat()), Token);
+        var keptNone = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.4", Name: "none", Efforts: ["glm-5.4=high"], Chat: none.Chat()), Token);
 
         Assert.Equal((HarnessExit.Success, HarnessExit.Success), (keptRest.ExitCode, keptNone.ExitCode));
         Assert.Equal(["the next message goes to narrow-1 through glm, at effort high", "the answer"], rest.Said);
@@ -2300,7 +2300,7 @@ public sealed class SideTaskServiceTests
 
         stored.Script = (run, events, _) => StoredClient.Answered(run, events, Keys);
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: "masked"), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.4", Name: "masked"), Token);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal($"keys: {ActionValues.Mask} {ActionValues.Mask} {ActionValues.Mask}", Assert.Single(stored.Runs).Mask.Redact(Keys));
@@ -2346,8 +2346,8 @@ public sealed class SideTaskServiceTests
 
         var served = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Tier: "api-first", Name: "api-first"), Token);
 
-        Assert.Equal((HarnessExit.Success, "side-task 'api-first' answered on glm-5.3"), (served.ExitCode, served.Message));
-        Assert.Equal(["glm-5.3"], stored.Runs.Select(run => run.Model!));
+        Assert.Equal((HarnessExit.Success, "side-task 'api-first' answered on glm-5.4"), (served.ExitCode, served.Message));
+        Assert.Equal(["glm-5.4"], stored.Runs.Select(run => run.Model!));
         Assert.Empty(rendered.Runs);
 
         var refused = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Tier: "claudes", Name: "claude-first"), Token);
@@ -2475,7 +2475,7 @@ public sealed class SideTaskServiceTests
         });
         using var tree = temp;
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: "early") { Interrupts = interrupts }, Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.4", Name: "early") { Interrupts = interrupts }, Token);
 
         Assert.Equal((HarnessExit.Cancelled, "'run-side-task' was stopped before the side-task began. Nothing was started."), (outcome.ExitCode, outcome.Message));
         Assert.Equal([SideTaskService.NoRecords], outcome.Details);
@@ -2546,7 +2546,7 @@ public sealed class SideTaskServiceTests
             return new AgentRunResult(AgentRunStatus.Cancelled, Model: run.Model, Error: AgentTurnInterrupt.Cut);
         };
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "cut", Chat: typed.Chat()) { Interrupts = interrupts }, Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.4", Name: "cut", Chat: typed.Chat()) { Interrupts = interrupts }, Token);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal(
@@ -2575,7 +2575,7 @@ public sealed class SideTaskServiceTests
             return new AgentRunResult(AgentRunStatus.Cancelled, Model: run.Model, Error: AgentTurnInterrupt.Cut);
         };
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "slow", Model: "glm-5.3", Name: "cut-once") { Interrupts = interrupts }, Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "slow", Model: "glm-5.4", Name: "cut-once") { Interrupts = interrupts }, Token);
 
         Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
         Assert.Equal([$"Records: {LayoutOf(temp, "cut-once").Directory}"], outcome.Details);
@@ -2705,12 +2705,12 @@ public sealed class SideTaskServiceTests
                     new AgentCost(Counted: 0.00208m));
             }
 
-            var unsaid = new AgentCost(MissingPrice: "a request to 'glm-5.3' on ZAI_API_KEY was left before its provider said what it used");
+            var unsaid = new AgentCost(MissingPrice: "a request to 'glm-5.4' on ZAI_API_KEY was left before its provider said what it used");
 
             return new Api(
-                "glm-5.3",
+                "glm-5.4",
                 held => ApiReply.Silent(Chunk("half an answer"), held),
-                ZaiApiFixtures.Answer,
+                text => ZaiApiFixtures.Answer("glm-5.4", text),
                 AgentUsage.None,
                 unsaid,
                 [],
@@ -2724,7 +2724,7 @@ public sealed class SideTaskServiceTests
                 => ("content_block_delta", """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""" + JsonSerializer.Serialize(text) + "}}");
 
             static string Chunk(string text)
-                => "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":" + JsonSerializer.Serialize(text) + "}}]}\n\n";
+                => "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.4\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":" + JsonSerializer.Serialize(text) + "}}]}\n\n";
         }
 
         private static (string, string) TextBegun => ("content_block_start", """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""");
@@ -2743,7 +2743,7 @@ public sealed class SideTaskServiceTests
         using var tree = temp;
         var typed = new Typed(["/help", "/records", "/nope", "one \\", "two", "/effort high", "after the effort", "/model narrow-1", "after the model", "/effort medium", "/exit"]);
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "commanded", Chat: typed.Chat()), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.4", Name: "commanded", Chat: typed.Chat()), Token);
 
         var directory = LayoutOf(temp, "commanded").Directory;
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
@@ -2753,7 +2753,7 @@ public sealed class SideTaskServiceTests
                 $"Records: {directory}",
                 "'/nope' is no command of this chat; /help lists them",
                 "the answer",
-                "the next message goes to glm-5.3 through glm, at effort high",
+                "the next message goes to glm-5.4 through glm, at effort high",
                 "the answer",
                 "the next message goes to narrow-1 through glm, at effort high",
                 "the answer",
@@ -2761,7 +2761,7 @@ public sealed class SideTaskServiceTests
             ],
             typed.Said);
         Assert.Equal(
-            [("one\ntwo", "glm-5.3", (string?)null), ("after the effort", "glm-5.3", "high"), ("after the model", "narrow-1", "high")],
+            [("one\ntwo", "glm-5.4", (string?)null), ("after the effort", "glm-5.4", "high"), ("after the model", "narrow-1", "high")],
             stored.Runs.Select(run => (Task(run.UserPrompt), run.Model, run.Effort)));
         Assert.Equal(new SideTaskRunsOn(Model: "narrow-1", Effort: "high"), RecordOf(harness, temp, directory)!.RunsOn);
 
@@ -2785,7 +2785,7 @@ public sealed class SideTaskServiceTests
         var typed = new Typed(["a long one", "go on"]);
         stored.Script = OutgrowsItsContextOn("a long one");
 
-        await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "compacted", Chat: typed.Chat()), Token);
+        await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.4", Name: "compacted", Chat: typed.Chat()), Token);
 
         Assert.Equal(2, stored.Runs.Count);
         Assert.Null(stored.Runs[1].Conversation);
@@ -2819,7 +2819,7 @@ public sealed class SideTaskServiceTests
             ],
             typed.Said);
         Assert.Equal(
-            [$"{SideTaskService.RunCommand}: side-task 'compacted' on glm-5.3 through glm; /help lists what the chat takes"],
+            [$"{SideTaskService.RunCommand}: side-task 'compacted' on glm-5.4 through glm; /help lists what the chat takes"],
             harness.StandardOutput.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     }
 
@@ -2840,8 +2840,8 @@ public sealed class SideTaskServiceTests
 
         var first = await service.RunAsync(
             chat
-                ? new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "walled", Chat: new Typed(["a long one"]).Chat())
-                : new SideTaskCall(temp.Path, Prompt: "a long one", Model: "glm-5.3", Name: "walled"),
+                ? new SideTaskCall(temp.Path, Model: "glm-5.4", Name: "walled", Chat: new Typed(["a long one"]).Chat())
+                : new SideTaskCall(temp.Path, Prompt: "a long one", Model: "glm-5.4", Name: "walled"),
             Token);
 
         var directory = LayoutOf(temp, "walled").Directory;
@@ -2850,7 +2850,7 @@ public sealed class SideTaskServiceTests
 
         var again = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "go on", Resume: "walled"), Token);
 
-        Assert.Equal((HarnessExit.Success, "side-task 'walled' answered on glm-5.3"), (again.ExitCode, again.Message));
+        Assert.Equal((HarnessExit.Success, "side-task 'walled' answered on glm-5.4"), (again.ExitCode, again.Message));
         Assert.Equal(2, stored.Runs.Count);
         Assert.Equal(("go on", (AgentSessionRef?)null), (stored.Runs[1].UserPrompt, stored.Runs[1].Conversation));
         Assert.Equal(
@@ -2885,11 +2885,11 @@ public sealed class SideTaskServiceTests
                 return await outgrows(run, events, token);
             }
 
-            await events.EmitAsync(new SessionStarted(StoredClient.ClientName, run.Model ?? "glm-5.3", "hash", [], [], HandedConversation: false, Provider: "zai", SessionId: $"c{Guid.NewGuid():N}"));
+            await events.EmitAsync(new SessionStarted(StoredClient.ClientName, run.Model ?? "glm-5.4", "hash", [], [], HandedConversation: false, Provider: "zai", SessionId: $"c{Guid.NewGuid():N}"));
             return AgentEndings.NotStarted(StoredClient.ClientName, AgentNotStartedBecause.ConfigurationWrong, "the plan does not serve the model", run.Model, run.Mask);
         };
 
-        await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "unserved", Chat: typed.Chat()), Token);
+        await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.4", Name: "unserved", Chat: typed.Chat()), Token);
 
         Assert.Equal(["a long one", "go on", "again"], stored.Runs.Select(run => run.UserPrompt));
         Assert.Equal(((AgentSessionRef?)null, (AgentSessionRef?)null), (stored.Runs[1].Conversation, stored.Runs[2].Conversation));
@@ -2952,7 +2952,7 @@ public sealed class SideTaskServiceTests
         var (_, temp, service, stored, rendered) = await RepoAsync();
         using var tree = temp;
 
-        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "begin here", Model: "glm-5.3", Name: "moved"), Token);
+        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "begin here", Model: "glm-5.4", Name: "moved"), Token);
         var other = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "go on there", Resume: "moved", Model: "narrow-1", Efforts: ["high"]), Token);
         var claude = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "and here", Resume: "moved", Model: "claude-sonnet-5-5"), Token);
 
@@ -2978,7 +2978,7 @@ public sealed class SideTaskServiceTests
         var (_, temp, service, stored, rendered) = await RepoAsync();
         using var tree = temp;
 
-        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "one", Model: "glm-5.3", Name: "carried"), Token);
+        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "one", Model: "glm-5.4", Name: "carried"), Token);
         await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "two", Resume: "carried", Model: "narrow-1", Efforts: ["high"]), Token);
 
         foreach (var prompt in new[] { "three", "four", "five" })
@@ -3044,16 +3044,16 @@ public sealed class SideTaskServiceTests
         var (_, temp, service, _, _) = await RepoAsync();
         using var tree = temp;
 
-        var none = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Resume: "no-such"), Token);
+        var none = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.4", Resume: "no-such"), Token);
 
         Assert.Equal(HarnessExit.Refused, none.ExitCode);
         Assert.Equal("side-task 'no-such' names no side-task of this repository: list-side-tasks lists them. Nothing was changed.", none.Message);
         Assert.Equal([SideTaskService.NoRecords], none.Details);
 
-        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "open me", Model: "glm-5.3", Name: "held"), Token);
+        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "open me", Model: "glm-5.4", Name: "held"), Token);
         HeldElsewhere(temp, "held");
 
-        var held = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "again", Model: "glm-5.3", Resume: "held", Json: true), Token);
+        var held = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "again", Model: "glm-5.4", Resume: "held", Json: true), Token);
 
         Assert.Equal(HarnessExit.Refused, held.ExitCode);
         Assert.Equal($"side-task 'held' is open in another process (process {Environment.ProcessId}); end its chat there, or wait for it to leave. Nothing was changed.", held.Message);
@@ -3073,7 +3073,7 @@ public sealed class SideTaskServiceTests
         var (_, temp, service, stored, _) = await RepoAsync();
         using var tree = temp;
 
-        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "open me", Model: "glm-5.3", Name: "unread"), Token);
+        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "open me", Model: "glm-5.4", Name: "unread"), Token);
         var owner = LayoutOf(temp, "unread").OwnerFile;
         File.WriteAllText(owner, "null");
 
@@ -3093,7 +3093,7 @@ public sealed class SideTaskServiceTests
         var (harness, temp, service, stored, _) = await RepoAsync();
         using var tree = temp;
 
-        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "open me", Model: "glm-5.3", Name: "orphan"), Token);
+        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "open me", Model: "glm-5.4", Name: "orphan"), Token);
         HeldElsewhere(temp, "orphan", stamp: "a process long gone");
 
         var again = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "again", Resume: "orphan"), Token);
@@ -3116,11 +3116,11 @@ public sealed class SideTaskServiceTests
         var (_, temp, service, _, _) = await RepoAsync();
         using var tree = temp;
 
-        var first = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "one", Model: "glm-5.3", Name: "mine"), Token);
+        var first = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "one", Model: "glm-5.4", Name: "mine"), Token);
         Assert.Equal(HarnessExit.Success, first.ExitCode);
 
-        var second = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "two", Model: "glm-5.3", Name: "mine"), Token);
-        var json = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "two", Model: "glm-5.3", Name: "mine", Json: true), Token);
+        var second = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "two", Model: "glm-5.4", Name: "mine"), Token);
+        var json = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "two", Model: "glm-5.4", Name: "mine", Json: true), Token);
 
         Assert.Equal((HarnessExit.Refused, HarnessExit.Refused), (second.ExitCode, json.ExitCode));
         Assert.Equal("side-task 'mine' is taken: --resume mine opens it again, or --name gives a new one another name. Nothing was changed.", second.Message);
@@ -3141,7 +3141,7 @@ public sealed class SideTaskServiceTests
         var (_, temp, service, _, _) = await RepoAsync();
         using var tree = temp;
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: name), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.4", Name: name), Token);
 
         Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
         Assert.Equal($"the side-task's name '{name}' is no name a side-task's directory takes: {SideTaskService.NameRule}. Nothing was started.", outcome.Message);
@@ -3160,17 +3160,17 @@ public sealed class SideTaskServiceTests
         using var tree = temp;
 
         var refused = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "narrow-1", Efforts: ["medium"]), Token);
-        var typo = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Efforts: ["glm-5.3=high", "typo-model=high"]), Token);
+        var typo = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.4", Efforts: ["glm-5.4=high", "typo-model=high"]), Token);
 
         Assert.Equal(
             [
                 (HarnessExit.UsageError, "the side-task runs at effort 'medium', which 'narrow-1' does not take. It takes: high. Give it a level of its own: --effort narrow-1=high, with all=<level> for the rest"),
-                (HarnessExit.UsageError, "the side-task gives an effort to 'typo-model', which it does not run on. It runs on: glm-5.3"),
+                (HarnessExit.UsageError, "the side-task gives an effort to 'typo-model', which it does not run on. It runs on: glm-5.4"),
             ],
             new[] { refused, typo }.Select(outcome => (outcome.ExitCode, outcome.Message)));
         Assert.Empty(stored.Runs);
 
-        var byModel = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "y", Model: "glm-5.3", Efforts: ["glm-5.3=high", "all=low"]), Token);
+        var byModel = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "y", Model: "glm-5.4", Efforts: ["glm-5.4=high", "all=low"]), Token);
 
         Assert.Equal(HarnessExit.Success, byModel.ExitCode);
         Assert.Equal("high", Assert.Single(stored.Runs).Effort);
@@ -3186,16 +3186,16 @@ public sealed class SideTaskServiceTests
         var (_, temp, service, stored, _) = await RepoAsync();
         using var tree = temp;
 
-        stored.Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Refused, Model: "glm-5.3", Error: "the model declined"));
-        var failed = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: "failed-one"), Token);
+        stored.Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Refused, Model: "glm-5.4", Error: "the model declined"));
+        var failed = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.4", Name: "failed-one"), Token);
 
-        stored.Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.RateLimited, Model: "glm-5.3", Error: "the key is at its limit") { Limit = new AgentAccountLimit(BalanceSpent: false) });
-        var limited = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: "failed-two"), Token);
+        stored.Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.RateLimited, Model: "glm-5.4", Error: "the key is at its limit") { Limit = new AgentAccountLimit(BalanceSpent: false) });
+        var limited = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.4", Name: "failed-two"), Token);
 
         // No key in the slot: the runner refuses the run before it begins.
         File.Delete(Path.Combine(temp.Path, ".harness-config", "workflows", ".env", "zai.env"));
         stored.Script = (run, events, _) => StoredClient.Answered(run, events, "never reached");
-        var missing = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: "failed-three"), Token);
+        var missing = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.4", Name: "failed-three"), Token);
 
         Assert.Equal(
             [HarnessExit.CommandFailed, HarnessExit.Incomplete, HarnessExit.Refused],
@@ -3212,7 +3212,7 @@ public sealed class SideTaskServiceTests
 
         stored.Script = (_, _, _) => throw new HarnessException(HarnessExit.Refused, "the provider refused the key");
 
-        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: "refused", Json: true), Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.4", Name: "refused", Json: true), Token);
 
         var directory = LayoutOf(temp, "refused").Directory;
         Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
@@ -3234,19 +3234,19 @@ public sealed class SideTaskServiceTests
     [Fact]
     public void WhatItUsedInAll_IsItsTurnsTogether_ByTheOneFoldOfUsage()
     {
-        static AgentUsageReport Turn(AgentCost cost) => new(new AgentUsage(10, 5, 0, 0, 0, 0), [new AgentModelUsage("glm-5.3", new AgentUsage(10, 5, 0, 0, 0, 0))], cost);
+        static AgentUsageReport Turn(AgentCost cost) => new(new AgentUsage(10, 5, 0, 0, 0, 0), [new AgentModelUsage("glm-5.4", new AgentUsage(10, 5, 0, 0, 0, 0))], cost);
 
         var two = AgentUsageReport.Sum(Turn(new(Counted: 0.5m)), Turn(new(Reported: 0.25m)))!;
 
         Assert.Equal(new AgentCost(Reported: 0.75m, Counted: null), two.Cost);
         Assert.Equal(0.75m, two.Cost!.Usd);
 
-        var three = AgentUsageReport.Sum(two, Turn(new(MissingPrice: "glm-5.3")))!;
+        var three = AgentUsageReport.Sum(two, Turn(new(MissingPrice: "glm-5.4")))!;
 
-        Assert.Equal(new AgentCost(MissingPrice: "glm-5.3"), three.Cost);
+        Assert.Equal(new AgentCost(MissingPrice: "glm-5.4"), three.Cost);
         Assert.Null(three.Cost!.Usd);
         Assert.Equal(new AgentUsage(30, 15, 0, 0, 0, 0), three.Total);
-        Assert.Equal(["glm-5.3", "glm-5.3", "glm-5.3"], three.PerModel.Select(part => part.Model));
+        Assert.Equal(["glm-5.4", "glm-5.4", "glm-5.4"], three.PerModel.Select(part => part.Model));
         Assert.Same(two, AgentUsageReport.Sum(two, null));
         Assert.Null(AgentUsageReport.Sum(null, null));
     }
@@ -3258,8 +3258,8 @@ public sealed class SideTaskServiceTests
         var (_, temp, service, _, _) = await RepoAsync();
         using var tree = temp;
 
-        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "one", Model: "glm-5.3", Name: "older"), Token);
-        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "two", Model: "glm-5.3", Name: "newer"), Token);
+        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "one", Model: "glm-5.4", Name: "older"), Token);
+        await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "two", Model: "glm-5.4", Name: "newer"), Token);
         HeldElsewhere(temp, "newer");
 
         var listed = await service.ListAsync(temp.Path, json: false, Token);
