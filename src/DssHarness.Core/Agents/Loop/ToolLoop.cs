@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -111,6 +112,11 @@ public sealed record ToolLoopTerms(
 /// among those the step is given, its input held to the tool's schema, its place to the agent's roots and the policy -
 /// before it runs, a denial answered with its rule's sentence, which the agent reads.
 /// </para>
+/// <para>
+/// A loop is its client's for the client's life, every run of the client through it, in parallel too: an envelope the
+/// provider refused as a schema is remembered by the provider's API address, the model and the envelope exactly as sent,
+/// so a later run of that envelope on that model sends it as no schema from its first request, and says it in words.
+/// </para>
 /// </remarks>
 /// <param name="fileSystem">Keeps the conversation and the step's records.</param>
 /// <param name="tools">The host each run's tool runtime is opened on.</param>
@@ -166,6 +172,17 @@ public sealed class ToolLoop(
     private readonly Func<TimeSpan, CancellationToken, Task> _wait = wait ?? ((delay, token) => Task.Delay(delay, clock, token));
     private readonly Func<double> _jitter = jitter ?? Random.Shared.NextDouble;
 
+    // The envelopes the provider refused as a schema, each with what it said, masked by the run it refused: what no later
+    // run of the client's sends that model as its schema again.
+    private readonly ConcurrentDictionary<RefusedFormat, string> _refusedFormats = new();
+
+    /// <summary>
+    /// An envelope a provider refused as a schema: the address of the provider's API the request went to, the model it
+    /// asked for, and the envelope exactly as the request carried it - what the refusal is of, for a format's grammar is
+    /// compiled for a model and the envelope alone.
+    /// </summary>
+    private readonly record struct RefusedFormat(string Api, string Model, string Envelope);
+
     /// <summary>
     /// The most a run's first request asks for: a quarter of the most a reply of the model holds, rounded up (user,
     /// 2026-10-26), so an ordinary turn reserves no more of the account's output allowance than it needs; a turn cut off
@@ -182,6 +199,14 @@ public sealed class ToolLoop(
     /// <param name="why">What the provider said, masked.</param>
     public static string SchemaSaidInWords(string why)
         => $"The provider refused the step's envelope as a schema ({why}): the run's requests send it no more, and a message of the conversation says it in words; the harness's own check still holds every answer to it.";
+
+    /// <summary>
+    /// What a run is told where the provider refused the step's envelope as a schema on the model it asks earlier in this
+    /// session: its requests send none from then on, and a message of the conversation says it in words.
+    /// </summary>
+    /// <param name="why">What the provider said when it refused it, masked.</param>
+    public static string SchemaRefusedEarlier(string why)
+        => $"The provider refused the step's envelope as a schema on this model earlier in this session ({why}): the run's requests send it none, and a message of the conversation says it in words; the harness's own check still holds every answer to it.";
 
     /// <summary>The wait before the <paramref name="retry"/>th try after a failure: <c>min(60 s, 2 s x 2^(n-1))</c>, up to a quarter of it taken off by <paramref name="jitter"/>.</summary>
     /// <param name="retry">Which try after the failure, from one.</param>
@@ -465,6 +490,10 @@ public sealed class ToolLoop(
             {
                 await SayAsync(AgentEnvelope.InWords(gate.Envelope), AgentMessageKind.EnvelopeInWords).ConfigureAwait(false);
             }
+
+            // An envelope the provider refused as a schema on the run's model earlier in the client's life is told the same
+            // way, from the run's first request: none of its requests sends it.
+            await RefusedEarlierAsync().ConfigureAwait(false);
 
             var result = await LoopAsync(stop).ConfigureAwait(false);
 
@@ -876,6 +905,10 @@ public sealed class ToolLoop(
                     return new Sent(Left: true);
                 }
 
+                // A model the run moved to, or one another run of the client's found meanwhile, that refused the envelope
+                // as a schema is sent it no more: said in words before the request.
+                await RefusedEarlierAsync().ConfigureAwait(false);
+
                 var request = new ChatRequest(Now.Model, Now.Effort, Conversation.SystemPrompt, Conversation.Tools, [.. Conversation.Messages(), .. _pending, .. _paused], _maxTokens, Now.Key, _schemaRefused ? null : _gate?.Envelope, Credit: _goesOn, ContextTokens: Now.Terms!.Model.ContextTokens, JsonAlone: _jsonAlone, CreditToken: _credit, FirstEffort: _firstEffort);
 
                 // The handoff turn is held to its bound, not to the step's time: it counts against none of the step's
@@ -1098,7 +1131,7 @@ public sealed class ToolLoop(
 
                 if (inWords)
                 {
-                    await InWordsAsync(failure, request.Schema!).ConfigureAwait(false);
+                    await InWordsAsync(failure, request).ConfigureAwait(false);
                     continue;
                 }
 
@@ -1388,14 +1421,45 @@ public sealed class ToolLoop(
                 : $"The step goes on at effort '{level}': its requests name that level from now on.";
 
         /// <summary>
-        /// The provider refused the step's envelope as a schema: the run's requests send none from now on, and the envelope
-        /// is said in words in a message of the conversation - stored with it as every message the engine sends is, so what
-        /// was sent stays the history and a step that goes on in it sends it again - which a notice tells.
+        /// The provider refused the step's envelope as a schema on <paramref name="request"/>: the refusal remembered for the
+        /// client's life by the provider's API address, the request's model and the envelope exactly as it carried it, what
+        /// the provider said kept masked; and the run said in words from now on (<see cref="SaidInWordsAsync"/>).
         /// </summary>
-        private async Task InWordsAsync(ChatFailure failure, string schema)
+        private async Task InWordsAsync(ChatFailure failure, ChatRequest request)
+        {
+            var why = Masked(failure.Message);
+            loop._refusedFormats.TryAdd(new RefusedFormat(terms.Provider.Api, request.Model, request.Schema!), why);
+
+            await SaidInWordsAsync(SchemaSaidInWords(why), request.Schema!).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Where the provider, whose wire holds an answer to a schema, refused the step's envelope as one on the model the
+        /// run asks now earlier in the client's life - this run's or another's - and the run still sends it: the run said in
+        /// words from now on (<see cref="SaidInWordsAsync"/>), told why, before its next request is sent.
+        /// </summary>
+        private async Task RefusedEarlierAsync()
+        {
+            if (_schemaRefused
+                || !provider.SendsSchema
+                || _gate is not { } gate
+                || !loop._refusedFormats.TryGetValue(new RefusedFormat(terms.Provider.Api, Now.Model, gate.Envelope), out var why))
+            {
+                return;
+            }
+
+            await SaidInWordsAsync(SchemaRefusedEarlier(Masked(why)), gate.Envelope).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// The run's requests send the step's envelope as no schema from now on, and it is said in words in a message of the
+        /// conversation - stored with it as every message the engine sends is, so what was sent stays the history and a
+        /// step that goes on in it sends it again - which <paramref name="notice"/> tells first.
+        /// </summary>
+        private async Task SaidInWordsAsync(string notice, string schema)
         {
             _schemaRefused = true;
-            await Emit(new Notice(SchemaSaidInWords(Masked(failure.Message)))).ConfigureAwait(false);
+            await Emit(new Notice(notice)).ConfigureAwait(false);
             await SayAsync(AgentEnvelope.InWords(schema), AgentMessageKind.EnvelopeInWords).ConfigureAwait(false);
         }
 

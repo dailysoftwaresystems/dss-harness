@@ -426,7 +426,8 @@ public sealed class ClaudeApiProviderTests : IDisposable
     /// Each refusal of the API is the loop's, said in the API's words with the request it names: a key refused, the key's
     /// limit, a limit of the model on the key waited out as named, the context full, a model the account is not given -
     /// a first request's 400 among them, with what to do - a history changed under a thinking block said as this tool's
-    /// defect, the service failing for now, and every other refusal at once.
+    /// defect, a format more than structured outputs compile in each way the API says it - a first request's too, never
+    /// read as a model not given - the service failing for now, and every other refusal at once.
     /// </summary>
     [Theory]
     [MemberData(nameof(Refusals))]
@@ -462,6 +463,18 @@ public sealed class ClaudeApiProviderTests : IDisposable
             {
                 400, "invalid_request_error", "The compiled grammar is too large, which would cause performance issues.", true,
                 new(ChatFailureKind.SchemaRefused, $"the API answered 400 invalid_request_error: The compiled grammar is too large, which would cause performance issues.{Request}")
+            },
+            {
+                400, "invalid_request_error", "Schemas contains too many optional parameters (25), which would make grammar compilation inefficient. Reduce the number of optional parameters in your tool schemas (limit: 24).", true,
+                new(ChatFailureKind.SchemaRefused, $"the API answered 400 invalid_request_error: Schemas contains too many optional parameters (25), which would make grammar compilation inefficient. Reduce the number of optional parameters in your tool schemas (limit: 24).{Request}")
+            },
+            {
+                400, "invalid_request_error", "Schemas contains too many parameters with union types (18 parameters with type arrays or anyOf). This causes exponential compilation cost. Reduce the number of nullable or union-typed parameters (limit: 16 parameters with unions).", true,
+                new(ChatFailureKind.SchemaRefused, $"the API answered 400 invalid_request_error: Schemas contains too many parameters with union types (18 parameters with type arrays or anyOf). This causes exponential compilation cost. Reduce the number of nullable or union-typed parameters (limit: 16 parameters with unions).{Request}")
+            },
+            {
+                400, "invalid_request_error", "Schema is too complex for compilation.", true,
+                new(ChatFailureKind.SchemaRefused, $"the API answered 400 invalid_request_error: Schema is too complex for compilation.{Request}")
             },
             { 403, "permission_error", "not allowed", false, new(ChatFailureKind.Unserved, $"the API answered 403 permission_error: not allowed{Request}") },
             { 404, "not_found_error", "model: claude-opus-5-5", false, new(ChatFailureKind.Unserved, $"the API answered 404 not_found_error: model: claude-opus-5-5{Request}") },

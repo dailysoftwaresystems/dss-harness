@@ -3597,9 +3597,18 @@ said and counted the same way. What each client is sent: `--json-schema` the
 envelope as built; the loop's `ChatRequest.Schema`, which the Claude API sends as `output_config.format` in the copy
 `ClaudeApiRequest.Sent` makes - every array bound structured outputs do not take moved into its description, over
 `JsonSchemaSubset.SchemasIn` - and which, once the API refuses it as more than it compiles
-(`ClaudeApiFailures.RefusesTheFormat`, failed as `ChatFailureKind.SchemaRefused`), the loop sends the run's later requests
-none of, the envelope said in words in a message it appends to the conversation (`AgentMessageKind.EnvelopeInWords`) -
-never in the system prompt, which every stored turn's thinking was made under - and which a provider whose wire holds no answer to a schema (`IChatProvider.SendsSchema` false, Z.AI) is told in words
+(`ClaudeApiFailures.RefusesTheFormat`: its grammar too large, more optional or union-typed properties than it takes, or a
+schema too complex, each way the API says it held in the one list `ClaudeApiFailures.MoreThanItCompiles` and matched
+whatever its case, failed as `ChatFailureKind.SchemaRefused` - a conversation's first request's too, never read as a
+model the account is not given), the loop sends the run's later requests none of, the envelope said in words in a message
+it appends to the conversation (`AgentMessageKind.EnvelopeInWords`) - never in the system prompt, which every stored
+turn's thinking was made under. The refusal is remembered for the client's life - by the `ToolLoop` the client keeps, one
+for the process, as the registrations keep each client - by the provider's API address, the model and the envelope
+exactly as sent, safe under runs in parallel: every later run of that envelope on that model, in the same session, sends
+none from its first request and is told the envelope in words in a message of its own after its first, a notice saying it
+was refused earlier in this session with what the API said then, masked (`ToolLoop.SchemaRefusedEarlier`), and so is a
+run that moves to that model, or finds another run's refusal of it meanwhile, before its next request; the same envelope
+on another model, and another envelope, still send their format. A provider whose wire holds no answer to a schema (`IChatProvider.SendsSchema` false, Z.AI) is told the envelope in words
 in a message of the same kind after the step's first, in every conversation the run begins (`AgentEnvelope.InWords`),
 so the first message is exactly what `AgentPromptParts.FirstMessage` wrote and `AgentPromptParts.TaskOf` takes apart,
 and the attempt's items hold the envelope once (`AgentAttempt.Items`); an answer that read as no JSON asked again in JSON

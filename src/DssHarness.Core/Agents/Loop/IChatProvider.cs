@@ -19,7 +19,8 @@ public interface IChatProvider
     /// it does not, the loop puts the schema in words in the step's first message, and asks an answer that read as no JSON
     /// again in JSON alone (<see cref="ChatRequest.JsonAlone"/>). Where it does and refuses a schema
     /// (<see cref="ChatFailureKind.SchemaRefused"/>), the loop sends the run's requests none from then on, said in words in a
-    /// message of the conversation.
+    /// message of the conversation, and every later run of the client's sends that envelope to that model as none from its
+    /// first request, said in words the same way.
     /// </summary>
     bool SendsSchema { get; }
 
@@ -275,8 +276,9 @@ public enum ChatFailureKind
     /// <summary>
     /// The provider refused the schema the request sent (<see cref="ChatRequest.Schema"/>) as more than its wire takes - no
     /// failure of the step's: the loop sends the run's requests no schema from then on, says the envelope in words in a
-    /// message of the conversation, and sends the request again, no try of the service's. A request that sent no schema
-    /// and is refused so fails the step, said in the provider's own words.
+    /// message of the conversation, and sends the request again, no try of the service's - and remembers the refusal for the
+    /// client's life, so no later run sends that envelope to that model as its schema. A request that sent no schema and is
+    /// refused so fails the step, said in the provider's own words.
     /// </summary>
     SchemaRefused,
 }
