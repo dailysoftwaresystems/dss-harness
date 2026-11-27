@@ -4408,8 +4408,9 @@ run's order (the instance order of `flow.json`), every row of a list with an id 
 `<instance>@<attempt>`, a signal `<kind>#<n>`, a convergence row its list, the item, step or agent that said it and
 what it is of), every number in one fixed form (durations to one decimal, dollars to four with the currency, times as the records keep them) and never a word
 of now: a run still going is said so at the time of its last record, marked partial. What the records cannot give is
-said in its `notes` - an events file whose last line was torn (the report is as of the event before it), a definition
-that is not there, or one that does not read with why it does not (`OrchestrationStore.ReadDefinitionOrWhy`; no
+said in its `notes` - an events file not read whole, in its reader's own words (`FlowEventLog.Read`): a torn last line,
+or the lines from the first that holds a NUL on, what a power loss left of a pass (the report is as of the event before
+it) - a definition that is not there, or one that does not read with why it does not (`OrchestrationStore.ReadDefinitionOrWhy`; no
 critical path is named). Its sections are the run (its sessions, its wall time, its active
 time - the union of every attempt's runs, two steps at once counted once - its pauses between sessions, its waits for a
 person, each question's to its first answer or, still open, to the last record, and its budget), the totals (tokens by
@@ -5009,7 +5010,8 @@ warning (`FlowRunRecords.Dispose`), and a session that ends in order heard it at
 read back strictly: a value the engine does not name, a nested record that
 does not hold, a time in any but the one form (`yyyy-MM-dd HH:mm:ss`, UTC; one not yet come is
 written `null`), a log line out of sequence or corrupt is refused by its number, and only a torn last
-line, or the lines from the first that holds a NUL, are set aside, said. A resume reconciles `flow.json` against every step's own record, taking the
+line, or the lines from the first that holds a NUL, are set aside, said - by the report's notes, and as a warning by the
+session that opens the log for append and takes them back (`FlowEventLog.SetAside`). A resume reconciles `flow.json` against every step's own record, taking the
 step's own whole wherever there is one, keeping the index's order and adopting what only a step's
 directory holds at the end. The graph is rebuilt in that order, never sorted again - `build+10` after
 `build+2`, `rounds#10` after `rounds#2`, a loop's later visit (`rounds+2`) and its items as their own,

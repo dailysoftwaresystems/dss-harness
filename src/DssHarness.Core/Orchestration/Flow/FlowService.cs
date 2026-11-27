@@ -1105,7 +1105,7 @@ public sealed class FlowService(
             LedgersOf(layout, flow),
             definition,
             thresholds,
-            EventsTorn: torn is not null,
+            EventsSetAside: torn,
             By: by,
             Steps: steps,
             NextRound: _store.ReadNextRound(layout),

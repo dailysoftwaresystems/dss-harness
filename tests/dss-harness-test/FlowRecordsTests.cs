@@ -202,7 +202,10 @@ public sealed class FlowRecordsTests
         }
     }
 
-    /// <summary>A last line with no newline is the crash's own: the reader ignores it and says so, and the next writer takes it back.</summary>
+    /// <summary>
+    /// A last line with no newline is the crash's own: the reader ignores it and says so, and the next writer takes it back
+    /// and says, in the reader's own words, what it took back.
+    /// </summary>
     [Fact]
     public void ATornLastLineIsIgnoredAndSaid_AndTakenBackByTheNextWriter()
     {
@@ -220,12 +223,17 @@ public sealed class FlowRecordsTests
         var (events, torn) = FlowEventLog.Read(files, file);
 
         Assert.Single(events);
-        Assert.NotNull(torn);
-        Assert.Contains("no newline", torn, StringComparison.Ordinal);
+        Assert.Equal("""the log's last line has no newline and was set aside: '{"seq": 2, "at": "2026-10-19 12'""", torn);
 
         using (var again = FlowEventLog.Open(files, file))
         {
+            Assert.Equal(torn, again.SetAside);
             Assert.Equal(2, again.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed).Seq);
+        }
+
+        using (var mended = FlowEventLog.Open(files, file))
+        {
+            Assert.Null(mended.SetAside);
         }
 
         var (whole, _) = FlowEventLog.Read(files, file);
@@ -236,8 +244,8 @@ public sealed class FlowRecordsTests
     /// <summary>
     /// What a power loss left of a pass never put on the disk - NULs where an earlier page of the pass never landed, the
     /// end of one of its lines and its later lines whole after them - is never refused: the reader sets aside the first line
-    /// that holds a NUL with every line after it, and says so, and the next writer takes them back and goes on from the last
-    /// event before them, so a resume of the run goes on.
+    /// that holds a NUL with every line after it, and says so, and the next writer takes them back, says so in the same
+    /// words, and goes on from the last event before them, so a resume of the run goes on.
     /// </summary>
     [Fact]
     public void WhatAPowerLossLeftOfAPass_FromItsFirstNul_IsSetAsideAndTakenBack_NeverRefused()
@@ -273,6 +281,7 @@ public sealed class FlowRecordsTests
 
         using (var again = FlowEventLog.Open(files, file))
         {
+            Assert.Equal(torn, again.SetAside);
             Assert.Equal(3, again.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed).Seq);
         }
 
@@ -281,6 +290,38 @@ public sealed class FlowRecordsTests
         Assert.Equal([1, 2, 3], whole.Select(read => read.Seq));
         Assert.Null(none);
         Assert.DoesNotContain((byte)0, File.ReadAllBytes(file));
+    }
+
+    /// <summary>
+    /// A session that opens a run's log not whole says what it took back as a warning, in the reader's words, before it
+    /// appends - never cutting the run's history silently; a log that is whole says nothing.
+    /// </summary>
+    [Fact]
+    public void ARunsRecords_OpeningALogNotWhole_WarnWhatTheyTookBack()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: one\n    type: orient\n");
+        var warned = new List<string>();
+
+        using (new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition), warn: warned.Add))
+        {
+        }
+
+        Assert.Empty(warned);
+
+        File.WriteAllBytes(layout.EventsFile, [.. File.ReadAllBytes(layout.EventsFile), .. new byte[3], .. System.Text.Encoding.UTF8.GetBytes("{}\n")]);
+        var (events, setAside) = FlowEventLog.Read(harness.FileSystem, layout.EventsFile);
+
+        using (new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition), warn: warned.Add))
+        {
+        }
+
+        Assert.Equal(
+            [$"'{layout.EventsFile}' was not whole as the session opened it: the log's lines from the one after event {events.Count} on hold a NUL, what a power loss left of a pass never put on the disk, and were set aside: ''; the run's events go on after the last whole one"],
+            warned);
+        Assert.NotNull(setAside);
     }
 
     /// <summary>
