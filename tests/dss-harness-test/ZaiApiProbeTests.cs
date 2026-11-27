@@ -126,8 +126,8 @@ public sealed class ZaiApiProbeTests
         var map = string.Join('\n', Enumerable.Range(0, 60).Select(index => $"at{index:D3} member void Member{index}() | src/File{index:D2}.cs:{index + 1}-{index + 9} #a1b2c{index:D3} | it does what member {index} does, and nothing else"));
         var tokens = DssHarness.Core.Codebase.EstimatedTokens.Of(map);
 
-        var first = await run.StepAsync("s1", "glm-5.3", "low", ReadIt, null, null, Token, map: map);
-        var second = await run.StepAsync("s2", "glm-5.3", "low", "Give as your answer the one word the file a.txt holds.", null, null, Token, map: map);
+        var first = await run.StepAsync("s1", "glm-5.4", "low", ReadIt, null, null, Token, map: map);
+        var second = await run.StepAsync("s2", "glm-5.4", "low", "Give as your answer the one word the file a.txt holds.", null, null, Token, map: map);
 
         run.Keep();
         var served = ServedByTheCache(run).ToList();

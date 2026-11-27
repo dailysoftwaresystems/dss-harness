@@ -88,7 +88,7 @@ public sealed class WorkflowValidationServiceTests
     /// <summary>
     /// The implementation workflow, initialized into a repository and declared in its config, passes its check: the one
     /// line says what it is, and under it each reason step's models and the level each runs at - the plan's own among
-    /// them, xhigh on Fable 5.1 and on GLM 5.3 - and the outcome says every one checked.
+    /// them, xhigh on Fable 5.2 and on GLM 5.4 - and the outcome says every one checked.
     /// </summary>
     [Fact]
     public async Task TheImplementationWorkflow_InitializedIntoARepository_PassesItsCheck()
@@ -100,15 +100,15 @@ public sealed class WorkflowValidationServiceTests
 
         Assert.True(report.Passed);
         Assert.Equal($"ok {Shown(Default)} (99 steps, 65 recovering, 61 reasoning)", report.Lines[0]);
-        Assert.Contains("step 'planning.plan' (best): claude-fable-5-1 at xhigh, glm-5.3 at xhigh", report.Lines);
-        Assert.Contains("step 'intake.triage' (high): claude-opus-5-5 at high, glm-5.3 at high", report.Lines);
+        Assert.Contains("step 'planning.plan' (best): claude-fable-5-2 at xhigh, glm-5.4 at xhigh", report.Lines);
+        Assert.Contains("step 'intake.triage' (high): claude-opus-5-5 at high, glm-5.4 at high", report.Lines);
 
         // Whether each model a step may run on has a price, and when its provider's numbers were read: every model of
         // the configuration init writes is priced, each provider's line naming its date.
         Assert.Equal(
             [
-                "prices of 'anthropic' (USD, read 2026-10-12): all 4 models priced",
-                "prices of 'zai' (USD, read 2026-10-12): glm-5.3 priced",
+                "prices of 'anthropic' (USD, read 2026-11-27): all 4 models priced",
+                "prices of 'zai' (USD, read 2026-11-27): all 2 models priced",
             ],
             report.Lines.Where(line => line.StartsWith("prices of", StringComparison.Ordinal)));
 
@@ -223,7 +223,7 @@ public sealed class WorkflowValidationServiceTests
                 $"ok {Shown("small")} (2 steps, 2 reasoning)",
                 "step 'think': claude-opus-5-5 at its own default",
                 "step 'write': claude-sonnet-5-5 at its own default",
-                "prices of 'anthropic' (USD, read 2026-10-12): claude-opus-5-5, claude-sonnet-5-5 priced",
+                "prices of 'anthropic' (USD, read 2026-11-27): claude-opus-5-5, claude-sonnet-5-5 priced",
                 $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares 'ANTHROPIC_API_KEY', the name provider 'anthropic' appoints for its key (its apiKeyNames); "
                     + "add ANTHROPIC_API_KEY= to a file there, holding the Anthropic API key (it is read from this slot and nowhere else). The steps that would read it: step 'think'",
             ],
