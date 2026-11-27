@@ -4532,7 +4532,10 @@ counted - each naming its steps and its numbers, their thresholds keys of `defau
 (`FlowReportThresholds.Of`) for every report of the run. The session's end writes this same report
 (`FlowReports.Write` keeps its place; `report.json` is the document with the session's own members - its line, its
 code, its end and its handoffs - beside it, `report.md` its sections with the session's own words at its head and its
-questions, updates, handoffs and what is left for a person said in full), and `read-orchestrator-report <run>`
+questions, updates, handoffs and what is left for a person said in full - each open question with its recommendation
+and its next step (`FlowReports.NextStepOf`): `answer-orchestrator <run> <answer> --question <id>`, or, where it still
+owes the recommendation it is answered with (`FlowAnswerRules.OwesRecommendation`) - a stop or a crash left it -
+`resume-orchestrator <run>`, which seeks it first, for the answer command refuses any answer but `abort` until then), and `read-orchestrator-report <run>`
 answers it any time - reads only, its `--json` the code, the line and the report on every exit (the report null where
 the read stopped early), with `--steps` keeping the rows to named instances (one the run does not hold refused,
 named), `--by` regrouping the dollars in every form and `--top` bounding the signal lists.
@@ -5308,7 +5311,9 @@ over the same facts. The facts are the engine's (`FlowStatus`, pure, over the re
 methods `list-orchestrator` reads: `flow.json`, `questions.json`, `updates.json`, the frozen
 `definition.json` and the run's owner), computed and never guessed, stamped with the moment they
 were read: how the run stands and for how long, its engine and its pause; each step instance in
-progress; what it waits for - each open question with the command that answers it, a plan update
+progress; what it waits for - each open question with the command that answers it, or, where no engine runs the run and
+the question still owes its recommendation (`FlowAnswerRules.OwesRecommendation`), the resume, which seeks it first, `abort`
+alone taken now - a plan update
 under way or queued, an instance waiting on another, on a claim or room, or on the fix of an issue that holds a file its
 work item owns or that the item needs, a `ci-wait` reading the
 checks of the commit the run last pushed; what is done and what was spent of the budget; what is

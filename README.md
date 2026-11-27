@@ -970,7 +970,8 @@ starts no advice after it either, so the stop never waits on an advisor - its qu
 recommendation is sought at the resume, which seeks it - as it does one a crash left sought. A person answers a question
 recommended: `answer-orchestrator` to a question still owing its recommendation that no advisor seeks
 now - between sessions, or while a pause defers it - is refused (13), nothing answered, and `abort` is
-taken; `resume-orchestrator` seeks it first. The budget's own question is recommended too: once the
+taken; `resume-orchestrator` seeks it first, and the run's report names it as such a question's next
+step - `answer-orchestrator` for every other. The budget's own question is recommended too: once the
 budget's pause is complete, before the session ends, the advisor is asked of the run as a whole - its
 records under `steps/run/advice/<n>/`, `{question.step}` reading `run`, `{question.record}` the
 run's facts as `ask-orchestrator-status` gives them - held, as every advice is, to its own

@@ -223,6 +223,51 @@ public sealed class FlowStatusTests
     }
 
     /// <summary>
+    /// A question a stop or a crash left owing the recommendation it is answered with waits on the resume, which seeks it
+    /// first, where no engine runs the run - the answer command refuses any answer but abort until then - and on its
+    /// answer where an engine runs it, for the engine weighs an answer handed to it itself; a question recommended waits on
+    /// its answer either way.
+    /// </summary>
+    [Fact]
+    public void AQuestionOwingItsRecommendation_WaitsOnTheResume_WhereNoEngineRunsTheRun()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: gate
+                type: pause
+                question: what now?
+                options: [stay, go]
+            """);
+        var flow = File(nameof(FlowRunStatus.Stopped), [Step("gate", nameof(FlowInstanceState.Paused), "pause", started: At(10, 2))]);
+        FlowQuestionEntry Open(string id, FlowRecommendation recommendation)
+            => new(id, "open", "pause", At(10, 2), [], [new FlowQuestionOption("stay", "it stays"), new FlowQuestionOption("go", "it goes")], [], Recommendation: recommendation);
+        var questions = new FlowQuestionsFile(
+            1,
+            "r1",
+            AsOf,
+            [
+                Open("q1", new FlowRecommendation("deferred", Why: "the run was stopped while the advisor ran: the recommendation is sought when the run is resumed with this question still open")),
+                Open("q2", new FlowRecommendation("given", "go", Why: "it is ready", By: "advisor", Agent: "advisor")),
+            ]);
+        string[] Waits(FlowEngineState engine)
+            => [.. FlowStatus.Facts(definition, flow, questions, updates: null, engine, AsOf).Where(fact => fact.StartsWith("waits", StringComparison.Ordinal) || fact.StartsWith("          question", StringComparison.Ordinal))];
+
+        Assert.Equal(
+            [
+                "waits     question q1 (pause) since 10:02:00Z: its recommendation is still owed - 'dssharness resume-orchestrator r1' seeks it first, and 'dssharness answer-orchestrator r1 abort --question q1' is taken now",
+                "          question q2 (pause) since 10:02:00Z: 'dssharness answer-orchestrator r1 <answer> --question q2'",
+            ],
+            Waits(NoEngine));
+        Assert.Equal(
+            [
+                "waits     question q1 (pause) since 10:02:00Z: 'dssharness answer-orchestrator r1 <answer> --question q1'",
+                "          question q2 (pause) since 10:02:00Z: 'dssharness answer-orchestrator r1 <answer> --question q2'",
+            ],
+            Waits(new FlowEngineState(FlowEngineState.Running, "pid 7 on this machine", [])));
+    }
+
+    /// <summary>
     /// Least and most of what is left with a loop at each bound: a <c>repeat</c> at its <c>maxIterations</c> adds the
     /// iterations left to its bound times the steps its group holds, and a <c>repeat</c> with no numeric bound of its
     /// own, like a <c>forEach</c> not yet expanded, is bounded only by the run's own bound of instances, which the

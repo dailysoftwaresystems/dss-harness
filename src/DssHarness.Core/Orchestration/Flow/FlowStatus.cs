@@ -68,7 +68,7 @@ public static class FlowStatus
         var rows = new List<(string Label, IReadOnlyList<string> Lines)>
         {
             ("running", Running(flow, asOf)),
-            ("waits", Waits(flow, questions, updates)),
+            ("waits", Waits(flow, questions, updates, engine)),
             ("done", Done(definition, flow)),
             ("left", Left(definition, flow, questions, updates)),
             ("estimate", Estimate(definition, flow, questions, updates, asOf)),
@@ -103,18 +103,25 @@ public static class FlowStatus
     }
 
     /// <summary>
-    /// What the run waits for: each open question with since when and the command that answers it, a plan update under
-    /// way or queued, each instance that waits on another or on a claim or room, and a <c>ci-wait</c> with the commit it
-    /// watches.
+    /// What the run waits for: each open question with since when and the command that goes on with it - the one that
+    /// answers it, or, where no engine runs the run and the question still owes the recommendation it is answered with
+    /// (<see cref="FlowAnswerRules.OwesRecommendation"/>), the resume, which seeks it first, for the answer command refuses
+    /// any answer but <c>abort</c> until then - a plan update under way or queued, each instance that waits on another or
+    /// on a claim or room, and a <c>ci-wait</c> with the commit it watches. A running engine weighs an answer handed to it
+    /// itself, so its run's questions name the answer.
     /// </summary>
-    private static IReadOnlyList<string> Waits(FlowFile flow, FlowQuestionsFile? questions, FlowUpdatesFile? updates)
+    private static IReadOnlyList<string> Waits(FlowFile flow, FlowQuestionsFile? questions, FlowUpdatesFile? updates, FlowEngineState engine)
     {
         var waits = new List<string>();
+        var betweenSessions = engine.State is FlowEngineState.None or FlowEngineState.Gone;
 
         foreach (var question in questions?.Open ?? [])
         {
             waits.Add($"question {question.Id} ({question.Kind}) since {Clock(question.RaisedAt)}: "
-                + OrchestrationReports.Line(FlowService.AnswerCommand, flow.Run, "<answer>", "--question", question.Id));
+                + (betweenSessions && FlowAnswerRules.OwesRecommendation(question.Kind, question.Recommendation, (question.Questions ?? []).Count)
+                    ? $"its recommendation is still owed - {OrchestrationReports.Line(FlowService.ResumeCommand, flow.Run)} seeks it first, and "
+                        + $"{OrchestrationReports.Line(FlowService.AnswerCommand, flow.Run, "abort", "--question", question.Id)} is taken now"
+                    : OrchestrationReports.Line(FlowService.AnswerCommand, flow.Run, "<answer>", "--question", question.Id)));
         }
 
         foreach (var update in updates?.Updates ?? [])

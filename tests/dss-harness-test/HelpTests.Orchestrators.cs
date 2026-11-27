@@ -65,6 +65,11 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("which it reads every 2 s", prose, StringComparison.Ordinal);
         Assert.Contains(
+            "what it waits for - each open question with since when and the command that answers it - the resume, which seeks it first, where no engine "
+                + "runs the run and the question still owes its recommendation - a plan update under way or queued",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
             $"waits while the engine runs, for as long as that is, saying so every {DssHarness.Core.Waiting.Waits.SaidEvery.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - its own Ctrl+C ends the wait, the stop staying asked - "
                 + "and --now ends its process: only on this machine, and only the process its owner names by its start.",
             prose,

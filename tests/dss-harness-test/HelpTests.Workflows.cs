@@ -745,7 +745,9 @@ public sealed partial class HelpTests
                 + "spent.advice and counted in the run's spend. Only an agent's own questions carry their recommendation within them and are not advised - a step's own agent's, "
                 + "and a pause step's that shows an upstream step's questions - nor is one the run's input or its configuration answers, which no person is asked. "
                 + "A person answers a question recommended: an answer to one still owing its recommendation that no advisor seeks now - between sessions, or while a pause defers it - "
-                + "is refused (13), nothing answered, and abort is taken; resume-orchestrator seeks it first, and a pause once it is complete.",
+                + "is refused (13), nothing answered, and abort is taken; resume-orchestrator seeks it first, and a pause once it is complete. "
+                + "The run's report names each open question's next step so: resume-orchestrator for one still owing its recommendation, abort taken now, "
+                + "and answer-orchestrator for every other.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
