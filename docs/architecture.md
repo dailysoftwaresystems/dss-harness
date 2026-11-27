@@ -4469,8 +4469,12 @@ step's newest; the failed attempt the engine runs again carries its backoff
 (`FlowCoordinator.TakeMessage`'s usage branch, `Charge`): every turn charges the run's budget and the attempt's entry
 with the same numbers, so the run's `spent` is the sum of its instances' - and is summed from them again at a resume,
 for a step's record is written before the run's, with what a build that kept no measures recorded before them
-(`flow.json`'s `spent.unmeasured`). What the advisor spent answering a step's own questions is kept beside them
-(`measure.advice`, never in an attempt, for the advisor's turns are its own records'). An attempt a crash cut off - its
+(`flow.json`'s `spent.unmeasured`). A turn of an attempt that is over - a handoff turn answered as a pause hands the
+step off, one its runner reported as the attempt ended - is written to the step's own record as it is charged (a
+`step` change saying so), for a resume gives back from a stream only what an attempt still running spent. What the
+advisor spent answering a step's own questions is kept beside them (`measure.advice`, never in an attempt, for the
+advisor's turns are its own records'), on the step's own record as each advice is taken (an `advised` change about
+the step, which writes its record: `FlowRunRecords`). An attempt a crash cut off - its
 record still `Running` - is completed at the resume from its own stored stream (`IFlowHandoffRunner.AttemptOf`: the
 events of the attempt the record says it was on, replayed through the engine's own count of a run's spending, each turn
 priced as it was reported): only the turns past what its entry was charged (`reports`) are charged now, its run ends
@@ -4683,7 +4687,17 @@ once; a stop ends it (`DeferAdvice` from `ApplyTheStop`, `BeginHardStop` through
 question `deferred` - a stop once the pause is complete among them, which is what `--all` is for the machine steps
 (`RequestStop` ending the session's advice stop and marking the stop, the loop's `DeferAdvice` taking each asking), and
 after which the complete pause starts no advice (`AdviseThePause` leaving each question owing one to the resume, deferred),
-so the stop never waits on an advisor - and a session's end ends and waits for whatever is left (`EndAdviceAsync`). A stop
+so the stop never waits on an advisor - an advice a stop ended that returns its recommendation all the same giving it to
+its question, which the resume then never pays for again (`Took`, the one owner of what a taken asking leaves) - and a
+session's end ends and waits for whatever is left (`EndAdviceAsync`). A session its cancellation token ends - which no
+run verb hands it: their interrupts and their command's own cancellation are the pause and the stop (`FlowTerminal`,
+`FlowService.DriveAsync`) - ends now, and writes what it charged and holds all the same: each advice it ends deferred as a
+stop defers it and taken by `Took`, its recommendation kept where it returned one, and the session's last record with
+every spend among it (`FlowCoordinator.RecordTheSessionsEnd`, the one owner of that record, `Finish`'s too), saying
+`cancelled` with the steps it leaves running - their runners are not the token's to end, the run's status `Running` and
+no end time where one runs - and what they answer as the session ends kept for the coordinator's next session
+(`HandBackWhatIsLeft`); one its token ends during its start writes nothing, as a refused start does, and one a
+defect ends leaves what a crash leaves - nothing more written, each question it was advising still marked sought. A stop
 is in the run's state from the moment it is applied - the hard stop by `ApplyTheStop`, a stop once the pause is complete
 as the loop takes it, recorded on its own (`StopApplied`) where the pause said all already - as `flow.json`'s
 `stoppingSince`, kept by the session's end and written out by the resume that takes the run up (`FlowResume.Load`), so a
@@ -5202,8 +5216,8 @@ written once, as it first starts, and read by every later start: its head, then 
 held untracked, one to a line), then `flow.json` (the
 truth a resume reads), `workflow.json`, `pre-existing-issues.json` where the change listed one, and last the event
 in `events.jsonl`, each line handed to the system whole and in order as it is written and put on the disk once per
-pass of the engine's loop - as the pass ends, before the loop waits on anything, and as the session ends
-(`IFlowRecords.Flush`) - so an end of the engine's process loses no line, and a power loss what the last pass had not
+pass of the engine's loop - as the pass ends, before the loop waits on anything, and as the session ends, in order or by
+its cancellation token (`IFlowRecords.Flush`) - so an end of the engine's process loses no line, and a power loss what the last pass had not
 put on the disk, never a line before it: writes never put on the disk reach it in any order, so the log can come back
 with the pass's later lines and its size and NULs where an earlier page of the pass never landed, and as no line holds a
 NUL - each is JSON - the log's opening takes back from its first NUL to its end (`AppendLog.Open`, `batched`) and its
@@ -5217,7 +5231,8 @@ does not hold, a time in any but the one form (`yyyy-MM-dd HH:mm:ss`, UTC; one n
 written `null`), a log line out of sequence or corrupt is refused by its number, and only a torn last
 line, or the lines from the first that holds a NUL, are set aside, said - by the report's notes, and as a warning by the
 session that opens the log for append and takes them back (`FlowEventLog.SetAside`). A resume reconciles `flow.json` against every step's own record, taking the
-step's own whole wherever there is one, keeping the index's order and adopting what only a step's
+step's own whole wherever there is one - so what changes a step's measure that no stream gives back, an advice taken and
+a turn of an attempt that is over, is written to the step's own record as it is charged - keeping the index's order and adopting what only a step's
 directory holds at the end. The graph is rebuilt in that order, never sorted again - `build+10` after
 `build+2`, `rounds#10` after `rounds#2`, a loop's later visit (`rounds+2`) and its items as their own,
 a block's members whatever the block ended, the agents the run holds open (each a create-agent step

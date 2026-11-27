@@ -572,9 +572,10 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         var at = _clock.GetUtcNow();
         var step = instance is null ? null : snapshot.Steps.FirstOrDefault(held => string.Equals(held.Instance, instance, StringComparison.Ordinal));
 
-        if (kind is FlowChangeKind.Step && step is not null)
+        if (kind is FlowChangeKind.Step or FlowChangeKind.Advised && step is not null)
         {
-            // The step's own files first: its output, then its record, in the step's own directory.
+            // The step's own files first: its output, then its record, in the step's own directory - what its advice spent
+            // among it, which is its measure's and which a resume sums from its own record.
             WriteStepFiles(step);
         }
 

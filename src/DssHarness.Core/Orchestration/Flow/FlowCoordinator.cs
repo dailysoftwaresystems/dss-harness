@@ -644,6 +644,13 @@ public sealed class FlowCoordinator
     private int _questionsRaised;
     private FlowSessionEnd? _last;
     private Task<Message>? _pending;
+
+    /// <summary>
+    /// What reached the loop after its last read that speaks of an attempt still running, kept by a session that ended
+    /// while it ran - its token ended it, or a defect did - in the order it was read: the next session takes it first, as
+    /// one the channel holds, so a step's answer is never lost for having come as the session ended.
+    /// </summary>
+    private readonly List<Message> _carried = [];
     private IFlowRecords? _records;
 
     /// <summary>
@@ -1185,7 +1192,13 @@ public sealed class FlowCoordinator
     /// question, or ended by a safe pause or a hard stop; a paused run goes on when a question is answered
     /// (<see cref="TryAnswer(string, string, out string?)"/>) and this is called again.
     /// </summary>
-    /// <param name="cancellationToken">Stops the waiting; nothing of the run is changed by a cancellation.</param>
+    /// <param name="cancellationToken">
+    /// Ends the session where it stands, which then throws <see cref="OperationCanceledException"/>: nothing more is
+    /// started, decided or waited for, save the advice it ends, whose runners it waits for as a stop's drain does. What it
+    /// charged and holds is written all the same - what each advice answered, and its last record with every spend among
+    /// it - and nothing else of the run is changed: the steps it started run on, and what they answer is the next
+    /// session's. One that ends the session's start writes nothing, as a refused start does.
+    /// </param>
     public async Task<FlowSessionEnd> RunAsync(CancellationToken cancellationToken)
     {
         if (_top is null)
@@ -1229,6 +1242,12 @@ public sealed class FlowCoordinator
         _sessionToken = cancellationToken;
         _adviceStop.Dispose();
         _adviceStop = new CancellationTokenSource();
+
+        // How the session leaves: in order, through its end below; by its cancellation token once it went on, which ends
+        // it now and writes what it charged and holds all the same; or by a refusal of its start or a defect, which writes
+        // nothing more - a refused start writes nothing of itself, and a defect leaves what a crash leaves.
+        var recorded = true;
+        var byItsToken = false;
 
         try
         {
@@ -1477,21 +1496,41 @@ public sealed class FlowCoordinator
             // leaving: what its last pass wrote is put on the disk by the records' close (FlowRunRecords).
             EndThePass();
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && !_starting)
+        {
+            // The session's token ended it once it went on: it ends now - nothing more is started, waited for or decided -
+            // and what it charged and holds is written below all the same, for flow.json never misses a spend.
+            byItsToken = true;
+            throw;
+        }
+        catch (Exception)
+        {
+            recorded = false;
+            throw;
+        }
         finally
         {
             // A start refused, or ended by a defect, leaves nothing held to be written by whatever comes after it - an
-            // answer it weighed handed back, for nothing records it; and what reached the loop after its last read is
-            // handed back or counted, however the session ended.
+            // answer it weighed handed back, for nothing records it - and what its end below would write is held and
+            // dropped with it: a refused start writes nothing of itself, and a defect leaves what a crash leaves. What
+            // reached the loop after its last read is handed back, counted or kept for the next session, however the
+            // session ended.
             var dropped = _held;
-            _held = null;
+            _held = recorded || _records is null ? null : [];
             Drop(dropped ?? []);
             _starting = false;
 
-            // An advice the session leaves running - it ended by a defect, or its token was cancelled - is ended and
-            // waited for before the session ends, for no advisor outlives the session that started it: what it spent
-            // is counted, and its question, still marked sought, is advised again at the next session's start.
-            await EndAdviceAsync().ConfigureAwait(false);
+            // An advice the session leaves running - its token ended it, or a defect did - is ended and waited for before
+            // the session ends, for no advisor outlives the session that started it: what it spent is counted. Where its
+            // token ended it, what each advice answered is written - a recommendation obtained kept, so the resume never
+            // pays for it again, and its question deferred to the resume where none was - and a defect leaves each
+            // question as a crash leaves it, still marked sought.
+            await EndAdviceAsync(recorded).ConfigureAwait(false);
             HandBackWhatIsLeft();
+
+            var unwritten = _held;
+            _held = null;
+            Drop(unwritten ?? []);
             _inSession = false;
 
             // Every read-only agent deletion the session began is seen to before it ends, for a deletion left
@@ -1502,20 +1541,65 @@ public sealed class FlowCoordinator
                 await Task.WhenAll(_deletions).ConfigureAwait(false);
                 _deletions.Clear();
             }
+
+            if (byItsToken)
+            {
+                // The session's last record, as one ended in order writes it: the run as the session leaves it, every
+                // spend it charged among it - its advice, and the turns that reached it after its last read.
+                RecordTheSessionsEnd(CancelledSummary());
+            }
         }
 
         _last = Finish();
+        return _last;
+    }
+
+    /// <summary>
+    /// The session's last record - the one owner of it, however the session ends: in order (<see cref="Finish"/>), or where
+    /// its cancellation token ends it once it went on - the run as the session leaves it, every spend it charged among it,
+    /// recorded and put on the disk before the session answers. A run its session leaves with steps still running - its
+    /// token ended it while they ran - has not ended, and its records say so.
+    /// </summary>
+    /// <param name="summary">The session in words, as its record says it.</param>
+    private void RecordTheSessionsEnd(string summary)
+    {
+        _endedAt = Status is FlowRunStatus.Running ? null : _clock.GetUtcNow();
+        Record(FlowChangeKind.SessionEnded, detail: summary);
 
         // The session's end is a pass's end: its record on the disk before the session answers.
         EndThePass();
-        return _last;
+    }
+
+    /// <summary>
+    /// What a session its cancellation token ended says of itself, as its last record words it: <c>cancelled</c>, with the
+    /// steps it leaves running - their runners are not the token's to end, and the coordinator's next session takes what
+    /// they answer - and the questions it leaves open.
+    /// </summary>
+    private string CancelledSummary()
+    {
+        var running = _created.Where(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup).Select(instance => instance.Id).ToList();
+        var open = OpenQuestions.Select(question => question.Id).ToList();
+        var said = new List<string>(2);
+
+        if (running.Count > 0)
+        {
+            said.Add($"{(running.Count == 1 ? "1 step" : $"{running.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} steps")} still running: {string.Join(", ", running)}");
+        }
+
+        if (open.Count > 0)
+        {
+            said.Add($"waiting on {string.Join(", ", open)}");
+        }
+
+        return said.Count == 0 ? "cancelled" : $"cancelled; {string.Join(", and ", said)}";
     }
 
     /// <summary>
     /// The end of a pass of the loop, for the run's records: every line written since the last pass ended is put on the
     /// disk, at once (<see cref="IFlowRecords.Flush"/>). A pass ends where the loop waits on anything - the next thing the
     /// run learns (<see cref="WaitNextAsync"/>), the handoff turns of a pause or of a plan update - and the session ends
-    /// with one, however it ends in order: done, failed, paused or stopped. So a power loss loses at most the last pass's
+    /// with one, however it ends in order - done, failed, paused or stopped - and where its token ends it once it went on
+    /// (<see cref="RecordTheSessionsEnd"/>). So a power loss loses at most the last pass's
     /// lines, and an end of the engine's process none, for each line is the system's as it is written.
     /// </summary>
     private void EndThePass() => _records?.Flush();
@@ -2051,7 +2135,10 @@ public sealed class FlowCoordinator
     /// Charges one turn of <paramref name="instance"/>'s attempt <paramref name="attempt"/> - the one place a token is
     /// counted: into that attempt's own measure entry, and the run's total with the same numbers at once, so the run's
     /// spend is the sum of its instances'. A turn of an attempt that is over - a handoff turn answered while the step stood
-    /// paused - reaches that attempt's own entry, for no attempt's spend is another's.
+    /// paused, one its runner reported as its attempt ended - reaches that attempt's own entry, for no attempt's spend is
+    /// another's, and the step's own record with it at once: a resume sums the run's spend from the steps' own records,
+    /// and gives back from its stream only what an attempt still running when the engine ended spent, so nothing else
+    /// would ever write that turn there. A turn of the attempt running is on its record as the attempt ends or asks.
     /// </summary>
     /// <param name="instance">The instance the turn's step is.</param>
     /// <param name="attempt">The attempt the turn belongs to.</param>
@@ -2060,6 +2147,17 @@ public sealed class FlowCoordinator
     {
         instance.Measure = (instance.Measure ?? new FlowStepMeasure()).Charged(attempt, turn);
         Spend(turn.Usage.AllTokens, FlowDollars.Of(turn.Usd, turn.Uncounted));
+
+        if (instance.State is not FlowInstanceState.Running || attempt != instance.Attempt)
+        {
+            Record(
+                FlowChangeKind.Step,
+                instance,
+                from: instance.State,
+                to: instance.State,
+                attempt: attempt,
+                detail: $"what attempt {attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)} spent after it ended is charged");
+        }
     }
 
     /// <summary>
@@ -11729,54 +11827,79 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Takes the advice the session's askings have answered: what each spent is counted against the run's budget - an
-    /// asking an answer or a stop ended among them, for what it spent was spent - a recommendation obtained is written
-    /// to its question with who gave it and where its records are, and one not obtained leaves the question saying why.
-    /// An asking that was ended leaves its question as the ending said it, its records standing under the asking step,
-    /// and one whose runner outlived the drain's bound of its end is let go of. Whether one was let go of or taken, so the
-    /// loop goes round before it waits again: the step a let-go asking held is admitted, and what a taken one spent is
-    /// weighed against the run's budget (<see cref="CheckBudget"/>) - an advice that spends the run to its reserve pauses
-    /// it at once, never only when something else next wakes the loop.
+    /// Takes the advice the session's askings have answered, each as <see cref="Took"/> says - what it spent counted against
+    /// the run's budget and recorded, its question given what it obtained - and lets go of one whose runner outlived the
+    /// drain's bound of its end (<see cref="LetGo"/>). Whether one was let go of or taken, so the loop goes round before it
+    /// waits again: the step a let-go asking held is admitted, and what a taken one spent is weighed against the run's
+    /// budget (<see cref="CheckBudget"/>) - an advice that spends the run to its reserve pauses it at once, never only when
+    /// something else next wakes the loop.
     /// </summary>
     private async Task<bool> TakeAdviceAsync()
     {
         var letGo = false;
         var taken = false;
 
-        // An ended asking whose runner outlived the drain's bound of its end is let go of, as a stopped step's runner is
-        // waited for no longer: the asking step is not held behind it any more, and what it spent is not counted, for it
-        // never answered.
         foreach (var pending in _advising.Where(pending => pending is { Dropped: true, LetGo.IsCompleted: true, Task.IsCompleted: false }).ToList())
         {
             _advising.Remove(pending);
             letGo = true;
-            Record(
-                FlowChangeKind.Advised,
-                pending.Instance,
-                detail: $"{pending.Asked.Id} let go: the advisor's runner did not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s of its end, and what it spent is not counted");
+            LetGo(pending);
         }
 
         foreach (var pending in _advising.Where(pending => pending.Task.IsCompleted).ToList())
         {
             _advising.Remove(pending);
-            var advice = await AdviceOfAsync(pending).ConfigureAwait(false);
+            Took(pending, await AdviceOfAsync(pending).ConfigureAwait(false));
             taken = true;
-
-            if (pending.Dropped || !_open.Contains(pending.Asked.Id))
-            {
-                // Ended while it ran - an answer was given, or the run paused or stopped - and its question says so.
-                continue;
-            }
-
-            pending.Asked.Recommendation = advice.Answer is { } answer
-                ? new FlowRecommendation("given", answer, advice.Text, advice.Why, "advisor", pending.Advisor.Agent, advice.Model, advice.Directory)
-                : new FlowRecommendation("notObtained", Why: $"no recommendation: one was sought and not obtained ({advice.NotObtained})");
-            WriteQuestions();
-            Record(FlowChangeKind.Advised, _answerable.GetValueOrDefault(pending.Asked.Id), detail: $"{pending.Asked.Id} {(advice.Answer is { } said ? $"advised '{said}'" : "left without a recommendation")}");
         }
 
         return letGo || taken;
     }
+
+    /// <summary>
+    /// What one asking of the advisor leaves once it is taken, its spend counted already (<see cref="AdviceOfAsync"/>) - the
+    /// one owner of it, for the loop's taking and the session's end alike. A recommendation obtained is written to its
+    /// question with who gave it and where its records are while the question is open, however the asking was ended -
+    /// a stop's, or the session's own end, which ended it while it ran - for a recommendation obtained is never paid for
+    /// again at the resume; an answer closes the question, which then keeps its answer. None obtained leaves the question
+    /// saying why where nothing ended the asking, and as its ending said it where something did - deferred to the resume.
+    /// Either way the asking is recorded, about the step that asked: what it spent is that step's measure's, which its own
+    /// record holds from here on - the record a resume takes for the truth - or about the run, whose file keeps what the
+    /// advice of its own question spent.
+    /// </summary>
+    /// <param name="pending">The asking, taken.</param>
+    /// <param name="advice">What it answered.</param>
+    private void Took(Advising pending, FlowAdvice advice)
+    {
+        var asked = pending.Asked;
+
+        if (!_open.Contains(asked.Id) || (pending.Dropped && advice.Answer is null))
+        {
+            Record(
+                FlowChangeKind.Advised,
+                pending.Instance,
+                detail: $"{asked.Id} {(_open.Contains(asked.Id) ? "left as its advice's ending said it" : "is no longer open")}, and what its advice spent is counted");
+            return;
+        }
+
+        asked.Recommendation = advice.Answer is { } answer
+            ? new FlowRecommendation("given", answer, advice.Text, advice.Why, "advisor", pending.Advisor.Agent, advice.Model, advice.Directory)
+            : new FlowRecommendation("notObtained", Why: $"no recommendation: one was sought and not obtained ({advice.NotObtained})");
+        WriteQuestions();
+        Record(FlowChangeKind.Advised, pending.Instance, detail: $"{asked.Id} {(advice.Answer is { } said ? $"advised '{said}'" : "left without a recommendation")}");
+    }
+
+    /// <summary>
+    /// Lets go of an ended asking whose runner outlived the drain's bound of its end, as a stopped step's runner is waited
+    /// for no longer: the asking step is not held behind it any more, its question keeps what its ending said, and what it
+    /// spent is not counted, for it never answered - and the records say so.
+    /// </summary>
+    /// <param name="pending">The asking let go of.</param>
+    private void LetGo(Advising pending)
+        => Record(
+            FlowChangeKind.Advised,
+            pending.Instance,
+            detail: $"{pending.Asked.Id} let go: the advisor's runner did not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s of its end, and what it spent is not counted");
 
     /// <summary>
     /// What one asking that has ended answered, its spend counted against the run's budget: the one place an advice's
@@ -11833,10 +11956,11 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Ends every advice still running, where the run stops - a hard stop, or a stop once the pause is complete: an
-    /// advisor is a reason step, and none runs past a stop - a pause leaves it to finish. Each question it was sought for,
-    /// still open, says the recommendation is sought when the run is resumed; the asking is kept until its runner has
-    /// ended, so what it spent is counted.
+    /// Ends every advice still running, where the run stops - a hard stop, or a stop once the pause is complete - or where
+    /// the session's token ends the session: an advisor is a reason step, and none runs past a stop - a pause leaves it to
+    /// finish. Each question it was sought for, still open, says the recommendation is sought when the run is resumed; the
+    /// asking is kept until its runner has ended, so what it spent is counted, and an advice that returns its
+    /// recommendation all the same gives it to its question (<see cref="Took"/>).
     /// </summary>
     /// <param name="why">What ended it, as the question says it.</param>
     private void DeferAdvice(string why)
@@ -11871,14 +11995,23 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Ends every advice the session leaves and waits for each runner to end, no longer than a stopped step's runner is
     /// waited for - what it spent counted - as a session ends however it ends: no advisor outlives the session that
-    /// started it. A question it was sought for keeps what it says, and one still marked sought is advised again at the
-    /// next session's start.
+    /// started it. Where the session ends with its records written - its token ended it - each is taken as the loop takes
+    /// one (<see cref="Took"/>): its question, deferred to the resume as a stop defers it, is given the recommendation the
+    /// advice returns all the same, so the resume never pays for it again, and what it spent is recorded on the step that
+    /// asked; one whose runner outlived the wait is let go of, and said. Where a defect ended it, its question stays as a
+    /// crash leaves it, still marked sought, and is advised again at the next session's start.
     /// </summary>
-    private async Task EndAdviceAsync()
+    /// <param name="recorded">Whether what the session's end takes is written: its token ended it, and no defect did.</param>
+    private async Task EndAdviceAsync(bool recorded)
     {
         if (_advising.Count == 0)
         {
             return;
+        }
+
+        if (recorded)
+        {
+            DeferAdvice("the session was ended while the advisor ran");
         }
 
         foreach (var pending in _advising)
@@ -11898,10 +12031,23 @@ public sealed class FlowCoordinator
         foreach (var pending in _advising.Where(pending => pending.Task.IsCompleted).ToList())
         {
             _advising.Remove(pending);
-            _ = await AdviceOfAsync(pending).ConfigureAwait(false);
+            var advice = await AdviceOfAsync(pending).ConfigureAwait(false);
+
+            if (recorded)
+            {
+                Took(pending, advice);
+            }
         }
 
         // One whose runner outlived the wait is let go of: its token is ended, and nothing of the run waits on it.
+        if (recorded)
+        {
+            foreach (var pending in _advising)
+            {
+                LetGo(pending);
+            }
+        }
+
         _advising.Clear();
     }
 
@@ -12519,9 +12665,10 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Ends the session, and says the run's status with its failures, its passed-over steps, and the pause or stop that
-    /// ended it. What never started is left as it is - for the question it waits on, the pause's resume or the stop's -
-    /// and a session that left a step unended is never said done.
+    /// Ends the session in order, its last record written (<see cref="RecordTheSessionsEnd"/>), and says the run's status
+    /// with its failures, its passed-over steps, and the pause or stop that ended it. What never started is left as it is -
+    /// for the question it waits on, the pause's resume or the stop's - and a session that left a step unended is never
+    /// said done.
     /// </summary>
     private FlowSessionEnd Finish()
     {
@@ -12573,8 +12720,7 @@ public sealed class FlowCoordinator
             _ => $"paused; waiting on {string.Join(", ", open.Count > 0 ? open.Select(question => question.Id) : waiting)}",
         };
 
-        _endedAt = _clock.GetUtcNow();
-        Record(FlowChangeKind.SessionEnded, detail: summary);
+        RecordTheSessionsEnd(summary);
 
         return new FlowSessionEnd(
             status,
@@ -12720,12 +12866,24 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Reads every message already waiting for the loop - what an earlier read holds, then what the channel holds - and
-    /// hands each to <paramref name="take"/>, waiting on nothing. A read still armed takes the channel's next message
-    /// as it comes, so the channel holds none meanwhile and is left to it.
+    /// Reads every message already waiting for the loop - what a session that ended while steps ran kept for the next
+    /// (<see cref="_carried"/>), then what an earlier read holds, then what the channel holds - and hands each to
+    /// <paramref name="take"/>, waiting on nothing. A read still armed takes the channel's next message as it comes, so the
+    /// channel holds none meanwhile and is left to it.
     /// </summary>
     private void EachQueued(Action<Message> take)
     {
+        if (_carried is [_, ..])
+        {
+            List<Message> carried = [.. _carried];
+            _carried.Clear();
+
+            foreach (var kept in carried)
+            {
+                take(kept);
+            }
+        }
+
         if (_pending is { IsCompleted: true } read)
         {
             _pending = null;
@@ -12745,9 +12903,12 @@ public sealed class FlowCoordinator
     /// <summary>
     /// What reached the loop after its last read, as its session ends however it ends: an answer offered is handed back
     /// cancelled - never refused, for it was never weighed, and it stays in the inbox for whoever takes it next - and
-    /// what a reason step spent is counted, for it was spent. What else was left speaks of an attempt that is over, save
-    /// that the answer of a runner that outlived its attempt gives back what that attempt kept held. An answer offered
-    /// after this is the next session's, taken at its start.
+    /// what a reason step spent is counted, for it was spent. What speaks of an attempt still running - its answer, its
+    /// time limit, its legs' events, its handoff taken - is kept for the next session, which takes it first
+    /// (<see cref="_carried"/>): a session ends with a step running only where its token or a defect ended it, and the
+    /// step's answer is the run's, never lost for having come as the session ended. What else was left speaks of an
+    /// attempt that is over, save that the answer of a runner that outlived its attempt gives back what that attempt kept
+    /// held. An answer offered after this is the next session's, taken at its start.
     /// </summary>
     private void HandBackWhatIsLeft()
     {
@@ -12760,6 +12921,10 @@ public sealed class FlowCoordinator
             else if (message.Turn is not null)
             {
                 TakeMessage(message);
+            }
+            else if (message.Instance is { State: FlowInstanceState.Running } running && message.Attempt == running.Attempt)
+            {
+                _carried.Add(message);
             }
             else
             {
