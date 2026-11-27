@@ -5143,7 +5143,12 @@ over `FlowRunContext.DigestOf`): the entry the definition's check makes now, and
 build reads a frozen one (`FrozenDefinition`), whichever build froze it - each member that may be null and that an
 earlier release left out, as it left out every null and had none of the members added since, read as null, and each
 member a new definition is refused for naming, which an earlier release's may hold (`FrozenDefinition.Retired`: the
-advisor's `kinds`, the codebase graph's `maxFileBytes`), read in its shape and ignored. Never against the digest
+advisor's `kinds`, the codebase graph's `maxFileBytes`), read in its shape and ignored, and each member written in a
+shape this build changed (`FrozenDefinition.Reshaped`: a sweep's `arms`, a test step's `filter`) held to the shape that
+release wrote it in and read as what this build's parser makes of the same words - a sweep's list of arm ids, written
+empty on every step that named none, read as no arms, every arm swept, and the ids it listed as the list they are; a
+filter written as one text read as the expression that scalar is - so it says what the unchanged entry does, and
+written again is in this build's shape alone. Never against the digest
 `flow.json` holds (`definitionDigest`, written as the run began and kept as the record of what it began with), which
 the build that began it made of the same words written its own way; never by where the file was read from; and never
 by a use's fingerprint, the digest that build made of the called file, which no frozen definition holds to make

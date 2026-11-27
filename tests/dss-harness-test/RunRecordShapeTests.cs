@@ -1,7 +1,10 @@
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
@@ -95,7 +98,8 @@ public sealed class RunRecordShapeTests
     /// <summary>
     /// The definition of a file, as the run's store froze it and as an earlier release wrote it, for the tests of what an
     /// earlier release's frozen definition reads as: an advisor on the configuration's tier, a codebase graph, an input,
-    /// a param and a recovery, each leaving out a member that may be null.
+    /// a param and a recovery, each leaving out a member that may be null; a sweep listing its arms and one naming none;
+    /// and a test step whose filter is one text.
     /// </summary>
     private static (HarnessFactory Harness, OrchestratorLayout Layout, WorkflowDefinition Definition, string Ours) FrozenByThisBuild(TempDirectory temp)
     {
@@ -124,6 +128,14 @@ public sealed class RunRecordShapeTests
               - name: one
                 type: orient
                 onFailure: recover
+              - name: swept
+                type: check-mutations
+                arms: [arm-1, arm-2]
+              - name: every-arm
+                type: check-mutations
+              - name: tested
+                type: test
+                filter: run.affectedTests
             """);
 
         harness.FileSystem.CreateDirectory(layout.Directory);
@@ -163,6 +175,95 @@ public sealed class RunRecordShapeTests
         harness.OrchestrationStore.WriteDefinition(layout, frozen);
 
         Assert.Equal(ours, File.ReadAllText(layout.DefinitionFile));
+    }
+
+    /// <summary>
+    /// A definition an earlier release froze holding a member in a shape since changed reads as that release meant it:
+    /// a sweep's arms - a list written on every step, empty on each that named none - read as the list the parser makes of
+    /// the ids the file lists, and as no arms, every arm swept, where it named none; a test step's filter - one text - read
+    /// as the expression the parser makes of the same scalar. So it is the definition this build reads of the same file,
+    /// digest for digest, and written again it is what this build writes of it, in this build's shape alone.
+    /// </summary>
+    [Theory]
+    [InlineData("arms")]
+    [InlineData("filter")]
+    public void ADefinitionAnEarlierReleaseFrozeInAShapeSinceChanged_ReadsAsTheOneThisBuildReadsOfTheSameFile(string reshaped)
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, definition, ours) = FrozenByThisBuild(temp);
+        var listed = EarlierRelease.WithArmsListed(EarlierRelease.WithKinds(EarlierRelease.Frozen(layout)));
+        var earlier = reshaped == "arms" ? listed : EarlierRelease.WithFilterText(listed);
+
+        File.WriteAllText(layout.DefinitionFile, earlier.ToJsonString(JsonStateFile.Options) + "\n");
+
+        var frozen = harness.OrchestrationStore.ReadDefinition(layout)!;
+        var swept = frozen.Steps.Single(step => step.Name == "swept").Arms!;
+        var filter = frozen.Steps.Single(step => step.Name == "tested").Filter!;
+
+        Assert.Equal(["arm-1", "arm-2"], swept.Written);
+        Assert.Null(swept.Expression);
+
+        // The steps that named no arms - the recovery's among them, at its depth - hold none, as the file read now does.
+        Assert.All(frozen.Steps.Where(step => step.Name != "swept").Concat(frozen.Recover!.Steps), step => Assert.Null(step.Arms));
+        Assert.Empty(filter.Written);
+        Assert.Equal("run.affectedTests", filter.Expression);
+        Assert.Equal(FlowRunContext.DigestOf(definition), FlowRunContext.DigestOf(frozen));
+
+        harness.OrchestrationStore.WriteDefinition(layout, frozen);
+
+        Assert.Equal(ours, File.ReadAllText(layout.DefinitionFile));
+    }
+
+    /// <summary>
+    /// A reshaped member is read in the shapes a release wrote it in and in no other: a sweep's arms given as one text and
+    /// a test step's filter given as a list - a list written out is this build's record of one - are each refused, the
+    /// filter at the line it stands on, and never read as nothing.
+    /// </summary>
+    /// <param name="step">The step whose member is written in a shape no release wrote it in.</param>
+    /// <param name="member">The member.</param>
+    /// <param name="value">What it is written as.</param>
+    /// <param name="why">The refusal, its line and the byte after the value's first token in it - each from 0 - as {0} and {1}.</param>
+    [Theory]
+    [InlineData("swept", "arms", "\"arm-1\"", "Expected an array, found String")]
+    [InlineData("tested", "filter", "[\"run.affectedTests\"]","The JSON value could not be converted to DssHarness.Core.Orchestration.Flow.WorkflowDefinition. Path: $.steps | LineNumber: {0} | BytePositionInLine: {1}")]
+    public void AReshapedMemberInAShapeNoReleaseWroteItIn_IsRefused(string step, string member, string value, string why)
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, _, _) = FrozenByThisBuild(temp);
+        var frozen = EarlierRelease.WithArmsListed(EarlierRelease.Frozen(layout));
+
+        frozen["steps"]!.AsArray().Single(written => (string?)written!["name"] == step)![member] = JsonNode.Parse(value);
+
+        var text = frozen.ToJsonString(JsonStateFile.Options) + "\n";
+        var lines = text.Split('\n');
+        var line = Array.FindIndex(lines, written => written.TrimStart().StartsWith($"\"{member}\": {value[0]}", StringComparison.Ordinal));
+
+        File.WriteAllText(layout.DefinitionFile, text);
+
+        var (read, refused) = harness.OrchestrationStore.ReadDefinitionOrWhy(layout);
+
+        Assert.Null(read);
+        Assert.Equal(string.Format(CultureInfo.InvariantCulture, why, line, lines[line].IndexOf(value[0], StringComparison.Ordinal) + 1), refused);
+    }
+
+    /// <summary>
+    /// Each reshaped member's two shapes are told apart by how its JSON opens: this build's is a record, written as an
+    /// object, and the earlier one never is - so neither shape of any member can be read as the other.
+    /// </summary>
+    [Fact]
+    public void EveryReshapedMember_IsARecordNow_AndWasNeverOneBefore()
+    {
+        var options = FrozenDefinition.ReadOptions;
+
+        Assert.Equal(new[] { (typeof(WorkflowStep), "arms"), (typeof(WorkflowStep), "filter") }, FrozenDefinition.Reshaped.Select(reshaped => (reshaped.Record, reshaped.Member)));
+
+        foreach (var (record, member, shape, _) in FrozenDefinition.Reshaped)
+        {
+            var now = options.GetTypeInfo(record).Properties.Single(property => property.Name == member).PropertyType;
+
+            Assert.Equal(JsonTypeInfoKind.Object, options.GetTypeInfo(now).Kind);
+            Assert.NotEqual(JsonTypeInfoKind.Object, options.GetTypeInfo(shape).Kind);
+        }
     }
 
     /// <summary>
