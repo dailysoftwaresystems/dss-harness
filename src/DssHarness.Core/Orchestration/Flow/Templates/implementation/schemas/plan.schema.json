@@ -303,6 +303,13 @@
         "settles": {
           "type": "string",
           "description": "The id of the issue of the run's next round this item settles (nx-<n>), exactly as the run names it; empty or absent where it settles none. A defect the run took from its own rounds is a work item like any other: it decides a class, and it is built first."
+        },
+        "needs": {
+          "type": "array",
+          "description": "The ids of the issues the recovery is fixing or fixed whose fix this item builds on, each exactly as the run's list of the issues it has taken names it; empty or absent where it needs none.",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },

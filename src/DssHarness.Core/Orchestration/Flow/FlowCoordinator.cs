@@ -8476,19 +8476,30 @@ public sealed class FlowCoordinator
 
             if (visits is not null || _pendingFixes.Contains(triage) || triage.WaitingQuestion is not null)
             {
-                holds.Add(FlowIssueHold.Of(TitleOf(triage), visits?[^1].Id ?? triage.Id, triage.Output?["where"], (visits ?? []).SelectMany(CheckedItemsOf)));
+                holds.Add(FlowIssueHold.Of(triage.Id, TitleOf(triage), visits?[^1].Id ?? triage.Id, triage.Output?["where"], (visits ?? []).SelectMany(CheckedItemsOf)));
             }
             else if (CourseOf(triage) == JoinCourse && JoiningOf(triage) is { Fate: Joining.With or Joining.After or Joining.Due, Root: { } root } joining)
             {
                 // Its fix is the visit of the issue it joined that it goes with, or the one it waits for to end.
                 var with = joining.Fate == Joining.With;
                 var fixer = atWork.GetValueOrDefault(root)?.LastOrDefault(visit => IsWith(triage, visit) == with);
-                holds.Add(FlowIssueHold.Of(TitleOf(triage), fixer?.Id ?? root.Id, triage.Output?["where"], []));
+                holds.Add(FlowIssueHold.Of(triage.Id, TitleOf(triage), fixer?.Id ?? root.Id, triage.Output?["where"], []));
             }
         }
 
         return holds;
     }
+
+    /// <summary>
+    /// The ids of the issues the recovery takes, as <c>{run.preExisting}</c> words them, in the order they were taken:
+    /// each a triage sent to fix, or joined to the fix of another, being fixed or fixed - the ones a work item may name
+    /// among those whose fix it needs (<see cref="FlowWorkItems.NeedsOf"/>), and for which the engine holds it while the
+    /// fix is under way (<see cref="IssueHolds"/>); a join whose fix ended without it, triaged again on its own, is none.
+    /// </summary>
+    private IEnumerable<string> IssuesTheRecoveryTakes()
+        => _tally
+            .Where(entry => entry.Triage is { } triage && CourseOf(triage) is "fix" or JoinCourse && StateOf(entry) is not null)
+            .Select(entry => entry.Id);
 
     /// <summary>The work items every <c>validate-plan</c> step of <paramref name="visit"/>, a visit of the recovery, read and ended done with: the remedy items its diagnosis gives, as they were checked.</summary>
     private static IEnumerable<JsonNode?> CheckedItemsOf(FlowInstance visit)
@@ -8500,8 +8511,9 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The fixes <paramref name="instance"/> waits for, each as its record says it (<see cref="FlowWaits.Fix"/>): where it
     /// is a step of a work item that has not begun - an instance of the work-item group none of whose steps has started
-    /// (<see cref="ItemBegun"/>) - and that item owns a path an issue being fixed holds (<see cref="FlowIssueHold.Meeting"/>),
-    /// it starts once that issue's visit has ended, so it builds on the tree the fix leaves. Empty for every other step,
+    /// (<see cref="ItemBegun"/>) - and that item owns a path an issue being fixed holds (<see cref="FlowIssueHold.Meeting"/>)
+    /// or names the issue among those whose fix it needs (<see cref="FlowIssueHold.NeededBy"/>), it starts once that
+    /// issue's visit has ended, so it builds on the tree the fix leaves. Empty for every other step,
     /// which nothing of a fix holds: an item that has begun goes on - its fold and its reconcile meet the fix as any two
     /// changes meet - and a step of the recovery is never a work item, whatever scope its visit stands in.
     /// </summary>
@@ -8519,9 +8531,9 @@ public sealed class FlowCoordinator
         return
         [
             .. holds.Value
-                .Select(hold => (Hold: hold, Meeting: hold.Meeting(owned)))
-                .Where(held => held.Meeting.Count > 0)
-                .Select(held => FlowWaits.Fix(held.Hold.Title, held.Hold.Fixer, held.Meeting)),
+                .Select(hold => (Hold: hold, Meeting: hold.Meeting(owned), Needed: hold.NeededBy(owned)))
+                .Where(held => held.Needed || held.Meeting.Count > 0)
+                .Select(held => FlowWaits.Fix(held.Hold.Title, held.Hold.Fixer, held.Meeting, held.Needed)),
         ];
     }
 
@@ -13543,6 +13555,11 @@ public sealed class FlowCoordinator
             var owed = UnsettledNext();
 
             read["settleable"] = FlowValue.Of(new JsonArray([.. owed.Select(issue => (JsonNode?)issue.Id)]));
+
+            // The issues the recovery takes, by their ids: an item of the list may name one of them among those whose fix
+            // it needs, which the engine holds it for until that fix has ended (FixHoldOf), and no other, for no fix of
+            // another is made to wait for. A recovery's check is handed none.
+            read["fixes"] = FlowValue.Of(new JsonArray([.. IssuesTheRecoveryTakes().Select(id => (JsonNode?)id)]));
 
             if (HoldsTheOwedIssues(check, declaredIn))
             {

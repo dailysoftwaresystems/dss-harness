@@ -301,7 +301,7 @@ public static partial class HelpTopics
             + "its agent, a reason step's model, its attempt and how long it has run; what it waits for - each open question with "
             + "since when and the command that answers it, a plan update under way or queued, an instance waiting on another, on "
             + "the resume, on room - a claim, the run to be quiet, a counter of its limits - or on the fix of an issue that holds a "
-            + "file its work item owns, a ci-wait reading the checks of the "
+            + "file its work item owns or that the item needs, a ci-wait reading the checks of the "
             + "commit the run last pushed; what is done, the failures a handler took and what was spent of the budget; what is left "
             + "at least and at most - a stopped instance among it, for it runs again at the resume - with the bound that gave the "
             + "most, by the engine's own bounds, so the most is a bound: each member of a scope still open not drawn yet, a loop's "

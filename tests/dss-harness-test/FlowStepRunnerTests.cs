@@ -832,6 +832,48 @@ public sealed class FlowStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// The plan check holds an item's <c>needs</c> to the issues the recovery is fixing or fixed whose ids the engine hands
+    /// it (<c>fixes</c>): an item that needs one of them passes, its items kept as they were; one that names an issue the
+    /// recovery takes no fix of is refused, for the engine would hold it for no fix; and a check handed none - a
+    /// recovery's - refuses every need.
+    /// </summary>
+    [Fact]
+    public async Task ThePlanCheck_HoldsAnItemsNeedsToTheIssuesTheRecoveryFixes()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items" };
+        var needing = Item("build-on-the-fix", "src/Parser.cs");
+        needing["needs"] = new JsonArray("triage+2");
+        var stranger = Item("build-on-what-is-not-fixed", "src/Lexer.cs");
+        stranger["needs"] = new JsonArray("triage+2", "pe-1");
+
+        async Task<IReadOnlyList<string>> ProblemsAsync(JsonArray items, JsonArray? fixes)
+        {
+            var read = new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(items) };
+
+            if (fixes is not null)
+            {
+                read["fixes"] = FlowValue.Of(fixes);
+            }
+
+            var result = await runner.RunAsync(Run(step, repository.Path, read), Token);
+
+            Assert.True(result.Passed, result.Error);
+            Assert.Equal(items.Select(FlowWorkItems.NameOf), result.Output!["items"]!.AsArray().Select(FlowWorkItems.NameOf));
+            return [.. result.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+        }
+
+        Assert.Empty(await ProblemsAsync(new JsonArray(Item("around"), needing.DeepClone()), new JsonArray("triage", "triage+2")));
+        Assert.Equal(
+            ["the item 'build-on-what-is-not-fixed' needs the fix of 'pe-1', which is not an issue the run is fixing or has fixed"],
+            await ProblemsAsync(new JsonArray(needing.DeepClone(), stranger.DeepClone()), new JsonArray("triage+2")));
+        Assert.Equal(
+            ["the item 'build-on-the-fix' needs the fix of 'triage+2', which is not an issue the run is fixing or has fixed"],
+            await ProblemsAsync(new JsonArray(needing.DeepClone()), null));
+    }
+
+    /// <summary>
     /// A check handed the issues the run owes its next round and the round a plan update's pieces join holds the list that
     /// round opens with to them - the round's own items, less the one a changed piece names, with the pieces' items - and
     /// not the plan's own list: an issue an item of the round settles is settled though no item of the plan names it, and

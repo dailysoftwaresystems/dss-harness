@@ -67,6 +67,19 @@ public static class FlowWorkItems
         => item is JsonObject held && held["name"] is JsonValue value && value.TryGetValue<string>(out var name) && !string.IsNullOrWhiteSpace(name)
             ? name
             : null;
+
+    /// <summary>
+    /// The ids of the issues whose fix the work item <paramref name="item"/> needs, as its <c>needs</c> names them - each
+    /// as <c>{run.preExisting}</c> words an issue, each once, in its order; none where it names none. The one reading of
+    /// the member, which the plan's check holds to the issues the run is fixing or fixed and the engine holds the item
+    /// by until each fix has ended (<see cref="FlowIssueHold.NeededBy"/>); an entry that is not a text that is not blank
+    /// reads as none.
+    /// </summary>
+    /// <param name="item">The work item, as a plan, a piece or an instance of the work-item group holds it.</param>
+    public static IReadOnlyList<string> NeedsOf(JsonNode? item)
+        => item is JsonObject held && held["needs"] is JsonArray needs
+            ? [.. needs.Select(need => need is JsonValue value && value.TryGetValue<string>(out var id) && !string.IsNullOrWhiteSpace(id) ? id : null).OfType<string>().Distinct(StringComparer.Ordinal)]
+            : [];
 }
 
 /// <summary>

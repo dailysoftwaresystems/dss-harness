@@ -202,6 +202,7 @@ public static class WorkflowTemplates
         .. Schemas.Select(schema => $"schemas/{schema}.schema.json"),
         "recommendations.md",
         "closure.md",
+        "fixes.md",
         .. PipelineFiles,
         $"{ShippedWorkflowName}{HarnessLayout.WorkflowFileExtension}",
     ];

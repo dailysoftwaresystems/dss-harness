@@ -87,8 +87,7 @@ The work is in the main tree, committed; `git diff {orient.startCommit} HEAD` sh
 
 {run.preExisting}
 
-An issue the list says is being fixed is the recovery's: no work item fixes it or rewrites its lines; an item that
-needs it fixed builds after the fix, on the tree the fix leaves - the run holds it until the fix is done.
+{text.fixes}
 
 Where a line says that a step left no output, that thing was not read or did not run in this run: it is unknown, and never a pass.
 Name it under unverified; it is a finding only where the line says the step failed, not where it was skipped.

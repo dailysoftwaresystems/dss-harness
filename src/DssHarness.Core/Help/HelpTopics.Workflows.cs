@@ -271,9 +271,13 @@ public static partial class HelpTopics
         builder.AppendLine("moment it is sent to fix until its visit ends, the issue holds the files its triage's where");
         builder.AppendLine("names - each a path from the repository's root, never a command - and, once a check of its");
         builder.AppendLine("visit has read the remedy items its diagnosis gives, the paths those items own: an instance of");
-        builder.AppendLine("the work-item group that has not begun and owns one of them starts once that visit has ended,");
-        builder.AppendLine("building on the tree the fix leaves, its record waiting for the fix of the issue, by its title");
-        builder.AppendLine("and its visit, and the files it holds; every other item goes on at once. run.preExisting says");
+        builder.AppendLine("the work-item group that has not begun and owns one of them, or whose item names the issue's id");
+        builder.AppendLine("in its needs - the fix it builds on - starts once that visit has ended, building on the tree the");
+        builder.AppendLine("fix leaves, its record waiting for the fix of the issue, by its title and its visit, and the");
+        builder.AppendLine("files it holds or that the item needs it; every other item goes on at once. The plan's check");
+        builder.AppendLine("refuses a needs that names no issue the recovery is fixing or fixed, and the planner's prompts");
+        builder.AppendLine("and the self-audit read the rule once, the workflow's text fixes (fixes.md), beside the issues");
+        builder.AppendLine("the run has taken. run.preExisting says");
         builder.AppendLine("each issue in the order it was taken - the order its triage ended, a resume's as before it -");
         builder.AppendLine("and an always step starts once no issue's triage or fix is at work beside it, one the always");
         builder.AppendLine("phase raised among them, so what it is told of the issues is true when it is told; one that");

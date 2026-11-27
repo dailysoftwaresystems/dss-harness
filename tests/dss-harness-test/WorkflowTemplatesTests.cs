@@ -1287,11 +1287,11 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Contains(
             "An issue sent to fix is the recovery's at once, its visit beside any other at work - save one a step of a visit of the recovery reported, which waits for that visit to end, for the recovery never calls itself, and one a visit at work fixes already for another step it stopped, which waits for that visit; a step two issues stop runs again once, after both are settled. "
-                + "From the moment it is sent to fix until its visit ends, the issue holds the files its triage's where names - each a path from the repository's root, never a command - and, once a check of its visit has read the remedy items its diagnosis gives, the paths those items own: an instance of the work-item group that has not begun and owns one of them starts once that visit has ended, building on the tree the fix leaves,",
+                + "From the moment it is sent to fix until its visit ends, the issue holds the files its triage's where names - each a path from the repository's root, never a command - and, once a check of its visit has read the remedy items its diagnosis gives, the paths those items own: an instance of the work-item group that has not begun and owns one of them, or whose item names the issue's id in its needs - the fix it builds on - starts once that visit has ended, building on the tree the fix leaves,",
             help,
             StringComparison.Ordinal);
         Assert.Contains(
-            "an instance waiting on another, on the resume, on room - a claim, the run to be quiet, a counter of its limits - or on the fix of an issue that holds a file its work item owns,",
+            "an instance waiting on another, on the resume, on room - a claim, the run to be quiet, a counter of its limits - or on the fix of an issue that holds a file its work item owns or that the item needs,",
             Prose.Words(DssHarness.Core.Help.HelpTopics.Render("orchestrators")),
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1299,7 +1299,7 @@ public sealed class WorkflowTemplatesTests
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
-            "a work item that has not begun and owns one of them starts once that fix is done, building on the tree it leaves, and `ask-orchestrator-status` says what it waits for; every other item goes on at once.",
+            "a work item that has not begun and owns one of them, or names the issue under `needs` - the fix it builds on - starts once that fix is done, building on the tree it leaves, and `ask-orchestrator-status` says what it waits for; every other item goes on at once.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1311,7 +1311,15 @@ public sealed class WorkflowTemplatesTests
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            $"its record's `waitsOn` names the fix, `{FlowWaits.Fix("<title>", "<visit>", ["<paths>"])}` (`{nameof(FlowWaits)}.{nameof(FlowWaits.Fix)}`), and `ask-orchestrator-status` says it among what the run waits for.",
+            $"its record's `waitsOn` names the fix, `{FlowWaits.Fix("<title>", "<visit>", ["<paths>"])}` (`{nameof(FlowWaits)}.{nameof(FlowWaits.Fix)}`), `{FlowWaits.Fix("<title>", "<visit>", [], needed: true)["the fix of '<title>' (<visit>), ".Length..]}` where the item names it, and `ask-orchestrator-status` says it among what the run waits for.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"its `needs`, read by `{nameof(FlowWorkItems)}.{nameof(FlowWorkItems.NeedsOf)}` alone and met by `{nameof(FlowIssueHold)}.{nameof(FlowIssueHold.NeededBy)}`, the issue's id (`{nameof(FlowIssueHold)}.{nameof(FlowIssueHold.Issue)}`) its triage's,",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"and `{nameof(PlanCheckRunner)}` refuses an item whose `needs` names another,",
             architecture,
             StringComparison.Ordinal);
     }
@@ -1362,28 +1370,41 @@ public sealed class WorkflowTemplatesTests
 
     /// <summary>
     /// The planner's prompts and the self-audit leave an issue the recovery is fixing to the recovery: each reads
-    /// <c>{run.preExisting}</c> and says once that no work item fixes an issue it lists as being fixed or rewrites its
-    /// lines, and that an item needing it fixed builds after the fix, which the run holds it for - a plan that folded the
-    /// fix into an item of its own would build the fix's lines beside the recovery's remedy. No other shipped file says it.
+    /// <c>{run.preExisting}</c> and, right after it, the workflow's text <c>fixes</c> - the one file that says that no work
+    /// item fixes an issue the list says is being fixed or rewrites its lines, and that an item needing its fix names it
+    /// under <c>needs</c> and is held until that fix has ended - a plan that folded the fix into an item of its own would
+    /// build the fix's lines beside the recovery's remedy. No other shipped file says it, so the promise of a wait is made
+    /// once, where the engine keeps it (<see cref="FlowIssueHold.NeededBy"/>).
     /// </summary>
     [Fact]
     public void ThePlannersPromptsAndTheSelfAudit_LeaveAnIssueBeingFixedToTheRecovery()
     {
-        const string Rule = "An issue the list says is being fixed is the recovery's: no work item fixes it or rewrites its lines; an item that needs it fixed builds after the fix, on the tree the fix leaves - the run holds it until the fix is done.";
+        const string Rule = "An issue the list says is being fixed is the recovery's: no work item fixes it or rewrites its lines. An item that needs its fix names the issue under needs, by its id as the list gives it, and the run holds the item until that fix has ended, so it builds on the tree the fix leaves; an item that owns a file the fix holds waits for it alike.";
         string[] told = ["prompts/plan-update.md", "prompts/plan.md", "prompts/replan.md", "prompts/self-audit.md"];
 
+        Assert.Equal("fixes.md", WorkflowTemplates.ShippedDefinition().Texts!["fixes"]);
+        Assert.Equal<IEnumerable<string>>(
+            ["fixes.md"],
+            [.. WorkflowTemplates.Files.Where(file => Prose.Words(WorkflowTemplates.TextOf(file)!).Contains("is the recovery's: no work item fixes it", StringComparison.Ordinal))]);
+        Assert.StartsWith(Rule, Prose.Words(WorkflowTemplates.TextOf("fixes.md")!), StringComparison.Ordinal);
         Assert.Equal<IEnumerable<string>>(
             told,
-            [.. WorkflowTemplates.Files.Where(file => Prose.Words(WorkflowTemplates.TextOf(file)!).Contains(Rule, StringComparison.Ordinal)).Order(StringComparer.Ordinal)]);
+            [.. WorkflowTemplates.Files.Where(file => WorkflowTemplates.TextOf(file)!.Contains("{text.fixes}", StringComparison.Ordinal)).Order(StringComparer.Ordinal)]);
 
         foreach (var prompt in told)
         {
             var words = Prose.Words(WorkflowTemplates.TextOf(prompt)!);
 
-            // The list the rule names is the one the prompt reads, and the rule is said once.
-            Assert.Contains("its title and where; empty where none is: {run.preExisting} " + Rule, words, StringComparison.Ordinal);
-            Assert.Equal(words.IndexOf(Rule, StringComparison.Ordinal), words.LastIndexOf(Rule, StringComparison.Ordinal));
+            // The list the text names is the one the prompt reads, right before it, and the text is read once.
+            Assert.Contains("its title and where; empty where none is: {run.preExisting} {text.fixes}", words, StringComparison.Ordinal);
+            Assert.Equal(words.IndexOf("{text.fixes}", StringComparison.Ordinal), words.LastIndexOf("{text.fixes}", StringComparison.Ordinal));
         }
+
+        // The member the text names is the work item's, and its description says what it holds, not the rule again.
+        var needs = JsonNode.Parse(WorkflowTemplates.TextOf("schemas/plan.schema.json")!)!["$defs"]!["workItem"]!["properties"]!["needs"]!;
+
+        Assert.Equal("array", needs["type"]!.GetValue<string>());
+        Assert.DoesNotContain("waits", needs["description"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -1368,6 +1368,80 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
+    /// A work item that names an issue being fixed among those whose fix it needs - its <c>needs</c>, by the id
+    /// <c>{run.preExisting}</c> gives the issue, its triage's, which the check its round opens with is handed among the
+    /// issues the recovery takes - waits for that fix's visit to end whatever files it owns, its record saying it needs
+    /// the fix, and starts after it, on the tree the fix left; one that needs it and owns a file it holds says both; one
+    /// that needs no fix and owns none of its files starts at once.
+    /// </summary>
+    [Fact]
+    public async Task AWorkItemThatNeedsTheFixOfAnIssueBeingFixed_StartsOnceTheFixEnded_WhateverFilesItOwns()
+    {
+        const string Unchecked = "  - name: items\n    dependsOn: [plan]\n    forEach: 'plan.items'\n";
+        Assert.Contains(Unchecked, ItemsBesideAFix, StringComparison.Ordinal);
+        var definition = Parse(ItemsBesideAFix.Replace(
+            Unchecked,
+            "  - name: check\n    type: validate-plan\n    items: 'plan.items'\n    dependsOn: [plan]\n  - name: items\n    dependsOn: [check]\n    forEach: 'check.items'\n",
+            StringComparison.Ordinal)) with
+        {
+            Amend = new FlowAmend("request", 5, null, "replan", "check", "replan.latest.scope", "items.build", "items.rebuild", "items.withdraw", null),
+        };
+        var planning = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mending = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        JsonNode? handed = null;
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser")]))
+            .On("triage", run => Course("fix", run.Issue!.Title, "src/a/main.c"))
+            .On("diagnose", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["items"] = new JsonArray() }))
+            .On("remedy-check", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["ok"] = true, ["problems"] = new JsonArray(), ["items"] = new JsonArray() }))
+            .On("check", run =>
+            {
+                handed = run.Read!["fixes"].ToNode()?.DeepClone();
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["ok"] = true, ["problems"] = new JsonArray(), ["items"] = run.Read["items"].ToNode()!.DeepClone() });
+            })
+            .OnAsync("plan", _ => planning.Task)
+            .OnAsync("mend", _ => mending.Task);
+        var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var cancel = TestContext.Current.CancellationToken;
+
+        JsonObject Needing(JsonObject item, params string[] issues)
+        {
+            item["needs"] = new JsonArray([.. issues.Select(issue => (JsonNode)issue)]);
+            return item;
+        }
+
+        // The plan stands once the fix is at work: the first item builds on what the fix makes, in files of its own; the
+        // third needs it too, and owns the file the triage named.
+        var session = coordinator.RunAsync(cancel);
+        await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        _ = planning.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+        {
+            ["items"] = new JsonArray(Needing(WorkItem("a", "src/x/**"), "triage"), WorkItem("b", "src/b/**"), Needing(WorkItem("c", "src/a/**"), "triage", "triage")),
+        }));
+        await watched.Until(snapshot => snapshot.Steps.Any(step => step.Instance == "items[1].build" && step.State == FlowInstanceState.Done)).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+
+        // The check the round opens with was handed the issue being fixed, by the id the items name.
+        Assert.Equal("[\"triage\"]", handed?.ToJsonString());
+        Assert.Equal(FlowInstanceState.NotStarted, coordinator.Instances["items[0].make"].State);
+        Assert.Equal(FlowInstanceState.NotStarted, coordinator.Instances["items[2].make"].State);
+        var steps = watched.Last!.Steps;
+        Assert.Equal(["the fix of 'a hole in the parser' (recover), which it needs"], steps.Single(step => step.Instance == "items[0].make").WaitsOn);
+        Assert.Equal([FlowWaits.Fix("a hole in the parser", "recover", ["src/a/main.c"], needed: true)], steps.Single(step => step.Instance == "items[2].make").WaitsOn);
+        Assert.Equal("the fix of 'a hole in the parser' (recover), which it needs and which holds src/a/main.c", FlowWaits.Fix("a hole in the parser", "recover", ["src/a/main.c"], needed: true));
+
+        _ = mending.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The fix done, the two held items start on the tree it left, and the run ends done.
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(
+            [("items[0].make", null), ("items[2].make", null), ("items[0].build", null), ("items[2].build", null)],
+            runner.Started.Skip(9));
+    }
+
+    /// <summary>
     /// An issue joined to another's fix holds the files its own triage's where names while that fix works, as the issue
     /// it joined holds its own: a work item that owns one waits for the visit it goes with, its record naming the joined
     /// issue; one that owns neither issue's file starts at once.

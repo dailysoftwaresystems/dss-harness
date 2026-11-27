@@ -17,8 +17,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// owes its next round whose ids the engine hands the check (<c>settleable</c>), or is refused; and a check handed those
 /// issues whole (<c>next</c>) - the engine hands them to every check whose list the next round opens with - holds that
 /// list to them as well, each settled, the settling items first: its own items, or, where its pieces join a round it is
-/// handed (<c>round</c>), that round joined with them. The rule is this step's alone; which checks apply it is the
-/// engine's. The same check reads the answer of a reason step whose items it will read, at the answer itself
+/// handed (<c>round</c>), that round joined with them. An item's <c>needs</c> names only issues the recovery is fixing or
+/// fixed whose ids the engine hands the same checks (<c>fixes</c>), or is refused - the engine holds the item until each
+/// such fix has ended. The rule is this step's alone; which checks apply it is the engine's. The same check reads the answer of a reason step whose items it will read, at the answer itself
 /// (<see cref="AnswerProblemsAsync"/>), so the agent puts right in its own conversation what this step would find.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
@@ -187,6 +188,16 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
                 .Select(issue => $"the issue '{TextOf(issue["id"])}' ({TextOf(issue["title"])}) is owed the next round, and no work item settles it"),
         ];
         problems.AddRange(nextProblems);
+
+        // The issues an item may name among those whose fix it needs, where the engine hands them - to every check whose
+        // items a round opens with: each the recovery is fixing or fixed, by its id, and none other, for the engine holds
+        // an item for no fix that is not made; a check handed none - a recovery's - refuses every need.
+        var fixes = Names(read, "fixes");
+        problems.AddRange(held.SelectMany(item => FlowWorkItems.NeedsOf(item)
+            .Where(id => !fixes.Contains(id, StringComparer.Ordinal))
+            .Select(id => FlowWorkItems.NameOf(item) is { } named
+                ? $"the item '{named}' needs the fix of '{id}', which is not an issue the run is fixing or has fixed"
+                : $"an item needs the fix of '{id}', which is not an issue the run is fixing or has fixed")));
 
         // The items that settle an owed issue come first, their own order kept: what the run took from its own rounds
         // is built before the work planned around it, whatever order the round's own list held.

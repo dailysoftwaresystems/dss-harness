@@ -720,9 +720,11 @@ An issue sent to fix is the recovery's at once, its fix beside any other at work
 recovery itself reported, which waits for that visit to end, and one a fix at work already mends for another step,
 which waits for that fix; a step two issues stop runs again once, after both are settled. While it is being fixed, the
 issue holds the files its triage names (never a command it names) and, once its diagnosis is checked, the files its
-remedy items own: a work item that has not begun and owns one of them starts once that fix is done, building on the
-tree it leaves, and `ask-orchestrator-status` says what it waits for; every other item goes on at once. The planner
-and the self-audit are told the same: no work item fixes an issue being fixed, or rewrites its lines.
+remedy items own: a work item that has not begun and owns one of them, or names the issue under `needs` - the fix it
+builds on - starts once that fix is done, building on the tree it leaves, and `ask-orchestrator-status` says what it
+waits for; every other item goes on at once. The planner and the self-audit are told the same, once, by the workflow's
+text `fixes` (`fixes.md`): no work item fixes an issue being fixed, or rewrites its lines, and an item that needs its
+fix names it; the plan's check refuses a `needs` that names no issue the recovery is fixing or fixed.
 
 Issues of one root cause take one fix: a triage that finds its issue's cause is that of an issue taken before it,
 being triaged or being fixed, answers `join` with that issue's id, and its issue takes no visit of its own. It goes with
@@ -787,7 +789,7 @@ the next question on; where the folder has none, a sentence says so and a recomm
 follows none. Beside it a workflow declares texts (`texts:`), each name a markdown file of its own
 directory read in a prompt as `{text.<name>}` the same live way - the used workflow's own first
 where the reading step is one of its, and the run's where none between them declares the name - and
-the shipped flow declares its `recommendations` and its `closure` there, `closure.md` being the
+the shipped flow declares its `recommendations`, its `fixes` and its `closure` there, `closure.md` being the
 repository's own from the day init writes it: the universe its decisions range over, and what else
 judges them. The planner's, the plan audit's, the item audit's and the builders' prompts read
 `{text.closure}`, and the file says so: what a repository writes there weighs on what they

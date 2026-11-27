@@ -39,10 +39,14 @@ pushCheckpoints: false
 # The workflow's texts: prose a prompt reads by name - {text.<name>} - beside the bar
 # for recommendations, which every prompt that recommends reads as {recommendations}
 # still, as it always did. closure.md is the repository's own from the day it is
-# written: the universe its decisions range over, and what else judges them.
+# written: the universe its decisions range over, and what else judges them. fixes.md
+# is the one saying of what an issue being fixed is to the work items, which the
+# planner's prompts and the self-audit read beside the issues the run has taken: the
+# recovery's, and an item that needs its fix names it (needs) and waits for it.
 texts:
   recommendations: recommendations.md
   closure: closure.md
+  fixes: fixes.md
 advisor:
   agent: advisor
   tier: high
@@ -493,7 +497,8 @@ steps:
   # that commit (commit), read and searched as any tree is, its graph that tree's - then gives it
   # to the recovery to fix at its root now (onAddress: recover) where it is in a step's way,
   # related to the work or critical - at once, beside any other fix at work, and a work item
-  # that owns a file the fix holds starts once the fix is done; joins it, by its id, to the fix
+  # that owns a file the fix holds, or names the issue under needs, starts once the fix is
+  # done (fixes.md says so to the planner and the self-audit); joins it, by its id, to the fix
   # of an issue taken before it, being triaged or being fixed, whose root cause it shares - one
   # fix settles both; otherwise it is added, proven, to the run's pre-existing-issues.json,
   # shown in the pull request and the handoff.

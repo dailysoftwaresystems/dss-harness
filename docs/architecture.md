@@ -2601,12 +2601,19 @@ path from the repository's root and never the command it may name instead (`Flow
 its visit has read the remedy items its diagnosis gives, every path those items own: `FlowIssueHold`, the one owner of
 what an issue holds and which of it a work item owns, over `FlowCoordinator.IssueHolds`, which reads the issues being
 fixed from the run's state. A work item - an instance of the work-item group - that has not begun and owns any of those
-paths starts once that visit has ended, so it builds on the tree the fix leaves (`FlowCoordinator.FixHoldOf`, a hold of
+paths, or names the issue among those whose fix it needs - its `needs`, read by `FlowWorkItems.NeedsOf` alone and met by
+`FlowIssueHold.NeededBy`, the issue's id (`FlowIssueHold.Issue`) its triage's, as `{run.preExisting}` words it - starts
+once that visit has ended, so it builds on the tree the fix leaves (`FlowCoordinator.FixHoldOf`, a hold of
 `HoldOf`, which reserves no claim, so every other item goes on at once and none waits behind it); its record's `waitsOn`
-names the fix, `the fix of '<title>' (<visit>), which holds <paths>` (`FlowWaits.Fix`), and `ask-orchestrator-status`
-says it among what the run waits for. An item that has begun goes on - its fold and its reconcile meet the fix as any two
-changes meet. The planner's prompts and the self-audit say the same: an issue `{run.preExisting}` lists as being fixed is
-the recovery's, and no work item fixes it or rewrites its lines.
+names the fix, `the fix of '<title>' (<visit>), which holds <paths>` (`FlowWaits.Fix`), `which it needs` where the item
+names it, and `ask-orchestrator-status` says it among what the run waits for. An item that has begun goes on - its fold
+and its reconcile meet the fix as any two changes meet. Every check whose items a round opens with is handed the ids of
+the issues the recovery takes (`fixes`, `FlowCoordinator.IssuesTheRecoveryTakes`: each sent to fix or joined to a fix,
+being fixed or fixed), and `PlanCheckRunner` refuses an item whose `needs` names another, for no fix of another is made
+to wait for; a recovery's check is handed none. The planner's prompts and the self-audit read the rule once, the
+workflow's text `fixes` (`fixes.md`, `{text.fixes}`) beside `{run.preExisting}`: an issue it lists as being fixed is the
+recovery's, no work item fixes it or rewrites its lines, and an item that needs its fix names it under `needs` and
+waits for it.
 
 An issue whose triage answers `join` takes no visit of its own: it goes with the fix of the issue it joined, read from
 the run's state alone (`FlowCoordinator.JoiningOf`, over the joins `_joined` keeps in the order they ended), through
@@ -5031,7 +5038,7 @@ methods `list-orchestrator` reads: `flow.json`, `questions.json`, `updates.json`
 were read: how the run stands and for how long, its engine and its pause; each step instance in
 progress; what it waits for - each open question with the command that answers it, a plan update
 under way or queued, an instance waiting on another, on a claim or room, or on the fix of an issue that holds a file its
-work item owns, a `ci-wait` reading the
+work item owns or that the item needs, a `ci-wait` reading the
 checks of the commit the run last pushed; what is done and what was spent of the budget; what is
 left at least and at most, with the bound that gave the most - each member of a scope still open not
 drawn yet, a loop's iterations to its bound, a handler's visits to its `maxVisits` with the steps its
