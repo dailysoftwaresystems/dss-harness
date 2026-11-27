@@ -1464,6 +1464,7 @@ public sealed class FlowPreExistingTests
         var package = FlowIssueHold.Of("the package imports itself", "recover", new JsonArray("src/click"), [], directories);
 
         Assert.Empty(makefile.Meeting(WorkItem("add-mul", "calc.c", "calc.h", "main.c")));
+        Assert.Empty(makefile.Meeting(WorkItem("every-c-file", "**/*.c")));
         Assert.Equal(["Makefile"], makefile.Meeting(WorkItem("build", "Makefile")));
         Assert.Equal(["src/click/testing.py", "pyproject.toml"], testing.Paths);
         Assert.Empty(testing.Meeting(WorkItem("tuple-types", "src/click/types.py", "tests/test_types/test_Tuple.py")));
