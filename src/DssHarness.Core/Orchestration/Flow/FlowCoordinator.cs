@@ -510,9 +510,9 @@ public sealed class FlowCoordinator
     private readonly Func<string, bool>? _agentLive;
 
     /// <summary>
-    /// Whether a path from the repository's root names a directory of the main tree, as the paths an issue being fixed
-    /// holds and those a work item owns are read (<see cref="FlowIssueHold"/>); no path names one where the session
-    /// answers none, a run held in memory alone.
+    /// Whether a path from the repository's root names a directory of the run's start tree, as the paths an issue
+    /// being fixed holds and those a work item owns are read (<see cref="FlowIssueHold"/>); no path names one where
+    /// the session answers none, a run held in memory alone.
     /// </summary>
     private readonly Func<string, bool> _startTreeDirectories;
 
