@@ -700,7 +700,7 @@ public sealed class FlowPlanPiecesTests
 
     /// <summary>The run as its records stand on disk, for a coordinator that takes it up.</summary>
     private static FlowResumeState ResumeOf(HarnessFactory harness, OrchestratorLayout layout, WorkflowDefinition definition)
-        => new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        => new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
 
     /// <summary>Waits, within the test's bound, until the run's records on disk hold what <paramref name="holds"/> looks for.</summary>
     private static async Task<FlowFile> UntilAsync(HarnessFactory harness, OrchestratorLayout layout, Func<FlowFile, bool> holds)

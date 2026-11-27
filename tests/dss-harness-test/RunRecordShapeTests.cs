@@ -92,6 +92,112 @@ public sealed class RunRecordShapeTests
         Assert.Equal(FlowRunContext.DigestOf(definition), FlowRunContext.DigestOf(frozen));
     }
 
+    /// <summary>
+    /// The definition of a file, as the run's store froze it and as an earlier release wrote it, for the tests of what an
+    /// earlier release's frozen definition reads as: an advisor on the configuration's tier, a codebase graph, an input,
+    /// a param and a recovery, each leaving out a member that may be null.
+    /// </summary>
+    private static (HarnessFactory Harness, OrchestratorLayout Layout, WorkflowDefinition Definition, string Ours) FrozenByThisBuild(TempDirectory temp)
+    {
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", """
+            name: flow
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+            codebaseGraph:
+              exclude: ['vendor/**']
+            inputs:
+              - name: request
+                kind: text
+            params:
+              - name: tone
+                default: plain
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: one
+                type: orient
+                onFailure: recover
+            """);
+
+        harness.FileSystem.CreateDirectory(layout.Directory);
+        harness.OrchestrationStore.WriteDefinition(layout, definition);
+
+        return (harness, layout, definition, File.ReadAllText(layout.DefinitionFile));
+    }
+
+    /// <summary>
+    /// A definition an earlier release froze reads as that release meant it: its advisor's retired kinds - written
+    /// empty where the file named none, or naming kinds - and its graph's retired maxFileBytes read and ignored, and
+    /// every member that may be null and that it left out - an advisor's tier, model, effort and client, a recovery's
+    /// maxVisits, an input's and a param's description and default - read as null. So it is the definition this build
+    /// reads of the same file, digest for digest, and written again it is what this build writes of it, nothing retired
+    /// in it.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("failure")]
+    public void ADefinitionAnEarlierReleaseFroze_ReadsAsTheOneThisBuildReadsOfTheSameFile(string kinds)
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, definition, ours) = FrozenByThisBuild(temp);
+        var earlier = EarlierRelease.WithoutNulls(EarlierRelease.WithKinds(EarlierRelease.Frozen(layout), kinds.Length == 0 ? [] : [kinds]));
+        var graph = earlier["codebaseGraph"]!.AsObject();
+
+        graph.Insert(graph.IndexOf("exclude") + 1, "maxFileBytes", 1_048_576);
+        File.WriteAllText(layout.DefinitionFile, earlier.ToJsonString(JsonStateFile.Options) + "\n");
+
+        var frozen = harness.OrchestrationStore.ReadDefinition(layout)!;
+
+        Assert.All(new[] { frozen.Advisor!.Tier, frozen.Advisor.Model, frozen.Advisor.Effort, frozen.Advisor.Client, frozen.Inputs[0].Description, frozen.Inputs[0].Default, frozen.Params[0].Description }, Assert.Null);
+        Assert.Null(frozen.Recover!.MaxVisits);
+        Assert.Equal("plain", frozen.Params[0].Default);
+        Assert.Equal(FlowRunContext.DigestOf(definition), FlowRunContext.DigestOf(frozen));
+
+        harness.OrchestrationStore.WriteDefinition(layout, frozen);
+
+        Assert.Equal(ours, File.ReadAllText(layout.DefinitionFile));
+    }
+
+    /// <summary>
+    /// A frozen definition is read as strictly as every state file otherwise: a retired member in a shape no release wrote
+    /// it in, a member no release wrote, and a member that needs a value left out are each refused, and never read as
+    /// nothing - only what an earlier release meant by its own form is taken as it meant it.
+    /// </summary>
+    [Theory]
+    [InlineData("kinds", "Expected an array, found Number")]
+    [InlineData("unknown", "The JSON property 'unknown' could not be mapped to any .NET member contained in type 'DssHarness.Core.Orchestration.Flow.FlowAdvisor'")]
+    [InlineData("agent", "JSON deserialization for type 'DssHarness.Core.Orchestration.Flow.FlowAdvisor' was missing required properties including: 'agent'")]
+    public void AFrozenDefinitionsMemberNoReleaseWroteSo_IsRefused(string member, string why)
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, _, _) = FrozenByThisBuild(temp);
+        var frozen = EarlierRelease.Frozen(layout);
+        var advisor = frozen["advisor"]!.AsObject();
+
+        if (member == "agent")
+        {
+            _ = advisor.Remove(member);
+        }
+        else
+        {
+            advisor[member] = 5;
+        }
+
+        File.WriteAllText(layout.DefinitionFile, frozen.ToJsonString(JsonStateFile.Options) + "\n");
+
+        var (read, refused) = harness.OrchestrationStore.ReadDefinitionOrWhy(layout);
+
+        Assert.Null(read);
+        Assert.Equal(why, refused);
+    }
+
     /// <summary>The types the run's store reads, each its record whole: what every <c>Read</c> of <see cref="OrchestrationStore"/> answers.</summary>
     private static IEnumerable<Type> RecordsTheRunsStoreReads()
         => typeof(OrchestrationStore).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)

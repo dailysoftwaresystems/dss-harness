@@ -344,8 +344,9 @@ public static class WorkflowResolver
         }
 
         // A local workflow's fingerprint is its parsed definition's digest, taken as the run's own definition's is, so
-        // a change no reader can see - a comment, the line endings an editor or a checkout wrote - refuses a resume of
-        // neither; a workflow of a remote one is its commit's, which names every byte of it.
+        // a change no reader can see - a comment, the line endings an editor or a checkout wrote - changes neither; a
+        // workflow of a remote one is its commit's, which names every byte of it. A resume compares what the use brings
+        // the run, never the fingerprint (FlowResume.Said).
         var fingerprint = place.Remote?.Commit ?? FlowRunContext.DigestOf(called);
 
         return await PlaceAsync(step, where, called, name, new Place(path[..path.LastIndexOf('/')], place.Remote), depth, [.. chain, file], walk, fingerprint).ConfigureAwait(false);

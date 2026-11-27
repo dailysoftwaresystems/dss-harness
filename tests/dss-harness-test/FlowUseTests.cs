@@ -729,8 +729,8 @@ public sealed class FlowUseTests
 
     /// <summary>
     /// WF1: the resolution is what the run freezes and a resume is refused by - the same caller over a changed called
-    /// file resolves to another digest, and the rule that refuses a changed definition refuses it; the same file, the
-    /// same bytes.
+    /// file resolves to another digest of what it says, and the rule that refuses a changed definition refuses it; the
+    /// same file, the same digest.
     /// </summary>
     [Fact]
     public void AChangedCalledFile_ChangesTheDigestAResumeIsRefusedBy()
@@ -745,10 +745,62 @@ public sealed class FlowUseTests
                   prompt: prompts/implement.md
             """;
 
-        var before = FlowRunContext.DigestOf(Resolved(caller));
+        var before = FlowResume.Said(Resolved(caller));
 
-        Assert.Equal(before, FlowRunContext.DigestOf(Resolved(caller)));
-        Assert.NotEqual(before, FlowRunContext.DigestOf(Resolved(caller, pipeline: Swap(Pipeline, "- name: diagnose", "- name: healing"))));
+        Assert.Equal(before, FlowResume.Said(Resolved(caller)));
+        Assert.NotEqual(before, FlowResume.Said(Resolved(caller, pipeline: Swap(Pipeline, "- name: diagnose", "- name: healing"))));
+    }
+
+    /// <summary>
+    /// WF1: a resume compares what a use brings the run, never its fingerprint - the digest the build that began the run
+    /// made of the called file, which another build makes of the same words written its own way: a frozen definition
+    /// whose uses - the step's and the one inside its recovery - hold an earlier build's fingerprint is no change of the
+    /// entry this build resolves, and the same entry over a called file whose steps changed is still refused.
+    /// </summary>
+    [Fact]
+    public void AUsesFingerprintAnEarlierBuildMade_IsNoChange_AndAChangedCalledFileStillIs()
+    {
+        var caller = """
+            name: flow
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: remedy
+                  use: ./pipeline/pipeline.yml
+                  with:
+                    title: r
+                    prompt: prompts/implement.md
+            """;
+        var entry = Resolved(caller);
+        var earlier = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData("the called file, as an earlier build wrote its definition"u8));
+        var frozen = entry with
+        {
+            Steps = [entry.Steps[0] with { Use = entry.Steps[0].Use! with { Fingerprint = earlier } }],
+            Recover = entry.Recover! with { Steps = [entry.Recover.Steps[0] with { Use = entry.Recover.Steps[0].Use! with { Fingerprint = earlier } }] },
+        };
+        var file = new FlowFile(1, "r1", "flow", FlowRunContext.DigestOf(frozen), new Dictionary<string, string>(), "Paused", new FlowBudgetRecord(0, 0, 0), 0, [], [], DateTimeOffset.UnixEpoch);
+        var layout = new DssHarness.Core.Orchestration.OrchestratorLayout("r1", Path.Combine(Path.GetTempPath(), "r1"));
+
+        // The fingerprints differ, and the digest the run recorded with them: only what the use brings is held the same.
+        Assert.NotEqual(entry.Steps[0].Use!.Fingerprint, frozen.Steps[0].Use!.Fingerprint);
+        Assert.NotEqual(FlowRunContext.DigestOf(entry), file.DefinitionDigest);
+
+        FlowResume.RefuseAChangedDefinition(file, layout, frozen, entry);
+
+        var refused = Assert.Throws<HarnessException>(() => FlowResume.RefuseAChangedDefinition(file, layout, frozen, Resolved(caller, pipeline: Swap(Pipeline, "- name: diagnose", "- name: healing"))));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            "workflow 'flow', as the repository's config declares it now, has changed since run 'r1' began, and a run goes on only under the definition it began with; "
+            + "run-orchestrator flow starts a new run of it. Nothing of run 'r1' was changed.",
+            refused.Message);
     }
 
     /// <summary>

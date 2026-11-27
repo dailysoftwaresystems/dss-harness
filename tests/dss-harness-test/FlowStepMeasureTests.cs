@@ -1342,7 +1342,7 @@ public sealed class FlowStepMeasureTests
 
     /// <summary>What a run left, taken up: the records read, reconciled, and handed back.</summary>
     private static FlowResumeState TakeUp(HarnessFactory harness, OrchestratorLayout layout, WorkflowDefinition definition)
-        => new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        => new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
 
     /// <summary>The runners a workflow names, as a test answers them.</summary>
     private sealed class RunnerFacts : IFlowRunnerFacts

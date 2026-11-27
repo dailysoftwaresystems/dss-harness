@@ -113,16 +113,12 @@ public sealed record WorkflowDefinition(
 /// <summary>
 /// The workflow's <c>codebaseGraph</c>: what the run's one graph is made of, as the file says it - each key left out
 /// <see langword="null"/>, a list given empty kept empty for the check to refuse. Each key is optional where the run's
-/// frozen definition is read back, for one left out is left out of the record too.
+/// frozen definition is read back, for one left out is left out of the record too; the retired <c>maxFileBytes</c> a
+/// frozen definition of an earlier release holds is read there and ignored (<see cref="FrozenDefinition.Retired"/>).
 /// </summary>
 /// <param name="Include">Patterns only the paths one of which matches are graphed.</param>
 /// <param name="Exclude">Patterns the paths one of which matches are not graphed.</param>
 /// <param name="Languages">The implementations used, by name.</param>
-/// <param name="MaxFileBytes">
-/// The retired <c>maxFileBytes</c>, as a frozen definition of an earlier release holds it: read so that run's definition
-/// still reads back, and never applied - every file the graph claims is read whole - nor written, for no file gives it
-/// (<see cref="WorkflowFileParser.RetiredGraphKey"/>).
-/// </param>
 /// <param name="Generated">What becomes of generated code: <c>low</c> or <c>exclude</c>.</param>
 /// <param name="MapTokens">The cap, in tokens, of the run's repository map, made once and read as it is by every step after; 0 asks for none.</param>
 /// <param name="KeyNaming">The naming policies a configuration key's last segment is joined to a member's name by.</param>
@@ -131,7 +127,6 @@ public sealed record FlowCodebaseGraph(
     IReadOnlyList<string>? Include = null,
     IReadOnlyList<string>? Exclude = null,
     IReadOnlyList<string>? Languages = null,
-    int? MaxFileBytes = null,
     string? Generated = null,
     int? MapTokens = null,
     IReadOnlyList<string>? KeyNaming = null,
@@ -228,7 +223,9 @@ public sealed record FlowBudget(double? Usd = null, long? Tokens = null, double?
 
 /// <summary>
 /// The agent that recommends an answer to every question the engine raises, before a person is asked it: a workflow a
-/// run is started of names one, and a used workflow's own recommends for its steps where its use governs itself.
+/// run is started of names one, and a used workflow's own recommends for its steps where its use governs itself. The
+/// retired <c>kinds</c> a frozen definition of an earlier release holds is read there and ignored
+/// (<see cref="FrozenDefinition.Retired"/>).
 /// </summary>
 /// <param name="Agent">The agent definition, as a file under the workflow's <c>agents</c> directory.</param>
 /// <param name="Prompt">The prompt file the recommendation is asked with.</param>
@@ -236,19 +233,13 @@ public sealed record FlowBudget(double? Usd = null, long? Tokens = null, double?
 /// <param name="Model">The model outright, whose provider, key and client follow from it.</param>
 /// <param name="Effort">The effort the model is asked for: one level, or <see langword="null"/> where <see cref="FlowAdvisor.EffortByModel"/> holds the map.</param>
 /// <param name="Client">The client, where the provider is reached two ways.</param>
-/// <param name="Kinds">
-/// The retired <c>kinds</c>, as a frozen definition of an earlier release holds it: read so that run's definition still
-/// reads back, and never applied - every kind of question is recommended - nor written, for no file gives it
-/// (<see cref="WorkflowFileParser.RetiredAdvisorKey"/>).
-/// </param>
 public sealed record FlowAdvisor(
     string Agent,
     string Prompt,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Tier,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Model,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Effort,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Client,
-    IReadOnlyList<string>? Kinds = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Client)
 {
     /// <summary>How often its agent is tried again where it failed, on each model it may use, where the file says.</summary>
     public int? Retries { get; init; } = null;
@@ -526,8 +517,10 @@ public sealed record FlowUseOwn(
 
 /// <summary>
 /// The workflow a step that says <c>use:</c> is, as resolution found it: everything of its own the step needs to run it
-/// - its inputs, its declared outputs, its recovery - beside the fingerprint of what it says, which the run records so a
-/// resume is refused where that changed, and the run-level keys of its own that no step applies.
+/// - its inputs, its declared outputs, its recovery - beside the fingerprint of what it says, which the run records, and
+/// the run-level keys of its own that no step applies. A resume is refused where what it brings the run changed: it is
+/// compared whole, as every step of the run's definition is, and its fingerprint is left out of that
+/// (<see cref="FlowResume.Said"/>).
 /// </summary>
 /// <param name="Source">The path as written, <c>./pipeline/pipeline.yml</c> among the callers.</param>
 /// <param name="Name">
@@ -536,9 +529,9 @@ public sealed record FlowUseOwn(
 /// a relative use inside a remote one names, its cache place, <c>remote/&lt;host&gt;/&lt;owner&gt;/&lt;repo&gt;/&lt;commit&gt;/&lt;dir&gt;</c>.
 /// </param>
 /// <param name="Fingerprint">
-/// What the run records of the called workflow's resolution: for a local one the digest of its parsed definition, taken
-/// as the run's own definition's is, so a comment or line endings change nothing; for a remote one, or one inside it,
-/// the commit it was read at.
+/// What the run records of the called workflow's resolution, and <c>validate-workflow</c> says: for a local one the
+/// digest of its parsed definition, taken as the run's own definition's is, so a comment or line endings change nothing;
+/// for a remote one, or one inside it, the commit it was read at, which a resume resolves the use to again.
 /// </param>
 /// <param name="Inputs">The called workflow's declared inputs, which the step's <c>with:</c> values fill.</param>
 /// <param name="Params">The called workflow's own params, read as <c>param.&lt;name&gt;</c> inside it.</param>

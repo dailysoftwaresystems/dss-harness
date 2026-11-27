@@ -3350,7 +3350,7 @@ public sealed class FlowPreExistingTests
             Assert.Equal("duplicate", coordinator.Instances["triage+3"].Output!["course"]!.GetValue<string>());
             Assert.Same(coordinator.Instances["triage+2"], coordinator.Instances["recover+2"].RaisedBy);
 
-            taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+            taken = new FlowResume(store, layout, harness.FileSystem).Load(definition);
         }
 
         Assert.NotEqual(diagnosed["recover.diagnose"].Agent, diagnosed["recover+2.diagnose"].Agent);
@@ -3485,7 +3485,7 @@ public sealed class FlowPreExistingTests
             made = coordinator.Instances["recover+2"].RecoveryThread;
             Assert.Equal(FlowRecoveryThread.OfIssue(string.Empty, Issue(Field)), made);
 
-            taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+            taken = new FlowResume(store, layout, harness.FileSystem).Load(definition);
         }
 
         // The duplicate's triage was made before the second visit - the records keep the order the run made them in - and
@@ -4138,7 +4138,7 @@ public sealed class FlowPreExistingTests
             Assert.Equal(["pe-1", "pe-2"], issues.Issues.Select(issue => issue.Id));
             Assert.Equal(["a broken test", "a stale document"], issues.Issues.Select(issue => issue.Title));
 
-            taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+            taken = new FlowResume(store, layout, harness.FileSystem).Load(definition);
         }
 
         using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
@@ -4194,7 +4194,7 @@ public sealed class FlowPreExistingTests
             coordinator.RequestPause("interrupt", all: true);
             Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
 
-            taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+            taken = new FlowResume(store, layout, harness.FileSystem).Load(definition);
         }
 
         using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
@@ -4281,7 +4281,7 @@ public sealed class FlowPreExistingTests
             Assert.Equal(FlowInstanceState.Done, coordinator.Instances["triage+2"].State);
             Assert.False(coordinator.Instances.ContainsKey("triage+3"));
 
-            taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+            taken = new FlowResume(store, layout, harness.FileSystem).Load(definition);
         }
 
         // The records of the instance the join named hold no issue.
@@ -4386,7 +4386,7 @@ public sealed class FlowPreExistingTests
             Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
             records.Dispose();
 
-            var taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+            var taken = new FlowResume(store, layout, harness.FileSystem).Load(definition);
             records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock);
             coordinator = TestAdvice.Coordinator(definition, new FakeRunner().On("mend", failed), new RunnerFacts(), clock, records: records, resume: taken);
             session = coordinator.RunAsync(cancel);
@@ -4590,7 +4590,7 @@ public sealed class FlowPreExistingTests
             Assert.NotNull(owed);
             Assert.Equal(("nx-1", "a broken test", "src/Parser.cs"), (owed.Issues[0].Id, owed.Issues[0].Title, owed.Issues[0].Files[0]));
 
-            taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+            taken = new FlowResume(store, layout, harness.FileSystem).Load(definition);
         }
 
         using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
@@ -4677,7 +4677,7 @@ public sealed class FlowPreExistingTests
             coordinator.RequestPause("interrupt", all: true);
             Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
 
-            taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+            taken = new FlowResume(store, layout, harness.FileSystem).Load(definition);
         }
 
         using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
@@ -4772,7 +4772,7 @@ public sealed class FlowPreExistingTests
         // The engine stopped where the triage's end was written and the run's file of the issues was not: the file holds
         // what the session's start wrote, no issue.
         store.WriteNextRound(layout, new FlowNextRoundFile(1, "r1", clock.GetUtcNow(), []));
-        var taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var taken = new FlowResume(store, layout, harness.FileSystem).Load(definition);
 
         using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
@@ -4927,7 +4927,7 @@ public sealed class FlowPreExistingTests
         // The engine stopped where the item's end was written and the run's file of the issues was not.
         var file = store.ReadNextRound(layout)!;
         store.WriteNextRound(layout, file with { Issues = [.. file.Issues.Select(issue => issue with { SettledBy = null })] });
-        var taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var taken = new FlowResume(store, layout, harness.FileSystem).Load(definition);
 
         using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
