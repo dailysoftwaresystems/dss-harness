@@ -63,8 +63,7 @@ where; empty where none is:
 
 {run.preExisting}
 
-An issue the list says is being fixed is the recovery's: no work item fixes it or rewrites its lines; an item that
-needs it fixed builds after the fix, on the tree the fix leaves - the run holds it until the fix is done.
+{text.fixes}
 
 ## Where a plan update is under way
 

@@ -345,6 +345,13 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     internal int ExtraIterations;
 
     /// <summary>
+    /// A repeat's: where its own bound counts from, once a plan update was planned in one of its iterations
+    /// (<see cref="FlowLoopCount"/>) - kept in its record, so every session counts it alike; null where none was, and the
+    /// bound counts every iteration.
+    /// </summary>
+    internal FlowLoopCount? Counted;
+
+    /// <summary>
     /// The updates that owe this loop work - each one's id, added where a piece it places finds the work-item group's
     /// round ended, so the work is owed to the loop's next iteration: the loop then runs again whatever its
     /// <c>until</c> says, and where it is at its bound one iteration is added for the update.
@@ -2388,6 +2395,23 @@ public sealed class FlowCoordinator
         => _updates.Updates.FirstOrDefault(update => update.State == FlowUpdateStates.UnderWay);
 
     /// <summary>
+    /// The check that opens a round which raised the plan update under way, with the work items it was opening that round
+    /// with - its own list and the work updates owed it then, as it checked them (its output's <c>items</c>): the round
+    /// has not opened, for the check waits on the update, and those items are the round the update's pieces join - from
+    /// the second round on, a list no planner wrote and no instance of the work-item group carries yet. The one owner of
+    /// that list, which the update's checks join its pieces with and know its items' names by
+    /// (<see cref="CheckReads"/>), and the planner is shown among the work of the run (<see cref="WorkOf"/>). Null where no
+    /// update is under way, where the one under way was raised by anything else, and where that check's visit holds no
+    /// list.
+    /// </summary>
+    private (FlowInstance Check, JsonArray Items)? OpeningUnderWay()
+        => UnderWayUpdate is { Cause: FlowUpdateCauses.PlanCheck, Check: { } raiser }
+            && _instances.GetValueOrDefault(raiser) is { Output: JsonObject { } output } check
+            && output["items"] is JsonArray items
+                ? (check, items)
+                : null;
+
+    /// <summary>
     /// Raises the step the <c>amend</c> block names for <paramref name="update"/> - a new visit of it in the newest
     /// instance of its scope, the last iteration a <c>repeat</c> began, whether or not that scope had ended - the way a
     /// handler is raised by an ending, but by the update alone: nothing else raises it, and it takes no place in the
@@ -2431,15 +2455,22 @@ public sealed class FlowCoordinator
 
         for (var at = scope; at is not null; at = at.Parent)
         {
-            // Every repeat that had ended around the planning step's scope is in progress again with it: once the
-            // raised visit and what the amend block's then set going have ended, the loop reads its until again, over
-            // the plan as the update left it, and where that plan does not pass what the flow has it pass - the check
-            // the block's then names returning its problems - the loop's next iteration is the settling, drawn before
-            // anything of the update is placed or anyone is told. A loop that had not ended is not touched, and a
-            // failed one is left as its failure left it.
-            if (at.LoopOf is { Step.Repeat: not null } loop && loop.State == FlowInstanceState.Done)
+            // Every repeat around the planning step's scope counts its bound from the iteration the update is planned
+            // in: the planning of the update is work of its own, held to the loop's own bound from where it begins and
+            // never refused by iterations the plan spent before it. One that had ended is in progress again with it:
+            // once the raised visit and what the amend block's then set going have ended, the loop reads its until
+            // again, over the plan as the update left it, and where that plan does not pass what the flow has it pass -
+            // the check the block's then names returning its problems - the loop's next iteration is the settling,
+            // drawn before anything of the update is placed or anyone is told. A failed one is left as its failure left
+            // it.
+            if (at.LoopOf is { Step.Repeat: not null, State: not FlowInstanceState.Failed } loop)
             {
-                InProgressAgain(loop, $"in progress again for update {update.Id}");
+                CountFrom(loop, at, update);
+
+                if (loop.State == FlowInstanceState.Done)
+                {
+                    InProgressAgain(loop, $"in progress again for update {update.Id}");
+                }
             }
         }
 
@@ -2668,6 +2699,51 @@ public sealed class FlowCoordinator
             && FlowUpdateGates.ChecksTheItemsARoundOpensWith(_definition, scope.Parent is null ? null : scope.GroupPath, scope.Group, check);
 
     /// <summary>
+    /// Whether <paramref name="check"/>, declared in a scope like <paramref name="scope"/>, holds the items it checks to
+    /// the issues the run owes its next round - each settled, the settling items first (<see cref="PlanCheckRunner"/>):
+    /// where what it checks is the list the next round opens with. The check that opens a round does, whichever round it
+    /// opens; and a check whose items a round opens with (<see cref="FlowUpdateGates.RoundsOpenedWith"/>) does where the
+    /// round they open is the next - no round of its groups has opened yet, so its items open the first: the plan's
+    /// check; or the plan update under way was raised by the check that opens one of them, whose round its pieces join,
+    /// that round's own list joined with them. Every other check - a plan update's while a round is open, whose pieces
+    /// join that round or the one after it, a recovery's - does not, for the next round opens with no list it checks.
+    /// The one gate of which checks hold their items to the owed issues, at the check's own moment and within the answer
+    /// of the reason step whose items it reads (<see cref="AnswerChecksOf"/>) alike, so the planner and the self-audit
+    /// settle an owed issue in their own conversation and no later check finds it unsettled.
+    /// </summary>
+    /// <param name="check">The check's declaration.</param>
+    /// <param name="scope">A scope the check is declared in: its own, or one of a step declared beside it.</param>
+    private bool HoldsTheOwedIssues(WorkflowStep check, Scope? scope)
+    {
+        if (RoundOpenedBy(check, scope) is not null)
+        {
+            return true;
+        }
+
+        if (scope is null)
+        {
+            return false;
+        }
+
+        var groups = FlowUpdateGates.RoundsOpenedWith(_definition, scope.Parent is null ? null : scope.GroupPath, scope.Group, check);
+
+        if (groups.Count == 0)
+        {
+            return false;
+        }
+
+        if (UnderWayUpdate is { Cause: FlowUpdateCauses.PlanCheck, Check: { } raiser }
+            && _instances.GetValueOrDefault(raiser) is { } raising
+            && RoundOpenedBy(raising) is { } raised
+            && groups.Contains(raised, StringComparer.Ordinal))
+        {
+            return true;
+        }
+
+        return !_created.Any(group => group.Step.IsGroup && groups.Contains(group.Path, StringComparer.Ordinal));
+    }
+
+    /// <summary>
     /// Whether <paramref name="check"/> opens a round of the group plan updates owe their work to - the group of
     /// <c>amend.whenAddScope</c> - and so is handed that work and raises the update its problems ask for.
     /// </summary>
@@ -2823,7 +2899,7 @@ public sealed class FlowCoordinator
 
     /// <summary>Every step instance the run holds, as the gates read one: what the gates and the rule of whether a work-item group runs a round more read of this engine's own state.</summary>
     private IReadOnlyList<FlowStepAt> StepsAt()
-        => [.. _created.Select(instance => new FlowStepAt(instance.Path, instance.State.ToString(), instance.Step.IsGroup, instance.Iteration, instance.Index, instance.Visit, instance.Id))];
+        => [.. _created.Select(instance => new FlowStepAt(instance.Path, instance.State.ToString(), instance.Step.IsGroup, instance.Iteration, instance.Index, instance.Visit, instance.Id, instance.Counted))];
 
     /// <summary>
     /// Takes an amendment of the run's request - a person's, handed over through the inbox to this engine or read with
@@ -5805,11 +5881,45 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>The iterations a repeat's own bound allows: its maxIterations, or its rounds and the further ones its blocking holds for.</summary>
+    /// <summary>
+    /// The iterations a repeat's own bound allows: its maxIterations, or its rounds and the further ones its blocking
+    /// holds for, with those granted past it that its count holds (<see cref="FlowLoopCount.Given"/>) - every one, or,
+    /// where a plan update was planned in it, those granted since.
+    /// </summary>
     private static int BoundOf(WorkflowStep declaration, FlowInstance instance)
     {
         // blockersLimitRounds: false is no bound but the budget: no count of iterations ever reaches it.
-        return declaration.Repeat!.Bound(instance.ExtraIterations);
+        return declaration.Repeat!.Bound(FlowLoopCount.Given(instance.ExtraIterations, instance.Counted));
+    }
+
+    /// <summary>
+    /// The iterations of <paramref name="loop"/> its own bound counts (<see cref="FlowLoopCount.Made"/>): every one it
+    /// has made, or, where a plan update was planned in it, those from the iteration that update was planned in - the
+    /// one count every reading of the loop's bound makes.
+    /// </summary>
+    private static int IterationsCounted(FlowInstance loop)
+        => FlowLoopCount.Made(loop.Children.Count, loop.Counted);
+
+    /// <summary>The iterations of <paramref name="loop"/> its bound counts, as its question says them: since the update that began the count, where one did.</summary>
+    private static string IterationsSaid(FlowInstance loop)
+        => $"{IterationsCounted(loop).ToString(System.Globalization.CultureInfo.InvariantCulture)} iterations{(loop.Counted is { } counted ? $" since plan update {counted.Update} was planned in it" : string.Empty)}";
+
+    /// <summary>
+    /// Begins the count of <paramref name="loop"/>'s bound at <paramref name="iteration"/>, the iteration the plan update
+    /// <paramref name="update"/> is planned in (<see cref="FlowLoopCount"/>): its bound counts the iterations from that
+    /// one, and the iterations granted past it from now, so the planning of a late update is held to the loop's own
+    /// bound from where it begins, never refused by iterations the plan spent before it. Kept in the loop's record at
+    /// once. An update whose count began already - a session that takes its entry again - begins none.
+    /// </summary>
+    private void CountFrom(FlowInstance loop, Scope iteration, FlowUpdateEntry update)
+    {
+        if (loop.Counted?.Update == update.Id || loop.Children.IndexOf(iteration) is not (>= 0 and var before))
+        {
+            return;
+        }
+
+        loop.Counted = new FlowLoopCount(update.Id, before, loop.ExtraIterations);
+        WriteStepRecordOf(loop);
     }
 
     /// <summary>Makes the repeat group's next iteration where its bound allows one, and asks at its bound where it does not.</summary>
@@ -5820,9 +5930,9 @@ public sealed class FlowCoordinator
 
         // The loop's own bound is said first: at it the run asks, and only an iteration the loop may have is held to
         // the instance bound.
-        if (iteration > bound)
+        if (IterationsCounted(instance) + 1 > bound)
         {
-            AskAtTheBound(instance, $"'{instance.Id}' has run {iteration - 1} iterations and its until still reads false");
+            AskAtTheBound(instance, $"'{instance.Id}' has run {IterationsSaid(instance)} and its until still reads false");
             return false;
         }
 
@@ -5863,7 +5973,7 @@ public sealed class FlowCoordinator
         _ = Ask(
             instance,
             "loopBound",
-            $"{stood}; {said}{(instance.ExtraIterations > 0 ? $", and {instance.ExtraIterations.ToString(System.Globalization.CultureInfo.InvariantCulture)} more were given by its answers" : string.Empty)}",
+            $"{stood}; {said}{(FlowLoopCount.Given(instance.ExtraIterations, instance.Counted) is > 0 and var given ? $", and {given.ToString(System.Globalization.CultureInfo.InvariantCulture)} more were given by its answers" : string.Empty)}",
             WorkflowValidator.AnswersOf["loopBound"]);
 
         // The work plan updates owe the loop is the question's to carry from here: each owing entry says so once the
@@ -5934,7 +6044,7 @@ public sealed class FlowCoordinator
         var owed = IterationOwed(instance);
         var to = until && !owed ? FlowLoopDecision.Ends : null;
 
-        if (to is null && repeat.Rounds is { } rounds && instance.Children.Count >= rounds)
+        if (to is null && repeat.Rounds is { } rounds && IterationsCounted(instance) >= rounds)
         {
             var blocking = Holds(repeat.Blocking!, body, out var unreadable);
 
@@ -5997,7 +6107,7 @@ public sealed class FlowCoordinator
 
     /// <summary>Whether <paramref name="loop"/>'s next iteration would pass its own bound: where it asks, at an iteration's end or at its deciding step.</summary>
     private static bool AtItsBound(FlowInstance loop)
-        => loop.Children.Count + 1 > BoundOf(loop.Step, loop);
+        => IterationsCounted(loop) + 1 > BoundOf(loop.Step, loop);
 
     /// <summary>
     /// Makes what follows from <paramref name="decision"/>, the decision the current iteration of a repeat that decides at
@@ -6023,7 +6133,7 @@ public sealed class FlowCoordinator
             case FlowLoopDecision.Asks:
                 AskAtTheBound(
                     instance,
-                    $"'{instance.Id}' has run {instance.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} iterations, its '{instance.Step.Repeat!.DecideAfter}' ended among them, and its until still reads false");
+                    $"'{instance.Id}' has run {IterationsSaid(instance)}, its '{instance.Step.Repeat!.DecideAfter}' ended among them, and its until still reads false");
                 return true;
             case FlowLoopDecision.Ends or FlowLoopDecision.EndsLeaving:
                 return EndAtTheDecision(instance, body);
@@ -6338,7 +6448,7 @@ public sealed class FlowCoordinator
             return true;
         }
 
-        if (!decided && instance.Step.Repeat!.Rounds is { } rounds && instance.Children.Count >= rounds)
+        if (!decided && instance.Step.Repeat!.Rounds is { } rounds && IterationsCounted(instance) >= rounds)
         {
             // Past the rounds another iteration is created only while blocking holds: whether what is left has to be
             // dealt with before the loop may end, worked out by the engine from what the body's steps answered.
@@ -6677,7 +6787,7 @@ public sealed class FlowCoordinator
     {
         var allowed = _definition.Amend!.AddedIterationsAllowed;
 
-        if (loop.Children.Count < BoundOf(loop.Step, loop)
+        if (IterationsCounted(loop) < BoundOf(loop.Step, loop)
             || _updates.Updates.FirstOrDefault(update => update.AddedIteration is null && IterationOwedBy(update.Id, loop)) is not { } update)
         {
             // The loop has an iteration of its own still - the owed work joins it, and nothing is added - or nothing is
@@ -8426,19 +8536,30 @@ public sealed class FlowCoordinator
 
             if (visits is not null || _pendingFixes.Contains(triage) || triage.WaitingQuestion is not null)
             {
-                holds.Add(FlowIssueHold.Of(TitleOf(triage), visits?[^1].Id ?? triage.Id, triage.Output?["where"], (visits ?? []).SelectMany(CheckedItemsOf), _mainTreeDirectories));
+                holds.Add(FlowIssueHold.Of(triage.Id, TitleOf(triage), visits?[^1].Id ?? triage.Id, triage.Output?["where"], (visits ?? []).SelectMany(CheckedItemsOf), _mainTreeDirectories));
             }
             else if (CourseOf(triage) == JoinCourse && JoiningOf(triage) is { Fate: Joining.With or Joining.After or Joining.Due, Root: { } root } joining)
             {
                 // Its fix is the visit of the issue it joined that it goes with, or the one it waits for to end.
                 var with = joining.Fate == Joining.With;
                 var fixer = atWork.GetValueOrDefault(root)?.LastOrDefault(visit => IsWith(triage, visit) == with);
-                holds.Add(FlowIssueHold.Of(TitleOf(triage), fixer?.Id ?? root.Id, triage.Output?["where"], [], _mainTreeDirectories));
+                holds.Add(FlowIssueHold.Of(triage.Id, TitleOf(triage), fixer?.Id ?? root.Id, triage.Output?["where"], [], _mainTreeDirectories));
             }
         }
 
         return holds;
     }
+
+    /// <summary>
+    /// The ids of the issues the recovery takes, as <c>{run.preExisting}</c> words them, in the order they were taken:
+    /// each a triage sent to fix, or joined to the fix of another, being fixed or fixed - the ones a work item may name
+    /// among those whose fix it needs (<see cref="FlowWorkItems.NeedsOf"/>), and for which the engine holds it while the
+    /// fix is under way (<see cref="IssueHolds"/>); a join whose fix ended without it, triaged again on its own, is none.
+    /// </summary>
+    private IEnumerable<string> IssuesTheRecoveryTakes()
+        => _tally
+            .Where(entry => entry.Triage is { } triage && CourseOf(triage) is "fix" or JoinCourse && StateOf(entry) is not null)
+            .Select(entry => entry.Id);
 
     /// <summary>The work items every <c>validate-plan</c> step of <paramref name="visit"/>, a visit of the recovery, read and ended done with: the remedy items its diagnosis gives, as they were checked.</summary>
     private static IEnumerable<JsonNode?> CheckedItemsOf(FlowInstance visit)
@@ -8450,8 +8571,9 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The fixes <paramref name="instance"/> waits for, each as its record says it (<see cref="FlowWaits.Fix"/>): where it
     /// is a step of a work item that has not begun - an instance of the work-item group none of whose steps has started
-    /// (<see cref="ItemBegun"/>) - and that item owns a path an issue being fixed holds (<see cref="FlowIssueHold.Meeting"/>),
-    /// it starts once that issue's visit has ended, so it builds on the tree the fix leaves. Empty for every other step,
+    /// (<see cref="ItemBegun"/>) - and that item owns a path an issue being fixed holds (<see cref="FlowIssueHold.Meeting"/>)
+    /// or names the issue among those whose fix it needs (<see cref="FlowIssueHold.NeededBy"/>), it starts once that
+    /// issue's visit has ended, so it builds on the tree the fix leaves. Empty for every other step,
     /// which nothing of a fix holds: an item that has begun goes on - its fold and its reconcile meet the fix as any two
     /// changes meet - and a step of the recovery is never a work item, whatever scope its visit stands in.
     /// </summary>
@@ -8469,9 +8591,9 @@ public sealed class FlowCoordinator
         return
         [
             .. holds.Value
-                .Select(hold => (Hold: hold, Meeting: hold.Meeting(owned)))
-                .Where(held => held.Meeting.Count > 0)
-                .Select(held => FlowWaits.Fix(held.Hold.Title, held.Hold.Fixer, held.Meeting)),
+                .Select(hold => (Hold: hold, Meeting: hold.Meeting(owned), Needed: hold.NeededBy(owned)))
+                .Where(held => held.Needed || held.Meeting.Count > 0)
+                .Select(held => FlowWaits.Fix(held.Hold.Title, held.Hold.Fixer, held.Meeting, held.Needed)),
         ];
     }
 
@@ -12868,8 +12990,9 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The work of the run, as the planning step's prompt reads it: each work item of the work-item group - the loop
     /// around the step <c>whenAddScope</c> names - in every round, by its name, with whether it waits, is under way
-    /// (and then which of its steps are in flight) or has ended and what it left; and each other step in flight, by
-    /// its id.
+    /// (and then which of its steps are in flight) or has ended and what it left; each item of the round the check that
+    /// raised the update under way opens, which has not begun (<see cref="OpeningUnderWay"/>); and each other step in
+    /// flight, by its id.
     /// </summary>
     private string WorkOf()
     {
@@ -12907,6 +13030,16 @@ public sealed class FlowCoordinator
                     }
 
                     lines.Add($"'{name}' of {round.Id}: {how}");
+                }
+            }
+
+            if (OpeningUnderWay() is { } opening)
+            {
+                // The round the check that raised the update opens has not opened, and no instance carries its items yet:
+                // they are the work the update's pieces change, withdraw or join all the same, each called by its name.
+                foreach (var name in opening.Items.Select(FlowWorkItems.NameOf).OfType<string>())
+                {
+                    lines.Add($"'{name}' of the round '{opening.Check.Id}' opens: not begun");
                 }
             }
         }
@@ -13633,14 +13766,20 @@ public sealed class FlowCoordinator
             // starts after one was taken reads it whatever moved meanwhile. Every check whose items a round opens with -
             // the plan's, so the one a plan update sends the run back to, and the round's own - is handed their ids: an
             // item of its list may settle one of them and no other. Every other check - a recovery's - is handed none,
-            // for no issue is owed it, and an item of it that names one in settles is refused. The check that opens a
-            // round - whether a loop or a plan update opens it - is handed the issues themselves as well, which it alone
-            // holds its items to: each named in an item's settles, none left unsettled, the settling items ordered first.
+            // for no issue is owed it, and an item of it that names one in settles is refused. A check whose list the next
+            // round opens with (HoldsTheOwedIssues) - the round's own, and the plan's while that round is the first or
+            // the update under way joins it - is handed the issues themselves as well, which it holds that list to: each
+            // named in an item's settles, none left unsettled, the settling items ordered first.
             var owed = UnsettledNext();
 
             read["settleable"] = FlowValue.Of(new JsonArray([.. owed.Select(issue => (JsonNode?)issue.Id)]));
 
-            if (RoundOpenedBy(check, declaredIn) is not null)
+            // The issues the recovery takes, by their ids: an item of the list may name one of them among those whose fix
+            // it needs, which the engine holds it for until that fix has ended (FixHoldOf), and no other, for no fix of
+            // another is made to wait for. A recovery's check is handed none.
+            read["fixes"] = FlowValue.Of(new JsonArray([.. IssuesTheRecoveryTakes().Select(id => (JsonNode?)id)]));
+
+            if (HoldsTheOwedIssues(check, declaredIn))
             {
                 read["next"] = FlowValue.Of(new JsonArray([.. owed.Select(issue => (JsonNode?)issue.Value())]));
             }
@@ -13648,13 +13787,20 @@ public sealed class FlowCoordinator
 
         if (_definition.Amend is { } amend && FlowUpdateGates.ParentOf(amend.WhenAddScope) is { } groupPath)
         {
-            // What the pieces of a plan update are checked with, and what they owe: the items of the round they join,
-            // where the run has one - and the names of the work items the plan had, which a piece that changes or
-            // withdraws one names; the names every instance of the work-item group carries, over every round, which no
-            // work item a round builds or an added piece makes may take, for the run knows a work item by its name
-            // alone; and, where this check opens the round, the items updates owe it, which join its own as one list,
-            // and whether the round carries them alone.
-            if (CurrentRound() is { } round)
+            // What the pieces of a plan update are checked with, and what they owe: the items of the round they join -
+            // the list the check that raised the update was opening its round with, where one did, for that round has not
+            // opened; else the round the run reached, where it has one - and the names of the work items the plan had,
+            // which a piece that changes or withdraws one names, those of that list among them; the names every instance
+            // of the work-item group carries, over every round, which no work item a round builds or an added piece
+            // makes may take, for the run knows a work item by its name alone; and, where this check opens the round, the
+            // items updates owe it, which join its own as one list, and whether the round carries them alone.
+            var opening = OpeningUnderWay();
+
+            if (opening is { Items: var joins })
+            {
+                read["round"] = FlowValue.Of(joins.DeepClone());
+            }
+            else if (CurrentRound() is { } round)
             {
                 read["round"] = FlowValue.Of(new JsonArray([.. LiveItemsOf(round).Select(item => item.Item.ToNode()?.DeepClone())]));
             }
@@ -13665,7 +13811,11 @@ public sealed class FlowCoordinator
                 .OfType<string>()
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
-            var known = carried.Concat(ItemsCheckedBefore(check, runsIn, self)).Distinct(StringComparer.Ordinal).ToList();
+            var known = carried
+                .Concat(ItemsCheckedBefore(check, runsIn, self))
+                .Concat(opening?.Items.Select(FlowWorkItems.NameOf).OfType<string>() ?? [])
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
 
             read["known"] = FlowValue.Of(new JsonArray([.. known.Select(name => (JsonNode?)name)]));
             read["carried"] = FlowValue.Of(new JsonArray([.. carried.Select(name => (JsonNode?)name)]));
@@ -14402,7 +14552,8 @@ public sealed class FlowCoordinator
             OwnScopeOf(instance)?.UseInputs?.DeepClone().AsObject(),
             instance.ScopeOf?.Decision,
             instance.Measure,
-            instance.DrawnIn == 0 ? null : instance.DrawnIn);
+            instance.DrawnIn == 0 ? null : instance.DrawnIn,
+            instance.Counted);
     }
 
     /// <summary>
@@ -15392,6 +15543,7 @@ public sealed class FlowCoordinator
             instance.Targets = record.Targets;
             instance.FromResume = true;
             instance.Measure = record.Measure;
+            instance.Counted = record.Counted;
 
             if (OwnScopeOf(instance) is { } own)
             {

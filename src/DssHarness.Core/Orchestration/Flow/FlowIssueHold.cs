@@ -8,11 +8,12 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// "Pre-existing issues"). From the moment a triage sends an issue to fix until the recovery's visit for it ends, the
 /// issue holds the files its triage's <c>where</c> names - each entry that is a path from the repository's root, never
 /// the command an issue may be in instead - and, once a check of that visit has read the remedy items its diagnosis gives,
-/// every path those items own. A work item that owns any of them and has not begun starts once that visit has ended, so
-/// it builds on the tree the fix leaves and never writes the fix's lines beside it; every other goes on at once. Every
-/// path is read from the repository's root, as the plan's check reads an item's (<see cref="GlobPattern.FromRoot"/>): a
-/// root-level file a fix holds meets the item that owns that file, and no other. The engine says which issues are being
-/// fixed and when an item has begun; this says what each holds and what an item meets.
+/// every path those items own. A work item that owns any of them, or that names the issue among those whose fix it needs
+/// (<c>needs</c>), and has not begun starts once that visit has ended, so it builds on the tree the fix leaves and never
+/// writes the fix's lines beside it; every other goes on at once. Every path is read from the repository's root, as the
+/// plan's check reads an item's (<see cref="GlobPattern.FromRoot"/>): a root-level file a fix holds meets the item that
+/// owns that file, and no other. The engine says which issues are being fixed and when an item has begun; this says
+/// what each holds and what an item meets.
 /// </summary>
 public sealed class FlowIssueHold
 {
@@ -26,13 +27,17 @@ public sealed class FlowIssueHold
     private readonly IReadOnlyList<(string Text, GlobPattern Pattern)> _held;
     private readonly Func<string, bool> _directories;
 
-    private FlowIssueHold(string title, string fixer, IReadOnlyList<(string Text, GlobPattern Pattern)> held, Func<string, bool> directories)
+    private FlowIssueHold(string issue, string title, string fixer, IReadOnlyList<(string Text, GlobPattern Pattern)> held, Func<string, bool> directories)
     {
+        Issue = issue;
         Title = title;
         Fixer = fixer;
         _held = held;
         _directories = directories;
     }
+
+    /// <summary>The issue's id, as <c>{run.preExisting}</c> words it - its triage's - which a work item that needs its fix names.</summary>
+    public string Issue { get; }
 
     /// <summary>The issue's title, as its triage gave it: what a step held for it says it waits for.</summary>
     public string Title { get; }
@@ -49,6 +54,7 @@ public sealed class FlowIssueHold
     /// read from the repository's root. A pattern a remedy item owns that does not read as one holds nothing, as the plan's
     /// own check refuses it.
     /// </summary>
+    /// <param name="issue">The issue's id.</param>
     /// <param name="title">The issue's title.</param>
     /// <param name="fixer">The id of what fixes it.</param>
     /// <param name="where">The triage's <c>where</c>: a list of texts, or one text; anything else names nothing.</param>
@@ -57,7 +63,7 @@ public sealed class FlowIssueHold
     /// Whether a path from the repository's root names a directory of the main tree (<see cref="GlobPattern.DirectoriesIn"/>):
     /// a path this holds, and one an item owns, holds what is beneath it only where it does.
     /// </param>
-    public static FlowIssueHold Of(string title, string fixer, JsonNode? where, IEnumerable<JsonNode?> remedies, Func<string, bool> directories)
+    public static FlowIssueHold Of(string issue, string title, string fixer, JsonNode? where, IEnumerable<JsonNode?> remedies, Func<string, bool> directories)
     {
         ArgumentNullException.ThrowIfNull(remedies);
         ArgumentNullException.ThrowIfNull(directories);
@@ -79,7 +85,7 @@ public sealed class FlowIssueHold
 
         held.AddRange(remedies.SelectMany(remedy => OwnedOf(remedy, directories)));
 
-        return new FlowIssueHold(title, fixer, [.. held.DistinctBy(entry => entry.Text, StringComparer.Ordinal)], directories);
+        return new FlowIssueHold(issue, title, fixer, [.. held.DistinctBy(entry => entry.Text, StringComparer.Ordinal)], directories);
     }
 
     /// <summary>
@@ -111,6 +117,14 @@ public sealed class FlowIssueHold
 
         return [.. _held.Where(held => owned.Any(mine => mine.Overlaps(held.Pattern, Comparison))).Select(held => held.Text)];
     }
+
+    /// <summary>
+    /// Whether the work item <paramref name="item"/> names this issue among those whose fix it needs
+    /// (<see cref="FlowWorkItems.NeedsOf"/>): it builds on what the fix makes, whatever files it owns, so it starts once
+    /// the fix has ended.
+    /// </summary>
+    /// <param name="item">The work item, as its instance of the work-item group holds it.</param>
+    public bool NeededBy(JsonNode? item) => FlowWorkItems.NeedsOf(item).Contains(Issue, StringComparer.Ordinal);
 
     /// <summary>Each entry <paramref name="item"/>'s <c>ownedPaths</c> names, as written, read from the root as the plan's check reads it; one that does not read is left out.</summary>
     private static IEnumerable<(string Text, GlobPattern Pattern)> OwnedOf(JsonNode? item, Func<string, bool> directories)

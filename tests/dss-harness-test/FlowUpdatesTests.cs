@@ -456,7 +456,6 @@ public sealed class FlowUpdatesTests
         Assert.Equal("rounds.items", FlowUpdateGates.RoundOpenedBy(shipped, "rounds", rounds, rounds.Steps.Single(step => step.Name == "item-check")));
         Assert.Null(FlowUpdateGates.RoundOpenedBy(shipped, "planning", planning, planning.Steps.Single(step => step.Name == "check")));
         Assert.Null(FlowUpdateGates.RoundOpenedBy(shipped, FlowScope.Recovery, recovery, recovery.Steps.Single(step => step.Name == "remedy-check")));
-        Assert.Null(FlowUpdateGates.RoundOpenedBy(shipped, FlowScope.Recovery, recovery, recovery.Steps.Single(step => step.Name == "remedy-recheck")));
 
         var once = Definition("""
             name: flow
@@ -548,7 +547,6 @@ public sealed class FlowUpdatesTests
         Assert.True(FlowUpdateGates.ChecksTheItemsARoundOpensWith(shipped, "rounds", rounds, rounds.Steps.Single(step => step.Name == "item-check")));
         Assert.True(FlowUpdateGates.ChecksTheItemsARoundOpensWith(shipped, "planning", planning, planning.Steps.Single(step => step.Name == "check")));
         Assert.False(FlowUpdateGates.ChecksTheItemsARoundOpensWith(shipped, FlowScope.Recovery, recovery, recovery.Steps.Single(step => step.Name == "remedy-check")));
-        Assert.False(FlowUpdateGates.ChecksTheItemsARoundOpensWith(shipped, FlowScope.Recovery, recovery, recovery.Steps.Single(step => step.Name == "remedy-recheck")));
 
         var flow = Definition("""
             name: flow
@@ -611,6 +609,14 @@ public sealed class FlowUpdatesTests
         Assert.True(FlowUpdateGates.ChecksTheItemsARoundOpensWith(flow, null, null, top.Single(step => step.Name == "plan-check")));
         Assert.True(FlowUpdateGates.ChecksTheItemsARoundOpensWith(flow, "rounds", loop, loop.Steps.Single(step => step.Name == "audit-check")));
 
+        // Each names the group whose rounds open with what it checks, which the engine asks to say whether the round its
+        // items open is the next: the one the run holds its items to the owed issues for.
+        Assert.Equal(["rounds.items"], FlowUpdateGates.RoundsOpenedWith(flow, "rounds", loop, loop.Steps.Single(step => step.Name == "item-check")));
+        Assert.Equal(["rounds.items"], FlowUpdateGates.RoundsOpenedWith(flow, null, null, top.Single(step => step.Name == "plan-check")));
+        Assert.Equal(["rounds.items"], FlowUpdateGates.RoundsOpenedWith(flow, "rounds", loop, loop.Steps.Single(step => step.Name == "audit-check")));
+        Assert.Empty(FlowUpdateGates.RoundsOpenedWith(flow, null, null, top.Single(step => step.Name == "side")));
+        Assert.Empty(FlowUpdateGates.RoundsOpenedWith(flow, FlowScope.Recovery, remedy, remedy.Steps.Single(step => step.Name == "remedy-check")));
+
         // A check of a list no round opens with takes none, and neither does a recovery's, though it reads the plan.
         Assert.False(FlowUpdateGates.ChecksTheItemsARoundOpensWith(flow, null, null, top.Single(step => step.Name == "side")));
         Assert.False(FlowUpdateGates.ChecksTheItemsARoundOpensWith(flow, FlowScope.Recovery, remedy, remedy.Steps.Single(step => step.Name == "remedy-check")));
@@ -636,7 +642,13 @@ public sealed class FlowUpdatesTests
             """);
 
         Assert.False(FlowUpdateGates.ChecksTheItemsARoundOpensWith(once, null, null, once.Steps.Single(step => step.Name == "check")));
-        Assert.Contains($"(`{nameof(FlowUpdateGates)}.{nameof(FlowUpdateGates.ChecksTheItemsARoundOpensWith)}`)", Prose.Document("docs", "architecture.md"), StringComparison.Ordinal);
+        Assert.Contains(
+            $"(`{nameof(FlowUpdateGates)}.{nameof(FlowUpdateGates.ChecksTheItemsARoundOpensWith)}`, over `{nameof(FlowUpdateGates)}.{nameof(FlowUpdateGates.RoundsOpenedWith)}`,",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+
+        // Which of them hold their list to the owed issues is the engine's one gate, as the run stands.
+        Assert.Contains("is one gate (`FlowCoordinator.HoldsTheOwedIssues`): every check whose list the next round opens with", Prose.Document("docs", "architecture.md"), StringComparison.Ordinal);
     }
 
     /// <summary>The definition of the gates' tests, parsed from <paramref name="text"/>.</summary>

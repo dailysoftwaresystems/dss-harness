@@ -2490,10 +2490,10 @@ reasoning step; its recovery diagnoses the failure (`diagnose`, which goes on wi
 the visits for the same failure or issue - a visit for another issue diagnosing in a conversation and an agent of its
 own, beside it, `FlowCoordinator.SameRecoveryThread`), asks a person only for what only a person can give (`direction`), holds the remedy items its last word
 sets out - the diagnosis's, or the one it gives on the person's answer (`redirect`) - to the plan's own check
-(`remedy-check`), gives what the check refuses back to the diagnostician within the visit (`remedy-revise`) and checks
-what it gives again (`remedy-recheck`), and builds, tests, folds and reviews the items those checks read as a round's
-work items are (`remedies`, expanding from them), the revised ones as they stand where the check still refuses them, as
-a round's are. A later round's items are audited before any is built (`item-audit`, which the round's `items` wait
+(`remedy-check`), whose problems the diagnostician is told within its own step as it answers
+(`FlowCoordinator.AnswerChecksOf`), so no step after the check sends them back again, and builds, tests, folds and
+reviews the items that check read as a round's work items are (`remedies`, expanding from them), as they stand where
+the check still refuses them, as a round's are. A later round's items are audited before any is built (`item-audit`, which the round's `items` wait
 for), and the round is judged by the self-audit that read that audit: its until reads the self-audit and the machine's
 checks, never the audit's own go, given before the build that may settle it. The flow builds first: its baseline is split
 in two - a `build` step, which fails red and is taken by the recovery and built again - and the
@@ -2617,12 +2617,20 @@ what an issue holds and which of it a work item owns, over `FlowCoordinator.Issu
 fixed from the run's state - every path it holds, and each one an item owns, read from the repository's root as the
 plan's check reads an item's (`GlobPattern.FromRoot`, whether a path names a directory asked of the main tree), so a
 root-level file a fix holds keeps only the item that owns that file waiting. A work item - an instance of the
-work-item group - that has not begun and owns any of those paths starts once that visit has ended, so it builds on the tree the fix leaves (`FlowCoordinator.FixHoldOf`, a hold of
+work-item group - that has not begun and owns any of those paths, or names the issue among those whose fix it needs -
+its `needs`, read by `FlowWorkItems.NeedsOf` alone and met by `FlowIssueHold.NeededBy`, the issue's id
+(`FlowIssueHold.Issue`) its triage's, as `{run.preExisting}` words it - starts once that visit has ended, so it builds
+on the tree the fix leaves (`FlowCoordinator.FixHoldOf`, a hold of
 `HoldOf`, which reserves no claim, so every other item goes on at once and none waits behind it); its record's `waitsOn`
-names the fix, `the fix of '<title>' (<visit>), which holds <paths>` (`FlowWaits.Fix`), and `ask-orchestrator-status`
-says it among what the run waits for. An item that has begun goes on - its fold and its reconcile meet the fix as any two
-changes meet. The planner's prompts and the self-audit say the same: an issue `{run.preExisting}` lists as being fixed is
-the recovery's, and no work item fixes it or rewrites its lines.
+names the fix, `the fix of '<title>' (<visit>), which holds <paths>` (`FlowWaits.Fix`), `which it needs` where the item
+names it, and `ask-orchestrator-status` says it among what the run waits for. An item that has begun goes on - its fold
+and its reconcile meet the fix as any two changes meet. Every check whose items a round opens with is handed the ids of
+the issues the recovery takes (`fixes`, `FlowCoordinator.IssuesTheRecoveryTakes`: each sent to fix or joined to a fix,
+being fixed or fixed), and `PlanCheckRunner` refuses an item whose `needs` names another, for no fix of another is made
+to wait for; a recovery's check is handed none. The planner's prompts and the self-audit read the rule once, the
+workflow's text `fixes` (`fixes.md`, `{text.fixes}`) beside `{run.preExisting}`: an issue it lists as being fixed is the
+recovery's, no work item fixes it or rewrites its lines, and an item that needs its fix names it under `needs` and
+waits for it.
 
 An issue whose triage answers `join` takes no visit of its own: it goes with the fix of the issue it joined, read from
 the run's state alone (`FlowCoordinator.JoiningOf`, over the joins the run's records hold, in the order they ended:
@@ -3676,7 +3684,7 @@ audit or another planning iteration; and one home belongs to one item - two clas
 may share one, a place that decides more than one thing, which that item changes alone. What the check finds reaches
 the agent that gave the items within its own step: the engine holds the answer of every reason step whose output the
 `items` of a check of its scope reads - the plan and a plan update through `plan.latest`, a round's self-audit through
-`previous`, the diagnosis, its redirect and its revision through `diagnose.latest` - to that check at the answer
+`previous`, the diagnosis and its redirect through `diagnose.latest` - to that check at the answer
 (`FlowCoordinator.AnswerChecksOf`, over the types that judge an answer, `WorkflowStepTypes.StepType.JudgesAnswer`: each
 key read as the check's start reads it, `StartReadsOf` and `ReadExpressions`, with a plan check's own, `CheckReads`, and
 the judged one from the answer, `FlowAnswerCheck.ReadOf`), judged by `PlanCheckRunner.AnswerProblemsAsync`, the one
@@ -3795,19 +3803,28 @@ an item a person skipped, done with nothing landed, settles nothing - and the fi
 a resume finds), whatever the run takes plan updates by. The check that opens a round - a `validate-plan` the `forEach`
 declared beside it expands from (`FlowUpdateGates.OpeningCheckOf`), where that group runs in rounds: declared in an
 iteration of a `repeat`, or the group plan updates owe their work to, to which an update adds a round where no loop is
-around it - is decided by one owner (`FlowUpdateGates.RoundOpenedBy`), whichever opens the round: that check is handed
-the owed issues under `next` and, where its group is the one updates owe, their work (`owed`, `owedAlone`) and the plan
-update its problems raise; and `PlanCheckRunner` refuses a round whose items leave one unsettled, and orders the
-settling items first - listed and started first, they are built beside the rest, so no other item may need their
-result - no other check holds its items to them. Which checks take an item that settles one is decided
-by one owner too (`FlowUpdateGates.ChecksTheItemsARoundOpensWith`): every check whose items a round opens with - the
-check that opens it, and each whose `items` read a step the items of such a check read: the plan's, whose plan a
-round opens with, and so the one a plan update sends the run back to. Each is handed the owed issues' ids under
-`settleable`, and `PlanCheckRunner` refuses an item whose `settles` names none of them, so an issue owed while the
-plan is made or updated becomes a work item of it that no check of the plan refuses; every other check - a
-recovery's, whose items the recovery builds and no round does - is handed none, and an item of one that names an
-issue is refused. The planner's prompts and the self-audit's list `{run.nextRound}`, each owed issue to be a work item
-of the round naming its id in `settles`. The rounds' `until` reads `empty(run.nextRound)`, so a clean
+around it - is decided by one owner (`FlowUpdateGates.RoundOpenedBy`), whichever opens the round: where its group is
+the one updates owe, that check is handed their work (`owed`, `owedAlone`) and raises the plan update its problems ask
+for. Which checks take an item that settles one is decided by one owner too
+(`FlowUpdateGates.ChecksTheItemsARoundOpensWith`, over `FlowUpdateGates.RoundsOpenedWith`, the groups whose rounds
+open with what a check checks): every check whose items a round opens with - the check that opens it, and each whose
+`items` read a step the items of such a check read: the plan's, whose plan a round opens with, and so the one a plan
+update sends the run back to. Each is handed the owed issues' ids under `settleable`, and `PlanCheckRunner` refuses an
+item whose `settles` names none of them, so an issue owed while the plan is made or updated becomes a work item of it
+that no check of the plan refuses; every other check - a recovery's, whose items the recovery builds and no round does
+- is handed none, and an item of one that names an issue is refused. Which of them hold the list they check to the
+owed issues is one gate (`FlowCoordinator.HoldsTheOwedIssues`): every check whose list the next round opens with - the
+check that opens a round, always; the plan's while no round of its group has opened, for its plan opens the first; and
+the plan's again where the plan update under way was raised by the check that opens one, its pieces joining that
+round's own list. Each is handed the issues under `next`, and `PlanCheckRunner` - the rule's one owner - refuses a
+list that leaves one unsettled, its own items or, where its pieces join a round it is handed, that round joined with
+them, and orders the settling items first - listed and started first, they are built beside the rest, so no other item
+may need their result. The gate holds where the check runs and within the answer of the reason step whose items it
+reads (`FlowCoordinator.AnswerChecksOf`) alike, so the planner, its update and the self-audit - whose items the next
+round's check reads through `previous` - are told an owed issue they left unsettled in their own conversation, and no
+check that opens a round finds it unsettled and raises a plan update for it. The planner's prompts and the
+self-audit's list `{run.nextRound}`, each owed issue to be a work item of the round naming its id in `settles`. The
+rounds' `until` reads `empty(run.nextRound)`, so a clean
 self-audit does not end them while one is left; never holding the round the issue came from, for the triage never holds
 a loop. The value an issue is read as and the schema typing `run.nextRound` are made from one list of its members
 (`FlowNextIssue.Value`, `ValueSchema`).
@@ -4606,7 +4623,12 @@ The planning of a plan update: where the run has begun the scope its plan update
 (the group its `amend.step` is directly in), a taken change is not refused but planned - the step the block names is
 raised by the update alone as a handler is raised by an ending (`FlowCoordinator.RaisePlanner`: a new visit of it in
 the newest instance of that scope, `FlowInstance.RaisedByUpdate` in its record, a group around it that had ended in
-progress again), never drawn by the ordinary schedule (`FlowCoordinator.Instantiate`), and admitted ahead of
+progress again, and every `repeat` around it counting its own bound from the iteration the update is planned in -
+`FlowLoopCount`, in the loop's own record: the iterations from that one, and those granted past the bound since,
+`FlowLoopCount.Made` and `Given` the one count the engine, the run's facts and the gates read, so the planning of a
+late update in a long run is held to the loop's own bound from where it begins, never refused by the iterations the
+plan spent before it, the bound's question saying what it counted since that update), never drawn by the ordinary
+schedule (`FlowCoordinator.Instantiate`), and admitted ahead of
 everything else (`AdmissionWalk`, which walks every other waiting step in the order it first became ready - the pass
 that drew it, `FlowInstance.DrawnIn` in the run's own order, never a clock - the fixed order breaking ties among what
 one pass freed: a step blocked on a claim reserves it, so a fold or an
@@ -4668,7 +4690,12 @@ are empty. `PlanValidator.CheckPieces` checks the pieces with the items where a 
 them - each of the four kinds and its texts, an `added` or `changed` item an item of the plan's list by name and member
 for member, no two pieces one work item, a `changed` or `removed` piece naming a work item the plan had, an `added`
 one naming none an instance of the work-item group carries - and the items an update places are checked with those of
-the round they join as one list. A work item is known by its name across
+the round they join as one list. Where the check that opens a round raised the update, that round has not opened and no
+instance carries its items - from the second round on a list the self-audit wrote, which no planner did - so the round
+the pieces join is the list that check was opening it with, its output's `items` (`FlowCoordinator.OpeningUnderWay`):
+the update's checks are handed it under `round`, a piece may change or withdraw any item of it (`known`), and the
+planner is shown its items among the run's work (`{update.work}`, `FlowCoordinator.WorkOf`), each as not begun. A
+problem two rules find - one pair of items meeting in the plan's list and in that round - is said once. A work item is known by its name across
 the run - `ItemInstanceNamed`, its tests' key in `affected-tests.json`, its updates - so the check that opens a round
 is handed the names every instance of the group carries (`carried`, read where it starts) and refuses a round's own
 item under one of them (`PlanValidator.Check`'s `carried`), an owed item excepted: a changed or a removed piece names
@@ -5067,7 +5094,7 @@ methods `list-orchestrator` reads: `flow.json`, `questions.json`, `updates.json`
 were read: how the run stands and for how long, its engine and its pause; each step instance in
 progress; what it waits for - each open question with the command that answers it, a plan update
 under way or queued, an instance waiting on another, on a claim or room, or on the fix of an issue that holds a file its
-work item owns, a `ci-wait` reading the
+work item owns or that the item needs, a `ci-wait` reading the
 checks of the commit the run last pushed; what is done and what was spent of the budget; what is
 left at least and at most, with the bound that gave the most - each member of a scope still open not
 drawn yet, a loop's iterations to its bound, a handler's visits to its `maxVisits` with the steps its

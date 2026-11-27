@@ -135,14 +135,22 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// </summary>
     /// <param name="pieces">The pieces, as the plan's scope yielded them.</param>
     /// <param name="items">The plan's items, as its <c>items</c> yielded them.</param>
-    /// <param name="round">The items of the round the pieces would join, every one it holds; null where the run has no round yet.</param>
-    /// <param name="known">The names of the work items the plan had before the update.</param>
+    /// <param name="round">
+    /// The items of the round the pieces would join, every one it holds: the list the check that opens that round was
+    /// opening it with, where that check raised the update - the round has not opened, and no instance carries them yet -
+    /// else the round the run reached; null where the run has neither.
+    /// </param>
+    /// <param name="known">The names of the work items the plan had before the update, those of the round the pieces join among them.</param>
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="run">The run's name.</param>
     /// <param name="definition">The workflow.</param>
     /// <param name="carried">
     /// The names every instance of the work-item group carries, over every round: an added piece under one of them would
     /// make a second work item of a name the run knows one by - the one it would replace is done again by a changed piece.
+    /// </param>
+    /// <param name="joined">
+    /// The list the round opens with once the update is placed, as it was checked: the round's items less those a
+    /// changed or a removed piece names, then each piece's item - or the pieces' items alone where the run has no round.
     /// </param>
     /// <returns>Every problem of the pieces, in their order; none where they pass.</returns>
     public IReadOnlyList<string> CheckPieces(
@@ -153,6 +161,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
         HarnessContext context,
         string run,
         WorkflowDefinition definition,
+        out IReadOnlyList<JsonNode?> joined,
         IReadOnlyCollection<string>? carried = null)
     {
         ArgumentNullException.ThrowIfNull(pieces);
@@ -220,10 +229,9 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             .Select(piece => piece.ItemName()!)
             .ToList();
 
-        var joined = (round ?? [])
+        joined = [.. (round ?? [])
             .Where(other => FlowWorkItems.NameOf(other) is not { } named || !namedByPieces.Contains(named, StringComparer.Ordinal))
-            .Concat(held.Select(piece => piece.Item))
-            .ToList();
+            .Concat(held.Select(piece => piece.Item))];
 
         problems.AddRange(Check(joined, context, run, definition, noItems: false));
 

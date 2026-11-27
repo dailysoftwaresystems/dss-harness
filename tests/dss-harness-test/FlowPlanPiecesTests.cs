@@ -2407,4 +2407,271 @@ public sealed class FlowPlanPiecesTests
             Assert.StartsWith("expression 'with.owned' of 'rounds.items[1]': ", round.Error, StringComparison.Ordinal);
         }
     }
+
+    /// <summary>
+    /// The flow of the tests whose checks are the real ones: a planning loop whose check reads the plan's latest items and
+    /// scope, and rounds whose check opens each with the round before's audit's items - or the plan's, in the first - each
+    /// item built by the step the amend block's whenAddScope names.
+    /// </summary>
+    private const string AuditedRounds = """
+        name: flow
+        inputs:
+          - name: request
+        steps:
+          - name: planning
+            repeat:
+              until: 'check.ok'
+              maxIterations: 2
+            steps:
+              - name: plan
+                type: reason
+                agent: planner
+                resume: plan
+                prompt: plan.md
+                outputs: plan.json
+              - name: check
+                type: validate-plan
+                items: 'plan.latest.items'
+                scope: 'plan.latest.scope'
+                dependsOn: [plan]
+              - name: plan-update
+                type: reason
+                agent: planner
+                resume: plan
+                prompt: plan-update.md
+                outputs: plan.json
+          - name: rounds
+            dependsOn: [planning]
+            repeat:
+              until: 'audit.clean'
+              maxIterations: 2
+            steps:
+              - name: item-check
+                type: validate-plan
+                items: 'previous.audit.items ?? planning.plan.latest.items'
+              - name: items
+                dependsOn: [item-check]
+                forEach: 'item-check.items'
+                steps:
+                  - name: build
+                    type: reason
+                    agent: builder
+                    prompt: build.md
+                    outputs: out.json
+                  - name: rebuild
+                    type: reason
+                    agent: builder
+                    prompt: rebuild.md
+                    outputs: out.json
+                  - name: undo
+                    type: reason
+                    agent: builder
+                    prompt: undo.md
+                    outputs: out.json
+              - name: audit
+                type: reason
+                prompt: audit.md
+                outputs: audit.json
+                dependsOn: [items]
+        """;
+
+    /// <summary>A work item of the plan whole, shaped as the real plan check reads one: it owns <paramref name="owned"/> and reuses the repository's one file.</summary>
+    private static JsonObject WholeItem(string name, string owned)
+        => new()
+        {
+            ["name"] = name,
+            ["title"] = $"The {name} item",
+            ["instructions"] = $"Write the {name} item's code.",
+            ["done"] = $"the {name} item ships",
+            ["ownedPaths"] = new JsonArray(owned),
+            ["forbiddenPaths"] = new JsonArray(),
+            ["reuses"] = new JsonArray(new JsonObject { ["path"] = "file.txt", ["what"] = "the content" }),
+            ["creates"] = new JsonArray(),
+            ["replaces"] = new JsonArray(),
+            ["tests"] = new JsonArray("OneTests"),
+            ["noTests"] = "",
+            ["classes"] = new JsonArray(),
+            ["noClass"] = $"the {name} item decides nothing: it adds a file",
+        };
+
+    /// <summary>
+    /// A plan update the check that opens a later round raises is checked against that round's own list - the items the
+    /// check was opening it with, which the round before's audit wrote and no instance of the work-item group carries
+    /// yet: a piece that changes one of them names a work item the plan had, the items it places are checked with the
+    /// rest of that list, and the planner is shown each item of it among the run's work, not begun. Over the real plan
+    /// checks, so a check that knew only the round the run had reached refused the piece as naming no work item the plan
+    /// had, and sent the planning round again on a plan that was right (live, 2026-11-26).
+    /// </summary>
+    [Fact]
+    public async Task AnUpdateTheCheckOfALaterRoundRaises_IsCheckedAgainstThatRoundsOwnList()
+    {
+        var harness = new HarnessFactory();
+        using var repository = new TempDirectory();
+        repository.WriteFile("file.txt", "content\n");
+        await harness.InitializeHarnessAsync(repository.Path, Token);
+        await harness.CommitAllAsync(repository.Path, "initial", Token);
+
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", AuditedRounds) with
+        {
+            Amend = new FlowAmend("request", 5, null, "planning.plan-update", "check", "planning.plan.latest.scope", "rounds.items.build", "rounds.items.rebuild", "rounds.items.undo", null),
+        };
+        var layout = OrchestratorLayout.Of(new HarnessLayout(repository.Path, repository.Path), "r1");
+        var check = new PlanCheckRunner(harness.ContextLoader, harness.Platform, new PlanValidator(harness.FileSystem, harness.PathBudget, harness.Platform));
+        var checks = new List<string>();
+        var audits = 0;
+        string? work = null;
+
+        // Each check is the real one, run where the run's repository is; each says what it found.
+        async Task<FlowStepResult> Checked(FlowStepRun run, CancellationToken cancellationToken)
+        {
+            var result = await check.RunAsync(run with { Place = new FlowRunPlace(repository.Path, "r1", null, definition) }, cancellationToken);
+            var output = result.Output!;
+
+            lock (checks)
+            {
+                checks.Add($"{run.Instance} {(bool)output["ok"]!} [{string.Join("; ", output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>()))}] {string.Join(",", output["items"]!.AsArray().Select(FlowWorkItems.NameOf))}");
+            }
+
+            return result;
+        }
+
+        // The round before's audit gives the second round two items that own one file, and then finds nothing more; the
+        // update moves one of them to paths of its own, changing it under the name the audit gave it.
+        var moved = WholeItem("four", "src/four/**");
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(WholeItem("one", "src/one/**"))))
+            .OnAsync("check", Checked)
+            .OnAsync("item-check", Checked)
+            .On("audit", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Interlocked.Increment(ref audits) == 1
+                ? new JsonObject { ["clean"] = false, ["items"] = new JsonArray(WholeItem("three", "src/shared/**"), WholeItem("four", "src/shared/**")) }
+                : new JsonObject { ["clean"] = true, ["items"] = new JsonArray() }))
+            .On("plan-update", run =>
+            {
+                work = FlowTemplate.Joined(run.Prompts!["prompt"]);
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
+                    new JsonArray(Piece("changed", moved.DeepClone(), "the round's items 'three' and 'four' shared a file: 'four' moves to paths of its own")),
+                    WholeItem("one", "src/one/**"),
+                    moved.DeepClone()));
+            });
+
+        using var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition));
+        var coordinator = new FlowCoordinator(
+            definition,
+            runner,
+            new RunnerFacts(),
+            new ManualClock(),
+            inputs: new Dictionary<string, string> { ["request"] = "build the tool" },
+            records: records,
+            updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout),
+            workflowFile: (_, named) => named == "plan-update.md" ? "work: {update.work}" : "Do the work.");
+
+        // Nothing in the run asks a person: each session goes on until the run is done or one is asked.
+        var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+        for (var sessions = 1; end.Status != FlowRunStatus.Done && coordinator.OpenQuestions.Count == 0 && sessions < 5; sessions++)
+        {
+            end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+        }
+
+        Assert.True(FlowRunStatus.Done == end.Status, $"{end.Summary} | asked: {string.Join("; ", coordinator.OpenQuestions.Select(asked => $"{asked.Kind}: {asked.Problem}"))} | checks: {string.Join(" / ", checks)}");
+
+        // The second round's check refused its own two items and raised the update; the update's check took the piece
+        // that changes one of them, against the round's own list; the round, opened again, built the settled list - and
+        // the planning never went round again.
+        Assert.Equal(
+            [
+                "planning#1.check True [] one",
+                "rounds#1.item-check True [] one",
+                "rounds#2.item-check False [work items 'three' and 'four' both own what 'src/shared/**' and 'src/shared/**' match: no file is written by two items, so give it to one] three,four",
+                "planning#1.check+2 True [] one,four",
+                "rounds#2.item-check+2 True [] three,four",
+            ],
+            checks);
+        Assert.DoesNotContain(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Instance.StartsWith("planning#2", StringComparison.Ordinal));
+
+        // The planner was shown the round the check opens among the work of the run, each of its items not begun.
+        Assert.Equal("work: 'one' of rounds#1.items: ended; 'three' of the round 'rounds#2.item-check' opens: not begun; 'four' of the round 'rounds#2.item-check' opens: not begun", work);
+
+        // The second round built the audit's item, and the one the update changed by the step its piece's kind names, in
+        // the add step's place and under its name.
+        var built = harness.OrchestrationStore.ReadFlow(layout)!.Steps
+            .Where(step => step.Instance.StartsWith("rounds#2.items[", StringComparison.Ordinal) && step.Instance.EndsWith(".build", StringComparison.Ordinal) && step.State == nameof(FlowInstanceState.Done))
+            .Select(step => $"{step.Step} {FlowWorkItems.NameOf(step.Item)} {(step.Item as JsonObject)!["ownedPaths"]![0]}")
+            .Order(StringComparer.Ordinal);
+        Assert.Equal(["rounds.items.build three src/shared/**", "rounds.items.rebuild four src/four/**"], built);
+    }
+
+    /// <summary>
+    /// A planning loop counts its own bound from the iteration a plan update is planned in: the update a round's check
+    /// raised after the plan spent every iteration its loop allows is held to that bound from where its planning
+    /// begins - the iteration it reopens and the one after it - never refused by the iterations the plan spent before it;
+    /// at the bound of its own count the loop asks, saying what it counted since the update, and a person's more is one
+    /// more of that count. The count is the loop's own record's, so a session that takes the run up counts it alike.
+    /// </summary>
+    [Fact]
+    public async Task APlanningLoopAPlanUpdateReopens_CountsItsBoundFromTheIterationTheUpdateIsPlannedIn()
+    {
+        using var temp = new TempDirectory();
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", AuditedRounds) with
+        {
+            Amend = new FlowAmend("request", 5, null, "planning.plan-update", "check", "planning.plan.latest.scope", "rounds.items.build", "rounds.items.rebuild", "rounds.items.undo", null),
+        };
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        // The plan passes its check at the loop's second iteration, its bound; the check of the update the round's check
+        // raises refuses the updated plan, and so does the iteration after - the last of the update's own count - and
+        // the one a person's more gives passes.
+        FlowStepResult Checked(FlowStepRun run, bool ok)
+            => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = ok,
+                ["problems"] = ok ? new JsonArray() : new JsonArray($"'{run.Instance}' found what does not pass"),
+                ["items"] = UnionOf(run),
+            });
+
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"))))
+            .On("plan-update", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"))))
+            .On("check", run => Checked(run, run.Instance is "planning#2.check" or "planning#4.check"))
+            .On("item-check", run => Checked(run, run.Instance != "rounds#1.item-check"))
+            .On("audit", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["clean"] = true, ["items"] = new JsonArray() }));
+
+        FlowQuestion asked;
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+            var paused = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.True(FlowRunStatus.Paused == paused.Status, paused.Summary);
+            asked = coordinator.OpenQuestions.Single();
+        }
+
+        // The update reopened the loop's second iteration and drew a third: two of its own count, the bound the loop
+        // says - and only then was a person asked.
+        Assert.Equal(("loopBound", "planning"), (asked.Kind, asked.Instance));
+        Assert.Equal("'planning' has run 2 iterations since plan update u1 was planned in it and its until still reads false; at most 2 are allowed (maxIterations)", asked.Problem);
+        Assert.Equal(
+            ["planning#1.check", "planning#2.check", "planning#2.check+2", "planning#3.check"],
+            runner.Started.Where(started => started.EndsWith(".check", StringComparison.Ordinal) || started.Contains(".check+", StringComparison.Ordinal)).Where(started => started.StartsWith("planning", StringComparison.Ordinal)));
+        Assert.Equal(new FlowLoopCount("u1", 1, 0), harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "planning").Counted);
+
+        // A session that takes the run up counts the loop as the one before did: the person's more is one more of the
+        // update's count, and the plan it draws passes.
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = CoordinatorOf(definition, runner, again, harness, layout, ResumeOf(harness, layout, definition));
+
+            Assert.True(resumed.TryAnswer(asked.Id, "more", null, out var refused), refused);
+            var end = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.True(FlowRunStatus.Done == end.Status, $"{end.Summary} | asked: {string.Join("; ", resumed.OpenQuestions.Select(open => open.Problem))}");
+        }
+
+        Assert.Contains("planning#4.check", runner.Started);
+        Assert.DoesNotContain(runner.Started, started => started.StartsWith("planning#5", StringComparison.Ordinal));
+        Assert.Equal(FlowUpdateStates.Done, UpdatesOf(harness, layout).Updates.Single().State);
+    }
 }

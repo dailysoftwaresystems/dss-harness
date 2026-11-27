@@ -239,21 +239,24 @@ public static partial class HelpTopics
         builder.AppendLine("critical, to fix at its root (a step it was in the way of runs again from where it stopped);");
         builder.AppendLine("sends a defect in code the run's change does not touch, that blocks nothing, to the run's next");
         builder.AppendLine("round - sized, by its files, what must be built and what measured first, in next-round.json,");
-        builder.AppendLine("which run.nextRound reads as the issues no work item has settled, and the check that opens a");
-        builder.AppendLine("round - a validate-plan the forEach beside it expands from, where that group runs in rounds, in an");
-        builder.AppendLine("iteration of a repeat or as the group plan updates add a round to with no loop around it, and no");
-        builder.AppendLine("other check - holds its items to: each issue named in an item's settles, none left unsettled,");
-        builder.AppendLine("the settling items listed and started first, built beside the rest, and the rounds going on while");
-        builder.AppendLine("one is left - never holding the round the issue came from. Every check whose items a round opens");
-        builder.AppendLine("with - that one, and each whose items read what that one's items read: the plan's, so the one a");
-        builder.AppendLine("plan update sends the run back to - takes an");
-        builder.AppendLine("item that settles one of those issues, and refuses one whose settles names an issue the run does");
-        builder.AppendLine("not owe; any other check - a recovery's - refuses every settles. A forEach item that names an");
-        builder.AppendLine("issue in settles settles it once it ends done with a commit of its own made, whatever the run");
-        builder.AppendLine("takes plan updates by, and next-round.json says which item did; one that ends done with nothing");
-        builder.AppendLine("committed - an item a person skipped - settles nothing, and the issue stays owed. It lists the");
-        builder.AppendLine("rest, proven, with a title and a description, in the run's pre-existing-issues.json, shown in the");
-        builder.AppendLine("pull request's body and the handoff. Where a workflow has such a step, every other reasoning step");
+        builder.AppendLine("which run.nextRound reads as the issues no work item has settled, and every check whose list the");
+        builder.AppendLine("next round opens with holds that list to: the check that opens a round - a validate-plan the forEach");
+        builder.AppendLine("beside it expands from, where that group runs in rounds, in an iteration of a repeat or as the group");
+        builder.AppendLine("plan updates add a round to with no loop around it - and the plan's while that round is the first,");
+        builder.AppendLine("or the plan update under way, raised by the check that opens it, joins it: each issue named in an");
+        builder.AppendLine("item's settles, none left unsettled, the settling items listed and started first, built beside the");
+        builder.AppendLine("rest, and the rounds going on while one is left - never holding the round the issue came from. Each");
+        builder.AppendLine("holds the answer of the reason step whose items it reads to it within that step, so the planner and");
+        builder.AppendLine("the self-audit settle an owed issue in their own conversation. Every check whose items a round opens");
+        builder.AppendLine("with - that one, and each whose items read what that one's items read: the plan's, so the one a plan");
+        builder.AppendLine("update sends the run back to - takes an item that settles one of those issues, and refuses one whose");
+        builder.AppendLine("settles names an issue the run does not owe; any other check - a recovery's - refuses every settles.");
+        builder.AppendLine("A forEach item that names an issue in settles settles it once it ends done with a commit of its own");
+        builder.AppendLine("made, whatever the run takes plan updates by, and next-round.json says which item did; one that ends");
+        builder.AppendLine("done with nothing committed - an item a person skipped - settles nothing, and the issue stays owed.");
+        builder.AppendLine("It lists the rest, proven, with a title and a description, in the run's pre-existing-issues.json,");
+        builder.AppendLine("shown in the pull request's body and the handoff. Where a workflow has such a step, every other");
+        builder.AppendLine("reasoning step");
         builder.AppendLine("names it, so no issue is lost; and each is told, at the end of its prompt, every issue the run");
         builder.AppendLine("holds where it starts - each one's id, what became of it, its title and where it is - and reports");
         builder.AppendLine("one again only where it stops its own work. The triage is told those taken before its own, with");
@@ -271,11 +274,15 @@ public static partial class HelpTopics
         builder.AppendLine("From the moment it is sent to fix until its visit ends, the issue holds the files its triage's where");
         builder.AppendLine("names - each a path from the repository's root, never a command - and, once a check of its");
         builder.AppendLine("visit has read the remedy items its diagnosis gives, the paths those items own: an instance of");
-        builder.AppendLine("the work-item group that has not begun and owns one of them starts once that visit has ended,");
-        builder.AppendLine("building on the tree the fix leaves, its record waiting for the fix of the issue, by its title");
-        builder.AppendLine("and its visit, and the files it holds; every other item goes on at once. What it holds and what");
-        builder.AppendLine("an item owns are read from the repository's root, as the plan's check reads an item's paths: a");
-        builder.AppendLine("root-level file the fix holds keeps only the item owning that file waiting. run.preExisting says");
+        builder.AppendLine("the work-item group that has not begun and owns one of them, or whose item names the issue's id in");
+        builder.AppendLine("its needs - the fix it builds on - starts once that visit has ended, building on the tree the fix");
+        builder.AppendLine("leaves, its record waiting for the fix of the issue, by its title and its visit, and the files it");
+        builder.AppendLine("holds or that the item needs it; every other item goes on at once. What it holds and what an item");
+        builder.AppendLine("owns are read from the repository's root, as the plan's check reads an item's paths: a root-level");
+        builder.AppendLine("file the fix holds keeps only the item owning that file waiting. The plan's check refuses a needs");
+        builder.AppendLine("that names no issue the recovery is fixing or fixed, and the planner's prompts and the self-audit");
+        builder.AppendLine("read the rule once, the workflow's text fixes (fixes.md), beside the issues the run has taken.");
+        builder.AppendLine("run.preExisting says");
         builder.AppendLine("each issue in the order it was taken - the order its triage ended, a resume's as before it -");
         builder.AppendLine("and an always step starts once no issue's triage or fix is at work beside it, one the always");
         builder.AppendLine("phase raised among them, so what it is told of the issues is true when it is told; one that");
@@ -419,7 +426,9 @@ public static partial class HelpTopics
             + "no two pieces naming one work item; a changed or a removed piece naming a work item the plan had before the "
             + "update, and an added one naming none a round of the run carries - one that does such an item again is changed; "
             + "and the items the update places checked with those of the round it joins, as one list - among themselves "
-            + "where the run has no round. One whose items yield no list, or whose scope yields neither a list nor nothing, "
+            + "where the run has no round. Where the check that opens a round raised the update, the round it joins is the list "
+            + "that check was opening it with, which no instance carries yet: a changed or a removed piece may name any item of "
+            + "it, and the planner is shown each among the run's work, not begun. One whose items yield no list, or whose scope yields neither a list nor nothing, "
             + "fails, as a definition that does not hold does. Where its items read the output of a reason step of its own "
             + "scope - by the step's name, through latest of the work that step goes on with, or through previous in the "
             + "iteration after - the same rules, with what it would be handed then, hold that step's answer as it is given, and "

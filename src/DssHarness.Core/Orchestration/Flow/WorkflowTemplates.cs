@@ -86,7 +86,7 @@ public static class WorkflowTemplates
         "priority", "triage", "plan", "replan", "plan-update", "plan-audit", "item-audit",
         "anchors", "deferrals", "handoff",
         "self-audit", "pr-body",
-        "diagnose", "rediagnose", "redirect", "remedy-revise", "pre-existing",
+        "diagnose", "rediagnose", "redirect", "pre-existing",
         "recommend", "status", "ask",
     ];
 
@@ -204,6 +204,7 @@ public static class WorkflowTemplates
         "closure.md",
         "done.md",
         "issues-before.md",
+        "fixes.md",
         .. PipelineFiles,
         $"{ShippedWorkflowName}{HarnessLayout.WorkflowFileExtension}",
     ];

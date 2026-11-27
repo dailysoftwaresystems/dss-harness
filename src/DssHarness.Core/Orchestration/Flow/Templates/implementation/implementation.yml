@@ -42,12 +42,16 @@ pushCheckpoints: false
 # written: the universe its decisions range over, and what else judges them. done.md
 # is the rule a definition of done is written by, read wherever one is written or
 # judged; issues-before.md is what a step does with an issue that was there before
-# the run, read by the prompt of every step that reports one.
+# the run, read by the prompt of every step that reports one; fixes.md is the one
+# saying of what an issue being fixed is to the work items, which the planner's
+# prompts and the self-audit read beside the issues the run has taken: the
+# recovery's, and an item that needs its fix names it (needs) and waits for it.
 texts:
   recommendations: recommendations.md
   closure: closure.md
   done: done.md
   issuesBefore: issues-before.md
+  fixes: fixes.md
 advisor:
   agent: advisor
   tier: high
@@ -498,7 +502,8 @@ steps:
   # that commit (commit), read and searched as any tree is, its graph that tree's - then gives it
   # to the recovery to fix at its root now (onAddress: recover) where it is in a step's way,
   # related to the work or critical - at once, beside any other fix at work, and a work item
-  # that owns a file the fix holds starts once the fix is done; joins it, by its id, to the fix
+  # that owns a file the fix holds, or names the issue under needs, starts once the fix is
+  # done (fixes.md says so to the planner and the self-audit); joins it, by its id, to the fix
   # of an issue taken before it, being triaged, being fixed or fixed, whose root cause it shares
   # - one fix settles both, or one fixed already gives it a fix of its own, told what that one
   # did; otherwise it is added, proven, to the run's pre-existing-issues.json,
@@ -523,10 +528,10 @@ recover:
   # on its fallback, and then asked. The remedy items built are the ones the plan's own check
   # read, after the last word on them: the diagnosis's, or the one it gives again on a
   # person's answer (redirect), is checked (remedy-check) - and held to the same check within the
-  # diagnostician's step, which is told each problem it finds until it answers clean or says it
-  # cannot; where the check still finds problems, they go back to the diagnostician once more
-  # (remedy-revise), and what it gives again is checked again (remedy-recheck) and built as it
-  # stands. Once its steps are done, the step that gave it its
+  # diagnostician's step, which is told each problem it finds, in its own conversation, until it
+  # answers clean or says it cannot - and built as the check read it. No step after the check
+  # sends its problems back again: the diagnostician was told them already, by the same check,
+  # before it ended. Once its steps are done, the step that gave it its
   # failure runs again from where it stopped (onSuccess: failed-step), now that what stood
   # in its way was put right. Should that step fail again, its own onFailure: recover brings
   # it back here, to the diagnostician who saw the last attempt - the one of that failure or
@@ -577,37 +582,19 @@ recover:
       graphFrom: changes
       prompt: prompts/redirect.md
       outputs: schemas/diagnosis.schema.json
-    # The diagnosis's last word on its remedy items is what the check reads, and what the
-    # remedies build is what a check read: its own items, or - where it refused them and the
-    # diagnostician said them again on its problems - the revised ones, checked again.
+    # The diagnosis's last word on its remedy items is what the check reads - the diagnostician
+    # told its problems within its own step, as it answered - and what the remedies build is
+    # what the check read.
     - name: remedy-check
       type: validate-plan
       dependsOn: [redirect]
       when: "diagnose.latest.course == 'fix'"
       items: 'diagnose.latest.items'
       onFailure: pause
-    - name: remedy-revise
-      type: reason
-      resume: diagnose
-      dependsOn: [remedy-check]
-      when: '!(remedy-check.ok ?? true)'
-      retries: 3
-      backoffSeconds: 30
-      onFailure: pause
-      onPreExisting: triage-pre-existing-issue
-      graphFrom: changes
-      prompt: prompts/remedy-revise.md
-      outputs: schemas/diagnosis.schema.json
-    - name: remedy-recheck
-      type: validate-plan
-      dependsOn: [remedy-revise]
-      when: "!(remedy-check.ok ?? true) && diagnose.latest.course == 'fix'"
-      items: 'diagnose.latest.items'
-      onFailure: pause
     - name: remedies
-      dependsOn: [remedy-recheck]
+      dependsOn: [remedy-check]
       when: "diagnose.latest.course == 'fix'"
-      forEach: 'remedy-recheck.items ?? remedy-check.items'
+      forEach: 'remedy-check.items'
       # The item pipeline again, used by the recovery as the rounds use it: each remedy is built in
       # an agent of its own, tested, reviewed, folded and checkpointed. This use builds one with the
       # remedy prompt, reading the diagnosis this step of the recovery hands it, and hands it no plan:
