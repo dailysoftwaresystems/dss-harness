@@ -52,10 +52,12 @@ built, and what must be measured first:
 
 {run.nextRound}
 
-An empty list means none is owed. Each issue listed becomes a work item of the plan, which its first round builds
-before the rest: make it one, with its size and a class - it is a defect too, and the rules of a class below apply to
-it - and name the issue it settles in `settles`, by its id exactly. The round's check refuses a round whose items
-leave one unsettled.
+An empty list means none is owed. Each issue listed becomes a work item of the plan's first round, listed and started
+first, built beside the rest - no other item may need its result. Make it one built to the issue's size - the files its
+fix touches among the paths it owns, what must be built and measured first in its instructions - with its class, for
+it is a defect too and the rules of a class below apply to it, or, where its fix decides nothing, why in noClass; and
+name the issue it settles in `settles`, by its id exactly. The round's check refuses a round whose items leave one
+unsettled.
 
 ## How the tests are run
 
@@ -79,8 +81,8 @@ of is refused before anything is built, and a person is asked.
 
 ## What the recovery is fixing
 
-Every issue that was there before the run that the run has taken, each with its id, what became of it (listed, being
-fixed or fixed, alone or with the issue whose root cause it shares), its title and where; empty where none is:
+Every issue that was there before the run that the run has taken, each with its id, what became of it, its title and
+where; empty where none is:
 
 {run.preExisting}
 
@@ -149,21 +151,22 @@ and says why in noClass.
    built at the same time: none may need another's result. Leave nothing inside an item that you already know only a
    person can give: ask it now, or, where you may not, leave it out and name it in the summary. A builder that finds
    part of its item cannot be done says so, and a person is asked before anything of the item is folded.
-6. For each item write: instructions a builder with none of this conversation can follow; its definition of done, as
-   statements a check can answer one by one - each behaviour, the test that pins it, and what is true of the tree
-   when the builder reports, a statement that compares with the tree before the work naming the run's base commit,
-   `{orient.startCommit}`, never a branch: a builder works in a repository of its own that holds no branch, so
-   `main` names nothing there; a statement the base commit would already fail for what the work does not touch - a
-   lint, a limit or a count over a whole file or the tree - checked there first, and narrowed to what the work changes
-   where the base fails it; the paths it owns and the paths it must not touch; its tests, or why it affects none; what it reuses, by
-   path and for what; what it creates, with why nothing that exists serves and where you searched; and what it
-   replaces because the request asked, by path, with what becomes of the old one.
+6. For each item write: instructions a builder with none of this conversation can follow; its definition of done -
+   each behaviour, the test that pins it, and what is true of the tree when the builder reports - by the rule for a
+   definition of done below, the run's base commit being `{orient.startCommit}`; the paths it owns and the paths it
+   must not touch; its tests, or why it affects none; what it reuses, by path and for what; what it creates, with why
+   nothing that exists serves and where you searched; and what it replaces because the request asked, by path, with
+   what becomes of the old one.
+
+## A definition of done
+
+{text.done}
 
 ## What to return
 
 A summary of the plan, naming each part of the request no item covers, with the reason; the plan's definition of
-done - what holds when the whole plan is built, as statements a check can answer one by one, which the run's final
-audit holds every round against; whether it was built on a plan a person gave or made here; each departure from a
+done - what holds when the whole plan is built, as statements a check can answer one by one, by the same rule, which
+the run's final audit holds every round against; whether it was built on a plan a person gave or made here; each departure from a
 given plan, with its reason; the items, each with its classes or its noClass; and under `scope` an empty list, since
 nothing is being updated.
 
@@ -171,8 +174,13 @@ A machine checks the items before anyone builds them: every name valid, no file 
 every path an item reuses or replaces there in the tree, every item saying what it reuses, creates or replaces, each
 home and site a path inside the tree, each class's home among the item's own paths and there in the tree, a site marked
 home only where it is the home, every other site the item's too, more than one site consolidated at the home, each
-class searched by data its queries name again, each universe counting the cells its axes that apply make, one class id
-used once, and one home belonging to one item. It reads your answer as you give it: what it finds wrong is told you
+class searched by data its queries name again, each axis of a universe answered one way or the other - values with where
+they are declared, or no value with why - each universe counting the cells its axes that apply make, one class id used
+once, and one home belonging to one item. It reads your answer as you give it: what it finds wrong is told you
 here, in this conversation, to put right in the answer you give again. An independent auditor then checks
 the plan against the code, searching for itself what you say does not exist - the classes above all. Then
 a person approves it, unless they approved it beforehand in what they gave this run.
+
+## Issues that were there before
+
+{text.issuesBefore}

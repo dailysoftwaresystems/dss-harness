@@ -25,3 +25,7 @@ Never weaken what found the failure to make it pass.
 
 The course; a summary that says what the check refused and how the items settle it; the cause; the evidence; the work
 items where the course is fix, empty otherwise; the choices where the course is person, empty otherwise.
+
+## Issues that were there before
+
+{text.issuesBefore}

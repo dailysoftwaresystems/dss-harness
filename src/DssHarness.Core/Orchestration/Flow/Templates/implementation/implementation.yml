@@ -39,10 +39,15 @@ pushCheckpoints: false
 # The workflow's texts: prose a prompt reads by name - {text.<name>} - beside the bar
 # for recommendations, which every prompt that recommends reads as {recommendations}
 # still, as it always did. closure.md is the repository's own from the day it is
-# written: the universe its decisions range over, and what else judges them.
+# written: the universe its decisions range over, and what else judges them. done.md
+# is the rule a definition of done is written by, read wherever one is written or
+# judged; issues-before.md is what a step does with an issue that was there before
+# the run, read by the prompt of every step that reports one.
 texts:
   recommendations: recommendations.md
   closure: closure.md
+  done: done.md
+  issuesBefore: issues-before.md
 advisor:
   agent: advisor
   tier: high

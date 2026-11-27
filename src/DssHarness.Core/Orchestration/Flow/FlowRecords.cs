@@ -897,7 +897,7 @@ public sealed record PreExistingProof(string Kind, string At, string? File = nul
 
 /// <summary>
 /// The run's record of the issues its triages sent to its next round, <c>next-round.json</c>: each a defect the run
-/// took from a round's work and owes its next round as its first item, with its size, and - once a work item settled
+/// took from a round's work and owes its next round as a work item listed and started first, with its size, and - once a work item settled
 /// it - that item. What <c>run.nextRound</c> reads: the issues no work item of the run has settled, for the rounds to
 /// go on while one is left. Nothing else writes the file, and it holds nothing but the issue, its size and what settled
 /// it.
@@ -924,7 +924,7 @@ public sealed record FlowNextRoundFile(
 
 /// <summary>
 /// One issue the run owes its next round, with its size: what the planner and the self-audit are told to make a work item
-/// of the round, built first, which names it in <c>settles</c>; what every check whose items a round opens with lets an
+/// of the round, listed and started first and built beside the rest, which names it in <c>settles</c>; what every check whose items a round opens with lets an
 /// item settle; and what the check that opens the round holds its items to. It is settled by the
 /// work item that names it, once that item ended done with its work landed - a commit of its own made - never by one
 /// that ended done with nothing landed, as an item a person skipped does.

@@ -21,9 +21,10 @@ built, and what must be measured first:
 
 {run.nextRound}
 
-An empty list means none is owed. Each issue listed becomes a work item of the round, built before the rest, naming
-the issue it settles in `settles` by its id exactly: where no item of the plan settles it yet, add one, with its size
-and a class, as an `added` piece. The round's check refuses a round whose items leave one unsettled.
+An empty list means none is owed. Each issue listed becomes a work item of the round, listed and started first, built
+beside the rest - no other item may need its result - naming the issue it settles in `settles` by its id exactly:
+where no item of the plan settles it yet, add one as an `added` piece, built to the issue's size, with its class or,
+where its fix decides nothing, why in noClass. The round's check refuses a round whose items leave one unsettled.
 
 ## The request as it now reads
 
@@ -39,8 +40,8 @@ and a class, as an `added` piece. The round's check refuses a round whose items 
 
 ## What the recovery is fixing
 
-Every issue that was there before the run that the run has taken, each with its id, what became of it (listed, being
-fixed or fixed, alone or with the issue whose root cause it shares), its title and where; empty where none is:
+Every issue that was there before the run that the run has taken, each with its id, what became of it, its title and
+where; empty where none is:
 
 {run.preExisting}
 
@@ -101,3 +102,7 @@ departures as before; the items as they now are, each with its definition of don
 
 The plan is checked, audited and put to approval again before anything of it is carried out or anyone is told.
 Until then the work under way goes on with the plan as it was.
+
+## Issues that were there before
+
+{text.issuesBefore}

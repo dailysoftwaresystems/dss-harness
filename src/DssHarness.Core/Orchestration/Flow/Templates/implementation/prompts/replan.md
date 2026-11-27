@@ -31,9 +31,10 @@ built, and what must be measured first:
 
 {run.nextRound}
 
-An empty list means none is owed. Each issue listed is a work item of the plan, which its first round builds before
-the rest, naming the issue it settles in `settles` by its id exactly: keep the one the plan has, or make one, with its
-size and a class, where it has none. The round's check refuses a round whose items leave one unsettled.
+An empty list means none is owed. Each issue listed is a work item of the plan's first round, listed and started first,
+built beside the rest - no other item may need its result - naming the issue it settles in `settles` by its id exactly:
+keep the one the plan has, or, where it has none, make one built to the issue's size, with its class or, where its fix
+decides nothing, why in noClass. The round's check refuses a round whose items leave one unsettled.
 
 ## What to do
 
@@ -45,8 +46,9 @@ before you add it, and extend the class's site list, its searches and its univer
 names a cell of a universe your plan leaves out, the axis was not searched whole: search the tree for every cell of that
 axis, as a class's searches are made, and hold every one you find, never only the one it named - an audit that finds
 another holds the plan back again; an axis it shows your plan said does not apply is answered with its values,
-searched whole the same way. Where it names a statement of the definition of done the base commit already fails,
-narrow the statement to what the work changes. An item that
+searched whole the same way. Where it names a statement of a definition of done that breaks the rule for one you
+were given - one the run's other work would change, or one the base commit already fails for what the work does not
+touch - write it again by that rule, held to what the work makes true. An item that
 changes a decision still gives the class, and one that decides none still says why in noClass.
 
 A finding that the plan builds what the repository already has, or writes a rule a second time, is settled by
@@ -56,8 +58,8 @@ what it reuses, creates and replaces true of the plan as it now is.
 
 ## What the recovery is fixing
 
-Every issue that was there before the run that the run has taken, each with its id, what became of it (listed, being
-fixed or fixed, alone or with the issue whose root cause it shares), its title and where; empty where none is:
+Every issue that was there before the run that the run has taken, each with its id, what became of it, its title and
+where; empty where none is:
 
 {run.preExisting}
 
@@ -79,3 +81,7 @@ Where this revision leaves something open that you may still ask the person, eac
 the one you recommend, by this bar as before:
 
 {recommendations}
+
+## Issues that were there before
+
+{text.issuesBefore}

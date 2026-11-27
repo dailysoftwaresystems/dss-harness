@@ -52,10 +52,13 @@ The homes the run touched often enough to name, with how often:
 
 ## Issues found that were there before
 
-Each was proven on the commit the run began from. One marked fixed was in this work's way, related to it or critical,
-and was fixed at its root in this run; one marked next round blocked nothing, and is owed the run's next round as its
-first work item; one marked fixed in a later round was owed one, and a later round's work item fixed it; one marked
-listed was none of these, and is left for a person.
+Each is marked with what became of it, after its proof on the commit the run began from. One marked fixed was in this
+work's way, related to it or critical, and was fixed at its root in this run - fixed with another where it shared that
+one's root cause, one fix settling both; one marked next round blocked nothing, and is owed the run's next round, a
+work item of which settles it; one marked fixed in a later round was owed one, and a later round's work item fixed it;
+one marked listed was none of these, and is left for a person; one marked duplicate of another is that issue again;
+one marked unproven could not be reproduced there, and is not listed. One marked being fixed, or joined to another,
+had its fix still under way when this was written.
 
 {run.preExisting}
 

@@ -49,3 +49,7 @@ Where a line says that a step left no output, that thing was not read or did not
 
 The course; a summary that says what was tried, why it did not hold, and what follows; the cause; the evidence; the
 work items where the course is fix, empty otherwise; the choices where the course is person, empty otherwise.
+
+## Issues that were there before
+
+{text.issuesBefore}

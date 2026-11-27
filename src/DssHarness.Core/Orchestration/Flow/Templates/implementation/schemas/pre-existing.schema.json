@@ -26,7 +26,7 @@
         "unproven",
         "join"
       ],
-      "description": "fix: it blocks the reporting step, is related or is critical - the run's recovery fixes it at its root now. next: a defect in code the run's change does not touch that blocks nothing - it becomes the first work item of the run's next round, and nothing of this round is held for it. list: none of these holds - it is listed, proven, and shown in the pull request's body and the handoff. duplicate: the issues the run has taken already hold it, and duplicates names its id. unproven: you could not reproduce it on the base commit - it is not listed. join: it is another issue, whose root cause is that of one taken before it that is being triaged or being fixed, and joins names that one's id - its fix is that issue's, which settles both."
+      "description": "fix: it blocks the reporting step, is related or is critical - the run's recovery fixes it at its root now. next: a defect in code the run's change does not touch that blocks nothing - it becomes a work item of the run's next round, listed and started first, built beside the rest, and nothing of this round is held for it. list: none of these holds - it is listed, proven, and shown in the pull request's body and the handoff. duplicate: the issues the run has taken already hold it, and duplicates names its id. unproven: you could not reproduce it on the base commit - it is not listed. join: it is another issue, whose root cause is that of one taken before it that is being triaged or being fixed, and joins names that one's id - its fix is that issue's, which settles both."
     },
     "title": {
       "type": "string",

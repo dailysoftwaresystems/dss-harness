@@ -36,3 +36,7 @@ what it showed. List as what you cannot do only what still cannot be done after 
 the way and what would let it be done: the person is asked again for it.
 
 When you report, the engine goes on with your work as it would have: it tests it, folds it and checks it.
+
+## Issues that were there before
+
+{text.issuesBefore}

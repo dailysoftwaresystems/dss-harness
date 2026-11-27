@@ -14,3 +14,7 @@ Where the item names no test, the reason it gives, which the review of tests jud
 
 For each of the five aspects - errors, tests, types, comments, simplicity - true or false. Where you are not sure,
 true. Where a reason stands above for the item's naming no test, tests is true.
+
+## Issues that were there before
+
+{text.issuesBefore}

@@ -66,9 +66,11 @@ them in the code; a site the list missed is yours to add, searched by the data (
 the literal) across every tier, format and file kind, not the file you saw it in. More than one site means you
 consolidate: the home decides, every other site reads it, the duplicates are deleted in this item. Patching one site
 of several is never done. Your test is table-driven over the universe the class names - every value of each axis it
-says applies, its directions and forms among them - not over the reported case, so a value added to the vocabulary
-later is covered the day it lands; where this repository keeps mutation arms, your arm mutates the home. Before you
-report, sweep the neighbours: the same invariant at the other cells, the opposite direction, and the optimised form
+says applies that a test can range over: its kinds, formats, entry points, tiers, forms and directions, and each
+further axis a test can - not over the reported case, so a value added to the vocabulary later is covered the day it
+lands. The targets and the configurations it says apply are no rows of a table: the pin covers them by running on each
+leg and in each configuration, as the gate runs it on the legs and the measure tool on a leg in a variant. Where this
+repository keeps mutation arms, your arm mutates the home. Before you report, sweep the neighbours: the same invariant at the other cells, the opposite direction, and the optimised form
 of the same source as `closure.md` names it, on each leg and on each reference separately; fix every failure in this
 item. A cell you cannot measure is named unmeasured, with the reason. Your report carries the record of each class:
 invariant, home, sites before and after, the searches, the universe covered, the pin, the arm, each neighbour and
@@ -100,3 +102,7 @@ yours to work through.
 
 When you report, a person is first asked about anything you could not do; then the engine builds your worktree and
 runs your tests itself. A red result comes back to you with the output, so report what you saw.
+
+## Issues that were there before
+
+{text.issuesBefore}

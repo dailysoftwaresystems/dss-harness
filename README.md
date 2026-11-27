@@ -787,16 +787,26 @@ the next question on; where the folder has none, a sentence says so and a recomm
 follows none. Beside it a workflow declares texts (`texts:`), each name a markdown file of its own
 directory read in a prompt as `{text.<name>}` the same live way - the used workflow's own first
 where the reading step is one of its, and the run's where none between them declares the name - and
-the shipped flow declares its `recommendations` and its `closure` there, `closure.md` being the
+the shipped flow declares its `recommendations`, its `closure`, its `done` and its `issuesBefore`
+there, `closure.md` being the
 repository's own from the day init writes it: the universe its decisions range over, and what else
 judges them. The planner's, the plan audit's, the item audit's and the builders' prompts read
 `{text.closure}`, and the file says so: what a repository writes there weighs on what they
 decide a class covers. A class's universe answers every axis the file lists by its structure -
 the plan's schema holds a member for each (`kinds`, `targets`, `configurations`, `formats`,
-`entryPoints`, `tiers`, `forms`, `directions`), each its values and where they are declared or
-why it does not apply, and `further` for the axes the file's own heading names - so a universe
-that leaves an axis out is sent back within the step that answers it, and the plan audit judges
-each answer rather than looking for an axis left out. The builders' prompts hold the
+`entryPoints`, `tiers`, `forms`, `directions`), each in the one shape of an axis - its values,
+where they are declared and why it does not apply, the plan check holding that it applies exactly
+where it names values, with where they are declared and no why, and otherwise says why and
+declares nothing - and `further` for the axes the file's heading "This repository" names, never its
+references or its optimised forms - so a universe that leaves an axis out, or answers one neither
+way, is sent back within the step that answers it, and the plan audit judges each answer rather
+than looking for an axis left out. `done.md` is the one rule a definition of done is written by -
+each statement holding whatever the run's other work does to the same files, never a count of lines,
+a line number, a whole output or a whole file or tree compared with the base - read by the
+planner's, the plan audit's, the self-audit's and the diagnosis's prompts, and pointed to by the
+plan's and each work item's `done`. `issues-before.md` is what a step does with an issue that was
+there before the run - report it, never fix it, and the courses a triage gives it - read by the
+prompt of every step that reports one, its agent's file saying it no more. The builders' prompts hold the
 class-closure paragraph - close the class, at its one home, over the universe it names, nothing
 folded without the record of each class -
 and every prompt that goes on with an item (mend, rework, reconcile, anchors, unblock, redo and
@@ -880,9 +890,10 @@ and the same hotspots as `{run.closure}` and `{run.hotspots}`, through the insta
 commit subjects, a hotspot's path, a pin that lists the case by hand - each disproved or made a work
 item. A pre-existing
 issue the triage answers `next` for - a defect in code the run's change does not touch that blocks
-nothing - is owed the run's next round as its first item, sized by its files: the planner, where
-it plans or updates the plan while one is owed, and the self-audit make it one with its class,
-naming it in `settles`; every check whose items a round opens with - the plan's, so the one a plan
+nothing - is owed the run's next round, sized by its files, as a work item of that round listed and
+started first, built beside the rest: the planner, where it plans or updates the plan while one is
+owed, and the self-audit make it one, with its class or why it decides none in `noClass`, naming it
+in `settles`; every check whose items a round opens with - the plan's, so the one a plan
 update sends the run back to, and the round's own - takes that item and refuses one that names an
 issue the run does not owe, and a recovery's check refuses every `settles`; the check that opens a
 round - and no other check - refuses a round whose items leave one unsettled, and the rounds go on
@@ -2411,8 +2422,10 @@ classes held to what the tree and the item's own paths say: one id to a class in
 inside the tree as a path an item reuses is, the home among the item's own paths and there in the tree where it exists,
 a site marked `home` exactly where it is the home by its path and symbol, every other site - which changes, reading the
 home or deleted - the item's too, more than one site consolidated at the home, each class searched by data its queries
-name again, its universe counting the cells its axes that apply make - the product of the counts of their values, 1
-where none applies, the plan's schema holding in the step that answers it that it answers every axis - and one home
+name again, its universe answering each axis in one of the two ways an axis is answered - values with where they are
+declared and no why, or no value with why and nothing declared - and counting the cells its axes that apply make - the
+product of the counts of their values, 1 where none applies, the plan's schema holding in the step that answers it that
+it answers every axis, in the one shape of an axis - and one home
 belonging to one item, two classes of
 one item sharing one as they may - and, where its `items` read the output of a reason step of its own scope (by the
 step's name, through `latest` of the work that step goes on with, or through `previous` in the iteration after), the
