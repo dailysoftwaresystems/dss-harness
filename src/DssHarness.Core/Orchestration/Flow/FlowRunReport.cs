@@ -512,8 +512,8 @@ public static partial class FlowRunReport
                 ["searches"] = tokens.Sum(use => use.Searches),
             },
             ["cacheSharePercent"] = input + cacheRead > 0 ? ShareOf(cacheRead, input + cacheRead) : null,
-            ["dollarsBy"] = DollarsBy(steps, source.By ?? Groupings[0]),
-            ["usd"] = Math.Round(steps.Sum(step => (step.Measure?.Totals?.Usd ?? 0) + (step.Measure?.Advice?.Usd ?? 0)), 4, MidpointRounding.AwayFromZero),
+            ["dollarsBy"] = DollarsBy(steps, source.Flow.Spent.Advice, source.By ?? Groupings[0]),
+            ["usd"] = Math.Round(steps.Sum(step => (step.Measure?.Totals?.Usd ?? 0) + (step.Measure?.Advice?.Usd ?? 0)) + (source.Flow.Spent.Advice?.Usd ?? 0), 4, MidpointRounding.AwayFromZero),
             ["uncounted"] = source.Flow.Spent.Uncounted,
             ["agents"] = steps.Where(step => step.Agent is { Length: > 0 }).Select(step => step.Agent!).Distinct(StringComparer.Ordinal).Count(),
             ["stepsRun"] = steps.Count(step => step.State == nameof(FlowInstanceState.Done)),
@@ -527,18 +527,22 @@ public static partial class FlowRunReport
 
     /// <summary>
     /// What the run's reasoning cost, grouped by <paramref name="by"/>: each part of each attempt by the model that served
-    /// it (<see cref="FlowStepAttempt.Parts"/>; an attempt a build kept no parts for as one part of its own model), and each
-    /// step's advice by the advisor's model - every dollar the totals count, once, in one group.
+    /// it (<see cref="FlowStepAttempt.Parts"/>; an attempt a build kept no parts for as one part of its own model), each
+    /// step's advice by the advisor's model, and the advice on the run's own question by its model, under the run's own
+    /// name where the dollars are grouped by step (<see cref="FlowQuestions.RunsOwn"/>) - every dollar the totals count,
+    /// once, in one group.
     /// </summary>
     /// <param name="steps">The run's steps.</param>
+    /// <param name="runsOwn">What the advisor spent on the run's own question; null where nothing was.</param>
     /// <param name="by">What the dollars are grouped by, one of <see cref="Groupings"/>.</param>
-    private static JsonObject DollarsBy(IReadOnlyList<FlowStepRecord> steps, string by)
+    private static JsonObject DollarsBy(IReadOnlyList<FlowStepRecord> steps, FlowStepAdvice? runsOwn, string by)
     {
         var parts = steps.SelectMany(step =>
             (step.Measure?.Attempts ?? []).SelectMany(attempt => attempt.Parts is { Count: > 0 } kept
-                ? kept.Select(part => (Step: step, Model: part.Model, Provider: part.Provider, Usd: part.Usd ?? 0, Tokens: part.Tokens?.AllTokens ?? 0))
-                : [(Step: step, attempt.Model, attempt.Provider, Usd: attempt.Usd ?? 0, Tokens: attempt.Tokens?.AllTokens ?? 0)])
-            .Concat(step.Measure?.Advice is { } advice ? [(Step: step, advice.Model, Provider: (string?)null, Usd: advice.Usd ?? 0, Tokens: advice.Tokens ?? 0)] : []));
+                ? kept.Select(part => (Instance: step.Instance, step.Agent, step.Type, Model: part.Model, Provider: part.Provider, Usd: part.Usd ?? 0, Tokens: part.Tokens?.AllTokens ?? 0))
+                : [(Instance: step.Instance, step.Agent, step.Type, attempt.Model, attempt.Provider, Usd: attempt.Usd ?? 0, Tokens: attempt.Tokens?.AllTokens ?? 0)])
+            .Concat(step.Measure?.Advice is { } advice ? [(Instance: step.Instance, step.Agent, step.Type, advice.Model, Provider: (string?)null, Usd: advice.Usd ?? 0, Tokens: advice.Tokens ?? 0)] : []))
+            .Concat(runsOwn is { } own ? [(Instance: FlowQuestions.RunsOwn, Agent: (string?)null, Type: (string?)null, own.Model, Provider: (string?)null, Usd: own.Usd ?? 0, Tokens: own.Tokens ?? 0)] : []);
 
         return new JsonObject
         {
@@ -547,10 +551,10 @@ public static partial class FlowRunReport
                 .Where(part => part.Usd > 0 || part.Tokens > 0)
                 .GroupBy(part => by switch
                 {
-                    "step" => part.Step.Instance,
-                    "agent" => part.Step.Agent ?? "-",
+                    "step" => part.Instance,
+                    "agent" => part.Agent ?? "-",
                     "provider" => part.Provider ?? "-",
-                    "type" => part.Step.Type ?? "-",
+                    "type" => part.Type ?? "-",
                     _ => part.Model ?? "-",
                 })
                 .OrderBy(group => group.Key, StringComparer.Ordinal)

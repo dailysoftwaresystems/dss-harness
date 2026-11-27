@@ -2,7 +2,8 @@ Recommend an answer to this question. A person decides; what you return is shown
 
 ## The question
 
-Step `{question.step}` of run `{run.name}` asks a question of the kind `{question.kind}`.
+Step `{question.step}` of run `{run.name}` asks a question of the kind `{question.kind}` - where the step is `run`, the
+run asks it of itself, as it asks its budget's question once the budget's pause is complete.
 
 {question.problem}
 
@@ -13,9 +14,12 @@ The answers there are, each with what it does:
 Where the problem lists choices of its own, as a diagnosis does, name the one you recommend in your reason, and
 recommend the answer that carries it out.
 
-## What the run recorded of the steps the question is about
+## What the run recorded of what the question is about
 
 {question.record}
+
+For a question the run asks of itself, this is the run's facts - how it stands, what is done, what is left and when it
+may finish - by which spending more is weighed against stopping where it stands.
 
 ## The work this run is doing
 

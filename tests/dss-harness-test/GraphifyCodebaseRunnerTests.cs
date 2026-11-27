@@ -232,7 +232,7 @@ public sealed class GraphifyCodebaseRunnerTests : IDisposable
         Assert.Empty(WorkflowValidator.Validate(definition, hasCommitTemplate: false, files: null, languages: CodeGraphExtractors.OfThisBuild.Languages));
         var runner = new GraphOrScripted(Runner(harness));
         var place = new FlowRunPlace(repository.Path, "r1", null, definition);
-        var coordinator = new FlowCoordinator(definition, runner, new NoWrites(), TimeProvider.System, runName: "r1", place: place);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new NoWrites(), TimeProvider.System, runName: "r1", place: place);
 
         var end = await coordinator.RunAsync(Token);
 
@@ -262,7 +262,7 @@ public sealed class GraphifyCodebaseRunnerTests : IDisposable
         return (harness, repository);
     }
 
-    private static WorkflowDefinition Parse(string text) => WorkflowFileParser.Parse("workflows/flow/flow.yml", text);
+    private static WorkflowDefinition Parse(string text) => TestAdvice.Named(WorkflowFileParser.Parse("workflows/flow/flow.yml", text));
 
     private static WorkflowStep Step(WorkflowDefinition definition, string name) => definition.Steps.Single(step => step.Name == name);
     private static GraphifyCodebaseRunner Runner(HarnessFactory harness)

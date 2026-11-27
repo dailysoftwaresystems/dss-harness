@@ -276,7 +276,7 @@ public sealed class FlowPauseTests
             .On("after", FlowStepResult.Ended(passed: true, HarnessExit.Success));
         var thinking = runner.Hold("think");
         var gate = runner.Hold("gate");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("think");
@@ -333,7 +333,7 @@ public sealed class FlowPauseTests
         var place = new FlowRunPlace("repository", "r1", null, definition);
         var runner = new FakeRunner().HandsOff("think", "what I did");
         _ = runner.Hold("think");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), place: place);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), place: place);
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("think");
@@ -367,7 +367,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner();
         _ = runner.Hold("think");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock());
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("think");
@@ -402,7 +402,7 @@ public sealed class FlowPauseTests
         var runner = new FakeRunner();
         _ = runner.Hold("think");
         var account = new StreamAccount("- src/one.cs (create_file)");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), streamAccount: account);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), streamAccount: account);
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("think");
@@ -434,7 +434,7 @@ public sealed class FlowPauseTests
             """);
         var account = new StreamAccount("The files the attempt wrote: none.");
         var runner = new FakeRunner().On("think", FlowStepResult.AtLimit("turns"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), streamAccount: account);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), streamAccount: account);
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         var end = await session;
@@ -480,7 +480,7 @@ public sealed class FlowPauseTests
         var runner = new FakeRunner();
         _ = runner.Hold("think");
         _ = runner.HandoffHeld("think");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -510,7 +510,7 @@ public sealed class FlowPauseTests
         var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner().HandoffFails("think", "the client's process ended");
         _ = runner.Hold("think");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock());
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -557,7 +557,7 @@ public sealed class FlowPauseTests
                 }
             }
         });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -618,7 +618,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner();
         var gate = runner.Hold("gate");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("gate");
@@ -657,7 +657,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner();
         _ = runner.Hold("think");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("think");
@@ -705,7 +705,7 @@ public sealed class FlowPauseTests
                 coordinator!.RequestStop();
             }
         });
-        coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+        coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -766,7 +766,7 @@ public sealed class FlowPauseTests
         var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner();
         _ = runner.Hold("two");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new TimerClock());
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("two").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -810,7 +810,7 @@ public sealed class FlowPauseTests
         var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner();
         _ = runner.Hold("gate");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new TimerClock());
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -847,7 +847,7 @@ public sealed class FlowPauseTests
         var runner = new FakeRunner();
         var gate = runner.Hold("gate", hearsTheStop: false);
         var clock = new TimerClock();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -880,7 +880,7 @@ public sealed class FlowPauseTests
         var runner = new FakeRunner();
         var gate = runner.Hold("gate", hearsTheStop: false);
         var clock = new TimerClock();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -918,7 +918,7 @@ public sealed class FlowPauseTests
         using var temp = new TempDirectory();
         var (harness, layout, records) = Kept(temp.Path, definition, clock);
         using var disposed = records;
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -958,7 +958,7 @@ public sealed class FlowPauseTests
         var runner = new FakeRunner().On("gate", FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "not settled yet"));
         var clock = new TimerClock();
         using var ending = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock);
 
         var session = coordinator.RunAsync(ending.Token);
         await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -990,7 +990,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner();
         var gate = runner.Hold("gate");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("gate");
@@ -1037,7 +1037,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner();
         var notes = runner.Hold("notes");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         // The question leaves the rest quiescent: the always phase begins, and the pause stops notes in it.
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
@@ -1074,7 +1074,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner();
         var gate = runner.Hold("gate");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("gate");
@@ -1116,7 +1116,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner();
         var gate = runner.Hold("gate");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("gate");
@@ -1164,7 +1164,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner();
         var gate = runner.Hold("gate");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("gate");
@@ -1210,7 +1210,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner();
         _ = runner.Hold("first");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("first").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
@@ -1247,7 +1247,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner();
         var gate = runner.Hold("gate");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
@@ -1286,7 +1286,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner();
         var gate = runner.Hold("gate");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("work.gate");
@@ -1330,7 +1330,7 @@ public sealed class FlowPauseTests
                 complete.TrySetResult();
             }
         });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1380,7 +1380,7 @@ public sealed class FlowPauseTests
                 }
             },
             inner: kept);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1421,7 +1421,7 @@ public sealed class FlowPauseTests
         var turning = runner.HandoffHeld("think");
 
         // A clock that never fires the turn's bound unless moved: only the stop ends the turn.
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new TimerClock());
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1466,7 +1466,7 @@ public sealed class FlowPauseTests
                 coordinator!.RequestStop();
             }
         });
-        coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records);
+        coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1508,7 +1508,7 @@ public sealed class FlowPauseTests
                 complete.TrySetResult();
             }
         });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1556,7 +1556,7 @@ public sealed class FlowPauseTests
                 complete.TrySetResult();
             }
         });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("work.gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1595,7 +1595,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner();
         var gate = runner.Hold("gate");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("gate");
@@ -1633,7 +1633,7 @@ public sealed class FlowPauseTests
             run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 45.10 * at));
             return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
         });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1671,7 +1671,7 @@ public sealed class FlowPauseTests
             .HandsOff("second", "second's account");
         _ = runner.Hold("first");
         _ = runner.Hold("second");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("first");
@@ -1712,7 +1712,7 @@ public sealed class FlowPauseTests
             })
             .HandsOff("think", "half way through");
         var gate = runner.Hold("gate");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("gate");
@@ -1780,7 +1780,7 @@ public sealed class FlowPauseTests
                 run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 1.0));
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
         var cancel = TestContext.Current.CancellationToken;
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1828,7 +1828,7 @@ public sealed class FlowPauseTests
         var runner = new FakeRunner().HandsOff("think", "half way through");
         _ = runner.Hold("think");
         var clock = new TimerClock();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, runName: "r7");
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, runName: "r7");
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1877,7 +1877,7 @@ public sealed class FlowPauseTests
 
             return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
         });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
         var cancel = TestContext.Current.CancellationToken;
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1934,7 +1934,7 @@ public sealed class FlowPauseTests
         var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner().HandsOff("think", "half way through");
         _ = runner.Hold("think");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1981,7 +1981,7 @@ public sealed class FlowPauseTests
             run.Events.Used(new FlowTurnSpend(new AgentUsage(9_000, 0, 0, 0, 0, 0), 0));
             return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
         });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -2010,7 +2010,7 @@ public sealed class FlowPauseTests
         var runner = new FakeRunner();
         var compile = runner.Hold("compile");
         var clock = new TimerClock();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("compile").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -2054,7 +2054,7 @@ public sealed class FlowPauseTests
 
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -2096,7 +2096,7 @@ public sealed class FlowPauseTests
             })
             .HandsOff("think", "stopped mid-thought");
         var gate = gateRunner.Hold("gate");
-        var paused = new FlowCoordinator(asked, gateRunner, new RunnerFacts(), new JumpingClock());
+        var paused = TestAdvice.Coordinator(asked, gateRunner, new RunnerFacts(), new JumpingClock());
 
         var session = paused.RunAsync(TestContext.Current.CancellationToken);
         await gateRunner.StartedAsync("gate");
@@ -2138,7 +2138,7 @@ public sealed class FlowPauseTests
 
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -2167,7 +2167,7 @@ public sealed class FlowPauseTests
         var clock = new ManualClock();
         var timedRunner = new FakeRunner();
         var thinking = timedRunner.Hold("think");
-        var run = new FlowCoordinator(timed, timedRunner, new RunnerFacts(), clock);
+        var run = TestAdvice.Coordinator(timed, timedRunner, new RunnerFacts(), clock);
 
         var timedSession = run.RunAsync(TestContext.Current.CancellationToken);
         await timedRunner.StartedAsync("think");
@@ -2213,7 +2213,7 @@ public sealed class FlowPauseTests
             (kind, _, _, _) => { if (kind == FlowChangeKind.PauseCompleted) { pauseCompleted.TrySetResult(); } },
             (_, detail) => { if (detail == "passed its timeoutMinutes (1): stopped") { limitStopped.TrySetResult(); } });
         var clock = new TimerClock();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -2268,7 +2268,7 @@ public sealed class FlowPauseTests
             (kind, _, _, _) => { if (kind == FlowChangeKind.PauseCompleted) { pauseCompleted.TrySetResult(); } },
             (_, detail) => { if (detail == "passed its timeoutMinutes (1): stopped") { limitStopped.TrySetResult(); } });
         var clock = new TimerClock();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -2309,7 +2309,7 @@ public sealed class FlowPauseTests
         var pauseCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var records = new RecordsWatch((kind, _, _, _) => { if (kind == FlowChangeKind.PauseCompleted) { pauseCompleted.TrySetResult(); } });
         var clock = new TimerClock();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -2353,7 +2353,7 @@ public sealed class FlowPauseTests
             (kind, _, _, _) => { if (kind == FlowChangeKind.PauseCompleted) { pauseCompleted.TrySetResult(); } },
             (_, detail) => { if (detail == "passed its timeoutMinutes (1): stopped") { limitStopped.TrySetResult(); } });
         var clock = new TimerClock();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("other").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -2407,7 +2407,7 @@ public sealed class FlowPauseTests
             (_, snapshot, _, _) => spent = snapshot.Spent,
             (_, detail) => { if (detail == "passed its timeoutMinutes (5): stopped") { limitStopped.TrySetResult(); } });
         var clock = new TimerClock();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -2445,7 +2445,7 @@ public sealed class FlowPauseTests
         var pauseCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var records = new RecordsWatch((kind, _, _, _) => { if (kind == FlowChangeKind.PauseCompleted) { pauseCompleted.TrySetResult(); } });
         var clock = new TimerClock();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -2483,7 +2483,7 @@ public sealed class FlowPauseTests
         // Its agent answers the handoff and its attempt ends: the pause has ended the limit's timer before it.
         var thinking = runner.Hold("think");
         var clock = new TimerClock();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -2535,13 +2535,13 @@ public sealed class FlowPauseTests
             return FlowStepResult.Ended(passed: true, HarnessExit.Success);
         });
 
-        var end = await new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(TestContext.Current.CancellationToken);
+        var end = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal(new double?[] { 45.0, 40.0 }, runner.Runs.Select(run => run.BudgetLeftUsd));
 
         var unbudgeted = new FakeRunner();
-        _ = await new FlowCoordinator(Parse("name: flow\nsteps:\n  - name: think\n    type: reason\n    prompt: work.md\n    outputs: work.json\n"), unbudgeted, new RunnerFacts(), new JumpingClock()).RunAsync(TestContext.Current.CancellationToken);
+        _ = await TestAdvice.Coordinator(Parse("name: flow\nsteps:\n  - name: think\n    type: reason\n    prompt: work.md\n    outputs: work.json\n"), unbudgeted, new RunnerFacts(), new JumpingClock()).RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Null(unbudgeted.Runs.Single().BudgetLeftUsd);
     }
@@ -2570,7 +2570,7 @@ public sealed class FlowPauseTests
             run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 44.0));
             return FlowStepResult.AtTheRunsReserve("'think' spent what was left of the run's budget before its reserve");
         });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
         var think = coordinator.Instances["think"];
@@ -2608,7 +2608,7 @@ public sealed class FlowPauseTests
         var runner = new FakeRunner().On("think", run => run.Attempt == 1
             ? FlowStepResult.AtTheRunsReserve("'think' spent what was left of the run's budget before its reserve")
             : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -2654,7 +2654,7 @@ public sealed class FlowPauseTests
             .On("two", run => run.Attempt == 1
                 ? FlowStepResult.AtTheRunsReserve("'two' spent what was left of the run's budget before its reserve")
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -2712,7 +2712,7 @@ public sealed class FlowPauseTests
             }
         });
         var clock = new TimerClock();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);

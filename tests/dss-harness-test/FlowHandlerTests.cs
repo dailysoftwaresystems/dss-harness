@@ -100,7 +100,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner()
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)", output: Output("""{"passed": false}""")))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -129,7 +129,7 @@ public sealed class FlowHandlerTests
                 dependsOn: [fix]
             """);
         var runner = new FakeRunner().On("build", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -159,7 +159,7 @@ public sealed class FlowHandlerTests
                 on: {step: build, outcome: failure}
             """);
         var runner = new FakeRunner().On("build", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -186,7 +186,7 @@ public sealed class FlowHandlerTests
                 on: {step: build, outcome: end}
             """);
         var runner = new FakeRunner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -209,7 +209,7 @@ public sealed class FlowHandlerTests
                 type: orient
             """);
         var runner = new FakeRunner();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -235,7 +235,7 @@ public sealed class FlowHandlerTests
                 dependsOn: [fix]
             """);
         var runner = new FakeRunner();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -274,7 +274,7 @@ public sealed class FlowHandlerTests
                     ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
                     : FlowStepResult.Ended(passed: true, HarnessExit.Success);
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -312,7 +312,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner()
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var waiting = coordinator.RunAsync(TestContext.Current.CancellationToken);
         var first = await waiting;
@@ -357,7 +357,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner()
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
         var asked = AssertSingle(coordinator.OpenQuestions, question => question.Kind == "visitBound");
@@ -389,7 +389,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner()
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("fix", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -420,7 +420,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner()
             .On("check", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("cite", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -452,7 +452,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner()
             .On("work", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("agent", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"agent": "a1"}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -490,7 +490,7 @@ public sealed class FlowHandlerTests
             .On("worker", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"agent": "a1"}""")))
             .On("check", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var first = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -540,7 +540,7 @@ public sealed class FlowHandlerTests
             """);
         var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -564,7 +564,7 @@ public sealed class FlowHandlerTests
         Assert.DoesNotContain(coordinator.Instances.Values, instance => instance.HandledBy is not null);
         Assert.Equal(["build", "tell", "note", "build+2", "note+2"], runner.Started);
 
-        var failing = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
+        var failing = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
         _ = await failing.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
         var bound = AssertSingle(failing.OpenQuestions, question => question.Kind == "visitBound");
         Assert.True(failing.TryAnswer(bound.Id, "fail", out _));
@@ -612,7 +612,7 @@ public sealed class FlowHandlerTests
                 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed", output: Output("""{"ok": false}"""))
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": true}""")))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"skip": true}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -645,7 +645,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner().On("verify", run => run.Visit == 1
             ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed")
             : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -674,7 +674,7 @@ public sealed class FlowHandlerTests
             """);
         var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -723,7 +723,7 @@ public sealed class FlowHandlerTests
             .On("verify", run => run.Visit == 1
                 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed")
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(cancel);
         await heldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -779,7 +779,7 @@ public sealed class FlowHandlerTests
             .On("check", run => run.Visit == 1
                 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed")
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -839,7 +839,7 @@ public sealed class FlowHandlerTests
             .On("check", run => run.Visit == 1
                 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed")
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -906,7 +906,7 @@ public sealed class FlowHandlerTests
                 started.TrySetResult();
                 return early.Task;
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(cancel);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -983,7 +983,7 @@ public sealed class FlowHandlerTests
         var harness = new HarnessFactory();
         var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
         using var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
 
         var session = coordinator.RunAsync(cancel);
         await verifying.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1070,7 +1070,7 @@ public sealed class FlowHandlerTests
 
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             var session = coordinator.RunAsync(cancel);
             await verifying.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
             await coordinator.SettledAsync(cancel);
@@ -1096,7 +1096,7 @@ public sealed class FlowHandlerTests
 
         using (var again = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: again, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: again, resume: taken);
 
             Assert.True(resumed.TryAnswer(Assert.Single(resumed.OpenQuestions).Id, "ship", out _));
 
@@ -1160,7 +1160,7 @@ public sealed class FlowHandlerTests
                 heldStarted.TrySetResult();
                 return held.Task;
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(cancel);
         await heldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1204,7 +1204,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner().On("check", run => run.Visit == 1
             ? FlowStepResult.Ended(passed: true, HarnessExit.Success)
             : FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -1305,7 +1305,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner()
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
         const int more = 120;
 
         // The run asks at the handler's bound once for each of the target's failures past it, and each more grants one
@@ -1365,7 +1365,7 @@ public sealed class FlowHandlerTests
             .On("test", (int asked) => asked <= 10
                 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
         var cancel = TestContext.Current.CancellationToken;
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1408,7 +1408,7 @@ public sealed class FlowHandlerTests
             passed: true,
             HarnessExit.Success,
             output: Output("""{"passed": false, "blocking": false}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -1448,7 +1448,7 @@ public sealed class FlowHandlerTests
             passed: true,
             HarnessExit.Success,
             output: Output("""{"passed": false, "blocking": false, "left": "one function and one test"}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1484,7 +1484,7 @@ public sealed class FlowHandlerTests
             passed: true,
             HarnessExit.Success,
             output: Output("""{"passed": false, "blocking": true}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1667,7 +1667,7 @@ public sealed class FlowHandlerRecordsTests
 
         using (records)
         {
-            _ = await new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
             Assert.True(crashing.Ended);
         }
 
@@ -1680,7 +1680,7 @@ public sealed class FlowHandlerRecordsTests
 
         using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
             var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -1721,7 +1721,7 @@ public sealed class FlowHandlerRecordsTests
 
         using (records)
         {
-            _ = await new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
         }
 
         // The records as a visit made in two writes, cut between them, leaves them: not started, in its own record and
@@ -1738,7 +1738,7 @@ public sealed class FlowHandlerRecordsTests
 
         using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
             var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -1779,7 +1779,7 @@ public sealed class FlowHandlerRecordsTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
             _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
@@ -1834,7 +1834,7 @@ public sealed class FlowHandlerRecordsTests
         using (records)
         {
             var watched = new Watched(records, snapshot => snapshot.Redirects is { Count: > 0 });
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             // The group is in flight when the handler ends done and names it: the redirect is owed, and nothing it
@@ -1892,7 +1892,7 @@ public sealed class FlowHandlerRecordsTests
         using (records)
         {
             var watched = new Watched(records, snapshot => snapshot.Redirects is { Count: > 0 });
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             // The redirect is owed once the handler has ended done and named the group in flight.
@@ -1909,7 +1909,7 @@ public sealed class FlowHandlerRecordsTests
 
         using (var again = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), clock, records: again, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, records: again, resume: taken);
             var done = await resumed.RunAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, done.Status);
@@ -1954,7 +1954,7 @@ public sealed class FlowHandlerRecordsTests
         using (records)
         {
             var watched = new Watched(records, snapshot => snapshot.Redirects is { Count: > 0 });
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             // The redirect waits for slow, a member of its set in flight; the hard stop stops slow and makes nothing.
@@ -1972,7 +1972,7 @@ public sealed class FlowHandlerRecordsTests
 
         using (var records2 = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, again, new RunnerFacts(), clock, records: records2, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: records2, resume: taken);
             var done = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, done.Status);

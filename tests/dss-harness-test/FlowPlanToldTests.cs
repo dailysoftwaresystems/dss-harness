@@ -627,7 +627,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -720,7 +720,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // To the watcher's own question, which the run pauses on: the planning scope has begun, and the amendment
             // is taken while the watcher waits on it.
@@ -796,7 +796,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -872,7 +872,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -942,7 +942,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The first round runs and ends, the loop's until reads false at its bound of one, and the run pauses on
             // the question its bound asks: the round has ended, and the amendment is taken there.
@@ -1043,7 +1043,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The first round runs and ends, and the iteration's review - its deciding step - asks: the amendment is
             // taken there, and planned whole while the review waits, its piece owed to the loop's next iteration.
@@ -1117,7 +1117,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, AddingAThirdItem(), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, AddingAThirdItem(), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The round runs, its review ends the loop where it decides, and the audit after the loop asks: the
             // amendment is taken there.
@@ -1163,7 +1163,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, AddingAThirdItem(), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, AddingAThirdItem(), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The first round's review goes on with its until false, the bound's question is accepted, and the loop ends
             // leaving what that review said; the audit after it asks, and the amendment is taken there.
@@ -1211,7 +1211,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, AddingAThirdItem(), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, AddingAThirdItem(), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The first round runs, its review ends at the loop's bound of one, and the loop asks there: the amendment
             // is taken with that question open.
@@ -1301,7 +1301,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // To the item's probe, which asks before the three alternatives: answering it lets the carrier of the
             // added kind start, and the amendment is taken while the run pauses on the probe.
@@ -1396,7 +1396,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The round runs and the loop ends done at its first iteration; the audit after it asks, and the amendment is
             // taken there.
@@ -1463,7 +1463,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The first iteration's round ends, and its review asks: the amendment is taken there, with the loop at the
             // first of its three iterations.
@@ -1506,7 +1506,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The round runs and ends, and the audit after it asks: the amendment is taken there, the round ended and no
             // loop around it.
@@ -1603,7 +1603,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -1656,7 +1656,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The amendment is taken while the round's item is under way; the item's failure wakes the run, which
             // raises the planning step, and the step stands in flight while the round ends failed, its failure passed
@@ -1728,7 +1728,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, AddingThree([]), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, AddingThree([]), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -1749,7 +1749,7 @@ public sealed class FlowPlanToldTests
 
         using (again)
         {
-            var resumed = new FlowCoordinator(definition, AddingThree(checks), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, AddingThree(checks), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             var end = await DriveAsync(resumed);
             Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
@@ -1784,7 +1784,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            await UntilTheUpdateItRaisedAsync(new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout)), crashing);
+            await UntilTheUpdateItRaisedAsync(TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout)), crashing);
         }
 
         // On disk: the update done, and the check that raised it still paused on it.
@@ -1794,7 +1794,7 @@ public sealed class FlowPlanToldTests
 
         using (stopped)
         {
-            var resumed = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: stopped, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: stopped, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             resumed.RequestStop();
             _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
@@ -1824,7 +1824,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            await UntilTheUpdateItRaisedAsync(new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout)), crashing);
+            await UntilTheUpdateItRaisedAsync(TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout)), crashing);
         }
 
         // On disk: the check ended for the update it raised, and nothing drawn in its place.
@@ -1908,7 +1908,7 @@ public sealed class FlowPlanToldTests
                 checks.Clear();
             }
 
-            var resumed = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
             var end = await DriveAsync(resumed);
 
             Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
@@ -1955,7 +1955,7 @@ public sealed class FlowPlanToldTests
             });
 
         using var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
         _ = await coordinator.RunAsync(Token);
         Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -2037,7 +2037,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -2079,7 +2079,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, AddingThree(checks), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, AddingThree(checks), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -2120,7 +2120,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, AddingThree([]), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, AddingThree([]), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -2140,7 +2140,7 @@ public sealed class FlowPlanToldTests
 
         using (again)
         {
-            var resumed = new FlowCoordinator(definition, AddingThree([]), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, AddingThree([]), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             var end = await DriveAsync(resumed);
             Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
@@ -2178,7 +2178,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The round runs and ends, and the audit after it asks: two amendments are given there, the second queued
             // behind the first.
@@ -2234,7 +2234,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -2324,7 +2324,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, AddingThenWithdrawing(checks), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout), runName: "r1");
+            var coordinator = TestAdvice.Coordinator(definition, AddingThenWithdrawing(checks), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout), runName: "r1");
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -2385,7 +2385,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, AddingThenWithdrawing([], plan: Concluded(Item("one"))), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, AddingThenWithdrawing([], plan: Concluded(Item("one"))), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -2453,7 +2453,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, AddingThenWithdrawing([]), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, AddingThenWithdrawing([]), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -2475,7 +2475,7 @@ public sealed class FlowPlanToldTests
 
         using (again)
         {
-            var resumed = new FlowCoordinator(definition, AddingThenWithdrawing(checks), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, AddingThenWithdrawing(checks), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             var end = await DriveAsync(resumed);
             Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
@@ -2561,7 +2561,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, OwingThenChanging(checks, changed), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, OwingThenChanging(checks, changed), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await UntilTheSecondRoundsAuditAsync(coordinator);
             Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver(changed ? "do the registry differently" : "drop the registry after all", "amend-orchestrator-request", out var problem), problem ?? "taken");
@@ -2617,7 +2617,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, OwingThenChanging([], changed: false), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, OwingThenChanging([], changed: false), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await UntilTheSecondRoundsAuditAsync(coordinator);
             Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("drop the registry after all", "amend-orchestrator-request", out var problem), problem ?? "taken");
@@ -2634,7 +2634,7 @@ public sealed class FlowPlanToldTests
 
         using (again)
         {
-            var resumed = new FlowCoordinator(definition, OwingThenChanging(checks, changed: false), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, OwingThenChanging(checks, changed: false), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             var end = await DriveAsync(resumed);
             Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
@@ -2708,7 +2708,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, FindingQWanting(checks, [], new JsonArray(Piece("removed", Item("q"), "the item is not built: the file it reuses is gone"))), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, FindingQWanting(checks, [], new JsonArray(Piece("removed", Item("q"), "the item is not built: the file it reuses is gone"))), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -2764,7 +2764,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, FindingQWanting([], [], scope), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, FindingQWanting([], [], scope), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -2790,7 +2790,7 @@ public sealed class FlowPlanToldTests
 
         using (again)
         {
-            var resumed = new FlowCoordinator(definition, FindingQWanting(checks, [], scope), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, FindingQWanting(checks, [], scope), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             var end = await DriveAsync(resumed);
             Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
@@ -2823,7 +2823,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, FindingQWanting([], opening, []), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, FindingQWanting([], opening, []), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -2879,7 +2879,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The amendment is taken while the round's item is under way, and its plan stands once the round has ended:
             // its work is owed to the loop's next iteration, at the loop's bound, with no iteration left to add.
@@ -2952,8 +2952,8 @@ public sealed class FlowPlanToldTests
     /// <summary>
     /// Work an update owes a loop at its own bound, where the run has no iteration left to add, is left to the question
     /// its bound asks, and the loop reaches that question whatever its until says: a true until ends no loop that owes
-    /// work, the update's entry says the bound was asked only once the question is written, and the iteration an answer
-    /// of more gives carries the work.
+    /// work, the update's entry says the bound was asked only once the question is written, the question is recommended
+    /// on before a person is left with it, and the iteration an answer of more gives carries the work.
     /// </summary>
     [Fact]
     public async Task WorkOwedToALoopAtItsBound_WhoseUntilReadsTrue_IsAskedFor_AndCarriedByTheIterationAnAnswerGives()
@@ -2975,7 +2975,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -2991,9 +2991,11 @@ public sealed class FlowPlanToldTests
                 Item("three"))));
             _ = await session.WaitAsync(Bound, Token);
 
-            // The loop asks at its bound, its true until notwithstanding, and only now does the entry say so.
+            // The loop asks at its bound, its true until notwithstanding, and only now does the entry say so; the
+            // question was put to the advisor before the session left it with a person, as every question is.
             var bound = coordinator.OpenQuestions.Single();
             Assert.Equal(("loopBound", "rounds"), (bound.Kind, UpdatesOf(harness, layout).Updates.Single().AskedAtBound));
+            Assert.Equal(new FlowRecommendation("notObtained", Why: $"no recommendation: one was sought and not obtained ({TestAdvice.NotObtained})"), bound.Recommendation);
 
             // More is answered, and the iteration it gives carries the work.
             Assert.True(coordinator.TryAnswer(bound.Id, "more", null, out _));
@@ -3094,7 +3096,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout), runName: "r1");
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout), runName: "r1");
 
             // The first amendment adds a round, whose check runs on its work and finds a problem: it raises a plan
             // update, and the planner settles it - held here, that a change has its window.
@@ -3265,7 +3267,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -3317,7 +3319,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The round runs, the loop's bound is accepted with its until false, and it ends leaving what its leftover
             // reads; the audit after it asks, and the amendment is taken there.
@@ -3379,7 +3381,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The loop's one iteration ends at its bound; both updates are handed while it asks, the second queued.
             _ = await UntilAskedAsync(coordinator, "'rounds' has run");
@@ -3448,7 +3450,7 @@ public sealed class FlowPlanToldTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // To the first item's probe: the second waits for the run's one open agent.
             _ = await coordinator.RunAsync(Token);

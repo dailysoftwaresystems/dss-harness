@@ -888,14 +888,29 @@ public sealed class WorkflowFileParserTests
     }
 
     /// <summary>
-    /// V43: the kinds an advisor recommends for are given not empty - an advisor that names none recommends for every
-    /// kind, which kinds given empty would never be read as.
+    /// The advisor's retired <c>kinds</c> is refused, given empty or naming kinds, saying what replaced it: every kind of
+    /// question the engine raises is recommended before a person is asked it, so no advisor is asked about some alone.
     /// </summary>
     [Fact]
-    public void AnAdvisorsKindsGivenEmpty_AreRefusedRatherThanReadAsEveryKind()
+    public void AnAdvisorsKinds_AreRefusedSayingEveryKindIsRecommendedNow()
     {
+        const string Why = "'kinds' is not a key of advisor; every kind of question the engine raises is recommended by the advisor before a person is asked it, so an advisor names no kinds.";
+
         Assert.Equal(
-            ["line 5, column 10: 'advisor.kinds' is given empty, which is never read as every kind: name the kinds it recommends for, or leave the key out for every kind."],
+            [$"line 5, column 3: {Why}"],
+            Problems(
+                """
+                name: default
+                advisor:
+                  agent: advisor
+                  prompt: prompts/recommend.md
+                  kinds: [loopBound, failure]
+                steps:
+                  - name: orient
+                    type: orient
+                """));
+        Assert.Equal(
+            [$"line 5, column 3: {Why}"],
             Problems(
                 """
                 name: default

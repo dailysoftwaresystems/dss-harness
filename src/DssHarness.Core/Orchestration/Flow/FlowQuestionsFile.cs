@@ -29,7 +29,11 @@ public sealed record FlowQuestionOption(string Answer, string Does, bool Text = 
 /// <param name="State">
 /// <c>given</c>; <c>sought</c> while the advisor runs; <c>deferred</c> where a pause or a stop came first, sought again at
 /// the resume; <c>cancelled</c> where an answer came while the advisor ran; <c>notObtained</c> where it was sought and none
-/// was had; or <c>notSought</c>.
+/// was had; or <c>notSought</c> where none has been sought yet - a question its configuration or the run's input answered
+/// at once, which no person was asked. A <c>notSought</c> an earlier build wrote with why none was sought for a question
+/// still open - its orchestrator named no advisor, the advisor's kinds left the question's kind out, the budget's own -
+/// is read as it stands, and the recommendation is sought at the next session that can (every question is recommended
+/// before a person is asked it).
 /// </param>
 /// <param name="Answer">The answer recommended, where one was.</param>
 /// <param name="Text">The text recommended with it, where the answer takes one.</param>
@@ -48,7 +52,7 @@ public sealed record FlowRecommendation(
     string? Model = null,
     string? Advice = null)
 {
-    /// <summary>The recommendation a question carries where none was sought: said plainly, and nothing is put in a person's place.</summary>
+    /// <summary>The recommendation a question carries until one is sought - and for good where it was answered at once, by its configuration or the run's input, asking no person.</summary>
     public static FlowRecommendation NotSought { get; } = new("notSought", Why: "no recommendation was sought");
 }
 

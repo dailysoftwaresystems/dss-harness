@@ -378,7 +378,7 @@ public sealed class FlowRecordsTests
         var leaving = await Assert.ThrowsAsync<IOException>(async () =>
         {
             using var records = new FlowRunRecords(files, new OrchestrationStore(files, harness.Output), layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock, said.Add);
-            await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), clock, records: records).RunAsync(TestContext.Current.CancellationToken);
+            await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, records: records).RunAsync(TestContext.Current.CancellationToken);
         });
 
         Assert.Equal("flush 1 failed", leaving.Message);
@@ -654,7 +654,7 @@ public sealed class FlowRecordsTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
 
@@ -723,7 +723,7 @@ public sealed class FlowRecordsTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("make").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
             await runner.StartedAsync("work").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
@@ -759,7 +759,7 @@ public sealed class FlowRecordsTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             runner.HandsOff("think", "what the agent said it was doing");
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("think");
@@ -802,7 +802,7 @@ public sealed class FlowRecordsTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
 
@@ -947,7 +947,7 @@ public sealed class FlowRecordsTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, records: records);
             await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
 

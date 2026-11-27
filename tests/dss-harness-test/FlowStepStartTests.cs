@@ -111,7 +111,7 @@ public sealed class FlowStepStartTests
     }
 
     private static FlowCoordinator Coordinator(WorkflowDefinition definition, Runner runner, IFlowRecords? records = null, IReadOnlyDictionary<string, string>? models = null, IReadOnlyDictionary<string, string>? inputs = null, FlowRunPlace? place = null, HarnessConfig? config = null, Func<string?, string, string>? workflowFile = null)
-        => new(definition, runner, new ConfiguredRunnerFacts(config ?? new HarnessConfig()), new JumpingClock(), inputs, records, runName: "r1", place: place, agentModels: models, workflowFile: workflowFile);
+        => TestAdvice.Coordinator(definition, runner, new ConfiguredRunnerFacts(config ?? new HarnessConfig()), new JumpingClock(), inputs, records, runName: "r1", place: place, agentModels: models, workflowFile: workflowFile);
 
     /// <summary>
     /// A create-agent step is named a1 and given the model resolved for it, both written to its record before its runner
@@ -584,7 +584,7 @@ public sealed class FlowStepStartTests
             .On("broken", _ => Pushed(FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "rejected", output: JsonNode.Parse("""{"pushed": false, "sha": "999"}"""))))
             .On("unsure", _ => Pushed(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"pushed": false, "sha": null}"""))));
 
-        _ = await new FlowCoordinator(definition, runner, new ConfiguredRunnerFacts(new HarnessConfig()), clock, null, null, runName: "r1").RunAsync(Token);
+        _ = await TestAdvice.Coordinator(definition, runner, new ConfiguredRunnerFacts(new HarnessConfig()), clock, null, null, runName: "r1").RunAsync(Token);
 
         Assert.Equal("222", runner.Runs.Single(run => run.Instance == "wait").Read!["commit"].AsTemplateText());
 
@@ -608,7 +608,7 @@ public sealed class FlowStepStartTests
                 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "rejected", output: JsonNode.Parse("""{"pushed": false, "sha": "lost"}"""))
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"pushed": true, "sha": "early"}"""))))
             .On("late", _ => PushedLater(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"pushed": true, "sha": "late"}"""))));
-        var coordinator = new FlowCoordinator(again, pushes, new ConfiguredRunnerFacts(new HarnessConfig()), later, null, null, runName: "r1");
+        var coordinator = TestAdvice.Coordinator(again, pushes, new ConfiguredRunnerFacts(new HarnessConfig()), later, null, null, runName: "r1");
 
         _ = await coordinator.RunAsync(Token);
         Assert.True(coordinator.TryAnswer(Assert.Single(coordinator.OpenQuestions).Id, "retry", out _));

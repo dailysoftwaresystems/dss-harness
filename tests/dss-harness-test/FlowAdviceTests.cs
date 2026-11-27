@@ -6,9 +6,9 @@ using DssHarness.Core.Results;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The run's advisor: a question the engine raises is recommended on before a person is left with it - never in the
-/// person's way - and where none was sought the question says so plainly; an answer, a pause and a stop each end an
-/// advice still running, what it spent counted all the same. Over a fake advisor, in memory.
+/// The run's advisor: every question the engine raises is recommended on before a person is asked it - never in the
+/// person's way - the budget's own among them; an answer, a pause and a stop each end an advice still running, what it
+/// spent counted all the same. Over a fake advisor, in memory.
 /// </summary>
 public sealed class FlowAdviceTests
 {
@@ -138,13 +138,13 @@ public sealed class FlowAdviceTests
         }
     }
 
-    private static WorkflowDefinition Advised(string? kinds = null, string? budget = null)
+    private static WorkflowDefinition Advised(string? budget = null)
         => Parse($"""
             name: flow
             advisor:
               agent: advisor
               prompt: prompts/recommend.md
-              tier: best{(kinds is null ? string.Empty : $"\n  kinds: [{kinds}]")}{(budget is null ? string.Empty : $"\nbudget:\n  {budget}")}
+              tier: best{(budget is null ? string.Empty : $"\nbudget:\n  {budget}")}
             steps:
               - name: think
                 type: reason
@@ -168,7 +168,7 @@ public sealed class FlowAdviceTests
     {
         var gate = new TaskCompletionSource<FlowAdvice>(TaskCreationOptions.RunContinuationsAsynchronously);
         var advisor = new Advisor(_ => gate.Task);
-        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
 
         var session = coordinator.RunAsync(Token);
 
@@ -228,7 +228,7 @@ public sealed class FlowAdviceTests
         var records = new Records();
 
         // A clock that never passes the bound on the advice's runner on its own: the runner is torn down within it.
-        var coordinator = new FlowCoordinator(Advised(), runner, new RunnerFacts(), new TimerClock(), records: records, advisor: advisor);
+        var coordinator = TestAdvice.Coordinator(Advised(), runner, new RunnerFacts(), new TimerClock(), records: records, advisor: advisor);
 
         var session = coordinator.RunAsync(Token);
         await TestEventuallyAsync(() => coordinator.OpenQuestions.Count == 1 && advisor.Asked.Count == 1);
@@ -278,7 +278,7 @@ public sealed class FlowAdviceTests
         });
         var records = new Records();
         var clock = new TimerClock();
-        var coordinator = new FlowCoordinator(Advised(), runner, new RunnerFacts(), clock, records: records, advisor: advisor);
+        var coordinator = TestAdvice.Coordinator(Advised(), runner, new RunnerFacts(), clock, records: records, advisor: advisor);
 
         var session = coordinator.RunAsync(Token);
         await TestEventuallyAsync(() => coordinator.OpenQuestions.Count == 1 && advisor.Asked.Count == 1);
@@ -347,7 +347,7 @@ public sealed class FlowAdviceTests
                 moreStarted.TrySetResult();
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success);
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), advisor: advisor);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), advisor: advisor);
 
         var session = coordinator.RunAsync(Token);
         await TestEventuallyAsync(() => advisor.Asked.Count == 1);
@@ -378,7 +378,7 @@ public sealed class FlowAdviceTests
         var held = new HeldAdvisor();
         held.TornDown.SetResult();
         var advisor = new Advisor((_, token) => held.AdviseAsync(token));
-        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
 
         var session = coordinator.RunAsync(Token);
         await TestEventuallyAsync(() => advisor.Asked.Count == 1);
@@ -401,7 +401,7 @@ public sealed class FlowAdviceTests
     {
         var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice("retry", "it went wrong", null, Usd: 0.25, Tokens: 4800)));
         var records = new Records();
-        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
 
         var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
@@ -420,7 +420,7 @@ public sealed class FlowAdviceTests
         const string Why = "no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)";
         var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice("retry", "it went wrong", null, Usd: 0.25, Tokens: 4800, Uncounted: Why)));
         var records = new Records();
-        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), records: records, advisor: advisor);
 
         var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
@@ -437,8 +437,8 @@ public sealed class FlowAdviceTests
     {
         var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice("retry", "it went wrong", null, Usd: 1.0)));
 
-        _ = await new FlowCoordinator(Advised(budget: "usd: 10"), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor).RunAsync(Token).WaitAsync(Bound, Token);
-        _ = await new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor).RunAsync(Token).WaitAsync(Bound, Token);
+        _ = await TestAdvice.Coordinator(Advised(budget: "usd: 10"), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor).RunAsync(Token).WaitAsync(Bound, Token);
+        _ = await TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor).RunAsync(Token).WaitAsync(Bound, Token);
 
         Assert.Equal(new double?[] { 9.0, null }, advisor.Asked.Select(call => call.BudgetLeftUsd));
     }
@@ -454,7 +454,7 @@ public sealed class FlowAdviceTests
         held.TornDown.SetResult();
         var calls = 0;
         var advisor = new Advisor((_, token) => Interlocked.Increment(ref calls) == 1 ? held.AdviseAsync(token) : Task.FromResult(new FlowAdvice("more", "now", null)));
-        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
 
         var session = coordinator.RunAsync(Token);
         await TestEventuallyAsync(() => advisor.Asked.Count == 1);
@@ -486,7 +486,7 @@ public sealed class FlowAdviceTests
         var held = new HeldAdvisor();
         held.TornDown.SetResult();
         var advisor = new Advisor((_, token) => held.AdviseAsync(token));
-        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
 
         var session = coordinator.RunAsync(Token);
         await TestEventuallyAsync(() => advisor.Asked.Count == 1);
@@ -512,7 +512,7 @@ public sealed class FlowAdviceTests
         var advisor = new Advisor((_, token) => held.AdviseAsync(token));
 
         // A clock whose waits pass in real time: the session's wait for the advisor's runner is bounded, not skipped.
-        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new ManualClock(), advisor: advisor);
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new ManualClock(), advisor: advisor);
         using var ending = CancellationTokenSource.CreateLinkedTokenSource(Token);
 
         var session = coordinator.RunAsync(ending.Token);
@@ -538,7 +538,7 @@ public sealed class FlowAdviceTests
     public async Task WhereTheAdvisorObtainsNothing_TheQuestionSaysSo()
     {
         var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice(null, null, null, NotObtained: "agent 'advisor' reached its 10 minutes")));
-        var coordinator = new FlowCoordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
+        var coordinator = TestAdvice.Coordinator(Advised(), AtItsTurnsFirst(), new RunnerFacts(), new JumpingClock(), advisor: advisor);
 
         var end = await coordinator.RunAsync(Token);
 
@@ -569,7 +569,7 @@ public sealed class FlowAdviceTests
                 prompt: work.md
                 outputs: work.json
             """);
-        var coordinator = new FlowCoordinator(
+        var coordinator = TestAdvice.Coordinator(
             definition,
             AtItsTurnsFirst(),
             new RunnerFacts(),
@@ -589,13 +589,15 @@ public sealed class FlowAdviceTests
     }
 
     /// <summary>
-    /// Where the orchestrator names no advisor the question says so plainly, naming it; where the advisor's kinds
-    /// leave the question's kind out, that is said too; nothing is put in a person's place.
+    /// A question is never put to a person unrecommended: a run whose workflow names no advisor, or that was started with no
+    /// runner for it, fails at its first question as the defect it is - a run's workflow is refused without an advisor, and
+    /// every session is given its runner - rather than asking it with no recommendation.
     /// </summary>
     [Fact]
-    public async Task WhereNoAdvisorIsNamed_TheQuestionSaysSoPlainly()
+    public async Task AQuestionWithNoAdvisorToRecommendIt_IsNeverAskedUnrecommended()
     {
-        var definition = Parse("""
+        var runner = new FakeRunner().On("think", FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true });
+        var bare = Parse("""
             name: flow
             steps:
               - name: think
@@ -603,30 +605,78 @@ public sealed class FlowAdviceTests
                 prompt: work.md
                 outputs: work.json
             """);
-        var runner = new FakeRunner().On("think", FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
-
-        var end = await coordinator.RunAsync(Token);
-
-        Assert.Equal(FlowRunStatus.Paused, end.Status);
-        Assert.Equal(
-            "no recommendation was sought: orchestrator 'flow' names no advisor",
-            coordinator.OpenQuestions.Single().Recommendation.Why);
-
-        // A kind the advisor's kinds leave out is said as plainly: no advisor runs for it.
         var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice("more", "never read", null)));
-        coordinator = new FlowCoordinator(Advised(kinds: "loopBound"), runner, new RunnerFacts(), new JumpingClock(), advisor: advisor);
 
-        end = await coordinator.RunAsync(Token);
+        var unnamed = await Assert.ThrowsAsync<InvalidOperationException>(() => new FlowCoordinator(bare, runner, new RunnerFacts(), new JumpingClock(), advisor: advisor).RunAsync(Token).WaitAsync(Bound, Token));
+        var unstarted = await Assert.ThrowsAsync<InvalidOperationException>(() => new FlowCoordinator(Advised(), runner, new RunnerFacts(), new JumpingClock()).RunAsync(Token).WaitAsync(Bound, Token));
 
-        Assert.Equal(FlowRunStatus.Paused, end.Status);
-        Assert.Empty(advisor.Asked);
         Assert.Equal(
-            "no recommendation was sought: the advisor's kinds leave out 'turnLimit'",
-            coordinator.OpenQuestions.Single().Recommendation.Why);
+            "question q1 (turnLimit) is to be recommended before a person is asked it, and this run is of workflow 'flow', which names no advisor: a run's workflow is refused without one, and every session is given its runner",
+            unnamed.Message);
+        Assert.Equal(
+            "question q1 (turnLimit) is to be recommended before a person is asked it, and this run was started with no advisor to run: a run's workflow is refused without one, and every session is given its runner",
+            unstarted.Message);
+        Assert.Empty(advisor.Asked);
     }
 
-    /// <summary>An agent's own questions are never advised - the agent recommends within each of them - nor is the budget's own question.</summary>
+    /// <summary>
+    /// The budget's own question is recommended as every question is, before a person is asked it: once the budget's
+    /// pause is complete the advisor is asked of the run as a whole - the run's own name, no agent's tree - held to no
+    /// share of the budget it asks about; what it spends is the run's own measure's, counted in the run's spend and kept
+    /// in its file's spent; and the session ends paused on the question, recommended.
+    /// </summary>
+    [Fact]
+    public async Task TheBudgetsOwnQuestion_IsRecommended_OnceItsPauseIsComplete()
+    {
+        var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice("abort", "what is left is small", null, Model: "claude-opus-5-5", Directory: "steps/run/advice/1", Usd: 0.5, Tokens: 700)));
+        var runner = new FakeRunner().On("think", run =>
+        {
+            run.Events.Used(new FlowTurnSpend(new DssHarness.Core.Agents.AgentUsage(1_000, 0, 0, 0, 0, 0), 45.10));
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var records = new Records();
+        var coordinator = new FlowCoordinator(Advised(budget: "usd: 50"), runner, new RunnerFacts(), new JumpingClock(), records: records, runName: "r7", advisor: advisor);
+
+        var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+        var question = coordinator.OpenQuestions.Single();
+        var call = advisor.Asked.Single();
+
+        Assert.Equal((FlowRunStatus.Paused, "budget"), (end.Status, end.Pause!.Cause));
+        Assert.Equal(("runBudget", FlowQuestions.RunsOwn, (string?)null, (double?)null), (call.Kind, call.Instance, call.Agent, call.BudgetLeftUsd));
+        Assert.Equal("run 'r7' has spent 45.10 of 50.00 USD (its reserve of 10% was reached)", call.Problem);
+        Assert.Equal(["more", "abort"], call.Answers.Select(option => option.Answer));
+        Assert.Equal(
+            new FlowRecommendation("given", "abort", null, "what is left is small", "advisor", "advisor", "claude-opus-5-5", "steps/run/advice/1"),
+            question.Recommendation);
+        Assert.Equal(
+            (45.6, 1_700L, new FlowStepAdvice("claude-opus-5-5", 700, 0.5)),
+            (Math.Round(records.Last!.Spent.Usd, 6), records.Last.Spent.Tokens, records.Last.Spent.Advice));
+    }
+
+    /// <summary>
+    /// An advisor that obtains nothing for the budget's own question - it failed past its retries - leaves the question
+    /// saying why, and the person is asked it all the same: the recommendation step ran.
+    /// </summary>
+    [Fact]
+    public async Task TheBudgetsOwnQuestion_WhoseAdvisorObtainsNothing_IsAskedSayingWhy()
+    {
+        var advisor = new Advisor(_ => Task.FromResult(new FlowAdvice(null, null, null, NotObtained: "agent 'advisor' failed past its 3 retries")));
+        var runner = new FakeRunner().On("think", run =>
+        {
+            run.Events.Used(new FlowTurnSpend(new DssHarness.Core.Agents.AgentUsage(1_000, 0, 0, 0, 0, 0), 45.10));
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var coordinator = new FlowCoordinator(Advised(budget: "usd: 50"), runner, new RunnerFacts(), new JumpingClock(), advisor: advisor);
+
+        var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(
+            ("runBudget", new FlowRecommendation("notObtained", Why: "no recommendation: one was sought and not obtained (agent 'advisor' failed past its 3 retries)")),
+            (coordinator.OpenQuestions.Single().Kind, coordinator.OpenQuestions.Single().Recommendation));
+    }
+
+    /// <summary>An agent's own questions are never advised: the agent recommends within each of them.</summary>
     [Fact]
     public async Task AnAgentsOwnQuestions_AreNeverAdvised()
     {
@@ -649,7 +699,7 @@ public sealed class FlowAdviceTests
             {
                 AgentQuestions = [new DssHarness.Core.Agents.AgentQuestion("which way?", "two ways stand", "the map", "the route", ["left", "right"], "left", "it is shorter")],
             }));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), advisor: advisor);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), advisor: advisor);
 
         var end = await coordinator.RunAsync(Token);
 
@@ -683,7 +733,7 @@ public sealed class FlowAdviceTests
                 question: 'Approve the plan?'
                 options: [approve, revise]
             """);
-        var coordinator = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["preapproved"] = "yes" }, advisor: advisor);
+        var coordinator = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["preapproved"] = "yes" }, advisor: advisor);
 
         var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 

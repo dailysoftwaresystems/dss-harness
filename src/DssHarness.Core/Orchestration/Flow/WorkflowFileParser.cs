@@ -462,21 +462,17 @@ public static class WorkflowFileParser
             return null;
         }
 
-        var keys = CollectKeys(mapping, "advisor", KeyDescription.Names(WorkflowKeys.Advisor), problems, RetiredAgentKey);
+        var keys = CollectKeys(mapping, "advisor", KeyDescription.Names(WorkflowKeys.Advisor), problems, key => RetiredAdvisorKey(key) ?? RetiredAgentKey(key));
         var read = ReadAgentSelection(keys, "advisor", problems);
         var agent = RequireScalarIn(keys, "advisor.agent", problems);
         var prompt = RequireScalarIn(keys, "advisor.prompt", problems);
-        var kinds = StringListIn(keys, "advisor.kinds", problems) ?? [];
-
-        // V43: the kinds an advisor recommends for, read as every kind where the key is left out.
-        RefuseGivenEmpty(keys, "advisor.kinds", "name the kinds it recommends for", "every kind", problems);
 
         if (agent is null || prompt is null)
         {
             return null;
         }
 
-        return new FlowAdvisor(agent, prompt, read.Tier, read.Model, read.Effort, read.Client, kinds)
+        return new FlowAdvisor(agent, prompt, read.Tier, read.Model, read.Effort, read.Client)
         {
             Retries = IntIn(keys, "advisor.retries", problems),
             BackoffSeconds = IntIn(keys, "advisor.backoffSeconds", problems),
@@ -541,14 +537,13 @@ public static class WorkflowFileParser
                     break;
 
                 // Read by the caller, which owns them: the agent each runs, which both require, the
-                // prompts each is asked with, the kinds an advisor is asked about, and how each is tried again.
+                // prompts each is asked with, and how each is tried again.
                 case "retries":
                 case "backoffSeconds":
                 case "agent":
                 case "prompt":
                 case "statusPrompt":
                 case "askPrompt":
-                case "kinds":
                     break;
 
                 default:
@@ -937,6 +932,16 @@ public static class WorkflowFileParser
             "provider" => "a model's code is listed by one provider, which it names",
             _ => null,
         };
+
+    /// <summary>
+    /// The keys the advisor took before what they set went: each is refused naming why, so a reader takes the line out
+    /// knowing what became of it. A frozen definition an earlier release wrote still reads its <c>kinds</c>
+    /// (<see cref="FlowAdvisor.Kinds"/>), never applied.
+    /// </summary>
+    internal static string? RetiredAdvisorKey(string key)
+        => key == "kinds"
+            ? "every kind of question the engine raises is recommended by the advisor before a person is asked it, so an advisor names no kinds"
+            : null;
 
     /// <summary>
     /// Reads one step, at <paramref name="depth"/> levels of nesting: a typed step, or a group

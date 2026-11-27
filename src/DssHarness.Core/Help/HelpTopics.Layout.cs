@@ -94,7 +94,8 @@ public static partial class HelpTopics
             + "ready, its waits by cause whole across sessions, its run time, its pause, and one entry per attempt - "
             + "what served it, the price copied as its cost was counted, the tokens by kind, the dollars, the turns, "
             + "the tools, the compactions, the pages past the first its graph calls asked for - with the advisor's spend beside them; the run's `spent` is the sum of its "
-            + "steps'), and an attempt a crash cut off has its measure completed at the resume from the step's stored "
+            + "steps' and of what the advisor spent on the run's own question, its budget's - kept as `spent.advice`, "
+            + "its records under `steps/run/advice/<n>/`), and an attempt a crash cut off has its measure completed at the resume from the step's stored "
             + "stream"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{HarnessLayout.OrchestratorTempDirectoryName}/<launch>/",
             "ignored; every temporary directory a run's launch and its children keep, one directory a launch (its "

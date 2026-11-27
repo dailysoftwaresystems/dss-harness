@@ -72,7 +72,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records, workflowFileIfThere: ReadBar);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records, workflowFileIfThere: ReadBar);
             _ = coordinator.RunAsync(Token);
 
             var first = coordinator.OpenQuestions.Single();
@@ -126,7 +126,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records, workflowFile: (_, named) => ReadText(named));
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records, workflowFile: (_, named) => ReadText(named));
             _ = coordinator.RunAsync(Token);
 
             var first = coordinator.OpenQuestions.Single();
@@ -153,7 +153,7 @@ public sealed class FlowResumeTests
                 question: '{text.nope}'
                 options: [approve, revise]
             """);
-        var failing = new FlowCoordinator(undeclared, new Runner(), new RunnerFacts(), new JumpingClock(), workflowFile: (_, named) => ReadText(named));
+        var failing = TestAdvice.Coordinator(undeclared, new Runner(), new RunnerFacts(), new JumpingClock(), workflowFile: (_, named) => ReadText(named));
 
         var end = await failing.RunAsync(Token);
 
@@ -196,7 +196,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             _ = coordinator.RunAsync(Token);
             await runner.StartedAsync("rebase", attempt: 2).WaitAsync(Bound, Token);
 
@@ -217,7 +217,7 @@ public sealed class FlowResumeTests
 
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success);
             });
-            var coordinator = new FlowCoordinator(definition, resumed, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, resumed, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
             var rebase = coordinator.Instances["rebase"];
 
@@ -268,7 +268,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var end = await new FlowCoordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
+            var end = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Failed, end.Status);
         }
@@ -287,7 +287,7 @@ public sealed class FlowResumeTests
 
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success);
             });
-            var coordinator = new FlowCoordinator(definition, resumed, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, resumed, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
             var rebase = coordinator.Instances["rebase"];
 
@@ -317,7 +317,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records);
             var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -363,7 +363,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             runner.HandsOff("think", "halfway through the reasoning");
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("think");
@@ -385,7 +385,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: taken, records: again);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: taken, records: again);
             var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -431,7 +431,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("after").WaitAsync(Bound, Token);
             coordinator.RequestPause("command");
@@ -445,7 +445,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
@@ -478,7 +478,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             _ = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("think");
 
@@ -494,7 +494,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: taken, records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: taken, records: again);
             var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -532,7 +532,7 @@ public sealed class FlowResumeTests
         using (records)
         {
             var watched = new Watched(records);
-            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, first, new RunnerFacts(), records: watched);
             var session = coordinator.RunAsync(Token);
             await first.StartedAsync("think").WaitAsync(Bound, Token);
             await watched.SeenAsync(snapshot => snapshot.WaitingOn.Count == 1).WaitAsync(Bound, Token);
@@ -547,7 +547,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, aborted, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, aborted, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             Assert.True(coordinator.TryAnswer("q1", "abort", out var problem), problem);
 
@@ -568,7 +568,7 @@ public sealed class FlowResumeTests
 
         using (last)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: last);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: last);
 
             Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
@@ -602,7 +602,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, first, new RunnerFacts(), records: records);
             var session = coordinator.RunAsync(Token);
             await first.StartedAsync("think").WaitAsync(Bound, Token);
             coordinator.RequestPause("command");
@@ -617,7 +617,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, second, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, second, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var session = coordinator.RunAsync(Token);
             await second.StartedAsync("think", 2).WaitAsync(Bound, Token);
 
@@ -641,7 +641,7 @@ public sealed class FlowResumeTests
 
         using (last)
         {
-            var coordinator = new FlowCoordinator(definition, third, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: last);
+            var coordinator = TestAdvice.Coordinator(definition, third, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: last);
 
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
@@ -667,7 +667,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records);
             await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
 
@@ -718,7 +718,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
+            await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
         }
 
         var file = harness.OrchestrationStore.ReadFlow(layout)!;
@@ -749,7 +749,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
+            await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
         }
 
         // The crash's cut: the step's own record written with its handler owed and an answer it was given, the index not.
@@ -783,7 +783,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
+            await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
         }
 
         var began = harness.OrchestrationStore.ReadFlow(layout)!.StartedAt;
@@ -820,7 +820,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
+            await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
         }
 
         var inAgent = layout.AgentStepRecordFile("a1", "work");
@@ -855,7 +855,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
+            await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
         }
 
         var file = Path.Combine(layout.Directory, missing);
@@ -893,7 +893,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
             coordinator.RequestPause("command");
@@ -935,7 +935,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             _ = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -966,7 +966,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records);
             await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
 
@@ -1006,7 +1006,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), inputs: inputs, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), inputs: inputs, records: records);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("round[0].work");
             runner.Complete("round[0].work");
@@ -1023,7 +1023,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(
+            var coordinator = TestAdvice.Coordinator(
                 definition,
                 next,
                 new RunnerFacts(),
@@ -1072,7 +1072,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, first, new RunnerFacts(), records: records);
             var session = coordinator.RunAsync(Token);
             await first.StartedAsync("think").WaitAsync(Bound, Token);
             await first.StartedAsync("side").WaitAsync(Bound, Token);
@@ -1091,7 +1091,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
             Assert.Equal([2, 2, 1], new[] { "think", "side", "after" }.Select(id => coordinator.Instances[id].Attempt));
@@ -1137,7 +1137,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            Assert.Equal(FlowRunStatus.Paused, (await new FlowCoordinator(definition, first, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(FlowRunStatus.Paused, (await TestAdvice.Coordinator(definition, first, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
 
         var next = new Runner().On("two", run => FlowStepResult.Ended(passed: true, 0, output: new JsonObject { ["agent"] = "a2" }));
@@ -1145,7 +1145,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             Assert.True(coordinator.TryAnswer("q1", "go", out var problem), problem);
 
@@ -1185,7 +1185,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("work").WaitAsync(Bound, Token);
 
@@ -1209,7 +1209,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again, agentModels: new Dictionary<string, string>(StringComparer.Ordinal) { ["work"] = "model-one" });
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again, agentModels: new Dictionary<string, string>(StringComparer.Ordinal) { ["work"] = "model-one" });
 
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
@@ -1239,12 +1239,40 @@ public sealed class FlowResumeTests
         }
     }
 
+    /// <summary>An advisor that recommends at once, keeping every asking.</summary>
+    private sealed class AnsweringAdvisor(string answer) : IFlowAdvisorRunner
+    {
+        /// <summary>Every asking, in order.</summary>
+        public List<FlowAdvisorCall> Asked { get; } = [];
+
+        public Task<FlowAdvice> AdviseAsync(FlowAdvisorCall call, CancellationToken cancellationToken)
+        {
+            lock (Asked)
+            {
+                Asked.Add(call);
+            }
+
+            return Task.FromResult(new FlowAdvice(answer, "the work is nearly done", null));
+        }
+    }
+
     /// <summary>
-    /// A resume refused - nothing can run until the open question is answered - starts no advisor, though the question
-    /// still owes its advice: the advisor is a paid run, and a refused resume writes and starts nothing of its own.
+    /// A resume beside an open question that still owes its recommendation is never refused, though nothing else of the
+    /// run can run: the question - left sought by a crash while the advisor ran, deferred by a pause or a stop, or never
+    /// sought in a questions file an earlier build wrote, which reads as it was written - has its recommendation sought,
+    /// and the session ends paused on it recommended, for a person is never left to answer a question without. A resume
+    /// beside it then owes nothing, and is refused as any is where nothing can run, starting no advisor: the advisor is a
+    /// paid run, and a refused resume writes and starts nothing of its own.
     /// </summary>
-    [Fact]
-    public async Task ARefusedResume_StartsNoAdvisor()
+    /// <param name="state">The recommendation's state as the file holds it at the resume; null for the one the crash left.</param>
+    /// <param name="why">Why, as the file holds it.</param>
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("deferred", "the run paused while the advisor ran: the recommendation is sought when the run is resumed with this question still open")]
+    [InlineData("notSought", "no recommendation was sought: orchestrator 'flow' names no advisor")]
+    [InlineData("notSought", "no recommendation was sought: this run starts no advisor")]
+    [InlineData("notSought", "no recommendation was sought: the advisor's kinds leave out 'turnLimit'")]
+    public async Task AResumeBesideAQuestionOwingItsRecommendation_SeeksIt_AndOneBesideItThenIsRefused(string? state, string? why)
     {
         using var temp = new TempDirectory();
         var definition = Parse("""
@@ -1264,20 +1292,52 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner().On("asker", _ => FlowStepResult.AtLimit("turns", "12 turns")), new RunnerFacts(), records: records, advisor: first);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner().On("asker", _ => FlowStepResult.AtLimit("turns", "12 turns")), new RunnerFacts(), records: records, advisor: first);
             _ = coordinator.RunAsync(Token);
             await first.Begun.Task.WaitAsync(Bound, Token);
 
             // The crash, while the advisor runs: the question is written marked sought.
         }
 
-        var taken = TakeUp(harness, layout, definition);
+        if (state is not null)
+        {
+            // The file as a pause or a stop, or an earlier build, left it.
+            var file = JsonNode.Parse(File.ReadAllText(layout.QuestionsFile))!;
+            file["questions"]![0]!["recommendation"] = new JsonObject { ["state"] = state, ["why"] = why };
+            File.WriteAllText(layout.QuestionsFile, file.ToJsonString());
+        }
+
+        var read = harness.OrchestrationStore.ReadFlowQuestions(layout)!;
+
+        Assert.Null(read.Problem());
+        Assert.Equal(state ?? "sought", read.Open.Single().Recommendation!.State);
+        Assert.Equal(why ?? read.Open.Single().Recommendation!.Why, read.Open.Single().Recommendation!.Why);
+
         var (_, _, again) = Records("r1", temp.Path, definition);
-        var resumed = new HeldAdvisor();
+        var answering = new AnsweringAdvisor("more");
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: taken, records: again, advisor: resumed);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again, advisor: answering);
+
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+        }
+
+        Assert.Equal("turnLimit", answering.Asked.Single().Kind);
+        Assert.Equal(
+            ("given", "more", "the work is nearly done"),
+            (harness.OrchestrationStore.ReadFlowQuestions(layout)!.Open.Single().Recommendation!.State,
+                harness.OrchestrationStore.ReadFlowQuestions(layout)!.Open.Single().Recommendation!.Answer,
+                harness.OrchestrationStore.ReadFlowQuestions(layout)!.Open.Single().Recommendation!.Why));
+
+        var (_, _, last) = Records("r1", temp.Path, definition);
+        var resumed = new HeldAdvisor();
+
+        using (last)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: last, advisor: resumed);
 
             var raised = await Assert.ThrowsAsync<HarnessException>(() => coordinator.RunAsync(Token)).WaitAsync(Bound, Token);
 
@@ -1311,7 +1371,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("asker");
             await runner.StartedAsync("gate");
@@ -1324,7 +1384,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: taken, records: again);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: taken, records: again);
             var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             // Something beside the question could run - the build the crash cut off - so the resume ran it; the
@@ -1348,7 +1408,7 @@ public sealed class FlowResumeTests
 
         using (records2)
         {
-            var coordinator = new FlowCoordinator(besideOnly, new Runner().Asking("asker"), new RunnerFacts(), records: records2);
+            var coordinator = TestAdvice.Coordinator(besideOnly, new Runner().Asking("asker"), new RunnerFacts(), records: records2);
             var session = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Paused, session.Status);
@@ -1362,7 +1422,7 @@ public sealed class FlowResumeTests
 
         using (again2)
         {
-            var coordinator = new FlowCoordinator(besideOnly, new Runner(), new RunnerFacts(), resume: taken2, records: again2);
+            var coordinator = TestAdvice.Coordinator(besideOnly, new Runner(), new RunnerFacts(), resume: taken2, records: again2);
 
             var raised = await Assert.ThrowsAsync<HarnessException>(() => coordinator.RunAsync(TestContext.Current.CancellationToken));
 
@@ -1403,7 +1463,7 @@ public sealed class FlowResumeTests
         using (records)
         {
             var watched = new Watched(records);
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: watched);
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("gate").WaitAsync(Bound, Token);
             await watched.SeenAsync(snapshot => snapshot.WaitingOn.Count == 1).WaitAsync(Bound, Token);
@@ -1421,7 +1481,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             var raised = await Assert.ThrowsAsync<HarnessException>(() => coordinator.RunAsync(Token)).WaitAsync(Bound, Token);
 
@@ -1453,7 +1513,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records);
 
             Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
@@ -1462,7 +1522,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var offered = coordinator.OfferAnswerAsync("q1", "go");
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
@@ -1493,7 +1553,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records);
 
             Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
@@ -1502,7 +1562,7 @@ public sealed class FlowResumeTests
 
         using (refusedResume)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: refusedResume);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: refusedResume);
             var offered = coordinator.OfferAnswerAsync("q9", "go", inbox: "e-refused");
 
             var raised = await Assert.ThrowsAsync<HarnessException>(() => coordinator.RunAsync(Token)).WaitAsync(Bound, Token);
@@ -1526,7 +1586,7 @@ public sealed class FlowResumeTests
                     settledAtItsEvent.Add(refusedOffer!.IsCompleted);
                 }
             });
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: told);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: told);
             refusedOffer = coordinator.OfferAnswerAsync("q9", "go", inbox: "e-refused");
             var taken = coordinator.OfferAnswerAsync("q1", "go", inbox: "e-taken");
 
@@ -1563,7 +1623,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records);
 
             Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
@@ -1579,7 +1639,7 @@ public sealed class FlowResumeTests
                     throw new IOException("the disk is full");
                 }
             });
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: failing);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: failing);
             var refused = coordinator.OfferAnswerAsync("q9", "go", inbox: "e-refused");
             var taken = coordinator.OfferAnswerAsync("q1", "go", inbox: "e-taken");
 
@@ -1624,7 +1684,7 @@ public sealed class FlowResumeTests
                     throw new IOException("the disk is full");
                 }
             });
-            coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: failing);
+            coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: failing);
 
             var failed = await Assert.ThrowsAsync<IOException>(() => coordinator.RunAsync(Token)).WaitAsync(Bound, Token);
 
@@ -1670,7 +1730,7 @@ public sealed class FlowResumeTests
                     refusedAtEachEvent.Add(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Refused);
                 }
             });
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: told);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: told);
 
             Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
             Assert.Equal(FlowHandedOver.Taken, coordinator.AnswerHandedOver("q1", "go", null, out var none, inbox: "e-taken"));
@@ -1690,7 +1750,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var offered = coordinator.OfferAnswerAsync("q1", "go", inbox: "e-taken");
 
             Assert.Equal(FlowHandedOver.RecordedAlready, coordinator.AnswerHandedOver("q1", "stay", null, out var said, inbox: "e-refused"));
@@ -1731,7 +1791,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records);
             var paused = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Paused, paused.Status);
@@ -1742,7 +1802,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: taken, records: again);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: taken, records: again);
 
             Assert.True(coordinator.TryAnswer("q1", "left", out var problem), problem);
 
@@ -1790,7 +1850,7 @@ public sealed class FlowResumeTests
         using (records)
         {
             var watched = new Watched(records);
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: watched);
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("gate").WaitAsync(Bound, Token);
             await watched.SeenAsync(snapshot => snapshot.Steps.Any(step => step.Instance == "think" && step.State == FlowInstanceState.Done)).WaitAsync(Bound, Token);
@@ -1811,7 +1871,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: taken, records: again);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: taken, records: again);
             var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
@@ -1858,7 +1918,7 @@ public sealed class FlowResumeTests
         using (records)
         {
             var watched = new Watched(records);
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: watched);
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("gate").WaitAsync(Bound, Token);
             await watched.SeenAsync(snapshot => snapshot.Spent.Tokens == 1_500 && snapshot.Steps.Any(step => step.Instance == "think" && step.State == FlowInstanceState.Done)).WaitAsync(Bound, Token);
@@ -1883,7 +1943,7 @@ public sealed class FlowResumeTests
                 run.Events.Used(new FlowTurnSpend(new AgentUsage(100, 0, 0, 0, 0, 0), 0.25));
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success);
             });
-            var end = await new FlowCoordinator(definition, resumed, new RunnerFacts(), resume: taken, records: again).RunAsync(Token).WaitAsync(Bound, Token);
+            var end = await TestAdvice.Coordinator(definition, resumed, new RunnerFacts(), resume: taken, records: again).RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
         }
@@ -1901,7 +1961,7 @@ public sealed class FlowResumeTests
 
         using (wholeRecords)
         {
-            Assert.Equal(FlowRunStatus.Done, (await new FlowCoordinator(definition, whole, new RunnerFacts(), records: wholeRecords).RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(FlowRunStatus.Done, (await TestAdvice.Coordinator(definition, whole, new RunnerFacts(), records: wholeRecords).RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
 
         Assert.Equal(["usd", "tokens", "minutes"], JsonNode.Parse(File.ReadAllText(wholeLayout.FlowFile))!["spent"]!.AsObject().Select(member => member.Key));
@@ -1937,7 +1997,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var end = await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
+            var end = await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
         }
@@ -1949,7 +2009,7 @@ public sealed class FlowResumeTests
 
         using (answering)
         {
-            var coordinator = new FlowCoordinator(definition, held, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: answering);
+            var coordinator = TestAdvice.Coordinator(definition, held, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: answering);
 
             Assert.True(coordinator.TryAnswer("q1", "yes", null, out _, FlowService.AnswerCommand));
 
@@ -1964,7 +2024,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
@@ -2016,7 +2076,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             _ = coordinator.RunAsync(Token);
             await runner.StartedAsync("fold", attempt: 2).WaitAsync(Bound, Token);
 
@@ -2027,7 +2087,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner().On("fold", _ => lacking), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner().On("fold", _ => lacking), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
             var fold = coordinator.Instances["fold"];
 
@@ -2074,7 +2134,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             var session = coordinator.RunAsync(Token);
 
             // The failure's ending is read before the build's: what the build frees is drawn while the run stops.
@@ -2095,7 +2155,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -2139,7 +2199,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner().On("broke", run => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "it broke")), new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner().On("broke", run => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "it broke")), new RunnerFacts(), records: records);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Failed, end.Status);
@@ -2151,7 +2211,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -2189,7 +2249,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: watched);
             _ = coordinator.RunAsync(Token);
             await watched.SeenAsync(snapshot => snapshot.Steps.Any(step => step is { Instance: "flaky", Failure: FlowFailure.PassedOver })).WaitAsync(Bound, Token);
 
@@ -2202,7 +2262,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -2236,7 +2296,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var end = await new FlowCoordinator(definition, new Runner().On("fold", _ => lacking), new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
+            var end = await TestAdvice.Coordinator(definition, new Runner().On("fold", _ => lacking), new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
         }
@@ -2246,7 +2306,7 @@ public sealed class FlowResumeTests
 
         using (answering)
         {
-            var coordinator = new FlowCoordinator(definition, held, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: answering);
+            var coordinator = TestAdvice.Coordinator(definition, held, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: answering);
 
             Assert.True(coordinator.TryAnswer("q1", "allow", null, out _, FlowService.AnswerCommand));
             _ = coordinator.RunAsync(Token);
@@ -2260,7 +2320,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
@@ -2291,7 +2351,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var end = await new FlowCoordinator(
+            var end = await TestAdvice.Coordinator(
                 definition,
                 new Runner().On("think", _ => FlowStepResult.AtLimit("turns", "20 turns")),
                 new RunnerFacts(),
@@ -2305,7 +2365,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             Assert.True(coordinator.TryAnswer("q1", "retry", null, out _, FlowService.AnswerCommand));
 
@@ -2344,7 +2404,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            _ = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
+            _ = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
             await runner.StartedAsync("round[0].work").WaitAsync(Bound, Token);
             await runner.StartedAsync("round[1].work").WaitAsync(Bound, Token);
         }
@@ -2354,7 +2414,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
@@ -2388,7 +2448,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             var session = coordinator.RunAsync(Token);
             await runner.StartedAsync("gate").WaitAsync(Bound, Token);
             coordinator.RequestPause("command");
@@ -2404,7 +2464,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -2446,7 +2506,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, failing, new RunnerFacts(), records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, failing, new RunnerFacts(), records: watched);
             var session = coordinator.RunAsync(Token);
             await watched.SeenAsync(snapshot => snapshot.WaitingOn.Contains("q1")).WaitAsync(Bound, Token);
             coordinator.RequestStop();
@@ -2463,7 +2523,7 @@ public sealed class FlowResumeTests
         using (beside)
         {
             var next = new Runner();
-            var end = await new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: beside).RunAsync(Token).WaitAsync(Bound, Token);
+            var end = await TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: beside).RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
             Assert.Equal(["q1"], end.OpenQuestions.Select(question => question.Id));
@@ -2474,7 +2534,7 @@ public sealed class FlowResumeTests
 
         using (answering)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: answering);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: answering);
 
             Assert.True(coordinator.TryAnswer("q1", "accept", null, out _, FlowService.AnswerCommand));
 
@@ -2512,7 +2572,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            _ = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
+            _ = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
             await runner.StartedAsync("fix").WaitAsync(Bound, Token);
 
             // The crash, while the handler runs.
@@ -2523,7 +2583,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -2557,14 +2617,14 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            Assert.Equal(FlowRunStatus.Paused, (await new FlowCoordinator(definition, failing, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(FlowRunStatus.Paused, (await TestAdvice.Coordinator(definition, failing, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
 
         var (_, _, answering) = Records("r1", temp.Path, definition);
 
         using (answering)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: answering);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: answering);
 
             Assert.True(coordinator.TryAnswer("q1", "fail", null, out _, FlowService.AnswerCommand));
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
@@ -2577,7 +2637,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var end = await new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token);
+            var end = await TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
             Assert.Empty(next.Started);
@@ -2615,7 +2675,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            _ = new FlowCoordinator(definition, runner, new RunnerFacts(), records: watched).RunAsync(Token);
+            _ = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: watched).RunAsync(Token);
             await watched.SeenAsync(snapshot => snapshot.Steps.Any(step => step is { Instance: "work.gate", Failure: FlowFailure.TakenByGroup })).WaitAsync(Bound, Token);
 
             // The crash, with the group's other member still running.
@@ -2625,7 +2685,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Failed, end.Status);
@@ -2674,7 +2734,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: watched);
             var session = coordinator.RunAsync(Token);
             await watched.SeenAsync(snapshot => snapshot.Redirects is { Count: 2 }).WaitAsync(Bound, Token);
             coordinator.RequestPause("command");
@@ -2690,7 +2750,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
             Assert.Equal(["round+2.member", "tail+2"], next.Started);
@@ -2731,7 +2791,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            _ = new FlowCoordinator(definition, runner, new RunnerFacts(), records: watched).RunAsync(Token);
+            _ = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: watched).RunAsync(Token);
             await watched.SeenAsync(snapshot => snapshot.Steps.Any(step => step is { Instance: "making", DrawnIn: not null })).WaitAsync(Bound, Token);
             runner.Complete("second");
             await watched.SeenAsync(snapshot => snapshot.Steps.Any(step => step is { Instance: "late", DrawnIn: not null })).WaitAsync(Bound, Token);
@@ -2749,7 +2809,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
             Assert.Equal(["first", "making", "late"], next.Started);
@@ -2799,7 +2859,7 @@ public sealed class FlowResumeTests
                 .On("broke", run => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "it broke"))
                 .On("think", run => FlowStepResult.Ended(passed: true, 0, preExisting: [issue]));
 
-            Assert.Equal(FlowRunStatus.Failed, (await new FlowCoordinator(definition, first, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(FlowRunStatus.Failed, (await TestAdvice.Coordinator(definition, first, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
 
         Assert.Equal([issue], harness.OrchestrationStore.ReadStepRecord(layout.AgentStepRecordFile("a1", "think"))!.IssuesOwed);
@@ -2809,7 +2869,7 @@ public sealed class FlowResumeTests
 
         using (raising)
         {
-            _ = new FlowCoordinator(definition, held, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: raising).RunAsync(Token);
+            _ = TestAdvice.Coordinator(definition, held, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: raising).RunAsync(Token);
             await held.StartedAsync("triage").WaitAsync(Bound, Token);
 
             // The crash, while the owed triage runs.
@@ -2831,7 +2891,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            Assert.Equal(FlowRunStatus.Done, (await new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(FlowRunStatus.Done, (await TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
 
         Assert.Equal([("broke", null), ("triage", "a broken test")], held.Issues);
@@ -2858,7 +2918,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            end = await new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
+            end = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
         }
 
         var flow = harness.OrchestrationStore.ReadFlow(layout)!;
@@ -2867,7 +2927,7 @@ public sealed class FlowResumeTests
         Assert.Equal(nameof(OutcomeCause.LockHeld), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("holding"))!.Cause);
         Assert.Equal(HarnessExit.Incomplete, FlowService.ExitOf(end, flow));
 
-        var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition));
+        var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition));
 
         Assert.Equal(OutcomeCause.LockHeld, coordinator.Instances["holding"].Cause);
     }
@@ -2927,7 +2987,7 @@ public sealed class FlowResumeTests
                 }
             });
 
-            Assert.Equal(FlowRunStatus.Done, (await new FlowCoordinator(definition, runner, new RunnerFacts(), records: watched).RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(FlowRunStatus.Done, (await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: watched).RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
 
         Assert.Equal(["a broken test"], atTheEnd!.Select(issue => issue.Title));
@@ -2941,7 +3001,7 @@ public sealed class FlowResumeTests
 
             using (again)
             {
-                Assert.Equal(FlowRunStatus.Done, (await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token)).Status);
+                Assert.Equal(FlowRunStatus.Done, (await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token)).Status);
             }
 
             var listed = harness.OrchestrationStore.ReadPreExistingIssues(layout)!.Issues;
@@ -3010,7 +3070,7 @@ public sealed class FlowResumeTests
                 }
             });
 
-            _ = await new FlowCoordinator(definition, runner, new RunnerFacts(), records: counted).RunAsync(Token).WaitAsync(Bound, Token);
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: counted).RunAsync(Token).WaitAsync(Bound, Token);
         }
 
         Assert.True(triageDone > 0, "the triage ended done");
@@ -3021,7 +3081,7 @@ public sealed class FlowResumeTests
 
         using (crashedRecords)
         {
-            _ = await new FlowCoordinator(definition, runner, new RunnerFacts(), records: new Cut(crashedRecords, triageDone)).RunAsync(Token).WaitAsync(Bound, Token);
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: new Cut(crashedRecords, triageDone)).RunAsync(Token).WaitAsync(Bound, Token);
         }
 
         Assert.Equal(nameof(FlowInstanceState.Done), crashedHarness.OrchestrationStore.ReadStepRecord(crashedLayout.AgentStepRecordFile("a2", "triage"))!.State);
@@ -3032,7 +3092,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(crashedHarness, crashedLayout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(crashedHarness, crashedLayout, definition), records: again);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
@@ -3083,7 +3143,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            _ = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
+            _ = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
             await runner.StartedAsync("recover+2.mend").WaitAsync(Bound, Token);
 
             // The crash, while the recovery's first visit for the second failure runs.
@@ -3095,7 +3155,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, Scripted(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, Scripted(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             // The second failure of 'second' is the recovery's second visit for it - within its bound - and never a third.
@@ -3137,7 +3197,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            _ = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
+            _ = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
             await runner.StartedAsync("build+11").WaitAsync(Bound, Token);
 
             // The crash, while the eleventh visit runs.
@@ -3148,7 +3208,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
             Assert.Equal(["build+11", "after"], next.Started);
@@ -3184,7 +3244,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            _ = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
+            _ = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
             await runner.StartedAsync("rounds#11.attempt").WaitAsync(Bound, Token);
 
             // The crash, while the eleventh iteration runs.
@@ -3195,7 +3255,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
             Assert.Equal(["rounds#11.attempt"], next.Started);
@@ -3239,7 +3299,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            _ = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
+            _ = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
             await runner.StartedAsync("rounds+2#1.attempt").WaitAsync(Bound, Token);
 
             // The crash, while the loop's second visit runs its first iteration.
@@ -3252,7 +3312,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
             Assert.Equal(["rounds+2#1.attempt", "verify+2"], next.Started);
@@ -3284,7 +3344,7 @@ public sealed class FlowResumeTests
         {
             var first = new Runner().On("gate", run => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "it broke"));
 
-            Assert.Equal(FlowRunStatus.Failed, (await new FlowCoordinator(definition, first, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(FlowRunStatus.Failed, (await TestAdvice.Coordinator(definition, first, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
 
         var next = new Runner();
@@ -3292,7 +3352,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
             Assert.Equal(["work+2.gate", "work+2.side"], next.Started);
@@ -3342,7 +3402,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: new Intercepted(records, (_, _, _, snapshot) => written.Add(snapshot)));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: new Intercepted(records, (_, _, _, snapshot) => written.Add(snapshot)));
             var first = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
             var asked = Assert.Single(coordinator.OpenQuestions);
 
@@ -3402,7 +3462,7 @@ public sealed class FlowResumeTests
             [],
             []);
 
-        var refused = Assert.Throws<InvalidOperationException>(() => new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: state));
+        var refused = Assert.Throws<InvalidOperationException>(() => TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: state));
 
         Assert.Equal("'Finished' is not one of the FlowInstanceState names a run's records hold: NotStarted, Running, Done, Skipped, Failed, Paused, Stopped, NotRun.", refused.Message);
     }
@@ -3432,7 +3492,7 @@ public sealed class FlowResumeTests
             [],
             []);
 
-        var end = await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: state).RunAsync(Token).WaitAsync(Bound, Token);
+        var end = await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: state).RunAsync(Token).WaitAsync(Bound, Token);
 
         Assert.Equal(FlowRunStatus.Failed, end.Status);
         Assert.Equal("failed; the session ended with steps that never ended: after", end.Summary);
@@ -3489,7 +3549,7 @@ public sealed class FlowResumeTests
             {
                 // The run as far as the cut lets its records go: the engine goes on in memory, and nothing it does after
                 // the cut reaches the disk - as nothing does once its process has ended.
-                _ = await new FlowCoordinator(definition, Scripted(), new RunnerFacts(), records: cut).RunAsync(Token).WaitAsync(Bound, Token);
+                _ = await TestAdvice.Coordinator(definition, Scripted(), new RunnerFacts(), records: cut).RunAsync(Token).WaitAsync(Bound, Token);
             }
 
             if (writes == int.MaxValue)
@@ -3501,7 +3561,7 @@ public sealed class FlowResumeTests
 
             using (again)
             {
-                var end = await new FlowCoordinator(definition, Scripted(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token);
+                var end = await TestAdvice.Coordinator(definition, Scripted(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token);
                 return (end, harness.OrchestrationStore.ReadFlow(layout)!.Steps, harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, cut.Made);
             }
         }
@@ -3602,7 +3662,7 @@ public sealed class FlowResumeTests
 
             using (records)
             {
-                end = await new FlowCoordinator(definition, Scripted(first: true), new RunnerFacts(), records: cut).RunAsync(Token).WaitAsync(Bound, Token);
+                end = await TestAdvice.Coordinator(definition, Scripted(first: true), new RunnerFacts(), records: cut).RunAsync(Token).WaitAsync(Bound, Token);
             }
 
             // The run uncut says what its one session started as none, for only a resume's starts are looked at.
@@ -3615,7 +3675,7 @@ public sealed class FlowResumeTests
 
                 using (again)
                 {
-                    end = await new FlowCoordinator(definition, resumed, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token);
+                    end = await TestAdvice.Coordinator(definition, resumed, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token);
                 }
 
                 started = resumed.Started;
@@ -3653,7 +3713,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, granted, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, granted, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: records);
 
             Assert.True(coordinator.TryAnswer("q1", "more", null, out var problem, FlowService.AnswerCommand), problem);
             end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
@@ -3702,7 +3762,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, first, new RunnerFacts(), records: records);
             _ = coordinator.RunAsync(Token);
             await first.StartedAsync("fix#1.commit").WaitAsync(Bound, Token);
 
@@ -3714,7 +3774,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             // The first iteration ran to its end, none of it withdrawn, and the second was made and decided at its own
@@ -3740,7 +3800,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var end = await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
+            var end = await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
         }
@@ -3750,7 +3810,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
             var bound = Assert.Single(coordinator.OpenQuestions);
 
             Assert.Equal("loopBound", bound.Kind);
@@ -3813,7 +3873,7 @@ public sealed class FlowResumeTests
 
             using (records)
             {
-                var end = await new FlowCoordinator(definition, Scripted(), new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
+                var end = await TestAdvice.Coordinator(definition, Scripted(), new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
                 uncut = Standing(end, store.OrchestrationStore.ReadFlow(place)!.Steps, store.OrchestrationStore.ReadFlowQuestions(place)?.Questions ?? []);
             }
         }
@@ -3833,7 +3893,7 @@ public sealed class FlowResumeTests
 
             using (records)
             {
-                _ = await new FlowCoordinator(definition, Scripted(), new RunnerFacts(), records: counting).RunAsync(Token).WaitAsync(Bound, Token);
+                _ = await TestAdvice.Coordinator(definition, Scripted(), new RunnerFacts(), records: counting).RunAsync(Token).WaitAsync(Bound, Token);
             }
 
             written = counting.Marked ?? throw new InvalidOperationException($"no write held the decision '{decided}'");
@@ -3845,7 +3905,7 @@ public sealed class FlowResumeTests
         using (cutRecords)
         {
             // The run again, its records cut right after the decision's write: what followed it never reached the disk.
-            _ = await new FlowCoordinator(definition, Scripted(), new RunnerFacts(), records: new Cut(cutRecords, written)).RunAsync(Token).WaitAsync(Bound, Token);
+            _ = await TestAdvice.Coordinator(definition, Scripted(), new RunnerFacts(), records: new Cut(cutRecords, written)).RunAsync(Token).WaitAsync(Bound, Token);
         }
 
         Assert.Equal(decided, harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "fix#1").Decided?.To);
@@ -3855,7 +3915,7 @@ public sealed class FlowResumeTests
 
         using (again)
         {
-            var end = await new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token);
+            var end = await TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token);
 
             // The resume made what followed from the decision, and nothing the decision held started.
             Assert.Equal(uncut, Standing(end, harness.OrchestrationStore.ReadFlow(layout)!.Steps, harness.OrchestrationStore.ReadFlowQuestions(layout)?.Questions ?? []));
@@ -3904,7 +3964,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), records: records, workflowFile: (_, _) => "the first session's");
+            var coordinator = TestAdvice.Coordinator(definition, first, new RunnerFacts(), records: records, workflowFile: (_, _) => "the first session's");
             _ = coordinator.RunAsync(Token);
             await first.StartedAsync("items.first").WaitAsync(Bound, Token);
 
@@ -3917,7 +3977,7 @@ public sealed class FlowResumeTests
         using (again)
         {
             // The text the with reads changed since: the use's steps still read what the first session filled.
-            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again, workflowFile: (_, _) => "changed since");
+            var coordinator = TestAdvice.Coordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again, workflowFile: (_, _) => "changed since");
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);

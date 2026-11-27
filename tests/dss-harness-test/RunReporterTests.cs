@@ -30,8 +30,11 @@ public sealed class RunReporterTests
     /// <summary>The agent runner as a fake, keeping every request it was asked and answering as a test says.</summary>
     private sealed class Agents : IAgentRunner
     {
-        /// <summary>Every request the runner built, in order.</summary>
+        /// <summary>Every request the runner built, in order, but the run's advisor's.</summary>
         public List<AgentStepRequest> Asked { get; } = [];
+
+        /// <summary>Every request of the run's advisor, asked of the questions the run raised, in order: kept apart, and recommending nothing.</summary>
+        public List<AgentStepRequest> Advised { get; } = [];
 
         /// <summary>How the run answers; a completed run with no answer unless a test changes it.</summary>
         public Func<AgentStepRequest, AgentRunResult> Answer { get; set; } = _ => new AgentRunResult(AgentRunStatus.Completed, FinalText: "All good.");
@@ -47,6 +50,12 @@ public sealed class RunReporterTests
 
         public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
         {
+            if (step.AgentDefinition == TestAdvice.Advisor.Agent)
+            {
+                Advised.Add(step);
+                return new AgentRunResult(AgentRunStatus.Completed);
+            }
+
             Asked.Add(step);
 
             foreach (var said in Says)
@@ -115,8 +124,9 @@ public sealed class RunReporterTests
             TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase),
         });
         await harness.CommitAllAsync(temp.Path, "initial", Token);
-        temp.WriteFile(
-            $".harness-config/workflows/{Workflow}/{Workflow}.yml",
+        TestAdvice.WriteWorkflow(
+            temp,
+            Workflow,
             "name: flow\n"
             + "steps:\n"
             + "  - name: gate\n"
@@ -602,9 +612,9 @@ public sealed class RunReporterTests
         var temp = new TempDirectory();
         var harness = new HarnessFactory();
 
-        await harness.InitializeHarnessAsync(temp.Path, Token, new HarnessConfig { Workflows = [Workflow] });
+        await harness.InitializeHarnessAsync(temp.Path, Token, TestAdvice.Config(Workflow));
         await harness.CommitAllAsync(temp.Path, "initial", Token);
-        temp.WriteFile($".harness-config/workflows/{Workflow}/{Workflow}.yml", "name: flow\nsteps:\n  - name: one\n    type: orient\n");
+        TestAdvice.WriteWorkflow(temp, Workflow, "name: flow\nsteps:\n  - name: one\n    type: orient\n");
         harness.OrchestrationStore.WriteOrchestrator(
             OrchestratorLayout.Of(new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path), "o1"),
             new OrchestratorRecord { Kind = OrchestratorRecord.KindName, Name = "o1", Model = "glm-5.3", Parallel = 4, CreatedAt = DateTimeOffset.UtcNow });

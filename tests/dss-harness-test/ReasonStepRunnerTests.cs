@@ -2085,7 +2085,7 @@ public sealed class ReasonStepRunnerTests
         var definition = WorkflowFileParser.Parse(
             "workflows/flow/flow.yml",
             "name: flow\nhandoffSeconds: 60\nsteps:\n  - name: think\n    type: reason\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n");
-        var coordinator = new FlowCoordinator(
+        var coordinator = TestAdvice.Coordinator(
             definition,
             new Reasoned(Runner(kit, agents.AsRunner())),
             new ConfiguredRunnerFacts(new DssHarness.Core.Configuration.HarnessConfig()),

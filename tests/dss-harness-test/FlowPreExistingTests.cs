@@ -344,7 +344,7 @@ public sealed class FlowPreExistingTests
             });
         var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
         _ = watched.Seen.ContinueWith(_ => joined.TrySetResult(), TaskScheduler.Default);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => OneCausePrompt(named));
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => OneCausePrompt(named));
         var cancel = TestContext.Current.CancellationToken;
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -395,7 +395,7 @@ public sealed class FlowPreExistingTests
         var said = new Said();
         var watched = new Watched(said, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
         _ = watched.Seen.ContinueWith(_ => joined.TrySetResult(), TaskScheduler.Default);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => OneCausePrompt(named));
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => OneCausePrompt(named));
         var cancel = TestContext.Current.CancellationToken;
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -457,7 +457,7 @@ public sealed class FlowPreExistingTests
         var said = new Said();
         var watched = new Watched(said, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
         _ = watched.Seen.ContinueWith(_ => joined.TrySetResult(), TaskScheduler.Default);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => OneCausePrompt(named));
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => OneCausePrompt(named));
         var cancel = TestContext.Current.CancellationToken;
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -528,7 +528,7 @@ public sealed class FlowPreExistingTests
             });
         var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
         _ = watched.Seen.ContinueWith(_ => joined.TrySetResult(), TaskScheduler.Default);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -572,7 +572,7 @@ public sealed class FlowPreExistingTests
         var runner = new FakeRunner()
             .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the second hole")]))
             .On("triage", run => run.Instance == "triage" ? Naming(course, run.Issue!.Title, field, named) : Course("list", run.Issue!.Title));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -609,7 +609,7 @@ public sealed class FlowPreExistingTests
         var runner = new FakeRunner()
             .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the second hole")]))
             .On("triage", run => run.Instance == "triage" ? Course("list", run.Issue!.Title) : Joins(run.Issue!.Title, "triage"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -673,7 +673,7 @@ public sealed class FlowPreExistingTests
         var said = new Said();
         var watched = new Watched(said, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
         _ = watched.Seen.ContinueWith(_ => repeated.TrySetResult(), TaskScheduler.Default);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, _) => "Triage it.");
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, _) => "Triage it.");
         var cancel = TestContext.Current.CancellationToken;
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -709,7 +709,7 @@ public sealed class FlowPreExistingTests
                 "triage+2" => Naming("duplicate", run.Issue!.Title, "duplicates", "triage"),
                 _ => Course("list", run.Issue!.Title),
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -776,7 +776,7 @@ public sealed class FlowPreExistingTests
                 return OfferedIds(prompt) is [var offered, ..] ? Naming("duplicate", run.Issue!.Title, "duplicates", offered) : Course("list", run.Issue!.Title);
             });
         var watched = new Watched(null, BothTriaged);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, _) => "Triage it.");
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, _) => "Triage it.");
         var cancel = TestContext.Current.CancellationToken;
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -848,7 +848,7 @@ public sealed class FlowPreExistingTests
             });
         var said = new Said();
         var watched = new Watched(said, _ => false);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => OneCausePrompt(named));
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => OneCausePrompt(named));
         var cancel = TestContext.Current.CancellationToken;
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -900,7 +900,7 @@ public sealed class FlowPreExistingTests
         var runner = new FakeRunner()
             .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test"), Issue("a stale document")]))
             .On("triage", run => Course("unproven", run.Issue!.Title));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -948,7 +948,7 @@ public sealed class FlowPreExistingTests
             .On("broke", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the read failed"))
             .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test")]))
             .On("triage", run => Course("unproven", run.Issue!.Title));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -1002,7 +1002,7 @@ public sealed class FlowPreExistingTests
         // both triages ended - its own loop reads the release after them - so the run's words are settled when read.
         var watched = new Watched(null, BothTriaged);
         _ = watched.Seen.ContinueWith(_ => runner.Release("later"), TaskScheduler.Default);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -1045,7 +1045,7 @@ public sealed class FlowPreExistingTests
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success))
             .On("triage", run => Course("fix", run.Issue!.Title))
             .On("mend", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1086,7 +1086,7 @@ public sealed class FlowPreExistingTests
         var runner = new FakeRunner()
             .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser")]))
             .On("triage", run => Course("fix", run.Issue!.Title));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -1124,7 +1124,7 @@ public sealed class FlowPreExistingTests
             .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser")]))
             .On("triage", run => Course("fix", run.Issue!.Title))
             .On("mend", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1148,7 +1148,7 @@ public sealed class FlowPreExistingTests
         runner.Hold("mend");
         var watched = new Watched(null, snapshot => BothTriaged(snapshot)
             && snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         var session = coordinator.RunAsync(cancel);
@@ -1233,7 +1233,7 @@ public sealed class FlowPreExistingTests
             });
         var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "recover.diagnose" && step.State == FlowInstanceState.Running)
             && snapshot.Steps.Any(step => step.Instance == "recover+2.diagnose" && step.State == FlowInstanceState.NotStarted && step.WaitsOn.Count > 0));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         var session = coordinator.RunAsync(cancel);
@@ -1332,7 +1332,7 @@ public sealed class FlowPreExistingTests
                 }
             })
             .On("mend", run => run.Instance == "recover.mend" ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the remedy stayed red") : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), workflowFile: (_, named) => named);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), workflowFile: (_, named) => named);
         var cancel = TestContext.Current.CancellationToken;
 
         var paused = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1426,7 +1426,7 @@ public sealed class FlowPreExistingTests
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": true, "problems": [], "items": []}"""));
             })
             .On("mend", run => run.Instance == "recover.mend" ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the remedy stayed red") : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), workflowFile: (_, named) => named == "diagnose.md" ? "red: {run.red}" : "Do it.");
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), workflowFile: (_, named) => named == "diagnose.md" ? "red: {run.red}" : "Do it.");
         var cancel = TestContext.Current.CancellationToken;
 
         Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
@@ -1482,7 +1482,7 @@ public sealed class FlowPreExistingTests
         var said = new Said();
         var watched = new Watched(said, snapshot => snapshot.Steps.Any(step => step.Instance == "triage" && step.State == FlowInstanceState.Done)
             && snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         var session = coordinator.RunAsync(cancel);
@@ -1528,7 +1528,7 @@ public sealed class FlowPreExistingTests
         var said = new Said();
         var watched = new Watched(said, snapshot => BothTriaged(snapshot)
             && snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         var session = coordinator.RunAsync(cancel);
@@ -1572,7 +1572,7 @@ public sealed class FlowPreExistingTests
         var said = new Said();
         var watched = new Watched(said, snapshot => BothTriaged(snapshot)
             && snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         var session = coordinator.RunAsync(cancel);
@@ -1645,7 +1645,7 @@ public sealed class FlowPreExistingTests
             .On("triage", run => Course("fix", run.Issue!.Title))
             .OnAsync("mend", run => mending[run.Instance].Task);
         var watched = new Watched(null, snapshot => new[] { "recover.mend", "recover+2.mend" }.All(mend => snapshot.Steps.Any(step => step.Instance == mend && step.State == FlowInstanceState.Running)));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         var session = coordinator.RunAsync(cancel);
@@ -1706,7 +1706,7 @@ public sealed class FlowPreExistingTests
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success))
             .OnAsync("triage", run => run.Issue!.Title == "the second hole" ? triaging.Task : Task.FromResult(Course("fix", run.Issue.Title)));
         var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "recover" && step.State == FlowInstanceState.Done));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         var session = coordinator.RunAsync(cancel);
@@ -1826,7 +1826,7 @@ public sealed class FlowPreExistingTests
             .OnAsync("plan", _ => planning.Task)
             .OnAsync("mend", _ => mending.Task);
         var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         // The plan stands once the fix is at work, its remedy checked: its items open beside the fix.
@@ -1895,7 +1895,7 @@ public sealed class FlowPreExistingTests
             .OnAsync("plan", _ => planning.Task)
             .OnAsync("mend", _ => mending.Task);
         var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         JsonObject Needing(JsonObject item, params string[] issues)
@@ -1990,7 +1990,7 @@ public sealed class FlowPreExistingTests
             .OnAsync("mend", _ => mending.Task);
         var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
         _ = watched.Seen.ContinueWith(_ => planning.TrySetResult(), TaskScheduler.Default);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         // The plan stands once the second issue joined the first, whose triage waits on its question: the item that needs
@@ -2085,7 +2085,7 @@ public sealed class FlowPreExistingTests
             .OnAsync("mend", _ => mending.Task);
         var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
         _ = watched.Seen.ContinueWith(_ => planning.TrySetResult(), TaskScheduler.Default);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         // The plan stands once the second issue joined the first, whose triage waits on its question: the item that needs
@@ -2158,7 +2158,7 @@ public sealed class FlowPreExistingTests
             .OnAsync("mend", _ => mending.Task);
         var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
         _ = watched.Seen.ContinueWith(_ => joined.TrySetResult(), TaskScheduler.Default);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         // The plan stands once the one fix of both issues is at work.
@@ -2262,7 +2262,7 @@ public sealed class FlowPreExistingTests
         var runner = new FakeRunner()
             .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [.. titles.Select(title => Issue(title))]))
             .On("triage", (FlowStepRun run) => Course("unproven", run.Issue!.Title));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
         var cancel = TestContext.Current.CancellationToken;
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(60), cancel);
@@ -2324,7 +2324,7 @@ public sealed class FlowPreExistingTests
             .On("triage", run => Course("fix", run.Issue!.Title))
             .OnAsync("mend", run => mending[run.Instance].Task);
         var watched = new Watched(null, snapshot => new[] { "recover.mend", "recover+2.mend" }.All(mend => snapshot.Steps.Any(step => step.Instance == mend && step.State == FlowInstanceState.Running)));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         // The second issue's visit ends first.
@@ -2386,7 +2386,7 @@ public sealed class FlowPreExistingTests
             .On("triage", run => Course("fix", run.Issue!.Title))
             .OnAsync("mend", _ => mending.Task);
         var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         var session = coordinator.RunAsync(cancel);
@@ -2473,7 +2473,7 @@ public sealed class FlowPreExistingTests
         var runner = new FakeRunner()
             .On("audit", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole")]))
             .On("triage", run => Course("fix", run.Issue!.Title));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
         var cancel = TestContext.Current.CancellationToken;
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -2534,7 +2534,7 @@ public sealed class FlowPreExistingTests
 
         using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
             _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -2606,7 +2606,7 @@ public sealed class FlowPreExistingTests
 
         using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
             _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -2670,7 +2670,7 @@ public sealed class FlowPreExistingTests
         var runner = new FakeRunner()
             .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test")]))
             .On("triage", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: answer));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -2727,7 +2727,7 @@ public sealed class FlowPreExistingTests
                 ]))
             .On("triage", run => Course("unproven", run.Issue!.Title));
         var said = new Said();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: said);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: said);
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -2828,7 +2828,7 @@ public sealed class FlowPreExistingTests
                         return Course("unproven", run.Issue.Title);
                 }
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => named == "work.md" ? "Do the work." : "Triage it.");
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => named == "work.md" ? "Do the work." : "Triage it.");
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -2875,7 +2875,7 @@ public sealed class FlowPreExistingTests
             .On("second", FlowStepResult.Ended(passed: true, HarnessExit.Success,
                 preExisting: [new FlowPreExistingReport("a null dereference", "what it is", "src/Lexer.cs", "read the file and saw it", false)]))
             .On("triage", run => Course("unproven", run.Issue!.Title));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -2900,7 +2900,7 @@ public sealed class FlowPreExistingTests
                 ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser", blocks: true)])
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success))
             .On("triage", run => Course(run.Issue!.Blocks ? "fix" : "unproven", run.Issue.Title));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -2928,7 +2928,7 @@ public sealed class FlowPreExistingTests
             .On("first", Blocked)
             .On("second", Blocked)
             .On("triage", run => run.Instance == "triage" ? Course("fix", run.Issue!.Title) : Naming("duplicate", run.Issue!.Title, "duplicates", "triage"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -2965,7 +2965,7 @@ public sealed class FlowPreExistingTests
                 ? deciding.Task
                 : Task.FromResult(run.Issue!.Title == "a test is red" ? Course("fix", run.Issue.Title) : Naming("duplicate", run.Issue.Title, "duplicates", "triage")));
         var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "recover" && step.State == FlowInstanceState.Done));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
         var session = coordinator.RunAsync(cancel);
@@ -3032,7 +3032,7 @@ public sealed class FlowPreExistingTests
 
                 return run.Instance == "triage" ? Course("fix", run.Issue!.Title) : Naming("duplicate", run.Issue!.Title, "duplicates", "triage");
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), workflowFile: (_, _) => "Triage it.");
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), workflowFile: (_, _) => "Triage it.");
 
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -3102,7 +3102,7 @@ public sealed class FlowPreExistingTests
 
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success);
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), workflowFile: (_, named) => named);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), workflowFile: (_, named) => named);
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -3195,7 +3195,7 @@ public sealed class FlowPreExistingTests
 
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success);
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => named);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => named);
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -3335,7 +3335,7 @@ public sealed class FlowPreExistingTests
         using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
             watching = new Watched(records, _ => false);
-            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watching, workflowFile: (_, named) => named);
+            var coordinator = TestAdvice.Coordinator(definition, first, new RunnerFacts(), clock, records: watching, workflowFile: (_, named) => named);
             var session = coordinator.RunAsync(cancel);
 
             await Seen(snapshot => Ended(snapshot, "triage+3")).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -3367,7 +3367,7 @@ public sealed class FlowPreExistingTests
             // What the record keeps is the visit's thread, as it is: never weighed again over the visits around it.
             var kept = FlowRecoveryThread.OfIssue(string.Empty, Issue("a thread no visit's issues would choose"));
             var told = taken with { File = taken.File with { Steps = [.. taken.File.Steps.Select(step => step.Instance == "recover+2" ? step with { Thread = kept } : step)] } };
-            Assert.Equal(kept, new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), clock, resume: told, workflowFile: (_, named) => named).Instances["recover+2"].RecoveryThread);
+            Assert.Equal(kept, TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), clock, resume: told, workflowFile: (_, named) => named).Instances["recover+2"].RecoveryThread);
         }
         else
         {
@@ -3388,7 +3388,7 @@ public sealed class FlowPreExistingTests
 
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success);
             });
-            var resumed = new FlowCoordinator(definition, second, new RunnerFacts(), clock, records: watching, resume: taken, workflowFile: (_, named) => named);
+            var resumed = TestAdvice.Coordinator(definition, second, new RunnerFacts(), clock, records: watching, resume: taken, workflowFile: (_, named) => named);
 
             // Read back, the thread is the one it was made in, and its diagnosis goes on as it began.
             Assert.Equal(made, resumed.Instances["recover+2"].RecoveryThread);
@@ -3473,7 +3473,7 @@ public sealed class FlowPreExistingTests
         using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
             watching = new Watched(records, _ => false);
-            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watching, workflowFile: (_, named) => named);
+            var coordinator = TestAdvice.Coordinator(definition, first, new RunnerFacts(), clock, records: watching, workflowFile: (_, named) => named);
             var session = coordinator.RunAsync(cancel);
 
             await Seen(snapshot => Ended(snapshot, "triage+2")).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -3500,7 +3500,7 @@ public sealed class FlowPreExistingTests
         taken = taken with { File = taken.File with { Steps = [.. taken.File.Steps.Select(step => step with { Thread = null })] } };
 
         using var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock);
-        var resumed = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: again, resume: taken, workflowFile: (_, named) => named);
+        var resumed = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: again, resume: taken, workflowFile: (_, named) => named);
 
         Assert.Equal(FlowRecoveryThread.OfIssue(string.Empty, Issue(Hole)), resumed.Instances["recover"].RecoveryThread);
         Assert.Equal(made, resumed.Instances["recover+2"].RecoveryThread);
@@ -3537,7 +3537,7 @@ public sealed class FlowPreExistingTests
         var runner = new FakeRunner()
             .On("think", asked => FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser", blocks: asked == 1)]))
             .On("triage", run => Course(run.Issue!.Blocks ? "fix" : "unproven", run.Issue.Title));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -3578,7 +3578,7 @@ public sealed class FlowPreExistingTests
         var runner = new FakeRunner()
             .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser", blocks: true)]))
             .On("triage", run => Course("fix", run.Issue!.Title));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -3606,7 +3606,7 @@ public sealed class FlowPreExistingTests
             .On("first", Blocked)
             .On("second", Blocked)
             .On("triage", run => Course("fix", run.Issue!.Title));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -3654,7 +3654,7 @@ public sealed class FlowPreExistingTests
         var runner = new FakeRunner()
             .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser", blocks: true)]))
             .On("triage", run => Course("fix", run.Issue!.Title));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -3703,7 +3703,7 @@ public sealed class FlowPreExistingTests
             .On("review", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser")]))
             .On("triage", run => Course(run.Issue!.Blocks ? "fix" : "list", run.Issue.Title));
         var said = new Said();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: said);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: said);
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -3766,7 +3766,7 @@ public sealed class FlowPreExistingTests
             })
             .On("triage", run => Course("fix", run.Issue!.Title))
             .On("mend", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -3828,7 +3828,7 @@ public sealed class FlowPreExistingTests
             })
             .On("later", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser")]))
             .On("triage", run => Course(run.Issue!.Blocks ? "fix" : "list", run.Issue.Title));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -3890,7 +3890,7 @@ public sealed class FlowPreExistingTests
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser")]);
             })
             .On("triage", run => Course(run.Issue!.Blocks ? "fix" : "list", run.Issue.Title));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
 
         var first = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -3923,7 +3923,7 @@ public sealed class FlowPreExistingTests
         _ = watched.Seen.ContinueWith(
             _ => runner.Release("second", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test")])),
             TaskScheduler.Default);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -3987,7 +3987,7 @@ public sealed class FlowPreExistingTests
         var runner = new FakeRunner()
             .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test")]))
             .On("triage", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output(answer)));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -4034,7 +4034,7 @@ public sealed class FlowPreExistingTests
 
         using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
             var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -4072,7 +4072,7 @@ public sealed class FlowPreExistingTests
         var runner = new FakeRunner()
             .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test")]))
             .On("triage", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"course": "list", "title": "a broken test", "description": "what", "where": ["src/Parser.cs"], "why": "not related", "proof": {"kind": "read"}}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -4122,7 +4122,7 @@ public sealed class FlowPreExistingTests
         using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
             var watched = new Watched(records, BothTriaged);
-            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, first, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             // Both issues are triaged - the pause is read by the run's own loop after both answers - and then it pauses.
@@ -4143,7 +4143,7 @@ public sealed class FlowPreExistingTests
 
         using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, new FakeRunner().On("later", FlowStepResult.Ended(passed: true, HarnessExit.Success)), new RunnerFacts(), clock, records: again, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, new FakeRunner().On("later", FlowStepResult.Ended(passed: true, HarnessExit.Success)), new RunnerFacts(), clock, records: again, resume: taken);
             var done = await resumed.RunAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Paused, done.Status);
@@ -4187,7 +4187,7 @@ public sealed class FlowPreExistingTests
         {
             var watched = new Watched(records, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
             _ = watched.Seen.ContinueWith(_ => joined.TrySetResult(), TaskScheduler.Default);
-            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watched, workflowFile: (_, named) => OneCausePrompt(named));
+            var coordinator = TestAdvice.Coordinator(definition, first, new RunnerFacts(), clock, records: watched, workflowFile: (_, named) => OneCausePrompt(named));
             var session = coordinator.RunAsync(cancel);
 
             await watched.Until(snapshot => snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running)).WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -4200,7 +4200,7 @@ public sealed class FlowPreExistingTests
         using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
             var watched = new Watched(again, _ => false);
-            var resumed = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: watched, resume: taken, workflowFile: (_, named) => OneCausePrompt(named));
+            var resumed = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: watched, resume: taken, workflowFile: (_, named) => OneCausePrompt(named));
             var done = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
             // The always step asked as the resumed visit began; the run's counts, written as the visit ended, say both fixed.
@@ -4275,7 +4275,7 @@ public sealed class FlowPreExistingTests
         FlowResumeState taken;
         using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var coordinator = new FlowCoordinator(definition, Runner(), new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, Runner(), new RunnerFacts(), clock, records: records);
 
             Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
             Assert.Equal(FlowInstanceState.Done, coordinator.Instances["triage+2"].State);
@@ -4291,7 +4291,7 @@ public sealed class FlowPreExistingTests
         // That instance is answered and goes on: the join is triaged again on its own beside it, not after it.
         var said = new Said();
         var watched = new Watched(said, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+3" && step.State == FlowInstanceState.Done));
-        var resumed = new FlowCoordinator(definition, Runner(), new RunnerFacts(), clock, records: watched, resume: taken);
+        var resumed = TestAdvice.Coordinator(definition, Runner(), new RunnerFacts(), clock, records: watched, resume: taken);
         Assert.True(resumed.TryAnswer(resumed.OpenQuestions.Single().Id, "answer", "the parser's", out var refused), refused);
         var session = resumed.RunAsync(cancel);
 
@@ -4375,7 +4375,7 @@ public sealed class FlowPreExistingTests
         var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock);
         var watched = new Watched(records, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
         _ = watched.Seen.ContinueWith(_ => joined.TrySetResult(), TaskScheduler.Default);
-        var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watched);
+        var coordinator = TestAdvice.Coordinator(definition, first, new RunnerFacts(), clock, records: watched);
         var session = coordinator.RunAsync(cancel);
 
         if (resumed)
@@ -4388,7 +4388,7 @@ public sealed class FlowPreExistingTests
 
             var taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
             records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock);
-            coordinator = new FlowCoordinator(definition, new FakeRunner().On("mend", failed), new RunnerFacts(), clock, records: records, resume: taken);
+            coordinator = TestAdvice.Coordinator(definition, new FakeRunner().On("mend", failed), new RunnerFacts(), clock, records: records, resume: taken);
             session = coordinator.RunAsync(cancel);
         }
 
@@ -4505,7 +4505,7 @@ public sealed class FlowPreExistingTests
             .On("reclosing", (FlowStepRun _) => Answer(Checked(
                 new JsonArray(Closed("c-rate", "the rate holds over every format"), Class("c-frame", "the frame's size is decided once")),
                 new JsonArray(new JsonObject { ["class"] = "c-rate", ["path"] = "src/Rates/Home.cs", ["touches"] = 6 }))));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -4522,7 +4522,7 @@ public sealed class FlowPreExistingTests
             coordinator.OpenQuestions.Single(question => question.Kind == "pause").Problem);
 
         // A run whose items no check judged says none of each.
-        var none = new FlowCoordinator(
+        var none = TestAdvice.Coordinator(
             definition,
             new FakeRunner().On("audit", (FlowStepRun _) => Answer(new JsonObject { ["items"] = new JsonArray(Item("b")), ["closure"] = new JsonArray() })),
             new RunnerFacts(),
@@ -4576,7 +4576,7 @@ public sealed class FlowPreExistingTests
         using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
             var watched = new Watched(records, snapshot => snapshot.Steps.Any(step => step.Step == "triage" && step.State is FlowInstanceState.Done or FlowInstanceState.Failed));
-            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, first, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
@@ -4595,7 +4595,7 @@ public sealed class FlowPreExistingTests
 
         using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, new FakeRunner().On("later", FlowStepResult.Ended(passed: true, HarnessExit.Success)), new RunnerFacts(), clock, records: again, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, new FakeRunner().On("later", FlowStepResult.Ended(passed: true, HarnessExit.Success)), new RunnerFacts(), clock, records: again, resume: taken);
             var done = await resumed.RunAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Paused, done.Status);
@@ -4663,7 +4663,7 @@ public sealed class FlowPreExistingTests
         using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
             var watched = new Watched(records, snapshot => snapshot.Steps.Count(step => step.Step == "triage" && step.State == FlowInstanceState.Running) == 3);
-            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, first, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(cancel);
             await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -4682,7 +4682,7 @@ public sealed class FlowPreExistingTests
 
         using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, new FakeRunner().On("later", FlowStepResult.Ended(passed: true, HarnessExit.Success)), new RunnerFacts(), clock, records: again, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, new FakeRunner().On("later", FlowStepResult.Ended(passed: true, HarnessExit.Success)), new RunnerFacts(), clock, records: again, resume: taken);
             Assert.Equal(FlowRunStatus.Paused, (await resumed.RunAsync(cancel)).Status);
 
             Assert.Equal(
@@ -4761,7 +4761,7 @@ public sealed class FlowPreExistingTests
         using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
             var watched = new Watched(records, snapshot => snapshot.Steps.Any(step => step.Step == "triage" && step.State is FlowInstanceState.Done or FlowInstanceState.Failed));
-            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, first, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
@@ -4776,7 +4776,7 @@ public sealed class FlowPreExistingTests
 
         using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, new FakeRunner().On("later", FlowStepResult.Ended(passed: true, HarnessExit.Success)), new RunnerFacts(), clock, records: again, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, new FakeRunner().On("later", FlowStepResult.Ended(passed: true, HarnessExit.Success)), new RunnerFacts(), clock, records: again, resume: taken);
             Assert.Equal(FlowRunStatus.Paused, (await resumed.RunAsync(TestContext.Current.CancellationToken)).Status);
 
             Assert.Equal("what was there before: nx-1: next round - a broken test (src/Parser.cs)", resumed.OpenQuestions.Single(question => question.Kind == "pause").Problem);
@@ -4902,7 +4902,7 @@ public sealed class FlowPreExistingTests
                     later.TrySetResult();
                     return new TaskCompletionSource<FlowStepResult>().Task;
                 });
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             await later.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
@@ -4931,7 +4931,7 @@ public sealed class FlowPreExistingTests
 
         using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: again, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: again, resume: taken);
             Assert.Equal(FlowRunStatus.Paused, (await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken)).Status);
 
             Assert.Equal("what was there before: nx-1: fixed in a later round - a broken test (src/Parser.cs)", resumed.OpenQuestions.Single(question => question.Kind == "pause").Problem);
@@ -5164,7 +5164,7 @@ public sealed class FlowPreExistingTests
                     new JsonObject { ["clean"] = false, ["items"] = new JsonArray(WorkItem("speed-up")) },
                     new JsonObject { ["clean"] = false, ["items"] = new JsonArray(WorkItem("speed-up"), Settling("settle-the-build", "nx-2")) })
                 : await Held(run, new JsonObject { ["clean"] = true, ["items"] = new JsonArray() })));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, inputs: new Dictionary<string, string> { ["request"] = "fix the tool" }, records: watched, place: place, updates: () => store.ReadFlowUpdates(layout));
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, inputs: new Dictionary<string, string> { ["request"] = "fix the tool" }, records: watched, place: place, updates: () => store.ReadFlowUpdates(layout));
 
         // Nothing in the run asks a person: each session goes on until the run is done or one is asked.
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);

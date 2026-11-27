@@ -286,7 +286,7 @@ public sealed class FlowStepMeasureTests
         {
             var seen = new Seen(records);
             var waiting = seen.SeenAsync(snapshot => Step(snapshot, "second").WaitsOn.SequenceEqual([FlowWaits.ReasoningAgents]));
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: seen);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: seen);
             var running = coordinator.RunAsync(Token);
             await runner.StartedAsync("first").WaitAsync(Bound, Token);
             await waiting.WaitAsync(Bound, Token);
@@ -337,7 +337,7 @@ public sealed class FlowStepMeasureTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             var running = coordinator.RunAsync(Token);
             await runner.StartedAsync("plan").WaitAsync(Bound, Token);
 
@@ -388,7 +388,7 @@ public sealed class FlowStepMeasureTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
             var paused = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
             Assert.Equal(FlowRunStatus.Paused, paused.Status);
@@ -462,7 +462,7 @@ public sealed class FlowStepMeasureTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -535,7 +535,7 @@ public sealed class FlowStepMeasureTests
                 && Step(snapshot, "other").WaitsOn.SequenceEqual([FlowWaits.ReasoningAgents])
                 && Step(snapshot, "think").Measure?.Attempts?.Single().Reports == 1);
             using var engine = CancellationTokenSource.CreateLinkedTokenSource(Token);
-            var session = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(Began), records: seen).RunAsync(engine.Token);
+            var session = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(Began), records: seen).RunAsync(engine.Token);
             await used.Task.WaitAsync(Bound, Token);
             runner.Release("tick");
             await written.WaitAsync(Bound, Token);
@@ -551,7 +551,7 @@ public sealed class FlowStepMeasureTests
         using (again)
         {
             var account = new CutAccount(new FlowCutAttempt(new FlowStepAttempt(0, Model: "model-x", Turns: 2), [charged, past], Began.AddSeconds(5)));
-            var coordinator = new FlowCoordinator(
+            var coordinator = TestAdvice.Coordinator(
                 definition,
                 new Runner(),
                 new RunnerFacts(),
@@ -620,7 +620,7 @@ public sealed class FlowStepMeasureTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(Began), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(Began), records: records);
 
             Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
@@ -632,7 +632,7 @@ public sealed class FlowStepMeasureTests
             var seen = new Seen(answered);
             var running = seen.SeenAsync(snapshot => Step(snapshot, "think").State == FlowInstanceState.Running);
             using var engine = CancellationTokenSource.CreateLinkedTokenSource(Token);
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(Began.AddHours(1)), resume: TakeUp(harness, layout, definition), records: seen);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(Began.AddHours(1)), resume: TakeUp(harness, layout, definition), records: seen);
 
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "answer", "the left one", out var refused), refused);
             var session = coordinator.RunAsync(engine.Token);
@@ -647,7 +647,7 @@ public sealed class FlowStepMeasureTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(
+            var coordinator = TestAdvice.Coordinator(
                 definition,
                 new Runner(),
                 new RunnerFacts(),
@@ -700,7 +700,7 @@ public sealed class FlowStepMeasureTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
 
             Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
@@ -722,7 +722,7 @@ public sealed class FlowStepMeasureTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
 
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "answer", "go on", out var refused), refused);
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
@@ -759,7 +759,7 @@ public sealed class FlowStepMeasureTests
             var seen = new Seen(records);
             var running = seen.SeenAsync(snapshot => Step(snapshot, "think").State == FlowInstanceState.Running);
             using var engine = CancellationTokenSource.CreateLinkedTokenSource(Token);
-            var session = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(Began), records: seen).RunAsync(engine.Token);
+            var session = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(Began), records: seen).RunAsync(engine.Token);
             await running.WaitAsync(Bound, Token);
             await engine.CancelAsync();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.WaitAsync(Bound, Token));
@@ -769,7 +769,7 @@ public sealed class FlowStepMeasureTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(
+            var coordinator = TestAdvice.Coordinator(
                 definition,
                 new Runner(),
                 new RunnerFacts(),
@@ -815,7 +815,7 @@ public sealed class FlowStepMeasureTests
             var seen = new Seen(records);
             var running = seen.SeenAsync(snapshot => Step(snapshot, "build").State == FlowInstanceState.Running);
             using var engine = CancellationTokenSource.CreateLinkedTokenSource(Token);
-            var session = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(Began), records: seen).RunAsync(engine.Token);
+            var session = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(Began), records: seen).RunAsync(engine.Token);
             await runner.StartedAsync("build");
             await running.WaitAsync(Bound, Token);
 
@@ -858,7 +858,7 @@ public sealed class FlowStepMeasureTests
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(
+            var coordinator = TestAdvice.Coordinator(
                 definition,
                 new Runner(),
                 new RunnerFacts(),
@@ -936,7 +936,7 @@ public sealed class FlowStepMeasureTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(Began), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(Began), records: records);
 
             Assert.Equal(FlowRunStatus.Failed, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
@@ -959,7 +959,7 @@ public sealed class FlowStepMeasureTests
             var seen = new Seen(again);
             var running = seen.SeenAsync(snapshot => Step(snapshot, "build").State == FlowInstanceState.Running && Step(snapshot, "build").Attempt == 2);
             using var engine = CancellationTokenSource.CreateLinkedTokenSource(Token);
-            var session = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(resumedAt), resume: TakeUp(harness, layout, definition), records: seen).RunAsync(engine.Token);
+            var session = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(resumedAt), resume: TakeUp(harness, layout, definition), records: seen).RunAsync(engine.Token);
             await running.WaitAsync(Bound, Token);
 
             // The crash, with the second attempt under way and the directory still holding the first attempt's ledger.
@@ -971,7 +971,7 @@ public sealed class FlowStepMeasureTests
 
         using (onceMore)
         {
-            var coordinator = new FlowCoordinator(
+            var coordinator = TestAdvice.Coordinator(
                 definition,
                 new Runner(),
                 new RunnerFacts(),
@@ -1026,7 +1026,7 @@ public sealed class FlowStepMeasureTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: seen);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: seen);
 
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
@@ -1219,7 +1219,7 @@ public sealed class FlowStepMeasureTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -1265,7 +1265,7 @@ public sealed class FlowStepMeasureTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
@@ -1308,7 +1308,7 @@ public sealed class FlowStepMeasureTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), records: records);
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Failed, end.Status);
