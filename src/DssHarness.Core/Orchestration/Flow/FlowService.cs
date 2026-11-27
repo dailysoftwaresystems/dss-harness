@@ -1801,7 +1801,8 @@ public sealed class FlowService(
                 updates: () => _store.ReadFlowUpdates(layout),
                 workflowFileIfThere: named => WorkflowNamedFiles.OfRun(_fileSystem, _platform.PathComparison, layout).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"),
                 runFacts: (instance, fact) => RunFactOf(context, layout, instance, fact),
-                agentLive: agent => _store.ReadAgent(layout, agent) is { State: Orchestration.AgentStates.Live });
+                agentLive: agent => _store.ReadAgent(layout, agent) is { State: Orchestration.AgentStates.Live },
+                mainTreeDirectories: GlobPattern.DirectoriesIn(_fileSystem, context.Layout.MainCheckoutRoot));
             var before = _store.ReadFlowQuestions(layout);
 
             // What a session before this one recorded and left queued - an amendment given while no engine ran - is

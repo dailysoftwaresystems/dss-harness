@@ -195,14 +195,14 @@
         },
         "ownedPaths": {
           "type": "array",
-          "description": "The path patterns this item may write, from the repository's root: a file, or a glob where ** matches any depth (src/Orders/**). No file is matched by the patterns of two items.",
+          "description": "The paths this item may write, each from the repository's root - a name with no slash is the root's own file, never one at any depth: a file (calc.c, src/Orders/Order.cs), a directory and everything in it (src/Orders, or src/Orders/ where the tree does not hold it yet), or a glob, anchored at the root too, where * matches within one name and ** any depth (src/Orders/**, **/*.md). A path names what is beneath it only where it names a directory, so the root's Makefile and calc.c meet nothing but themselves. No path is matched by the entries of two items.",
           "items": {
             "type": "string"
           }
         },
         "forbiddenPaths": {
           "type": "array",
-          "description": "Path patterns, written as ownedPaths are, that this item must not touch, though they are near its work.",
+          "description": "Paths, written and read as ownedPaths are, that this item must not touch, though they are near its work; none may match a path the item owns.",
           "items": {
             "type": "string"
           }

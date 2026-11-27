@@ -2600,8 +2600,10 @@ asked whether its failure is tried again, included - the issue holds the files i
 path from the repository's root and never the command it may name instead (`FlowIssueHold.IsPath`), and, once a check of
 its visit has read the remedy items its diagnosis gives, every path those items own: `FlowIssueHold`, the one owner of
 what an issue holds and which of it a work item owns, over `FlowCoordinator.IssueHolds`, which reads the issues being
-fixed from the run's state. A work item - an instance of the work-item group - that has not begun and owns any of those
-paths starts once that visit has ended, so it builds on the tree the fix leaves (`FlowCoordinator.FixHoldOf`, a hold of
+fixed from the run's state - every path it holds, and each one an item owns, read from the repository's root as the
+plan's check reads an item's (`GlobPattern.FromRoot`, whether a path names a directory asked of the main tree), so a
+root-level file a fix holds keeps only the item that owns that file waiting. A work item - an instance of the
+work-item group - that has not begun and owns any of those paths starts once that visit has ended, so it builds on the tree the fix leaves (`FlowCoordinator.FixHoldOf`, a hold of
 `HoldOf`, which reserves no claim, so every other item goes on at once and none waits behind it); its record's `waitsOn`
 names the fix, `the fix of '<title>' (<visit>), which holds <paths>` (`FlowWaits.Fix`), and `ask-orchestrator-status`
 says it among what the run waits for. An item that has begun goes on - its fold and its reconcile meet the fix as any two
@@ -3622,7 +3624,8 @@ among what it reads - and each fact by its owner
 `OrchestrationRules.OpenAgents`, `TreeHolders`); `GraphifyCodebaseRunner` checks the graph's longest path against the
 run's directory and syncs the run's one codebase graph through `ICodebaseGraphService` (`Core.Codebase`, below);
 `PlanCheckRunner` holds the items its `items` yields to `PlanValidator`, whose path budget is
-`FlowRunPaths`'s with the deepest file an item owns, and which also holds each item to its classes (P-C1 to P-C8)
+`FlowRunPaths`'s with the deepest file an item owns, which reads each path an item owns and must not touch from the
+repository's root (`GlobPattern.FromRoot`, below), and which also holds each item to its classes (P-C1 to P-C8)
 and its tests (P-C9: the units its change affects in `tests`, none blank, or why it affects none in `noTests`, exactly
 one of the two):
 an item declares the classes of the decisions it changes or says in `noClass` why it decides none; a class id names
@@ -3869,6 +3872,21 @@ through `IAgentRunner`, its ending mapped to the step's own (`FlowStepResult.AtL
 incomplete for a stop, the schema-validated output the step's, with the issues it reports under `preExisting`). The
 step's stream is read by the store's one reader of it (`OrchestrationStore.ReadStepStream`): a whole line that does
 not read refuses the attempt that goes on with it.
+
+A list of a tree's own paths has one reading, `GlobPattern.FromRoot`: a work item's `ownedPaths` and `forbiddenPaths`
+(`PlanValidator`), the files an issue being fixed holds (`FlowIssueHold`), a reason step's `writes` (`AgentPolicy`,
+against its worktree) and a fold's `within` (`FoldWithin`, against the main tree) - the plan's `ownedPaths` flow into
+the last two, so what the plan's check found no two items to share is exactly what each item's agent may write and its
+fold carry. Every entry is anchored at the tree's root, so a name with no separator is the root's own, never one at any
+depth, as the rules' gitignore reading (`GlobPattern.Parse`) takes it. A path - an entry with no wildcard - names that
+one path, and what is beneath it only where it names a directory: one the tree holds (`GlobPattern.DirectoriesIn`; a
+link, or a path that cannot be asked of, names none) or one ending in a separator, which names what is beneath it
+alone. A pattern keeps its meaning, anchored at the root: a directory it matches covers what is beneath it. Two entries
+meet (`GlobPattern.Overlaps`) only where some path a tree can hold matches both: a path naming no directory holds
+nothing beneath it, unless the other names only paths beneath it by its own names - `src/new` and `src/new/a.py` -
+which are real only where it is a directory. So the root's `Makefile`, `calc.c` and `pyproject.toml` meet no other
+root-level name and no nested file, where the gitignore reading had them meet through a `Makefile/calc.c` no tree can
+hold, refusing sound plans and holding every item that owned a root-level file behind every fix.
 
 Before its agent is launched, a step, the advisor, the reporter and a side-task each ask the operating system's
 isolation of the launch (`IAgentIsolation`, `AgentIsolation.ForLaunchAsync`, through `ReasonLaunch.IsolationAsync` for
@@ -4696,8 +4714,8 @@ gh answers fewer than asked, so one among any number is found (`GitPublisher`). 
 `FoldFamilyStepRunner` - calls the verbs' typed use cases and reads their `AgentVerbFacts`, never an exit code:
 `FoldStandings.Read` says whether a dry run ends the step, asks or applies; `FlowQuestions.FoldQuestionOf` is the one rule
 of the question it raises - `foldConflicts` for conflicting merges alone, `foldOutside` for paths `FoldWithin` finds
-outside a fold's `within`, then each consent it lacks, a person's first - with what it is about (`FlowDryRun.Of`, over
-`AgentPlanned`), which the runner keeps in the step's `fold.json` (`FlowFoldRecord`) with where its answer will stand; a
+outside a fold's `within`, read from the main tree's root, then each consent it lacks, a person's first - with what
+it is about (`FlowDryRun.Of`, over `AgentPlanned`), which the runner keeps in the step's `fold.json` (`FlowFoldRecord`) with where its answer will stand; a
 consent is given by name only where the dry run made again names exactly that, and one that no longer does is never
 passed. A fold's apply, and a deletion's, is held to what its dry run named (`FoldAgentRequest.Expected`,
 `DeleteAgentRequest.Expected`, measured again under its hold and compared by `AgentPlanned.DifferenceFrom`) - a

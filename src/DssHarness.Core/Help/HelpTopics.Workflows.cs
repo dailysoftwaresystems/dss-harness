@@ -269,7 +269,9 @@ public static partial class HelpTopics
         builder.AppendLine("visit has read the remedy items its diagnosis gives, the paths those items own: an instance of");
         builder.AppendLine("the work-item group that has not begun and owns one of them starts once that visit has ended,");
         builder.AppendLine("building on the tree the fix leaves, its record waiting for the fix of the issue, by its title");
-        builder.AppendLine("and its visit, and the files it holds; every other item goes on at once. run.preExisting says");
+        builder.AppendLine("and its visit, and the files it holds; every other item goes on at once. What it holds and what");
+        builder.AppendLine("an item owns are read from the repository's root, as the plan's check reads an item's paths: a");
+        builder.AppendLine("root-level file the fix holds keeps only the item owning that file waiting. run.preExisting says");
         builder.AppendLine("each issue in the order it was taken - the order its triage ended, a resume's as before it -");
         builder.AppendLine("and an always step starts once no issue's triage or fix is at work beside it, one the always");
         builder.AppendLine("phase raised among them, so what it is told of the issues is true when it is told; one that");
@@ -386,7 +388,11 @@ public static partial class HelpTopics
             + "of a work item of an earlier round, for the run knows a work item by its name alone; a round added to a group "
             + "with no loop around it builds the owed work alone, its own items being those the round before built - "
             + "ownedPaths, forbiddenPaths and the lists reuses, creates and replaces - an item without them is of "
-            + "the wrong shape; no path owned by two items, and none an item owns that it must not touch; the path budget of the "
+            + "the wrong shape; no path owned by two items, and none an item owns that it must not touch - each entry read from "
+            + "the repository's root, as the item's agent's writes and its fold's within read it: a path names that one path, and "
+            + "what is beneath it only where it names a directory, one the tree holds or one ending in a separator, and a pattern "
+            + "is anchored there too, ** for any depth, so two entries meet only where some path a tree can hold matches both - "
+            + "a path the tree does not hold meeting one beneath it, which is real only where it is a directory; the path budget of the "
             + "worktree each would get, with the copies and workers its legs keep inside it and the deepest file it owns; every "
             + "path it reuses or replaces there in the main tree, something under one of the three, and a why and a search for "
             + "each thing it creates; and each item declaring the classes of the decisions it changes or saying in noClass why it "

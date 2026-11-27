@@ -1,3 +1,5 @@
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 
@@ -385,5 +387,156 @@ public sealed class GlobPatternTests
             $"'{path}' is not a path inside the tree spelled as its owner spells one: it is the root alone, or holds a '.' or '..' "
                 + "segment or a doubled separator (Parameter 'relativePath')",
             refused.Message);
+    }
+
+    /// <summary>
+    /// An entry of a list of a tree's own paths - a work item's owned paths, a step's writes - is read from the tree's root
+    /// whatever it holds: a name with no separator is the root's own, a pattern is anchored there, and <c>**</c> is how an
+    /// entry says any depth. The rules' reading of the same entries is the other one, at any depth, each for its own lists.
+    /// </summary>
+    [Fact]
+    public void AnEntryReadFromTheRoot_IsAnchoredThere_WhateverItHolds()
+    {
+        var file = GlobPattern.FromRoot("calc.c", NoDirectories);
+        var glob = GlobPattern.FromRoot("*.c", NoDirectories);
+
+        Assert.True(file.Matches("calc.c"));
+        Assert.False(file.Matches("src/calc.c"));
+        Assert.True(glob.Matches("calc.c"));
+        Assert.False(glob.Matches("src/calc.c"));
+        Assert.True(GlobPattern.FromRoot("**/*.c", NoDirectories).Matches("src/calc.c"));
+        Assert.True(GlobPattern.FromRoot(@"src\calc.c", NoDirectories).Matches("src/calc.c"));
+        Assert.True(GlobPattern.Parse("calc.c").Matches("src/calc.c"));
+    }
+
+    /// <summary>
+    /// A path read from the root names that one path, and holds what is beneath it only where it names a directory - one
+    /// the tree holds, or one written with a trailing separator, which names what is beneath it alone; a link names none,
+    /// and neither does a path the tree does not hold. A pattern keeps its meaning: a directory it matches covers what is
+    /// beneath it.
+    /// </summary>
+    [Fact]
+    public void APathReadFromTheRoot_HoldsWhatIsBeneathIt_OnlyWhereItNamesADirectory()
+    {
+        using var tree = LiveTree();
+        var directories = GlobPattern.DirectoriesIn(FileSystem, tree.Path);
+        var file = GlobPattern.FromRoot("calc.c", directories);
+        var directory = GlobPattern.FromRoot("src/click", directories);
+        var notThere = GlobPattern.FromRoot("src/new", directories);
+        var written = GlobPattern.FromRoot("src/new/", directories);
+
+        Assert.True(file.Matches("calc.c"));
+        Assert.False(file.Matches("calc.c/inner.c"));
+        Assert.True(directory.Matches("src/click"));
+        Assert.True(directory.Matches("src/click/testing.py"));
+        Assert.True(notThere.Matches("src/new"));
+        Assert.False(notThere.Matches("src/new/a.py"));
+        Assert.True(written.Matches("src/new/a.py"));
+        Assert.False(written.Matches("src/new"));
+        Assert.True(GlobPattern.FromRoot("src/*", directories).Matches("src/click/testing.py"));
+        Assert.True(directories("src/click"));
+        Assert.False(directories("calc.c"));
+        Assert.False(directories("src/new"));
+
+        // A name no file system can hold is no directory, never a failure of the reading.
+        Assert.False(directories("a\0b"));
+
+        // A link to a directory is no directory of the tree: what is written through it lands where it leads.
+        TestLinks.DirectoryLink(Path.Combine(tree.Path, "linked"), Path.Combine(tree.Path, "src"));
+        Assert.False(directories("linked"));
+        Assert.False(GlobPattern.FromRoot("linked", directories).Matches("linked/click/testing.py"));
+    }
+
+    /// <summary>
+    /// Two entries read from the root overlap only where some path a tree can hold is matched by both: root-level names
+    /// never meet each other or a nested file - the live runs' refusals of <c>calc.c</c> against <c>Makefile</c> and of
+    /// <c>pyproject.toml</c> against <c>src/click/testing.py</c> met through paths beneath a file - nor a pattern that
+    /// reaches beneath one; a directory the tree holds meets its files, a pattern what it matches, and a path the tree does
+    /// not hold an entry that names only paths beneath it by its own names, which are real only where it is a directory.
+    /// </summary>
+    [Theory]
+    [InlineData("calc.c", "Makefile", false)]
+    [InlineData("Makefile", "src/a.c", false)]
+    [InlineData("pyproject.toml", "src/click/testing.py", false)]
+    [InlineData("uv.lock", "pyproject.toml", false)]
+    [InlineData("README.md", "*/tests/**", false)]
+    [InlineData("README.md", "**/bin/**", false)]
+    [InlineData("NOTES.md", "**/*.lock", false)]
+    [InlineData("calc.c", "calc.c", true)]
+    [InlineData("calc.c", "/calc.c", true)]
+    [InlineData("src/click", "src/click/testing.py", true)]
+    [InlineData("src/click", "src/click/**", true)]
+    [InlineData("src/click/", "src/click/testing.py", true)]
+    [InlineData("src/click", "src/*/testing.py", true)]
+    [InlineData("src/new", "src/new/a.py", true)]
+    [InlineData("src/new", "src/new/**", true)]
+    [InlineData("src/new", "src/new/", true)]
+    [InlineData("src/new", "src/*/a.py", false)]
+    [InlineData("*.toml", "pyproject.toml", true)]
+    [InlineData("*.c", "src/calc.c", false)]
+    [InlineData("**/*.py", "src/click/testing.py", true)]
+    [InlineData("**/*.py", "pyproject.toml", false)]
+    [InlineData("src/**", "src/click/testing.py", true)]
+    [InlineData("src/**", "Makefile", false)]
+    public void TwoEntriesReadFromTheRoot_OverlapWhereSomePathATreeCanHoldMatchesBoth(string left, string right, bool overlap)
+    {
+        using var tree = LiveTree();
+        var directories = GlobPattern.DirectoriesIn(FileSystem, tree.Path);
+
+        Assert.Equal(overlap, GlobPattern.FromRoot(left, directories).Overlaps(GlobPattern.FromRoot(right, directories)));
+        Assert.Equal(overlap, GlobPattern.FromRoot(right, directories).Overlaps(GlobPattern.FromRoot(left, directories)));
+    }
+
+    /// <summary>
+    /// Overlap read from the root is what matching says it is: wherever a path matches two entries both, the two overlap -
+    /// checked over every pair of a set of entries, against the tree they are read from, and a set of paths.
+    /// </summary>
+    [Fact]
+    public void TwoEntriesReadFromTheRootThatMatchOnePath_Overlap()
+    {
+        using var tree = LiveTree();
+        var directories = GlobPattern.DirectoriesIn(FileSystem, tree.Path);
+        string[] entries =
+        [
+            "calc.c", "Makefile", "src", "src/", "src/click", "src/click/testing.py", "src/*", "src/**", "**/*.py", "*.c",
+            "src/new", "src/new/", "src/new/a.py", "**", "*/click/**", "pyproject.toml", "**/testing.py",
+        ];
+        string[] paths =
+        [
+            "calc.c", "Makefile", "src", "src/click", "src/click/testing.py", "src/click/types.py", "src/new", "src/new/a.py",
+            "pyproject.toml", "lib/calc.c", "deep/src/click/testing.py",
+        ];
+
+        foreach (var left in entries)
+        {
+            foreach (var right in entries)
+            {
+                var (mine, theirs) = (GlobPattern.FromRoot(left, directories), GlobPattern.FromRoot(right, directories));
+
+                if (paths.FirstOrDefault(path => mine.Matches(path) && theirs.Matches(path)) is { } both)
+                {
+                    Assert.True(mine.Overlaps(theirs), $"'{left}' and '{right}' both match '{both}'");
+                }
+            }
+        }
+    }
+
+    /// <summary>A tree that reads no path as a directory.</summary>
+    private static bool NoDirectories(string path) => false;
+
+    /// <summary>The file system the tests' trees are on.</summary>
+    private static readonly PhysicalFileSystem FileSystem = new(FilePermissionsFactory.Create());
+
+    /// <summary>A tree laid out as the live runs' were: files at its root - a C program's and a Python package's - and a package beneath.</summary>
+    private static TempDirectory LiveTree()
+    {
+        var tree = new TempDirectory();
+
+        foreach (var file in new[] { "Makefile", "calc.c", "calc.h", "main.c", "pyproject.toml", "uv.lock", "README.md", "src/click/testing.py", "src/click/types.py" })
+        {
+            tree.WriteFile(file, "content\n");
+        }
+
+        return tree;
     }
 }

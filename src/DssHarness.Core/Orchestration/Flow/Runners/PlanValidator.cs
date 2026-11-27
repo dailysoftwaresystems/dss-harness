@@ -14,7 +14,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// the shape a work item has;
 /// every name valid and used once - in the list, and across the run where the list opens a round, for a work item is
 /// known by its name alone; no path owned by two items; each item's forbidden paths kept by its own owned
-/// paths; the path budget of the worktree each would get, with the copies and workers its legs keep inside it and the
+/// paths - each entry read from the repository's root, as the item's agent's writes and its fold's within read it
+/// (<see cref="GlobPattern.FromRoot"/>), so two entries meet only where some path the tree can hold is matched by both;
+/// the path budget of the worktree each would get, with the copies and workers its legs keep inside it and the
 /// deepest file it owns; and the lists that hold an item to what the repository has - every path it reuses or replaces
 /// there in the main tree, something under one of the three, and a reason and a search for everything it creates. Each
 /// item also carries its classes - the decisions it changes, each with its one home, its sites, its searches and its
@@ -62,10 +64,11 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
         var problems = new List<string>();
         var read = new List<Item>();
+        var directories = GlobPattern.DirectoriesIn(fileSystem, context.Layout.MainCheckoutRoot);
 
         foreach (var (node, at) in items.Select((node, at) => (node, at)))
         {
-            if (ItemOf(node, at, problems) is { } item)
+            if (ItemOf(node, at, directories, problems) is { } item)
             {
                 read.Add(item);
             }
@@ -155,8 +158,10 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
         ArgumentNullException.ThrowIfNull(pieces);
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(known);
+        ArgumentNullException.ThrowIfNull(context);
 
         var problems = new List<string>();
+        var directories = GlobPattern.DirectoriesIn(fileSystem, context.Layout.MainCheckoutRoot);
 
         // Each piece read by the one rule of a piece's shape the engine reads it by, its first breach said of it.
         var held = new List<FlowUpdatePiece>();
@@ -180,7 +185,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             {
                 // The item under the name it had, written for the step that takes it back: of a work item's shape,
                 // so the step that takes back owns the paths it may write.
-                _ = ItemOf(piece.Item, 0, problems);
+                _ = ItemOf(piece.Item, 0, directories, problems);
             }
             else if (!items.Any(other => string.Equals(FlowWorkItems.NameOf(other), name, StringComparison.Ordinal) && JsonNode.DeepEquals(other, piece.Item)))
             {
@@ -229,10 +234,15 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     private sealed record Item(string Name, IReadOnlyList<(string Text, GlobPattern Pattern)> Owned, IReadOnlyList<(string Text, GlobPattern Pattern)> Forbidden, JsonObject Node);
 
     /// <summary>
-    /// The work item <paramref name="node"/> is, where it is of a work item's shape and its paths read as patterns; each
+    /// The work item <paramref name="node"/> is, where it is of a work item's shape and its paths read from the
+    /// repository's root (<see cref="GlobPattern.FromRoot"/>), as its agent's writes and its fold's within read them; each
     /// thing wrong with it is a problem, and an item of the wrong shape is checked no further.
     /// </summary>
-    private static Item? ItemOf(JsonNode? node, int at, List<string> problems)
+    /// <param name="node">The item, as the plan gives it.</param>
+    /// <param name="at">Where it stands in its list, from 0.</param>
+    /// <param name="directories">Whether a path from the root names a directory of the main tree.</param>
+    /// <param name="problems">The problems of the plan, its own added to.</param>
+    private static Item? ItemOf(JsonNode? node, int at, Func<string, bool> directories, List<string> problems)
     {
         var place = $"work item {(at + 1).ToString(CultureInfo.InvariantCulture)}";
 
@@ -264,8 +274,8 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             problems.Add($"{where} is not named in lowercase letters, digits and single hyphens, as a work item is");
         }
 
-        var owned = Patterns(item, "ownedPaths", "owns", where, problems);
-        var forbidden = Patterns(item, "forbiddenPaths", "must not touch", where, problems);
+        var owned = Patterns(item, "ownedPaths", "owns", where, directories, problems);
+        var forbidden = Patterns(item, "forbiddenPaths", "must not touch", where, directories, problems);
 
         if (owned.Count == 0 && Texts(item["ownedPaths"])!.Count == 0)
         {
@@ -311,8 +321,8 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
         return new Item(name, owned, forbidden, item);
     }
 
-    /// <summary>The patterns of <paramref name="member"/>, each read as a glob; one that does not read is a problem, and is left out.</summary>
-    private static List<(string Text, GlobPattern Pattern)> Patterns(JsonObject item, string member, string does, string where, List<string> problems)
+    /// <summary>The entries of <paramref name="member"/>, each read from the repository's root; one that does not read is a problem, and is left out.</summary>
+    private static List<(string Text, GlobPattern Pattern)> Patterns(JsonObject item, string member, string does, string where, Func<string, bool> directories, List<string> problems)
     {
         var patterns = new List<(string, GlobPattern)>();
 
@@ -324,7 +334,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
                 continue;
             }
 
-            patterns.Add((text, GlobPattern.Parse(text)));
+            patterns.Add((text, GlobPattern.FromRoot(text, directories)));
         }
 
         return patterns;

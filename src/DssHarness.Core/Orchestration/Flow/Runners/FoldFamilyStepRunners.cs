@@ -48,24 +48,30 @@ public sealed record FoldCall(
 /// <summary>
 /// The paths a fold would write that a step's <c>within</c> leaves out: each path its plan writes or removes in the main
 /// tree, those it would merge were it asked among them (<see cref="AgentPlanned.WouldWrite"/>), matched against the
-/// patterns <c>within</c> names - never the registry files its rows change, nor a path handed to the agent.
+/// entries <c>within</c> names, read from the main tree's root as a work item's owned paths are
+/// (<see cref="GlobPattern.FromRoot"/>) - never the registry files its rows change, nor a path handed to the agent.
 /// </summary>
 public static class FoldWithin
 {
     /// <summary>The paths of <paramref name="paths"/> none of <paramref name="within"/> matches; none where the step names no <c>within</c>.</summary>
     /// <param name="paths">The paths it would write.</param>
-    /// <param name="within">The patterns the step's <c>within</c> names, already checked; null where it names none.</param>
+    /// <param name="within">The entries the step's <c>within</c> names, already checked; null where it names none.</param>
+    /// <param name="directories">
+    /// Whether a path from the root names a directory of the main tree (<see cref="GlobPattern.DirectoriesIn"/>): an entry
+    /// that is a path carries what is beneath it only where it does, as the plan's check read it.
+    /// </param>
     /// <param name="comparison">How this machine compares paths.</param>
-    public static IReadOnlyList<string> Outside(IReadOnlyList<string> paths, IReadOnlyList<string>? within, StringComparison comparison)
+    public static IReadOnlyList<string> Outside(IReadOnlyList<string> paths, IReadOnlyList<string>? within, Func<string, bool> directories, StringComparison comparison)
     {
         ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(directories);
 
         if (within is null)
         {
             return [];
         }
 
-        var patterns = within.Select(GlobPattern.Parse).ToList();
+        var patterns = within.Select(entry => GlobPattern.FromRoot(entry, directories)).ToList();
 
         return [.. paths.Where(path => !patterns.Any(pattern => pattern.Matches(path, comparison)))];
     }
@@ -130,10 +136,11 @@ public static class FoldStandings
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
+/// <param name="fileSystem">Tells which paths a fold's <c>within</c> names are directories of the main tree.</param>
 /// <param name="store">Reads the agent's record, and keeps the step's.</param>
 /// <param name="ledger">The run's ledger of its folds; null for a step that folds nothing into the main tree.</param>
 /// <param name="graph">The engine's own syncs of the run's codebase graph.</param>
-public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, FoldLedger? ledger, FlowGraphSyncs graph) : IFlowStepTypeRunner
+public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, IFileSystem fileSystem, OrchestrationStore store, FoldLedger? ledger, FlowGraphSyncs graph) : IFlowStepTypeRunner
 {
     /// <inheritdoc/>
     public abstract string Type { get; }
@@ -500,7 +507,9 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
 
     /// <summary>The paths a dry run would write that the step's <c>within</c> leaves out; none for a step that does not fold, and where nothing was planned.</summary>
     private IReadOnlyList<string> OutsideOf(AgentVerbFacts? facts, FoldCall call, bool folds)
-        => facts?.Planned is { } planned ? FoldWithin.Outside(planned.WouldWrite, WithinOf(call, folds).Patterns, platform.PathComparison) : [];
+        => facts?.Planned is { } planned
+            ? FoldWithin.Outside(planned.WouldWrite, WithinOf(call, folds).Patterns, GlobPattern.DirectoriesIn(fileSystem, call.Place.Repository), platform.PathComparison)
+            : [];
 
     /// <summary>What a question of <paramref name="kind"/> is about in a dry run: its paths outside <c>within</c>, or what its plan names for the consent.</summary>
     private static IReadOnlyList<string> NamesFor(string kind, AgentVerbFacts? facts, IReadOnlyList<string> outside)
@@ -591,12 +600,13 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
+/// <param name="fileSystem">Tells which paths its <c>within</c> names are directories of the main tree.</param>
 /// <param name="store">Reads the agent's record, and keeps the step's.</param>
 /// <param name="agents">Folds the agent.</param>
 /// <param name="ledger">The run's ledger of its folds.</param>
 /// <param name="graph">The engine's own syncs of the run's codebase graph.</param>
-public sealed class FoldStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IAgentService agents, FoldLedger ledger, FlowGraphSyncs graph)
-    : FoldFamilyStepRunner(contextLoader, platform, store, ledger, graph)
+public sealed class FoldStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, IFileSystem fileSystem, OrchestrationStore store, IAgentService agents, FoldLedger ledger, FlowGraphSyncs graph)
+    : FoldFamilyStepRunner(contextLoader, platform, fileSystem, store, ledger, graph)
 {
     /// <inheritdoc/>
     public override string Type => "fold";
@@ -625,12 +635,13 @@ public sealed class FoldStepRunner(IHarnessContextLoader contextLoader, IHostPla
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
+/// <param name="fileSystem">Tells which paths its <c>within</c> names are directories of the main tree.</param>
 /// <param name="store">Reads the agent's record, and keeps the step's.</param>
 /// <param name="agents">Deletes the agent.</param>
 /// <param name="ledger">The run's ledger of its folds.</param>
 /// <param name="graph">The engine's own syncs of the run's codebase graph.</param>
-public sealed class DeleteAgentStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IAgentService agents, FoldLedger ledger, FlowGraphSyncs graph)
-    : FoldFamilyStepRunner(contextLoader, platform, store, ledger, graph)
+public sealed class DeleteAgentStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, IFileSystem fileSystem, OrchestrationStore store, IAgentService agents, FoldLedger ledger, FlowGraphSyncs graph)
+    : FoldFamilyStepRunner(contextLoader, platform, fileSystem, store, ledger, graph)
 {
     /// <inheritdoc/>
     public override string Type => "delete-agent";
@@ -704,11 +715,12 @@ public sealed class DeleteAgentStepRunner(IHarnessContextLoader contextLoader, I
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
+/// <param name="fileSystem">The file system, which a step that folds nothing never asks.</param>
 /// <param name="store">Reads the agent's record, and keeps the step's.</param>
 /// <param name="agents">Refreshes the agent.</param>
 /// <param name="graph">The engine's own syncs of the run's codebase graph.</param>
-public sealed class RefreshStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IAgentService agents, FlowGraphSyncs graph)
-    : FoldFamilyStepRunner(contextLoader, platform, store, ledger: null, graph)
+public sealed class RefreshStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, IFileSystem fileSystem, OrchestrationStore store, IAgentService agents, FlowGraphSyncs graph)
+    : FoldFamilyStepRunner(contextLoader, platform, fileSystem, store, ledger: null, graph)
 {
     /// <inheritdoc/>
     public override string Type => "refresh";
@@ -760,11 +772,12 @@ public sealed class RefreshStepRunner(IHarnessContextLoader contextLoader, IHost
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
+/// <param name="fileSystem">The file system, which a step that folds nothing never asks.</param>
 /// <param name="store">Reads the agent's record, and keeps the step's.</param>
 /// <param name="agents">Moves the agent's base.</param>
 /// <param name="graph">The engine's own syncs of the run's codebase graph.</param>
-public sealed class RebaseStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IAgentService agents, FlowGraphSyncs graph)
-    : FoldFamilyStepRunner(contextLoader, platform, store, ledger: null, graph)
+public sealed class RebaseStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, IFileSystem fileSystem, OrchestrationStore store, IAgentService agents, FlowGraphSyncs graph)
+    : FoldFamilyStepRunner(contextLoader, platform, fileSystem, store, ledger: null, graph)
 {
     /// <inheritdoc/>
     public override string Type => "rebase";
