@@ -521,26 +521,29 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         }
     }
 
-    /// <summary>The orchestrator entry as it ran, frozen, or null where the run holds none.</summary>
+    /// <summary>
+    /// The orchestrator entry as it ran, frozen, or null where the run holds none: read as this build reads one whichever
+    /// build froze it (<see cref="FrozenDefinition"/>).
+    /// </summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     /// <exception cref="HarnessException">The entry cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
     public WorkflowDefinition? ReadDefinition(OrchestratorLayout orchestrator)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
-        return Read<WorkflowDefinition>(orchestrator.DefinitionFile, DefinitionKind, _ => null);
+        return Read(orchestrator.DefinitionFile, DefinitionKind, _ => null, () => FrozenDefinition.Read(_fileSystem, orchestrator.DefinitionFile));
     }
 
     /// <summary>
     /// The orchestrator entry as it ran, frozen, or why it cannot be read: the entry null and the why set where the file
     /// is there and does not read, both null where it is not there - for a reader that answers anyway and says so in its
-    /// own words, where <see cref="ReadDefinition"/> refuses the whole read.
+    /// own words, where <see cref="ReadDefinition"/> refuses the whole read. Read as that one reads it.
     /// </summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     public (WorkflowDefinition? Definition, string? Why) ReadDefinitionOrWhy(OrchestratorLayout orchestrator)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
 
-        var (definition, why, _) = ReadOrWhy(orchestrator.DefinitionFile, DefinitionKind, _ => null, () => JsonStateFile.Read<WorkflowDefinition>(_fileSystem, orchestrator.DefinitionFile));
+        var (definition, why, _) = ReadOrWhy(orchestrator.DefinitionFile, DefinitionKind, _ => null, () => FrozenDefinition.Read(_fileSystem, orchestrator.DefinitionFile));
         return (definition, why);
     }
 

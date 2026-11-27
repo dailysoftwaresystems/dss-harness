@@ -197,9 +197,11 @@ public static partial class HelpTopics
         builder.AppendLine("preapproved is a run's input alone, whatever the key says. A workflow file that uses itself,");
         builder.AppendLine($"directly or through others, is refused with the circle of the files that close it, and steps nest at most {WorkflowFileParser.MaxDepth}");
         builder.AppendLine("deep in all, a used workflow's own counted below the step that uses it; a run records each");
-        builder.AppendLine("use's resolution, and a resume is refused where what the called workflow says changed since");
-        builder.AppendLine("the run began - the digest of its parsed definition, taken as the run's own definition's is,");
-        builder.AppendLine("so a comment or line endings change nothing - as its own definition's would.");
+        builder.AppendLine("use's resolution, and a resume is refused where what the called workflow brings the run");
+        builder.AppendLine("changed since it began - its steps and every part of it the run carries, compared with the");
+        builder.AppendLine("rest of the run's definition, so a comment or line endings change nothing - as its own");
+        builder.AppendLine("definition's would; the fingerprint the run records of it is no part of that, for another");
+        builder.AppendLine("build makes its own of the same words.");
         builder.AppendLine();
         AppendWrapped(builder, RemoteWorkflowsHelp);
         builder.AppendLine();

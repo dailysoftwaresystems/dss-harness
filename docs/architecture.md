@@ -2320,8 +2320,12 @@ others, so no definition that holds is deeper than the run's frozen `definition.
 written. A run records each use's resolution - the called workflow's name and its fingerprint, for
 a local one the digest of its parsed definition taken as the run's own definition's is, so a
 comment or line endings change nothing, and for a remote one, or one inside it, its commit - in the
-definition it freezes, and a resume is refused where what the called workflow says changed since
-the run began, as the run's own definition's would be. The shipped implementation workflow uses the
+definition it freezes, and a resume is refused where what the called workflow brings the run changed
+since the run began - its steps, inputs, params, outputs and recovery, the settings of its own it
+carries, its texts and the keys it declares unapplied, compared with the rest of the definition as
+the run's own steps are (`FlowResume.Said`); the fingerprint is left out of that, for a local one's is
+a digest the build that began the run made, which no frozen definition holds to make again, and a
+remote one's commit is in its name. The shipped implementation workflow uses the
 mechanism for itself: its item pipeline - written once in `item-pipeline/item-pipeline.yml` - is
 used by its rounds (`implementPrompt: prompts/implement.md`, `alternatives: 'true'`,
 `failTo: recover`) and by its recovery (`prompts/remedy.md`, `alternatives: 'false'`,
@@ -4631,7 +4635,9 @@ the event log says so, and the person is asked. The advisor: every question the 
 person is asked it, so every workflow a run is started of names an `advisor` - `WorkflowValidator` refuses one that names
 none (V43), the refusal naming the block `init` writes as its fix (`WorkflowTemplates.ShippedAdvisor`, read from the
 shipped definition), and the advisor's retired `kinds` is refused by the reader (`WorkflowFileParser.RetiredAdvisorKey`)
-and read forever from a frozen definition an earlier release wrote, never applied (`FlowAdvisor.Kinds`); and every
+and read forever from a frozen definition an earlier release wrote - empty where the file named none, as every release
+that read an advisor wrote it - and ignored, never applied nor written back, so no digest a resume compares carries it
+(`FrozenDefinition.Retired`); and every
 session of a run is given the advisor's runner (`FlowService`), so a question no advisor could be started for is a
 defect that fails the session (`InvalidOperationException`), never one asked unrecommended. `FlowCoordinator.SeekAdvice`
 runs the orchestrator's `advisor` block through
@@ -5118,9 +5124,19 @@ alike. A used workflow's file input is no such thing: it names a file of that wo
 definition's check reads. A session of a run already made -
 `resume-orchestrator`, or `answer-orchestrator` where no engine runs the run - first sweeps what a
 killed engine's steps left running (`ChildSessions`), refuses a definition the repository's entry
-in the main checkout no longer matches - compared by digest of what the definition says
-(`FlowRunContext.DigestOf`), never of where its file was read from, so a checkout that moved or a
-command typed in another tree is no change - and claims the run inside the same section: refused by
+in the main checkout no longer says - a definition is changed only by what it says, so what each says is compared,
+both as this build reads them and digested by this build's one serializer (`FlowResume.RefuseAChangedDefinition`
+over `FlowRunContext.DigestOf`): the entry the definition's check makes now, and the run's `definition.json` as this
+build reads a frozen one (`FrozenDefinition`), whichever build froze it - each member that may be null and that an
+earlier release left out, as it left out every null and had none of the members added since, read as null, and each
+member a new definition is refused for naming, which an earlier release's may hold (`FrozenDefinition.Retired`: the
+advisor's `kinds`, the codebase graph's `maxFileBytes`), read in its shape and ignored. Never against the digest
+`flow.json` holds (`definitionDigest`, written as the run began and kept as the record of what it began with), which
+the build that began it made of the same words written its own way; never by where the file was read from; and never
+by a use's fingerprint, the digest that build made of the called file, which no frozen definition holds to make
+again - what the use brings the run, its steps and every part of it carried, is in the definition and compared there
+(`FlowResume.Said`). So a checkout that moved, a command typed in another tree, or a run an earlier release began is no
+change - and claims the run inside the same section: refused by
 name where the run was deleted since, refused while a live engine owns it, a dead owner reclaimed
 and said, a request no engine took removed - one that cannot be read refuses the session, and the
 claim just made is let go first, so no owner is left behind by a session that never began. Two starts,

@@ -338,7 +338,8 @@ public static class WorkflowFileParser
 
     /// <summary>
     /// The keys <c>codebaseGraph</c> took before what they set went: each is refused naming why, so a reader takes the
-    /// line out knowing what became of it rather than looking for where it moved.
+    /// line out knowing what became of it rather than looking for where it moved. A frozen definition an earlier release
+    /// wrote still reads its <c>maxFileBytes</c>, and ignores it (<see cref="FrozenDefinition.Retired"/>).
     /// </summary>
     internal static string? RetiredGraphKey(string key)
         => key == "maxFileBytes"
@@ -935,8 +936,8 @@ public static class WorkflowFileParser
 
     /// <summary>
     /// The keys the advisor took before what they set went: each is refused naming why, so a reader takes the line out
-    /// knowing what became of it. A frozen definition an earlier release wrote still reads its <c>kinds</c>
-    /// (<see cref="FlowAdvisor.Kinds"/>), never applied.
+    /// knowing what became of it. A frozen definition an earlier release wrote still reads its <c>kinds</c>, and ignores
+    /// it (<see cref="FrozenDefinition.Retired"/>).
     /// </summary>
     internal static string? RetiredAdvisorKey(string key)
         => key == "kinds"

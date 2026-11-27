@@ -35,9 +35,9 @@ public sealed class FlowResumeTests
         return (harness, layout, new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of(run, definition)));
     }
 
-    /// <summary>What a run left, taken up: the records read, reconciled, and handed back with the handoffs of its stopped steps.</summary>
-    private static FlowResumeState TakeUp(HarnessFactory harness, OrchestratorLayout layout, WorkflowDefinition definition, string? digest = null)
-        => new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(digest ?? FlowRunContext.DigestOf(definition));
+    /// <summary>What a run left, taken up under <paramref name="definition"/> as the repository's entry: the records read, reconciled, and handed back with the handoffs of its stopped steps.</summary>
+    private static FlowResumeState TakeUp(HarnessFactory harness, OrchestratorLayout layout, WorkflowDefinition definition)
+        => new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
 
     /// <summary>
     /// The repository's bar for a recommendation is read live, each time it is given: the orchestrator's
@@ -970,13 +970,40 @@ public sealed class FlowResumeTests
             await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
 
-        var raised = Assert.Throws<HarnessException>(() => TakeUp(harness, layout, definition, digest: "another digest entirely"));
+        var changed = definition with { Steps = [.. definition.Steps, new WorkflowStep { Name = "added", Type = "orient" }] };
+        var raised = Assert.Throws<HarnessException>(() => TakeUp(harness, layout, changed));
 
         Assert.Equal(HarnessExit.Refused, raised.ExitCode);
         Assert.Equal(
             "workflow 'flow', as the repository's config declares it now, has changed since run 'r1' began, and a run goes on only under the definition it began with; "
             + "run-orchestrator flow starts a new run of it. Nothing of run 'r1' was changed.",
             raised.Message);
+    }
+
+    /// <summary>
+    /// The help, the README and the architecture say what a resume compares, as the rule does: what the repository's
+    /// entry and the run's frozen definition say, each as this build reads it - a run an earlier release began no change,
+    /// a key retired since read and ignored, and the digest <c>flow.json</c> holds kept as the record of what it began with.
+    /// </summary>
+    [Fact]
+    public void TheHelpTheReadmeAndTheArchitecture_SayAResumeComparesWhatEachDefinitionSays()
+    {
+        var help = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("orchestrators"));
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            $"the entry and the run's frozen {OrchestratorLayout.DefinitionFileName} are compared each as this build reads it, so a run an earlier release began, which wrote its definition its own way, "
+                + "is no change, a key retired since that it froze is read and ignored, and the digest its flow.json holds stays the record of what it began with",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "refused (13) too where what the repository's entry for it says changed since - the entry and the run's frozen definition compared each as this build reads it, so a run an earlier release began is no change -",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains($"(`{nameof(FlowResume)}.{nameof(FlowResume.RefuseAChangedDefinition)}` over `{nameof(FlowRunContext)}.{nameof(FlowRunContext.DigestOf)}`)", architecture, StringComparison.Ordinal);
+        Assert.Contains($"(`{nameof(FrozenDefinition)}.{nameof(FrozenDefinition.Retired)}`: the advisor's `kinds`, the codebase graph's `maxFileBytes`)", architecture, StringComparison.Ordinal);
+        Assert.Contains($"compared there (`{nameof(FlowResume)}.{nameof(FlowResume.Said)}`)", architecture, StringComparison.Ordinal);
     }
 
     /// <summary>The graph is rebuilt over the items and iterations the records name: a taken-up forEach holds each item's value, and what a finished item wrote is read by what comes after.</summary>

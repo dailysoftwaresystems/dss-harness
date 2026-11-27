@@ -441,7 +441,7 @@ public sealed class FlowPlanUpdateTests
 
         using (again)
         {
-            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The question the probe asked is open, and the run paused beside it with the update under way: the
             // answer drives the update to its end - the scope rests, the plan stands, the hold ends, `later` runs.
@@ -747,7 +747,7 @@ public sealed class FlowPlanUpdateTests
 
         using (again)
         {
-            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             Assert.True(resumed.TryAnswer(gate, "go", null, out _));
             var end = await Task.Run(() => resumed.RunAsync(Token), Token).WaitAsync(Bound, Token);
@@ -839,7 +839,7 @@ public sealed class FlowPlanUpdateTests
 
         using (again)
         {
-            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             Assert.True(resumed.TryAnswer(resumed.OpenQuestions.Single().Id, "go", null, out _));
             var end = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
@@ -1002,7 +1002,7 @@ public sealed class FlowPlanUpdateTests
 
         using (again)
         {
-            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             var end = await resumed.RunAsync(Token);
 

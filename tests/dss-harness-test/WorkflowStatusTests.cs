@@ -311,7 +311,7 @@ public sealed class WorkflowStatusTests
             // The crash: the session never ends, and the records stop where they stand - the last whole writes.
         }
 
-        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
 
         var (_, _, again) = Records("r1", temp.Path, definition, clock);
 

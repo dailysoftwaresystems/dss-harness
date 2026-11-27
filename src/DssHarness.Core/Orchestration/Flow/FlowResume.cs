@@ -56,20 +56,27 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
 
     /// <summary>
-    /// Refuses (13), with a pointer to a new run, a run whose definition the repository's entry no longer matches: the
-    /// run keeps the definition it began with, and every record it wrote was written under it. The one owner of the rule.
+    /// Refuses (13), with a pointer to a new run, a run whose definition the repository's entry no longer says: the run
+    /// keeps the definition it began with, and every record it wrote was written under it. A definition is changed only
+    /// by what it says, so what each says is compared (<see cref="Said"/>), both as this build reads them - the entry as
+    /// the definition's check made it now, and the run's <c>definition.json</c> as this build reads a frozen one
+    /// (<see cref="FrozenDefinition"/>) - and both written by this build's one serializer: never against the digest
+    /// <c>flow.json</c> holds, the record of what the run began with, which the build that began it made of the same words
+    /// written its own way. The one owner of the rule.
     /// </summary>
-    /// <param name="file">The run's state in one file, which holds the digest it began with.</param>
+    /// <param name="file">The run's state in one file, which names the workflow it runs.</param>
     /// <param name="layout">The run's layout.</param>
-    /// <param name="definitionDigest">The digest of the repository's entry as it reads now.</param>
-    /// <exception cref="HarnessException">The two differ (<see cref="HarnessExit.Refused"/>).</exception>
-    public static void RefuseAChangedDefinition(FlowFile file, OrchestratorLayout layout, string definitionDigest)
+    /// <param name="frozen">The definition the run began with, as this build reads its <c>definition.json</c>.</param>
+    /// <param name="entry">The repository's entry for the workflow, as the definition's check reads it now.</param>
+    /// <exception cref="HarnessException">The two say different things (<see cref="HarnessExit.Refused"/>).</exception>
+    public static void RefuseAChangedDefinition(FlowFile file, OrchestratorLayout layout, WorkflowDefinition frozen, WorkflowDefinition entry)
     {
         ArgumentNullException.ThrowIfNull(file);
         ArgumentNullException.ThrowIfNull(layout);
-        ArgumentException.ThrowIfNullOrWhiteSpace(definitionDigest);
+        ArgumentNullException.ThrowIfNull(frozen);
+        ArgumentNullException.ThrowIfNull(entry);
 
-        if (!string.Equals(definitionDigest, file.DefinitionDigest, StringComparison.Ordinal))
+        if (!string.Equals(Said(entry), Said(frozen), StringComparison.Ordinal))
         {
             throw new HarnessException(
                 HarnessExit.Refused,
@@ -79,23 +86,57 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
     }
 
     /// <summary>
+    /// The digest of what <paramref name="definition"/> says, as this build writes it (<see cref="FlowRunContext.DigestOf(WorkflowDefinition)"/>),
+    /// each use's fingerprint left out. The use it stands for is in the definition whole - the called workflow's steps,
+    /// its inputs, params, outputs and recovery, the settings of its own it carries, its texts and the keys it declares
+    /// that nothing applies - and is compared there, as every other step is: the one owner of whether what a used
+    /// workflow brings the run changed. A local use's fingerprint is a digest the build that began the run made of the
+    /// called file, which no frozen definition holds to make again; a remote one's commit is in its name.
+    /// </summary>
+    /// <param name="definition">The definition, as this build reads it.</param>
+    internal static string Said(WorkflowDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        return FlowRunContext.DigestOf(definition with
+        {
+            Steps = Compared(definition.Steps),
+            Recover = Compared(definition.Recover),
+        });
+    }
+
+    /// <summary>Each of <paramref name="steps"/> as <see cref="Said"/> compares it, at every depth: each use's fingerprint left out.</summary>
+    private static IReadOnlyList<WorkflowStep> Compared(IReadOnlyList<WorkflowStep> steps)
+        => [.. steps.Select(step => step with
+        {
+            Steps = Compared(step.Steps),
+            Use = step.Use is { } use ? use with { Fingerprint = string.Empty, Recover = Compared(use.Recover) } : null,
+        })];
+
+    /// <summary>A recovery as <see cref="Said"/> compares it, its steps' uses' fingerprints left out; null where there is none.</summary>
+    private static FlowRecover? Compared(FlowRecover? recover)
+        => recover is null ? null : recover with { Steps = Compared(recover.Steps) };
+
+    /// <summary>
     /// The state the run left, reconciled: every step's own record read beside the index and taken wherever there is
     /// one, what only a step's directory holds adopted at the end, the stopped steps' handoffs read from their own
     /// directories, and the index written again over what the reconciliation found.
     /// </summary>
-    /// <param name="definitionDigest">The digest of the repository's entry as the caller reads it now; where the run's own digest differs, the resume is refused with a pointer to a new run (<see cref="RefuseAChangedDefinition"/>).</param>
+    /// <param name="entry">The repository's entry for the workflow, as the caller's definition check reads it now; where what it says differs from what the run's frozen definition says, the resume is refused with a pointer to a new run (<see cref="RefuseAChangedDefinition"/>).</param>
     /// <exception cref="HarnessException">
-    /// The run holds no state, its questions, its issues or its affected tests; a record does not read; a record names a handoff its
+    /// The run holds no state, no definition, its questions, its issues or its affected tests; a record does not read; a record names a handoff its
     /// directory does not hold; or the definition differs (<see cref="HarnessExit.Refused"/>).
     /// </exception>
-    public FlowResumeState Load(string definitionDigest)
+    public FlowResumeState Load(WorkflowDefinition entry)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(definitionDigest);
+        ArgumentNullException.ThrowIfNull(entry);
 
         var file = _store.ReadFlow(_layout)
             ?? throw new HarnessException(HarnessExit.Refused, $"'{_layout.FlowFile}' is not there, so run '{_layout.Name}' holds no state to take up");
+        var frozen = _store.ReadDefinition(_layout)
+            ?? throw new HarnessException(HarnessExit.Refused, $"'{_layout.DefinitionFile}' is not there, so run '{_layout.Name}' holds no definition to go on with");
 
-        RefuseAChangedDefinition(file, _layout, definitionDigest);
+        RefuseAChangedDefinition(file, _layout, frozen, entry);
 
         // The run's questions, its issues and its affected tests are made with it and never removed: one missing is
         // something that removed it, and an empty one in its place would leave a step waiting on a question nobody can

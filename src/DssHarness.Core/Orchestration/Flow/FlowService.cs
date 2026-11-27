@@ -405,7 +405,7 @@ public sealed class FlowService(
             return refused;
         }
 
-        var (digest, changed) = await EntryDigestAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
+        var (entry, changed) = await EntryAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
 
         if (changed is not null)
         {
@@ -424,7 +424,7 @@ public sealed class FlowService(
             return Ended(layout, ResumeCommand, outcome, ResultOf(layout, outcome), json);
         }
 
-        return await SessionAsync(context, layout, ResumeCommand, reclaimed, () => Resumed(layout, digest!), answered: null, interrupts, json, cancellationToken).ConfigureAwait(false);
+        return await SessionAsync(context, layout, ResumeCommand, reclaimed, () => Resumed(layout, entry!), answered: null, interrupts, json, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -526,7 +526,7 @@ public sealed class FlowService(
 
             // The session is held to the definition it began with, as a resume is, and begins with the change: the
             // engine holds the set to its window and to once, and the change goes by the gates every update passes.
-            var (digestOfChange, changedDefinition) = await EntryDigestAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
+            var (entryOfChange, changedDefinition) = await EntryAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
 
             if (changedDefinition is not null)
             {
@@ -550,7 +550,7 @@ public sealed class FlowService(
                 layout,
                 AnswerCommand,
                 reclaimedChange,
-                () => Resumed(layout, digestOfChange!),
+                () => Resumed(layout, entryOfChange!),
                 (set.Id, answer, changes, null),
                 interrupts,
                 json,
@@ -633,7 +633,7 @@ public sealed class FlowService(
         }
 
         // The session is held to the definition it began with, as a resume is.
-        string? digest;
+        WorkflowDefinition? declared;
         string? reclaimed;
 
         while (true)
@@ -648,7 +648,7 @@ public sealed class FlowService(
 
             try
             {
-                (digest, var changed) = await EntryDigestAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
+                (declared, var changed) = await EntryAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
 
                 if (changed is not null)
                 {
@@ -708,7 +708,7 @@ public sealed class FlowService(
         // The session begins with the answer: the question it names, answered by a person through this command - under
         // the inbox entry it was handed over under, where it was, so the run weighs that entry once - and everything
         // that can run after it.
-        return await SessionAsync(context, layout, AnswerCommand, reclaimed, () => Resumed(layout, digest!), (asked.Id, answer, takes, handedUnder), interrupts, json, cancellationToken).ConfigureAwait(false);
+        return await SessionAsync(context, layout, AnswerCommand, reclaimed, () => Resumed(layout, declared!), (asked.Id, answer, takes, handedUnder), interrupts, json, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1601,14 +1601,15 @@ public sealed class FlowService(
         => () => _children.SweepAsync(_store.Orchestrators(context.Layout), command).GetAwaiter().GetResult();
 
     /// <summary>
-    /// The digest of the repository's entry for the workflow the run began with, as it reads now in the definition tree
-    /// - the main checkout, <paramref name="definitionTree"/>, whichever tree the command was typed in - or the refusal
+    /// The repository's entry for the workflow the run began with, as it reads now in the definition tree - the main
+    /// checkout, <paramref name="definitionTree"/>, whichever tree the command was typed in - which the session's resume
+    /// holds to what the run's frozen definition says (<see cref="FlowResume.RefuseAChangedDefinition"/>), or the refusal
     /// (13) where the entry is no longer one that holds: a run goes on only under the definition it began with. The remote
     /// workflows the check resolved, each at the commit the run began with and read from the run's own copy first, are
     /// kept again in that copy where it does not hold them whole, so a session reads every file it began with whatever a
     /// pruning did meanwhile.
     /// </summary>
-    private async Task<(string? Digest, CommandOutcome? Refused)> EntryDigestAsync(string definitionTree, OrchestratorLayout layout, CancellationToken cancellationToken)
+    private async Task<(WorkflowDefinition? Entry, CommandOutcome? Refused)> EntryAsync(string definitionTree, OrchestratorLayout layout, CancellationToken cancellationToken)
     {
         var frozen = _store.ReadDefinition(layout);
 
@@ -1657,16 +1658,16 @@ public sealed class FlowService(
             return (null, CommandOutcome.Failed(ex.ExitCode, $"run '{layout.Name}' began of workflow '{frozen.Name}', and the remote workflows it began with could not be kept with it again in '{layout.RemoteWorkflowsDirectory}': {ex.Message.TrimEnd('.')}. Nothing else of the run was changed."));
         }
 
-        return (FlowRunContext.DigestOf(entry), null);
+        return (entry, null);
     }
 
-    /// <summary>What a session over a run already made goes on from: the definition it began with, the state it left reconciled and held to <paramref name="digest"/>, and the run as its records name it.</summary>
-    private (WorkflowDefinition Definition, FlowRunContext Context, FlowResumeState? Resume) Resumed(OrchestratorLayout layout, string digest)
+    /// <summary>What a session over a run already made goes on from: the definition it began with, the state it left reconciled and held to what <paramref name="entry"/> says, and the run as its records name it.</summary>
+    private (WorkflowDefinition Definition, FlowRunContext Context, FlowResumeState? Resume) Resumed(OrchestratorLayout layout, WorkflowDefinition entry)
     {
         var definition = _store.ReadDefinition(layout)
             ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.DefinitionFile}' is not there, so run '{layout.Name}' holds no definition to go on with");
 
-        var resume = new FlowResume(_store, layout, _fileSystem).Load(digest);
+        var resume = new FlowResume(_store, layout, _fileSystem).Load(entry);
 
         return (definition, FlowRunContext.Resumed(definition, resume.File), resume);
     }

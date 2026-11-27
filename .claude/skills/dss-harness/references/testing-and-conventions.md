@@ -124,7 +124,11 @@ the real client and intercept one call.
 - **Retired markers are read forever and never written; retired keys are refused.** A renamed `.gitignore` marker
   is still recognised where users have it on disk, and only the new one is ever written (`GitIgnoreManager`). A
   retired `config.json` key is refused like any unknown key, with a message naming what took its place
-  (`MisplacedKeys`): a key that loads is a key that is read.
+  (`MisplacedKeys`): a key that loads is a key that is read. A key retired from a workflow file is refused by its
+  reader, and a run's frozen `definition.json` that holds it is read by `FrozenDefinition` - the member in its old
+  shape, then ignored (`FrozenDefinition.Retired`) - never by a member kept on the model; what a resume compares is
+  what each definition says as this build reads it (`FlowResume.RefuseAChangedDefinition`), never a digest an older
+  build made.
 
 ## 7. Don't
 

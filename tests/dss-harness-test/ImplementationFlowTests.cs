@@ -3755,6 +3755,36 @@ public sealed class ImplementationFlowTests
     public sealed class StepsAndDefinition
     {
         /// <summary>
+        /// The shipped flow's run an earlier release began - its advisor's kinds frozen empty, as each release that read an
+        /// advisor wrote them, and its flow.json recording that release's digest of its own form - is answered and resumed
+        /// under the shipped entry unchanged, never refused as a definition changed since: what the entry and the frozen
+        /// definition say is compared, each as this build reads it, and the record of what the run began with is kept.
+        /// </summary>
+        [Fact]
+        public async Task TheShippedFlowsRunAnEarlierReleaseBegan_IsAnsweredAndResumedUnderTheEntryUnchanged()
+        {
+            using var temp = new TempDirectory();
+            var kit = await PrepareAsync(temp, agents => agents.Queue("triage", Asked("Which report is it?"), Completed(Triage(stops: [Stop()]))));
+
+            var triage = await StartAsync(kit, "request=Ship the orders report.");
+
+            Assert.Equal(FlowExit.Paused, triage.ExitCode);
+
+            var digest = EarlierRelease.Freeze(kit.RunOf(), EarlierRelease.WithKinds(EarlierRelease.Frozen(kit.RunOf())));
+            var stopped = await AnswerAsync(kit, "answer", "The orders report, weekly.");
+
+            // The answer is taken and the run goes on to the stop triage reported, put to the person.
+            Assert.Equal(FlowExit.Paused, stopped.ExitCode);
+            Assert.Equal(["q2"], kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open.Select(question => question.Id));
+
+            var resumed = await ResumeAsync(kit);
+
+            Assert.Equal(HarnessExit.Refused, resumed.ExitCode);
+            Assert.Equal("nothing of this run can run until the question of step 'blocked' is answered; answer-orchestrator answers it", resumed.Message);
+            Assert.Equal(digest, kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.DefinitionDigest);
+        }
+
+        /// <summary>
         /// The flow's commits, worked by the engine's own commit runner: a commit step with no fold upstream of it
         /// uncommitted ends done, committed false, and runs no git at all; and of two commit steps in one flow the first
         /// takes the fold before it and the second only what was folded after it, each with its own message of the checks

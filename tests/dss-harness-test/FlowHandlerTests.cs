@@ -1092,7 +1092,7 @@ public sealed class FlowHandlerTests
             [new FlowHandlerState("log", "raised"), new FlowHandlerState("mend", "left")],
             harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "round.check").Handlers!.OrderBy(handler => handler.Handler, StringComparer.Ordinal));
 
-        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
 
         using (var again = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
@@ -1675,7 +1675,7 @@ public sealed class FlowHandlerRecordsTests
         Assert.Equal(nameof(FlowInstanceState.Running), harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "mend").State);
         Assert.DoesNotContain(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Instance == "mend.fix");
 
-        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
         var again = new Runner().On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
 
         using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
@@ -1733,7 +1733,7 @@ public sealed class FlowHandlerRecordsTests
         });
         harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile("mend"), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("mend"))! with { State = nameof(FlowInstanceState.NotStarted) });
 
-        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
         var again = new Runner().On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
 
         using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
@@ -1905,7 +1905,7 @@ public sealed class FlowHandlerRecordsTests
             Assert.Single(harness.OrchestrationStore.ReadFlow(layout)?.Redirects ?? []);
         }
 
-        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
 
         using (var again = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
@@ -1966,7 +1966,7 @@ public sealed class FlowHandlerRecordsTests
             Assert.Equal("implement", Assert.Single(harness.OrchestrationStore.ReadFlow(layout)?.Redirects ?? []).Target);
         }
 
-        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
         var again = new Runner()
             .On("verify", run => FlowStepResult.Ended(passed: true, HarnessExit.Success));
 

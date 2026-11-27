@@ -72,9 +72,10 @@ public interface IFlowRecords
 
 /// <summary>
 /// What a run is, as its records name it: its name, the definition it runs and the digest of the definition as it ran,
-/// the values it was started with, the commit and the branch it started from, and when. The digest freezes the
-/// definition: a resume runs <c>definition.json</c>, never the file the command read, keeps the digest the run began
-/// with, and is refused, with a pointer to a new run, where the repository's entry now differs.
+/// the values it was started with, the commit and the branch it started from, and when. A resume runs
+/// <c>definition.json</c>, never the file the command read, and keeps the digest the run began with as the record of
+/// it; it is refused, with a pointer to a new run, where what the repository's entry says now differs from what
+/// <c>definition.json</c> says, both as this build reads them (<see cref="FlowResume.RefuseAChangedDefinition"/>).
 /// </summary>
 /// <param name="Run">The run's name.</param>
 /// <param name="Definition">The definition, as it ran.</param>
@@ -120,7 +121,7 @@ public sealed record FlowRunContext(
 
     /// <summary>
     /// What a run is as a resume takes it up: everything its state in one file says of it - the digest it began with,
-    /// never one worked out again, its values, its commit and branch, when it began, and whether it keeps its file inputs'
+    /// kept as the record of it and never worked out again, its values, its commit and branch, when it began, and whether it keeps its file inputs'
     /// copies, which a file an older build wrote does not say, for that build kept none - with the definition it froze.
     /// </summary>
     /// <param name="definition">The definition as it ran, read from <c>definition.json</c>.</param>
@@ -134,9 +135,10 @@ public sealed record FlowRunContext(
     }
 
     /// <summary>
-    /// The SHA-256 of <paramref name="definition"/> as this build freezes it: the digest a run begins with, and the one a
-    /// resume compares the repository's entry by. Where the file was read from is no part of what the definition says:
-    /// the same entry read at another path - the checkout moved - digests the same.
+    /// The SHA-256 of <paramref name="definition"/> as this build freezes it: the digest a run begins with, and the one
+    /// a resume compares what the repository's entry and the run's frozen definition say by, each digested by this build
+    /// (<see cref="FlowResume.RefuseAChangedDefinition"/>). Where the file was read from is no part of what the definition
+    /// says: the same entry read at another path - the checkout moved - digests the same.
     /// </summary>
     /// <param name="definition">The definition.</param>
     public static string DigestOf(WorkflowDefinition definition)
@@ -486,7 +488,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         }
 
         // The definition is what runs: frozen at the run's start, and never the file the command read. A resume runs
-        // this one, and checks the repository's entry against the digest the run began with.
+        // this one, and holds the repository's entry to what it says.
         if (_store.ReadDefinition(_layout) is null)
         {
             _store.WriteDefinition(_layout, _context.Definition);

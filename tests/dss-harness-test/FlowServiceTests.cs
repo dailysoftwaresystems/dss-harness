@@ -4252,6 +4252,140 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
+    /// The workflow of the runs an earlier release began: a question to wait at and a step after it whose failure goes to
+    /// the recovery, holding every member an earlier release wrote of a definition its own way - the advisor every run
+    /// names, its model the configuration's tier and its tier, model, effort and client null, written with no kinds; a
+    /// recovery naming no maxVisits; an input and a param naming no description.
+    /// </summary>
+    private const string FrozenEarlier = """
+        name: flow
+        inputs:
+          - name: request
+            kind: text
+        params:
+          - name: tone
+            default: plain
+        steps:
+          - name: holding
+            type: pause
+            question: what now?
+            options: [stay, go]
+          - name: after
+            type: orient
+            dependsOn: [holding]
+            onFailure: recover
+        recover:
+          onSuccess: failed-step
+          onFailure: pause
+          steps:
+            - name: diagnose
+              type: orient
+        """;
+
+    /// <summary>
+    /// A definition is changed only by what it says: a run whose definition an earlier release froze - its advisor's
+    /// kinds written empty, as each release that read an advisor wrote them, or every null left out, as each release wrote
+    /// before this build wrote such members null or not - is resumed and answered under its repository's entry
+    /// unchanged, though the digest its <c>flow.json</c> records is that release's of its own form; an entry whose words
+    /// changed is still refused; and the run's records of what it began with stay as that release wrote them.
+    /// </summary>
+    [Theory]
+    [InlineData("kinds")]
+    [InlineData("nulls")]
+    public async Task ARunWhoseDefinitionAnEarlierReleaseFroze_IsResumedAndAnsweredUnderItsEntryUnchanged_AndAChangedEntryIsStillRefused(string written)
+    {
+        var (repository, service, runner) = await ServiceAsync(FrozenEarlier);
+        using var disposed = repository;
+
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var began = repository.Harness.OrchestrationStore.ReadFlow(run)!.DefinitionDigest;
+        var frozen = EarlierRelease.Frozen(run);
+        var digest = EarlierRelease.Freeze(run, written == "kinds" ? EarlierRelease.WithKinds(frozen) : EarlierRelease.WithoutNulls(frozen));
+        var earlier = File.ReadAllText(run.DefinitionFile);
+
+        // The earlier release's digest is not the one this build recorded of the same definition as it began the run: a
+        // resume held to it would refuse the run.
+        Assert.NotEqual(began, digest);
+
+        TestAdvice.WriteWorkflow(repository.Tree, Workflow, FrozenEarlier.Replace("what now?", "what next?", StringComparison.Ordinal));
+
+        var changed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, changed.ExitCode);
+        Assert.Equal(
+            "workflow 'flow', as the repository's config declares it now, has changed since run 'r1' began, and a run goes on only under the definition it began with; "
+            + "run-orchestrator flow starts a new run of it. Nothing of run 'r1' was changed.",
+            changed.Message);
+
+        TestAdvice.WriteWorkflow(repository.Tree, Workflow, FrozenEarlier);
+
+        // Taken up: the resume goes on to the question still open, past the definition's check.
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, resumed.ExitCode);
+        Assert.Equal("nothing of this run can run until the question of step 'holding' is answered; answer-orchestrator answers it", resumed.Message);
+
+        var answered = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, answered.ExitCode);
+        Assert.Equal("done", answered.Message);
+        Assert.Equal(["after"], runner.Started);
+
+        // What the run began with is recorded as that release wrote it, never written again in this build's form.
+        Assert.Equal(digest, repository.Harness.OrchestrationStore.ReadFlow(run)!.DefinitionDigest);
+        Assert.Equal(earlier, File.ReadAllText(run.DefinitionFile));
+    }
+
+    /// <summary>
+    /// A run that named its advisor's kinds in an earlier release: its repository's entry naming them still is refused for
+    /// the retired key, which a new definition may not name, and once the line is taken out the run is resumed and
+    /// answered under the entry, its frozen kinds read and ignored - never one this build's reading counts as a change.
+    /// </summary>
+    [Fact]
+    public async Task AnEntryStillNamingItsAdvisorsKinds_IsRefusedForTheRetiredKey_AndWithTheLineTakenOut_TheRunGoesOn()
+    {
+        var (repository, service, runner) = await ServiceAsync(FrozenEarlier);
+        using var disposed = repository;
+
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var digest = EarlierRelease.Freeze(run, EarlierRelease.WithKinds(EarlierRelease.Frozen(run), "failure"));
+        var file = $".harness-config/workflows/{Workflow}/{Workflow}.yml";
+
+        repository.Tree.WriteFile(file, TestAdvice.Named(FrozenEarlier.ReplaceLineEndings("\n")).Replace("  prompt: prompts/recommend.md\n", "  prompt: prompts/recommend.md\n  kinds: [failure]\n", StringComparison.Ordinal));
+
+        var retired = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, retired.ExitCode);
+        Assert.Equal(
+            "run 'r1' began of workflow 'flow', which the repository's config no longer declares as one that holds; a run goes on only under the definition it began with. Nothing of the run was changed.",
+            retired.Message);
+        Assert.Equal(
+            [
+                $"'{Path.Combine(repository.Path, ".harness-config", "workflows", Workflow, $"{Workflow}.yml")}' has 1 problem(s):{Environment.NewLine}  - line 5, column 3: 'kinds' is not a key of advisor; every kind of question the engine raises is recommended by the advisor before a person is asked it, so an advisor names no kinds.",
+                $"log {run.LogFile("r1")}",
+            ],
+            retired.Details);
+
+        TestAdvice.WriteWorkflow(repository.Tree, Workflow, FrozenEarlier);
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, resumed.ExitCode);
+        Assert.Equal("nothing of this run can run until the question of step 'holding' is answered; answer-orchestrator answers it", resumed.Message);
+
+        var answered = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, answered.ExitCode);
+        Assert.Equal("done", answered.Message);
+        Assert.Equal(["after"], runner.Started);
+        Assert.Equal(digest, repository.Harness.OrchestrationStore.ReadFlow(run)!.DefinitionDigest);
+    }
+
+    /// <summary>
     /// The definition tree is the main checkout, wherever a command is typed: a run begun there is resumed and answered
     /// from another tree of the repository - one holding the same workflow file at a path of its own, then an edited copy
     /// - under the entry it began with, never refused as changed, and never held to the other tree's copy.
