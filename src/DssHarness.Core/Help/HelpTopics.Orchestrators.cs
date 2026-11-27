@@ -199,7 +199,8 @@ public static partial class HelpTopics
             $"{OrchestratorService.ListCommand} lists the orchestrators, or the one named, their agents and where each stands, "
             + "and the worktrees below an orchestrator's directory that no agent records; for a run, its own lines from flow.json "
             + "and what its engine is doing - none, running, pausing while its handoffs are written, recording the machine steps a "
-            + "complete pause left running, or gone, an owner recorded whose process has ended - with each step instance (--steps: "
+            + "complete pause left running, stopping, a stop it applied ending its session, or gone, an owner recorded whose "
+            + "process has ended - with each step instance (--steps: "
             + "its state, visit, attempt, agent and directory) and each question and what became of it (--questions). --json prints "
             + $"the listing as one JSON document. {StoppedDocument}");
         builder.AppendLine();
@@ -338,8 +339,10 @@ public static partial class HelpTopics
             + $"{FlowService.AskCommand} a person's, both answered with the engine's facts, computed from the run's records and never "
             + "guessed: how the run stands and for how long, its engine and its pause; each step instance in progress with its type, "
             + "its agent, a reason step's model, its attempt and how long it has run; what it waits for - each open question with "
-            + "since when and the command that answers it - the resume, which seeks it first, where no engine runs the run and the "
-            + "question still owes its recommendation - a plan update under way or queued, an instance waiting on another, on "
+            + "since when and its next step - its answer; its answer taken now, ending the asking, where a live engine's advisor "
+            + "seeks its recommendation; or, where it still owes its recommendation, the pause's advice where a live engine's pause "
+            + "defers it, the resume, which seeks it first, where no engine runs the run, and the resume once the engine has gone "
+            + "where it is stopping - a plan update under way or queued, an instance waiting on another, on "
             + "the resume, on room - a claim, the run to be quiet, a counter of its limits - or on the fix of an issue that holds a "
             + "file its work item owns or that the item needs, a ci-wait reading the checks of the "
             + "commit the run last pushed; what is done, the failures a handler took and what was spent of the budget; what is left "
@@ -380,7 +383,8 @@ public static partial class HelpTopics
         AppendWrapped(
             builder,
             $"The report of a run. {FlowService.ReadReportCommand} answers it from the run's records alone - the same bytes for "
-            + "the same records, whatever a model might say - and never asks one: what the run was and how it stands, with its "
+            + "the same records and the same state of its engine, which names each open question's next step, whatever a model "
+            + "might say - and never asks one: what the run was and how it stands, with its "
             + "sessions, its wall time, its active time (the union of every attempt's runs), its pause (the time between its "
             + "sessions), its wait for a person and its budget; the totals of its tokens by kind and its dollars grouped "
             + "(totals.dollarsBy: each part of an attempt by the model that served it, each advice by the advisor's - the "

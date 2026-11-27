@@ -119,7 +119,7 @@ public static class FlowReports
         // reads - after the sections every form of the report holds.
         var (layout, flow, questions, updates) = (source.Layout, source.Flow, source.Questions, source.Updates);
         var report = FlowRunReport.Of(source);
-        var left = LeftForAPerson(layout, flow, questions, updates);
+        var left = LeftForAPerson(layout, flow, questions, source.EngineOrNone, updates);
         var handoffs = HandoffsOf(layout, flow);
 
         report["session"] = new JsonObject
@@ -369,18 +369,22 @@ public static class FlowReports
     /// What is left for a person, tied to no step's name: each pull request a <c>pull-request</c> step opened or found
     /// open, by its address, which the run did not merge and will not; the paths its folds changed that git ignores, as
     /// its <c>commit</c> steps answered them (<c>ignored</c>) and none of them took since, which the run never commits;
-    /// each question still open, with its recommendation and the next step it takes - its answer, or the resume that seeks
-    /// the recommendation it still owes (<see cref="NextStepOf"/>); each plan update that waits or was
+    /// each question still open, with its recommendation and the next step it takes by the one rule of it over what the
+    /// run's engine is doing (<see cref="FlowAnswerRules.NextStepOf"/>) - its answer, taken now while a live engine's
+    /// advisor seeks the recommendation, or, where the recommendation is still owed, the pause's advice, the resume, or the
+    /// resume once a stopping engine has gone, which seeks it first; each plan update that waits or was
     /// refused, so what became of a change a person asked for is never lost; and what each of the run's loops left.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
     /// <param name="flow">The run's state in one file.</param>
     /// <param name="questions">The run's questions and answers.</param>
+    /// <param name="engine">What the run's engine is doing: none for the report a session's end writes, for that session is leaving the run.</param>
     /// <param name="updates">The run's plan updates.</param>
-    public static IReadOnlyList<string> LeftForAPerson(OrchestratorLayout layout, FlowFile flow, FlowQuestionsFile? questions, FlowUpdatesFile? updates = null)
+    public static IReadOnlyList<string> LeftForAPerson(OrchestratorLayout layout, FlowFile flow, FlowQuestionsFile? questions, FlowEngineState engine, FlowUpdatesFile? updates = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(flow);
+        ArgumentNullException.ThrowIfNull(engine);
 
         var left = new List<string>();
 
@@ -410,7 +414,7 @@ public static class FlowReports
         {
             left.Add(
                 $"question {question.Id} ({question.Kind}) is open: {question.ProblemShown?.Happened ?? question.Kind}; {RecommendationOf(question)} - "
-                + NextStepOf(layout.Name, question));
+                + FlowAnswerRules.NextStepSaid(FlowAnswerRules.NextStepOf(question, engine), layout.Name, question.Id));
         }
 
         foreach (var update in updates?.Updates.Where(update => update.State is FlowUpdateStates.Refused or FlowUpdateStates.Queued or FlowUpdateStates.UnderWay) ?? [])
@@ -436,20 +440,6 @@ public static class FlowReports
         => list is JsonArray texts
             ? texts.OfType<JsonValue>().Where(text => text.GetValueKind() == JsonValueKind.String).Select(text => text.GetValue<string>())
             : [];
-
-    /// <summary>
-    /// The next step an open question takes, as the report names it: the answer, by <c>answer-orchestrator</c>; or, where
-    /// the question still owes the recommendation it is answered with (<see cref="FlowAnswerRules.OwesRecommendation"/>) -
-    /// a stop or a crash left it - <c>resume-orchestrator</c>, which seeks the recommendation first, for no advisor seeks
-    /// one between sessions and the answer is refused until it is given, <c>abort</c> alone taken now
-    /// (<see cref="FlowAnswerRules.Unrecommended"/>).
-    /// </summary>
-    /// <param name="run">The run's name.</param>
-    /// <param name="question">The open question.</param>
-    private static string NextStepOf(string run, FlowQuestionEntry question)
-        => FlowAnswerRules.OwesRecommendation(question.Kind, question.Recommendation, (question.Questions ?? []).Count)
-            ? $"resume-orchestrator {run} seeks its recommendation first, and answer it with answer-orchestrator {run} <answer> --question {question.Id} then; 'abort' is taken now"
-            : $"answer with answer-orchestrator {run} <answer> --question {question.Id}";
 
     /// <summary>A question's recommendation in words: the answer recommended and why, or that none was sought and why.</summary>
     private static string RecommendationOf(FlowQuestionEntry question)

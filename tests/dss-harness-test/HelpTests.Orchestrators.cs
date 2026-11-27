@@ -65,8 +65,10 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("which it reads every 2 s", prose, StringComparison.Ordinal);
         Assert.Contains(
-            "what it waits for - each open question with since when and the command that answers it - the resume, which seeks it first, where no engine "
-                + "runs the run and the question still owes its recommendation - a plan update under way or queued",
+            "what it waits for - each open question with since when and its next step - its answer; its answer taken now, ending the asking, where a live "
+                + "engine's advisor seeks its recommendation; or, where it still owes its recommendation, the pause's advice where a live engine's pause defers it, "
+                + "the resume, which seeks it first, where no engine runs the run, and the resume once the engine has gone where it is stopping - a plan update "
+                + "under way or queued",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -496,7 +498,8 @@ public sealed partial class HelpTests
     {
         Assert.Contains(
             $"The report of a run. {FlowService.ReadReportCommand} answers it from the run's records alone - the same bytes for "
-                + "the same records, whatever a model might say - and never asks one: what the run was and how it stands, with its "
+                + "the same records and the same state of its engine, which names each open question's next step, whatever a model "
+                + "might say - and never asks one: what the run was and how it stands, with its "
                 + "sessions, its wall time, its active time (the union of every attempt's runs), its pause (the time between its "
                 + "sessions), its wait for a person and its budget; the totals of its tokens by kind",
             Prose.Words(HelpText.Of("orchestrators").StandardOutput),

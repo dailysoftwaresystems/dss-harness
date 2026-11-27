@@ -4497,7 +4497,8 @@ ended waits there and none holds a slot (`LegStepRunner.StepHold`).
 
 The report of a run is built from its records alone by their one owner (`FlowRunReport`, from `flow.json`,
 `questions.json`, `updates.json`, `events.jsonl`, the item agents' closure ledgers and the frozen definition, read for
-every report of the run in one place, `FlowService.SourceOf`): the same records give the same bytes in every form -
+every report of the run in one place, `FlowService.SourceOf`, with what the run's engine is doing): the same records,
+the engine doing the same, give the same bytes in every form -
 text for a terminal, `--json` as one document, `--markdown` for a pull request or the clipboard - with the steps in the
 run's order (the instance order of `flow.json`), every row of a list with an id of its own (an error
 `<instance>@<attempt>`, a signal `<kind>#<n>`, a convergence row its list, the item, step or agent that said it and
@@ -4533,9 +4534,21 @@ counted - each naming its steps and its numbers, their thresholds keys of `defau
 (`FlowReports.Write` keeps its place; `report.json` is the document with the session's own members - its line, its
 code, its end and its handoffs - beside it, `report.md` its sections with the session's own words at its head and its
 questions, updates, handoffs and what is left for a person said in full - each open question with its recommendation
-and its next step (`FlowReports.NextStepOf`): `answer-orchestrator <run> <answer> --question <id>`, or, where it still
-owes the recommendation it is answered with (`FlowAnswerRules.OwesRecommendation`) - a stop or a crash left it -
-`resume-orchestrator <run>`, which seeks it first, for the answer command refuses any answer but `abort` until then), and `read-orchestrator-report <run>`
+and its next step, by the one rule of it over what the run's engine is doing (`FlowAnswerRules.NextStepOf`, worded once
+by `FlowAnswerRules.NextStepSaid` for the report, the status and every refusal of an answer alike):
+`answer-orchestrator <run> <answer> --question <id>` where it owes nothing; where it still owes the recommendation it is
+answered with (`FlowAnswerRules.OwesRecommendation`) - none sought yet, one sought, or one deferred - with no engine
+running the run or a gone one, `resume-orchestrator <run>`, which seeks it first, for no advisor seeks one between
+sessions and the answer command refuses any answer but `abort` until then; with a live engine whose advisor seeks it now
+(`sought`), or a running one, which seeks it as it raises the question, the answer, taken at once and ending the asking -
+never the resume, which a live owner refuses, nor a stop, which would end the advice for the next resume to pay for again;
+with a live engine pausing or recording what its complete pause left running - or running, the recommendation deferred,
+which only a pause asked does - the pause's advice, the answer given then; and with a live engine that is stopping
+(`FlowEngineState.Stopping`) the resume once the engine has gone, for a stop starts no advice - `abort` taken now
+wherever one is owed. The report a session's end writes reads no engine (its source's `Engine` none), for that session
+is leaving the run; `read-orchestrator-report` and `analyze-orchestrator-report` read it as they read the records
+(`OrchestratorService.EngineOf`, in `FlowService.SourceOf`), so the same records give the same bytes while the engine
+does the same), and `read-orchestrator-report <run>`
 answers it any time - reads only, its `--json` the code, the line and the report on every exit (the report null where
 the read stopped early), with `--steps` keeping the rows to named instances (one the run does not hold refused,
 named), `--by` regrouping the dollars in every form and `--top` bounding the signal lists.
@@ -4670,7 +4683,11 @@ once; a stop ends it (`DeferAdvice` from `ApplyTheStop`, `BeginHardStop` through
 question `deferred` - a stop once the pause is complete among them, which is what `--all` is for the machine steps
 (`RequestStop` ending the session's advice stop and marking the stop, the loop's `DeferAdvice` taking each asking), and
 after which the complete pause starts no advice (`AdviseThePause` leaving each question owing one to the resume, deferred),
-so the stop never waits on an advisor - and a session's end ends and waits for whatever is left (`EndAdviceAsync`); a recommendation
+so the stop never waits on an advisor - and a session's end ends and waits for whatever is left (`EndAdviceAsync`). A stop
+is in the run's state from the moment it is applied - the hard stop by `ApplyTheStop`, a stop once the pause is complete
+as the loop takes it, recorded on its own (`StopApplied`) where the pause said all already - as `flow.json`'s
+`stoppingSince`, kept by the session's end and written out by the resume that takes the run up (`FlowResume.Load`), so a
+reader tells a live engine that is stopping from a pause whose advice is still to come (`OrchestratorService.EngineOf`); a recommendation
 obtained is written with who gave it and where its records are, none obtained said so, and what every advice spent - an
 ended one's among them, counted from its turns (`AgentRunSpend`) - is counted in the run's spend, the loop going round
 once it takes one so an advice that spends the run to its budget's reserve pauses it at once (`TakeAdviceAsync` answering
@@ -4693,9 +4710,10 @@ the pause is the budget's. A person's answer is held to the recommendation by th
 share (`FlowAnswerRules.Unrecommended`): an answer to an open question still owing its recommendation that no advisor
 seeks now is refused, nothing answered, and `abort` taken - by `answer-orchestrator` before anything of the run is
 touched where no engine runs it (13, naming `resume-orchestrator`, which seeks it first), and by the engine as it weighs
-a person's answer (`TryAnswer`): between sessions, as a session begins and where a stop ends it - a stop once the pause
-is complete among them, after which the pause seeks none - naming the resume, and while a pause under way defers it,
-naming the pause's completion; an answer given while the advisor works is taken and
+a person's answer (`TryAnswer`), naming the step from its own state in the words every document says it in
+(`FlowAnswerRules.NextStepSaid`): between sessions and as a session begins the resume, where a stop ends the session -
+a stop once the pause is complete among them, after which the pause seeks none - the resume once the engine has gone,
+and while a pause under way defers it the pause's completion; an answer given while the advisor works is taken and
 ends the asking. The budget's own question is asked of the run as a whole - `FlowQuestions.RunsOwn` its
 instance, so its records sit under `steps/run/advice/<n>/` and `{question.step}` reads `run`, no agent's tree held, and
 `{question.record}` the run's facts as `FlowStatus.Facts` gives them (`AdvisorRunner`); held, as every advice is, to its
@@ -5308,7 +5326,7 @@ removes the owner once the engine's process has gone, the rest of its tree not w
 (`FlowRunOwner`) by every command: `delete-orchestrator` refuses a run a live engine owns (13,
 naming `pause-orchestrator` and `stop-orchestrator`) and removes a gone engine's owner with the run,
 and `list-orchestrator` says what the engine is doing - none, running, pausing, recording what a
-complete pause left running, or gone.
+complete pause left running, stopping, a stop it applied ending its session (`flow.json`'s `stoppingSince`), or gone.
 
 Two commands answer a person's question about a run (`FlowService.AskStatusAsync`,
 `FlowService.AskAsync`): `ask-orchestrator-status` the tool's own - what is happening now, what is
@@ -5317,9 +5335,12 @@ over the same facts. The facts are the engine's (`FlowStatus`, pure, over the re
 methods `list-orchestrator` reads: `flow.json`, `questions.json`, `updates.json`, the frozen
 `definition.json` and the run's owner), computed and never guessed, stamped with the moment they
 were read: how the run stands and for how long, its engine and its pause; each step instance in
-progress; what it waits for - each open question with the command that answers it, or, where no engine runs the run and
-the question still owes its recommendation (`FlowAnswerRules.OwesRecommendation`), the resume, which seeks it first, `abort`
-alone taken now - a plan update
+progress; what it waits for - each open question with its next step, by the one rule the report names it by
+(`FlowAnswerRules.NextStepOf`, over what the engine is doing): its answer; its answer taken now, ending the asking, where a
+live engine's advisor seeks the recommendation; or, where the question still owes its recommendation
+(`FlowAnswerRules.OwesRecommendation`), the pause's advice where a live engine's pause defers it, the resume, which seeks
+it first, where no engine runs the run, and the resume once the engine has gone where it is stopping, `abort` alone taken
+now - a plan update
 under way or queued, an instance waiting on another, on a claim or room, or on the fix of an issue that holds a file its
 work item owns or that the item needs, a `ci-wait` reading the
 checks of the commit the run last pushed; what is done and what was spent of the budget; what is

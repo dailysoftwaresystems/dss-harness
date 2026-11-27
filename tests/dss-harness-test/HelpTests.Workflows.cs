@@ -746,8 +746,10 @@ public sealed partial class HelpTests
                 + "and a pause step's that shows an upstream step's questions - nor is one the run's input or its configuration answers, which no person is asked. "
                 + "A person answers a question recommended: an answer to one still owing its recommendation that no advisor seeks now - between sessions, or while a pause defers it - "
                 + "is refused (13), nothing answered, and abort is taken; resume-orchestrator seeks it first, and a pause once it is complete, unless a stop came after it. "
-                + "The run's report names each open question's next step so: resume-orchestrator for one still owing its recommendation, abort taken now, "
-                + "and answer-orchestrator for every other.",
+                + "The run's report, ask-orchestrator-status and every refusal of an answer name each open question's next step by one rule, over what the run's engine is doing: "
+                + "for one still owing its recommendation, resume-orchestrator, which seeks it first, where no engine runs the run; its answer, taken now and ending the asking, "
+                + "where a live engine's advisor seeks it; the pause's advice, then its answer, where a live engine's pause defers it; and resume-orchestrator once the engine "
+                + "has gone where it is stopping - abort taken now wherever one is owed - and answer-orchestrator for every other.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(

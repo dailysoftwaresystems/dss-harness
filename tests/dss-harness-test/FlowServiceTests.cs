@@ -1617,7 +1617,8 @@ public sealed class FlowServiceTests
 
         var refused = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: true, cancellationToken: Token).WaitAsync(Bound, Token);
         var document = JsonNode.Parse(Assert.Single(refused.Data))!.AsObject();
-        const string Owed = "question 'q1' of run 'r1' still owes the recommendation it is answered with, and no advisor seeks one between sessions, so nothing was answered; resume-orchestrator seeks it first, and 'abort' is taken now";
+        const string Owed = "question 'q1' of run 'r1' still owes the recommendation it is answered with, so nothing was answered - no advisor seeks one between sessions, and resume-orchestrator r1 seeks it first; "
+            + "answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now";
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(Owed, refused.Message);
@@ -1636,6 +1637,131 @@ public sealed class FlowServiceTests
         Assert.Equal(("abort", "person", "answer-orchestrator"), (question.Answers.Single().Answer, question.Answers.Single().By!.Who, question.Answers.Single().By!.Through));
         Assert.Equal("Stopped", repository.Harness.OrchestrationStore.ReadFlow(run)!.Status);
         Assert.Equal(HarnessExit.Cancelled, aborted.ExitCode);
+    }
+
+    /// <summary>
+    /// The report a session's end writes names each open question's next step as no engine running the run would - the
+    /// session is leaving it - whatever owner the records still name as it is written: here the session an abort ended,
+    /// stopping, its owner this process until it has written its end, leaves a question owing its recommendation to the
+    /// resume, which seeks it first.
+    /// </summary>
+    [Fact]
+    public async Task TheReportASessionsEndWrites_NamesTheResume_ForAQuestionItLeavesOwed_ThoughItsOwnerStillHoldsTheRun()
+    {
+        var (repository, service, _) = await ServiceAsync("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+            """);
+        using var disposed = repository;
+
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        // The questions as a crash while the advisor ran leaves them: the recommendation marked sought.
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+        var questions = store.ReadFlowQuestions(run)!;
+        store.WriteFlowQuestions(run, questions with { Questions = [questions.Questions[0] with { Recommendation = new FlowRecommendation("sought", Why: "a recommendation is being sought from the advisor") }] });
+
+        var aborted = await service.AnswerAsync(repository.Path, "r1", "abort", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var left = JsonNode.Parse(File.ReadAllText(run.ReportJsonFile))!["leftForAPerson"]!.AsArray().Select(line => line!.GetValue<string>()).Single(line => line.StartsWith("question q1 ", StringComparison.Ordinal));
+
+        Assert.Equal(HarnessExit.Cancelled, aborted.ExitCode);
+        Assert.EndsWith(
+            " - its recommendation is still owed - no advisor seeks one between sessions, and resume-orchestrator r1 seeks it first; answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now",
+            left,
+            StringComparison.Ordinal);
+
+        // The session's line names the same, and its own records say the stop it ended with.
+        Assert.Contains(left, aborted.Details ?? []);
+        Assert.NotNull(store.ReadFlow(run)!.StoppingSince);
+    }
+
+    /// <summary>
+    /// What a live run's report and status name as an open question's next step is what its engine does with an answer,
+    /// read as they read the run's records: with its advisor seeking the recommendation now, the answer, taken at once and
+    /// ending the asking - never the resume, which the live owner refuses, nor a stop, which would end the advice for the
+    /// next resume to pay for again; with a pause deferring the recommendation, the pause's advice and the answer then,
+    /// abort taken now; with a stop once its pause was complete, which starts no advice, the resume once the engine has
+    /// gone; and once it has, the resume, which seeks it first.
+    /// </summary>
+    [Fact]
+    public async Task ALiveRunsReportAndStatus_NameWhatItsEngineDoesWithAnAnswer_TheAnswerUnderAdvice_ThePausesAdvice_TheResumeOnceAStopHasGone()
+    {
+        var (repository, service, _) = await ServiceAsync("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+            """);
+        using var disposed = repository;
+
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+        var identity = repository.Harness.Identity;
+        var paused = store.ReadFlow(run)!;
+        var at = DateTimeOffset.UtcNow;
+
+        void Recommended(string state, string why)
+        {
+            var questions = store.ReadFlowQuestions(run)!;
+            store.WriteFlowQuestions(run, questions with { Questions = [questions.Questions[0] with { Recommendation = new FlowRecommendation(state, Why: why) }] });
+        }
+
+        async Task<(string Report, string Status)> NextStepAsync()
+        {
+            var read = await service.ReadReportAsync(repository.Path, "r1", json: true, cancellationToken: Token).WaitAsync(Bound, Token);
+            var left = JsonNode.Parse(Assert.Single(read.Data))!["report"]!["leftForAPerson"]!.AsArray().Select(line => line!.GetValue<string>()).Single(line => line.StartsWith("question q1 ", StringComparison.Ordinal));
+            var status = await service.AskStatusAsync(repository.Path, "r1", json: false, Token).WaitAsync(Bound, Token);
+            var waits = (status.Details ?? []).Single(line => line.StartsWith("waits ", StringComparison.Ordinal));
+
+            return (left[(left.IndexOf(" - ", StringComparison.Ordinal) + 3)..], waits[(waits.IndexOf("Z: ", StringComparison.Ordinal) + 3)..]);
+        }
+
+        // A live engine holds the run - this process, as its owner records it - and its advisor seeks the recommendation.
+        store.WriteOwner(run, new RunOwner(identity.CurrentMachine, identity.CurrentId, at, identity.Current));
+        Recommended("sought", "a recommendation is being sought from the advisor");
+
+        Assert.Equal(
+            (
+                "its recommendation is being sought: answer with answer-orchestrator r1 <answer> --question q1, taken now and ending the asking",
+                "its recommendation is being sought: answer with 'dssharness answer-orchestrator r1 <answer> --question q1', taken now and ending the asking"),
+            await NextStepAsync());
+
+        // The live engine is pausing, its pause deferring the recommendation, which the pause seeks once complete.
+        store.WriteFlow(run, paused with { Pause = new FlowPauseRecord("command", false, at, []) });
+        Recommended("deferred", "the run is pausing, and no reason step is started before its pause is complete: the recommendation is sought then, or when the run is resumed where a stop came first");
+
+        Assert.Equal(
+            (
+                "its recommendation is still owed - the run seeks it once its pause is complete; answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now",
+                "its recommendation is still owed - the run seeks it once its pause is complete; answer with 'dssharness answer-orchestrator r1 <answer> --question q1' then, and 'dssharness answer-orchestrator r1 abort --question q1' is taken now"),
+            await NextStepAsync());
+
+        // A stop once the pause was complete: the engine is stopping, and seeks none.
+        store.WriteFlow(run, paused with { Pause = new FlowPauseRecord("command", true, at, [], at), StoppingSince = at });
+
+        Assert.Equal(
+            (
+                "its recommendation is still owed - the stop under way seeks none, and resume-orchestrator r1 seeks it first once the engine has gone; answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now",
+                "its recommendation is still owed - the stop under way seeks none, and 'dssharness resume-orchestrator r1' seeks it first once the engine has gone; answer with 'dssharness answer-orchestrator r1 <answer> --question q1' then, and 'dssharness answer-orchestrator r1 abort --question q1' is taken now"),
+            await NextStepAsync());
+
+        // The engine has gone: its owner's process has ended, and the resume seeks it.
+        store.WriteOwner(run, new RunOwner(identity.CurrentMachine, Engines.Engine, at, "its start"));
+
+        Assert.Equal(
+            (
+                "its recommendation is still owed - no advisor seeks one between sessions, and resume-orchestrator r1 seeks it first; answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now",
+                "its recommendation is still owed - no advisor seeks one between sessions, and 'dssharness resume-orchestrator r1' seeks it first; answer with 'dssharness answer-orchestrator r1 <answer> --question q1' then, and 'dssharness answer-orchestrator r1 abort --question q1' is taken now"),
+            await NextStepAsync());
     }
 
     /// <summary>An answer's text file is read relative to the directory the command acts on; one that is not there, and a text given two ways, are usage errors.</summary>
@@ -5189,6 +5315,17 @@ public sealed class FlowServiceTests
 
         Assert.Equal("gone", engine["state"]!.GetValue<string>());
         Assert.Equal($"process {Engines.Engine.ToString(CultureInfo.InvariantCulture)}", engine["process"]!.GetValue<string>());
+
+        // A live engine whose run's state says a stop it applied is ending its session is said to be stopping, whatever
+        // pause the run is under.
+        var identity = repository.Harness.Identity;
+        var flow = repository.Harness.OrchestrationStore.ReadFlow(run)!;
+        repository.Harness.OrchestrationStore.WriteOwner(run, new RunOwner(identity.CurrentMachine, identity.CurrentId, DateTimeOffset.UtcNow, identity.Current));
+        repository.Harness.OrchestrationStore.WriteFlow(run, flow with { Pause = new FlowPauseRecord("command", true, DateTimeOffset.UtcNow, [], DateTimeOffset.UtcNow), StoppingSince = DateTimeOffset.UtcNow });
+
+        var stopping = await repository.Harness.OrchestratorService.ListAsync(repository.Path, "r1", steps: false, questions: false, json: false, Token);
+
+        Assert.Contains($"  run of 'flow': paused, its engine (process {identity.CurrentId.ToString(CultureInfo.InvariantCulture)}) is stopping", stopping.Details ?? []);
     }
 
     /// <summary>delete-orchestrator refuses a run a live engine owns, naming its process, pause-orchestrator and stop-orchestrator.</summary>

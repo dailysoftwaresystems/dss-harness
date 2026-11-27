@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Execution;
@@ -398,6 +399,46 @@ public sealed class FlowResumeTests
 
         Assert.NotNull(file);
         Assert.Null(file.Pause);
+    }
+
+    /// <summary>
+    /// A stop the session before was ending with has ended with that session: the resume that takes the run up writes it
+    /// out of the run's state at once, before its own session's first write, so a reader of the resumed run - its owner
+    /// this session's - never reads its engine as stopping; everything else the state says stands.
+    /// </summary>
+    [Fact]
+    public async Task AStopTheSessionBeforeWasEndingWith_IsWrittenOutByTheResume_AsItTakesTheRunUp()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: pause
+                question: what now?
+                options: [stay, go]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records);
+
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        // The state as a stop once the run's pause was complete leaves it: the stop kept past the session's end.
+        var left = harness.OrchestrationStore.ReadFlow(layout)! with { StoppingSince = DateTimeOffset.UnixEpoch };
+        harness.OrchestrationStore.WriteFlow(layout, left);
+
+        var taken = TakeUp(harness, layout, definition);
+        var written = harness.OrchestrationStore.ReadFlow(layout)!;
+
+        Assert.Null(taken.File.StoppingSince);
+        Assert.Null(written.StoppingSince);
+        Assert.Equal(
+            JsonSerializer.Serialize(left with { StoppingSince = null, Next = [] }, JsonStateFile.Options),
+            JsonSerializer.Serialize(written, JsonStateFile.Options));
     }
 
     /// <summary>

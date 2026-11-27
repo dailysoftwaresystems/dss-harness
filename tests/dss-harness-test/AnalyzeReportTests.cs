@@ -129,6 +129,32 @@ public sealed class AnalyzeReportTests
     }
 
     /// <summary>
+    /// The analyst is handed the report as the read verb answers it, what the run's engine is doing read with the records:
+    /// a live engine whose advisor seeks an open question's recommendation now is handed that question's answer, taken at
+    /// once, as its next step - never the resume, which the live owner refuses.
+    /// </summary>
+    [Fact]
+    public async Task TheAnalyst_IsHandedTheNextStepAsTheLiveEngineTakesIt()
+    {
+        var (harness, temp, analyst, service, run) = await AnalyzableAsync();
+        using var disposed = temp;
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), run);
+        var store = harness.OrchestrationStore;
+        var questions = store.ReadFlowQuestions(layout)!;
+        store.WriteFlowQuestions(layout, questions with { Questions = [questions.Questions[0] with { Recommendation = new FlowRecommendation("sought", Why: "a recommendation is being sought from the advisor") }] });
+        store.WriteOwner(layout, new RunOwner(harness.Identity.CurrentMachine, harness.Identity.CurrentId, DateTimeOffset.UtcNow, harness.Identity.Current));
+        analyst.Answer = step => new AgentRunResult(AgentRunStatus.Completed, StructuredOutput: Held);
+
+        Assert.Equal(HarnessExit.Success, (await service.AnalyzeReportAsync(temp.Path, run, json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
+
+        var kept = JsonNode.Parse(File.ReadAllText(Path.Combine(Assert.Single(analyst.Asked).RecordDirectory!, OrchestratorLayout.AnalysisReportFileName)))!;
+
+        Assert.Equal(
+            "question q1 (pause) is open: what now?; a recommendation is being sought from the advisor - its recommendation is being sought: answer with answer-orchestrator r1 <answer> --question q1, taken now and ending the asking",
+            Assert.Single(kept["leftForAPerson"]!.AsArray())!.GetValue<string>());
+    }
+
+    /// <summary>
     /// An analyst's client that throws after paid turns is refused with why, and what it spent is still said and kept:
     /// the run's spend and its model outlive the throw, so the cost names them, analysis.json is written with them, and
     /// the refusal names the directory its records are in - in the text and in the --json document alike - where the

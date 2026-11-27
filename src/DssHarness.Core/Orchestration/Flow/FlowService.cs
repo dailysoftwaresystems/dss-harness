@@ -106,7 +106,8 @@ public interface IFlowService : IUseCase
     Task<CommandOutcome> AskAsync(string startDirectory, string run, string? question, bool json, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// The run's report, built from its records alone - the same bytes for the same records, whether the run has ended
+    /// The run's report, built from its records alone - the same bytes for the same records and the same state of its
+    /// engine, which names each open question's next step (<see cref="FlowAnswerRules.NextStepOf"/>), whether the run has ended
     /// or is still going (said so at the time of its last record, marked partial): the deterministic report the
     /// session's end writes, in text, as one JSON document or as Markdown. Reads only: nothing of the run is written.
     /// </summary>
@@ -603,15 +604,11 @@ public sealed class FlowService(
 
         // A question is answered recommended, by the one rule the engine holds a person's answer to: with no engine
         // running the run no advisor seeks a recommendation, so an answer to a question still owing one is refused
-        // before anything of the run is touched - abort taken - and the resume seeks it first. A running engine weighs
-        // an answer handed to it by the same rule, an advice of its own under way or not.
+        // before anything of the run is touched - abort taken - naming its next step, the resume, which seeks it first.
+        // A running engine weighs an answer handed to it by the same rule from its own state, an advice of its own under
+        // way or not.
         if (!engineRuns
-            && FlowAnswerRules.Unrecommended(
-                run,
-                asked.Id,
-                answer,
-                FlowAnswerRules.OwesRecommendation(asked.Kind, asked.Recommendation, (asked.Questions ?? []).Count),
-                pausing: false) is { } owed)
+            && FlowAnswerRules.Unrecommended(run, asked.Id, answer, FlowAnswerRules.NextStepOf(asked, FlowEngineState.NoEngine)) is { } owed)
         {
             return Refuse(layout, AnswerCommand, owed, json);
         }
@@ -1087,7 +1084,7 @@ public sealed class FlowService(
             return CommandOutcome.Usage($"--steps names {string.Join(", ", unknown.Select(instance => $"'{instance}'"))}, which run '{run}' does not hold");
         }
 
-        var report = FlowRunReport.Of(SourceOf(layout, flow, FlowReportThresholds.Of(context.Config, top), by, wanted));
+        var report = FlowRunReport.Of(SourceOf(layout, flow, OrchestratorService.EngineOf(_store, _owner, layout, flow), FlowReportThresholds.Of(context.Config, top), by, wanted));
 
         if (json)
         {
@@ -1103,15 +1100,16 @@ public sealed class FlowService(
     /// A run's records as they stand, for its report - the one place the read verb, the analysis and the session's end
     /// read them: its state, questions, updates, events (a torn last line said in its notes), its item agents' closure
     /// ledgers, the issues it owed a later round and its frozen definition - read as the definition or why it cannot be
-    /// read, so the report says which it was rather than the read refusing the whole report - with the thresholds every
-    /// report of the run is computed by.
+    /// read, so the report says which it was rather than the read refusing the whole report - with what its engine is
+    /// doing and the thresholds every report of the run is computed by.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
     /// <param name="flow">The run's state.</param>
+    /// <param name="engine">What the run's engine is doing, as the read and the analysis read it (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout, FlowFile)"/>); none for the session's end, which is leaving the run.</param>
     /// <param name="thresholds">The thresholds its signals are computed by (<see cref="FlowReportThresholds.Of"/>).</param>
     /// <param name="by">What the dollars are grouped by; null for the model.</param>
     /// <param name="steps">The instances whose rows alone the steps table keeps; null for every one.</param>
-    private FlowRunReportSource SourceOf(OrchestratorLayout layout, FlowFile flow, FlowReportThresholds thresholds, string? by = null, IReadOnlySet<string>? steps = null)
+    private FlowRunReportSource SourceOf(OrchestratorLayout layout, FlowFile flow, FlowEngineState engine, FlowReportThresholds thresholds, string? by = null, IReadOnlySet<string>? steps = null)
     {
         var (events, torn) = FlowEventLog.Read(_fileSystem, layout.EventsFile);
         var (definition, why) = _store.ReadDefinitionOrWhy(layout);
@@ -1129,7 +1127,8 @@ public sealed class FlowService(
             By: by,
             Steps: steps,
             NextRound: _store.ReadNextRound(layout),
-            DefinitionWhy: why);
+            DefinitionWhy: why,
+            Engine: engine);
     }
 
     /// <inheritdoc/>
@@ -1168,7 +1167,7 @@ public sealed class FlowService(
                 : $"'{layout.DefinitionFile}' is not there, so run '{run}' holds no definition to analyse");
         }
 
-        var report = FlowRunReport.Of(SourceOf(layout, flow, FlowReportThresholds.Of(context.Config)));
+        var report = FlowRunReport.Of(SourceOf(layout, flow, OrchestratorService.EngineOf(_store, _owner, layout, flow), FlowReportThresholds.Of(context.Config)));
         var said = report.ToJsonString(ReportJson.Options);
         var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(said)));
 
@@ -1940,7 +1939,9 @@ public sealed class FlowService(
                 ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.FlowFile}' is not there after the session of run '{layout.Name}', which writes it at every change");
 
             FlowStepGraph.PutAwayRunPages(_fileSystem, _output, layout, flow);
-            var source = SourceOf(layout, flow, FlowReportThresholds.Of(context.Config));
+            // The session is leaving the run: its report names each open question's next step as no engine running it
+            // would, whatever owner the records still name as it is written.
+            var source = SourceOf(layout, flow, FlowEngineState.NoEngine, FlowReportThresholds.Of(context.Config));
             var questions = source.Questions;
             var exit = ExitOf(end, flow);
             var left = FlowReports.Write(_fileSystem, source, end.Summary, exit, _clock.GetUtcNow());
