@@ -1172,7 +1172,10 @@ public sealed class FlowAdviceTests
         var session = coordinator.RunAsync(Token);
         await TestEventuallyAsync(() => records.Saw(FlowChangeKind.PauseCompleted));
         fold.SetResult();
-        await TestEventuallyAsync(() => coordinator.OpenQuestions.Any(question => question.Kind == "foldConflicts"));
+
+        // Waited for once its recommendation is settled: the loop opens the question, then says what becomes of its
+        // recommendation, and a look between the two would see it not sought yet.
+        await TestEventuallyAsync(() => coordinator.OpenQuestions.Any(question => question.Kind == "foldConflicts" && question.Recommendation.State != "notSought"));
         var deferred = coordinator.OpenQuestions.Single(question => question.Kind == "foldConflicts");
 
         Assert.Equal(

@@ -971,14 +971,19 @@ recommendation is sought at the resume, which seeks it - as it does one a crash 
 the advice it ended still returns its recommendation, which the question keeps, so the resume never
 pays for it again. A session its cancellation token ends - a front end driving the engine in process;
 the run verbs' own interrupts and termination are the pause and the stop - ends where the engine meets
-the token, at the start of each pass of its loop or once a handoff turn under way has answered, and
-from there draws, decides, starts and waits for nothing more: a pause under way never completes, and a
-plan update visits nothing again until the next session. It ends its advice as a stop does, the token
-ending none itself, so a question it was advising is deferred to the resume, never left saying no
-recommendation was obtained; it waits for each runner as a stop's drain does, and writes what it
-charged and holds all the same: what each advice answered, and its last record with every spend among
-it, saying it was cancelled and what it left running - with no end time while a step still runs,
-whatever a pause or a stop makes the run's status. A person answers a question
+the token: in its loop's wait for what the run learns, at once, at the top of each pass of that loop,
+and after every wait the token does not end itself - a pause's or a plan update's handoff turns, whose
+answers it keeps - and the token of one session ends nothing of a later one. From there it draws,
+decides, starts and waits for nothing more: a pause under way never completes, and a plan update
+visits nothing again until the next session. It ends its advice as a stop does, the token ending none
+itself, so a question it was advising is deferred to the resume, never left saying no recommendation
+was obtained; it waits for each runner as a stop's drain does, and writes what it charged and holds
+all the same: what each advice answered, and its last record with every spend among it, saying it was
+cancelled and what it left running - with no end time while a step still runs, whatever a pause or a
+stop makes the run's status, and never saying the run is running where no step runs: a group stands
+open over its members, and one whose member waits on a question runs nothing. A session that ends in
+order records the standing it ends with - paused on a question asked inside a group as well - and a
+run is never said done while a step of it is left to start. A person answers a question
 recommended: `answer-orchestrator` to a question still owing its recommendation that no advisor seeks
 now - between sessions, or while a pause defers it - is refused (13), nothing answered, and `abort` is
 taken; `resume-orchestrator` seeks it first. The run's report, `ask-orchestrator-status` and every refusal of an

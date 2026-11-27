@@ -222,7 +222,9 @@ public sealed class FlowServiceTests
     /// The workflow of <see cref="Amended"/> in a repository whose config declares the agent sections as init writes
     /// them, with its planner's agent definition, prompt and output schema beside the definition.
     /// </summary>
-    private static async Task<(Repository Repository, FlowService Service, SteppedRunner Runner)> AmendedAsync(string? flow = null)
+    /// <param name="flow">The workflow; where left out, <see cref="Amended"/>.</param>
+    /// <param name="schema">The planner's output schema, <c>update.json</c>; where left out, one of no properties.</param>
+    private static async Task<(Repository Repository, FlowService Service, SteppedRunner Runner)> AmendedAsync(string? flow = null, string? schema = null)
     {
         // The agent sections the workflow's reason steps resolve their tiers against: as init writes them.
         var agents = DssHarness.Core.Agents.AgentProviderTemplates.Read();
@@ -239,7 +241,7 @@ public sealed class FlowServiceTests
             {
                 ["agents/planner.md"] = "---\nname: planner\ndescription: plans the change\n---\nYou plan the change.\n",
                 ["update.md"] = "plan the change\n",
-                ["update.json"] = "{ \"type\": \"object\", \"additionalProperties\": false, \"properties\": { } }",
+                ["update.json"] = schema ?? "{ \"type\": \"object\", \"additionalProperties\": false, \"properties\": { } }",
             });
         return (repository, Service(repository.Harness, runner), runner);
     }
@@ -1518,6 +1520,63 @@ public sealed class FlowServiceTests
         Assert.Equal("pause", asked.Kind);
         Assert.Equal("what now?", asked.ProblemShown!.Happened);
         Assert.Equal(["stay", "go", "abort"], asked.Options.Select(option => option.Answer));
+    }
+
+    /// <summary>
+    /// A session that ends in order on a question a step inside a group asked - a block's or a forEach's - records the
+    /// standing it ends with: the group stands open over its member, which runs nothing until the question is answered,
+    /// so nothing of the run still runs. Its last record says it paused in flow.json, in the status record with its end
+    /// time and in the event that ends the session, and the report the session writes is whole, never said still going:
+    /// a record that called the run running beside an end time would tell its reader the engine had gone mid-run.
+    /// </summary>
+    /// <param name="group">How the group holding the asking step is declared.</param>
+    [Theory]
+    [InlineData("block")]
+    [InlineData("forEach")]
+    public async Task ASessionThatEndsOnAQuestionInsideAGroup_RecordsItsEndPaused_AndItsReportWhole(string group)
+    {
+        var (repository, service, runner) = await AmendedAsync(
+            $"""
+            name: flow
+            steps:
+              - name: plan
+                type: reason
+                agent: planner
+                prompt: update.md
+                outputs: update.json
+              - name: round
+                dependsOn: [plan]
+                {(group == "forEach" ? "forEach: plan.list" : string.Empty)}
+                steps:
+                  - name: gate
+                    type: pause
+                    question: what now?
+                    options: [stay, go]
+            """,
+            schema: """{ "type": "object", "additionalProperties": false, "required": ["list"], "properties": { "list": { "type": "array", "items": { "type": "string" } } } }""");
+        using var disposed = repository;
+        runner.On("plan", FlowStepResult.Ended(passed: true, 0, output: new JsonObject { ["list"] = new JsonArray("x") }));
+
+        var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var run = RunOf(repository);
+        var flow = repository.Harness.OrchestrationStore.ReadFlow(run)!;
+        var status = repository.Harness.OrchestrationStore.ReadWorkflowStatus(run)!;
+        var (events, torn) = FlowEventLog.Read(repository.Harness.FileSystem, run.EventsFile);
+
+        Assert.Equal((FlowExit.Paused, "paused; waiting on q1"), (outcome.ExitCode, outcome.Message));
+
+        // The group - and a forEach's item - stands open over its member, which asked and runs nothing.
+        Assert.Equal(
+            group == "block"
+                ? [("round", nameof(FlowInstanceState.Running)), ("round.gate", nameof(FlowInstanceState.Paused))]
+                : [("round", nameof(FlowInstanceState.Running)), ("round[0]", nameof(FlowInstanceState.Running)), ("round[0].gate", nameof(FlowInstanceState.Paused))],
+            flow.Steps.Where(step => step.Instance != "plan").Select(step => (step.Instance, step.State)));
+        Assert.Equal(nameof(FlowRunStatus.Paused), flow.Status);
+        Assert.Equal(nameof(FlowRunStatus.Paused), status.Status);
+        Assert.NotNull(status.FinishedAt);
+        Assert.Null(torn);
+        Assert.Equal(("sessionEnded", nameof(FlowRunStatus.Paused), "paused; waiting on q1"), (events[^1].Kind, events[^1].To, events[^1].Detail));
+        Assert.False(JsonNode.Parse(File.ReadAllText(run.ReportJsonFile))!["partial"]!.GetValue<bool>());
     }
 
     /// <summary>

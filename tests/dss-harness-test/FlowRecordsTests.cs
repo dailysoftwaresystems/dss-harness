@@ -745,7 +745,12 @@ public sealed class FlowRecordsTests
     public async Task TheHandoffIsAFileInTheStoppedStepsDirectory_RemovedOnceGiven()
     {
         using var temp = new TempDirectory();
-        var clock = new ManualClock();
+        var cancel = TestContext.Current.CancellationToken;
+        var bound = TimeSpan.FromSeconds(30);
+
+        // A clock whose timers fire only when the test moves it: the handoff turn's bound passes when the test says, at
+        // once, never after the real seconds it names.
+        var clock = new TimerClock();
         var definition = Parse("""
             name: flow
             steps:
@@ -761,10 +766,16 @@ public sealed class FlowRecordsTests
         {
             var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             runner.HandsOff("think", "what the agent said it was doing");
-            var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
-            await runner.StartedAsync("think");
+            var session = coordinator.RunAsync(cancel);
+            await runner.StartedAsync("think").WaitAsync(bound, cancel);
+            var armed = clock.Waiting;
             coordinator.RequestPause("interrupt");
-            var end = await session;
+
+            // The held runner answers no turn: once the turn's bound is armed, the clock is moved past it - the 180 s a
+            // step that declares no handoffSeconds is given - and the attempt is ended, its handoff asked.
+            await clock.WaitingAsync(armed + 1).WaitAsync(bound, cancel);
+            clock.Advance(TimeSpan.FromSeconds(180));
+            var end = await session.WaitAsync(bound, cancel);
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
 
@@ -776,7 +787,7 @@ public sealed class FlowRecordsTests
             // The attempt the resume gives the handoff to may complete what the step was doing.
             runner.Complete("think");
 
-            var again = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+            var again = await coordinator.RunAsync(cancel).WaitAsync(bound, cancel);
 
             Assert.Equal(FlowRunStatus.Done, again.Status);
             Assert.Equal("what the agent said it was doing", runner.Given[2]);
