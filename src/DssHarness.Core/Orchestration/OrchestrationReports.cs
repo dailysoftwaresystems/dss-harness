@@ -144,17 +144,26 @@ public static class OrchestrationReports
                 ? $"  piece {piece.Kind} '{piece.ItemName()}' is carried out by '{carried}'"
                 : piece.Placed is { } placed
                     ? $"  piece {piece.Kind} '{piece.ItemName()}' is placed in '{placed}' and not drawn yet"
-                    : $"  piece {piece.Kind} '{piece.ItemName()}' is owed to {piece.OwedTo}";
+                    : piece.Withdrawal == true
+                        ? $"  piece {piece.Kind} '{piece.ItemName()}' is taken out of the work items of {piece.OwedTo}"
+                        : $"  piece {piece.Kind} '{piece.ItemName()}' is owed to {piece.OwedTo}";
         }
 
         if (update.AddedIteration is { } added)
         {
-            yield return $"  {Flow.FlowReports.IterationSaidOf(added)} was added for update {update.Id}";
+            yield return update.AddedWithdrawnBy is { } by
+                ? $"  {Flow.FlowReports.TakenBackSaidOf(added, update.Id, by)}"
+                : $"  {Flow.FlowReports.IterationSaidOf(added)} was added for update {update.Id}";
         }
 
         if (update.AskedAtBound is { } asked)
         {
             yield return $"  {Flow.FlowReports.AskedAtBoundSaidOf(asked, update.Id)}";
+        }
+
+        if (update.CheckedAgain is { } again)
+        {
+            yield return $"  {Flow.FlowReports.CheckedAgainSaidOf(again, update.Id)}";
         }
     }
 

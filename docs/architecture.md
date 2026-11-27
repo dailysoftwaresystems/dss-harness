@@ -3869,7 +3869,7 @@ a resume finds), whatever the run takes plan updates by. The check that opens a 
 declared beside it expands from (`FlowUpdateGates.OpeningCheckOf`), where that group runs in rounds: declared in an
 iteration of a `repeat`, or the group plan updates owe their work to, to which an update adds a round where no loop is
 around it - is decided by one owner (`FlowUpdateGates.RoundOpenedBy`), whichever opens the round: where its group is
-the one updates owe, that check is handed their work (`owed`, `owedAlone`) and raises the plan update its problems ask
+the one updates owe, that check is handed their work (`owed`, `owedAlone`, `withdrawn`) and raises the plan update its problems ask
 for. Which checks take an item that settles one is decided by one owner too
 (`FlowUpdateGates.ChecksTheItemsARoundOpensWith`, over `FlowUpdateGates.RoundsOpenedWith`, the groups whose rounds
 open with what a check checks): every check whose items a round opens with - the check that opens it, and each whose
@@ -4030,10 +4030,15 @@ instance carries and that check has just found wanting against the tree as it no
 the round the pieces join and in the plan's own list alike, for each was checked when its round opened, against the
 tree of that moment - a round's own item a fold since made a directory under, or took a path it reused from, would
 otherwise fail every update after it - while an update raised by the check that opens a round holds that round's items
-to the tree, so pieces that leave one wanting are refused at once, not found again by the check they were to satisfy;
-the check that opens a round passes over the same - an owed removed piece's item, and the own items of a round that
-carries the owed work alone, which the round before built - and holds the rest; a plan's first check, before any round,
-holds every item to the tree.
+to the tree: that round has not opened, its list is handed to the update's checks (`opening`, read where each starts,
+`FlowCoordinator.CheckReads`), and the update is checked with that round's list whether or not the update answers a
+piece (`PlanCheckRunner`, `PlanValidator.CheckPieces` over no piece), the names an earlier round carries refused among
+its items as the check that opens it refuses them, less the names the updates owe or the pieces place - none where the
+round carries the owed work alone - so what leaves one of its items wanting is refused at once, within the planner's own
+step, not found again by the check it was to satisfy; the check that opens a round passes over the same - an owed
+removed piece's item, and the own items of a round that carries the owed work alone, which the round before built -
+drops each item an update took out of its list (`withdrawn`, below), and holds the rest; a plan's first check, before
+any round, holds every item to the tree.
 A start tree that cannot be read is never silent: the session
 warns once why (`TreeDirectories.UnreadWarning`, through the records' warner), and every refusal its reading causes
 says it too - the narrow reading's after how to write the entry (`TreeDirectories.UnreadForWriting`, carried by each
@@ -4721,8 +4726,8 @@ finished from it by a session's start where a crash came between the two (`FlowC
 (`FlowUpdateGates.Refused`, read by the command over the run's files and by the engine over its own state): a run that
 is done, one past the step its `amend.before` names, one past the work items of its last round (a loop at its bound,
 or a work-item group with no loop around it whose newest round has ended and that runs no round more - updates have
-added every round `amend.maxAddedIterations` allows, counted by the rounds their entries name, and none of them waits
-to open, or a group around it ended otherwise than done and draws nothing more, `FlowUpdateGates.NoRoundMore`, the one
+added every round `amend.maxAddedIterations` allows, counted by the rounds their entries name that stand
+(`FlowUpdateEntry.StandingIteration`: one taken back before it opened counts no more), and none of them waits to open, or a group around it ended otherwise than done and draws nothing more, `FlowUpdateGates.NoRoundMore`, the one
 rule the engine reads too; a round an update added that the run's steps do not hold yet (`FlowUpdateGates.RoundNotOpened`)
 takes a change given before the check that opens it has started - the check's visit drawn after the group's newest,
 read of the steps in the order the run made them - which joins it, `FlowUpdateGates.PendingRound`, and once that check
@@ -4735,8 +4740,9 @@ The planning of a plan update: where the run has begun the scope its plan update
 raised by the update alone as a handler is raised by an ending (`FlowCoordinator.RaisePlanner`: a new visit of it in
 the newest instance of that scope, `FlowInstance.RaisedByUpdate` in its record, a group around it that had ended in
 progress again, and every `repeat` around it counting its own bound from the iteration the update is planned in -
-`FlowLoopCount`, in the loop's own record: the iterations from that one, and those granted past the bound since,
-`FlowLoopCount.Made` and `Given` the one count the engine, the run's facts and the gates read, so the planning of a
+`FlowLoopCount`, in the loop's own record: the iterations from that one, and those granted past the bound since - an
+iteration an update added before the count began, and a later update took back, left out no more,
+`FlowLoopCount.AddedBy` - `FlowLoopCount.Made` and `Given` the one count the engine, the run's facts and the gates read, so the planning of a
 late update in a long run is held to the loop's own bound from where it begins, never refused by the iterations the
 plan spent before it, the bound's question saying what it counted since that update), never drawn by the ordinary
 schedule (`FlowCoordinator.Instantiate`), and admitted ahead of
@@ -4753,7 +4759,11 @@ ended, what `then` set going ended, and a `repeat` it is in has ended its iterat
 update is `done`, the hold ends, and the steps that start from here on resolve every name anew. A failed planning
 step is decided by its own handlers and `onFailure` as any step: `stop` ends the run, `pause` asks, `continue` gives
 the update up - `failed`, nothing placed, nobody told, the hold ended, the run going on with the plan as it was, the
-entry saying the request or the answer is recorded and no plan holds it. The prompts of the planning step and of its
+entry saying the request or the answer is recorded and no plan holds it. A plan the check `then` names refuses stands
+only once a later iteration of the loop around the planning passes one (`FlowCoordinator.TheThenRefuses`); where
+nothing around the planning plans it again - the loop accepted at its bound as it stood, or no loop there is - the
+update is given up alike, its entry saying why (`FlowCoordinator.PlansNoMore`), and the run is never held for ever
+on a plan that cannot stand. The prompts of the planning step and of its
 scope read the update (`{update.cause}`, `{update.since}` and `{update.work}`, `FlowCoordinator.UpdateValues`) -
 outside an update each is a sentence that says none is under way. Updates are taken one at a time: one that arrives
 while another is under way is `queued` behind it and taken when that one is done, in the order given
@@ -4769,7 +4779,14 @@ by `FlowCoordinator.PlaceThePieces` and kept in the update's entry (`FlowUpdateP
 was placed, the visit that carries it). An `added` piece makes one more work item of the work-item group (the `forEach`
 group `amend.whenAddScope` names a step of), at once where the round is in progress and owed to the check that opens the
 round where it has not begun - which checks its own items and the owed ones as one list (`PlanCheckRunner`), its output
-`items` that list, so nothing joins a round unchecked. A `changed` or a `removed` piece finds the newest instance of the
+`items` that list, so nothing joins a round unchecked. An update done that changes the work updates owe a round whose
+opening check has already joined it - that check started, and the work-item group it opens not expanded yet, a step
+between them such as a pause over an audit still to end - draws that check again (`FlowCoordinator.CheckAgainWhatWasJoined`,
+the redirect machinery from the update's planning step: every step of the check's scope that depends on it drawn
+again, a question one of them asks withdrawn), so the round opens with what the updates owe it now - a withdrawn item
+never built, a changed one built as its newest piece says, never as the piece it replaced. The entry names the check
+(`FlowUpdateEntry.CheckedAgain`, absent from an older entry, which reads as before), a session's start draws it again
+from there where a crash came before the drawing was written, and the report says it (`FlowReports.CheckedAgainSaidOf`). A `changed` or a `removed` piece finds the newest instance of the
 group whose item has its name: where it waits it is given the piece's item in the place of its own, or - `removed` -
 withdrawn before it began; where it has begun - a step of it started, at any depth - it is brought to rest (nothing
 more started or drawn in it, what it owed dropped, what is drawn or raised in it since skipped, each reason step in
@@ -4785,7 +4802,13 @@ in the piece's entry before the instance brought to rest ends, so a crash betwee
 where it has ended, one more work item of the group, with new agents. A `removed` piece whose work item no instance
 carries needs no step, and withdraws the work an earlier update owes a round that has not opened under that name: each
 such piece ends in its own update's entry as withdrawn by this one before it was built
-(`FlowCoordinator.WithdrawWhatIsOwed`), so no round builds what the plan took back. What an update did to an instance is in
+(`FlowCoordinator.WithdrawWhatIsOwed`), so no round builds what the plan took back. One naming an item of the list the
+check that opens a round was opening it with (`FlowCoordinator.OpeningUnderWay`), which no instance carries, takes it
+out of that list: the piece is owed to that round as a withdrawal (`FlowUpdatePiece.Withdrawal`, absent from an older
+piece, which reads as before; `IsWithdrawing`), the check that opens the round, drawn again once the update is done, is
+handed its name (`withdrawn`) and drops the item from its own, the group's visit never expands it
+(`FlowCoordinator.OpenGroup`, which ends the withdrawal once the round opens without it), and no list an update's pieces
+join holds it (`PlanValidator.CheckPieces`: a removed piece's item joins the round only where an instance carries it). What an update did to an instance is in
 the instance's own records - ended for the update (`FlowStepRecord.EndedFor`), the piece it carries (`PieceOf`) and the
 instance it was visited again in place of (`AgainOf`) - so no session after runs an instance an update ended, a resume
 goes on bringing one to rest, and the pieces are placed once from the update's entry however often a crash makes the
@@ -4830,7 +4853,8 @@ with why (`FlowUpdateEntry.Told`/`NotConcerned`/`NotDelivered`, each telling als
 the round a piece joins has ended, the work is owed to the loop's next iteration (`FlowInstance.OwedIterationBy`,
 rebuilt at the resume, by each piece's own state, `FlowUpdatePiece.IsOwed`), which runs whatever its `until` says - a
 loop that ended done runs again for it; only where that loop is at its own bound is one iteration
-added for the update. With no loop around the work-item group, the piece is owed to a round added to the group
+added for the update, and none while the loop's newest iteration is under way with its round still to open, which the
+work joins at the check that opens it (`FlowCoordinator.RoundToOpenIn`). With no loop around the work-item group, the piece is owed to a round added to the group
 (`FlowCoordinator.AddARoundOwed`): the group is drawn once more as its next visit (`build.items+2`), with the check that
 opens its rounds and every step on the dependency path from that check to the group - a pause asked about the check's
 problems among them - where each was drawn before the round ended, and every group around it that had ended done in
@@ -4838,7 +4862,20 @@ progress again (`FlowCoordinator.OpenTheRoundAgain`, called again from the entry
 not yet drawn); the check is handed the owed work with its own items as one list, and the visit carries the owed work
 alone (`FlowCoordinator.OpenGroup`), never the items the round before built. An iteration or a round is added once per
 update, at most `amend.maxAddedIterations` over the run, published as an `iterationAdded` event and kept in the entry
-(`FlowUpdateEntry.AddedIteration`, said by `FlowReports.IterationSaidOf` as round n of the loop or of the group); a
+(`FlowUpdateEntry.AddedIteration`, said by `FlowReports.IterationSaidOf` as round n of the loop or of the group). One
+whose owed work is all withdrawn before it opens is taken back by the update whose placement left it owing nothing
+(`FlowCoordinator.TakeBackWhatOwesNothing`), unless another update's work still owes the same loop or round: its entry
+says so (`FlowUpdateEntry.AddedWithdrawnBy`, absent from an older entry, which reads as before), and from there it
+counts against no bound - `FlowUpdateEntry.StandingIteration` is the one read of what an entry added that stands, taken
+by the run's count of iterations given, the gates (`NoRoundMore`, `RoundNotOpened`, `PendingRound`), the grants
+(`FlowGrants.AddedTo`) and the status. A loop's added iteration not yet made is given no more (`ExtraIterations`
+lowered), so its bound reads as it did and asks its question again where work is owed past it; a round added to a group
+with no loop around it is closed again (`FlowCoordinator.CloseTheRoundAgain`): the check drawn for it and every step
+between that check and the group end skipped saying why - each drawn visit that had not ended, a question it asked
+withdrawn, and each not drawn yet - the group's slot holds its round before, the groups around it made in progress
+again end as their members have, and a later update's round drawn again reads that reason to draw them anew; a session's
+start takes back and closes from the entries where a crash cut either off. The report and `list-orchestrator` say the
+taking back (`FlowReports.TakenBackSaidOf`). A
 loop at its bound where the run has been given every iteration allowed asks its bound for the owed work - it reaches
 that question whatever its `until` or its `blocking` says, for owed work ends no loop - and each owing entry says so
 once the question is asked, or is found standing at a session's start (`FlowCoordinator.LeaveToTheBound`,

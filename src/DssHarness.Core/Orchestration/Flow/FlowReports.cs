@@ -506,6 +506,8 @@ public static class FlowReports
         })]) : null,
         ["addedIteration"] = update.AddedIteration,
         ["askedAtBound"] = update.AskedAtBound,
+        ["addedWithdrawnBy"] = update.AddedWithdrawnBy,
+        ["checkedAgain"] = update.CheckedAgain,
     };
 
     /// <summary>One piece of a plan update as the report's JSON document holds it: its kind, its work item, and where it stands.</summary>
@@ -519,7 +521,27 @@ public static class FlowReports
         ["carriedBy"] = piece.CarriedBy,
         ["again"] = piece.Again,
         ["ended"] = piece.Ended,
+        ["withdrawal"] = piece.Withdrawal,
     };
+
+    /// <summary>
+    /// That an iteration or a round an update added was taken back before it opened, as the report and
+    /// <c>list-orchestrator</c> say it: a later update's withdrawal left the update owing nothing, so it is never made.
+    /// </summary>
+    /// <param name="iteration">The iteration's id, as the update's entry holds it.</param>
+    /// <param name="update">The update that added it.</param>
+    /// <param name="by">The update that took it back.</param>
+    internal static string TakenBackSaidOf(string iteration, string update, string by)
+        => $"{IterationSaidOf(iteration)} was added for update {update}, and taken back by update {by} before it opened: nothing was owed it any more";
+
+    /// <summary>
+    /// That a check that opens a round was drawn again for an update, as the report and <c>list-orchestrator</c> say it:
+    /// the work updates owe its round, which it had joined, changed before the round opened.
+    /// </summary>
+    /// <param name="check">The visit of the check, as the update's entry names it.</param>
+    /// <param name="update">The update that changed the work it joined.</param>
+    internal static string CheckedAgainSaidOf(string check, string update)
+        => $"'{check}' is drawn again for update {update}: the work updates owe its round, which it had joined, changed before the round opened";
 
     /// <summary>
     /// That a loop's bound was asked for the work an update owes it, as the report and <c>list-orchestrator</c> say it:
@@ -645,6 +667,7 @@ public static class FlowReports
                     var where = piece.CarriedBy is { } carried ? $"carried out by '{carried}'"
                         : piece.Again is { } again ? $"visited again in '{again}'"
                         : piece.Placed is { } placed ? $"placed in '{placed}'"
+                        : piece is { Withdrawal: true, OwedTo: { } from } ? $"taken out of the work items of {from}"
                         : piece.OwedTo is { } owed ? $"owed to {owed}"
                         : "carried by no instance";
                     text.Add($"  - {piece.Kind} '{piece.ItemName()}': {where}{(piece.Ended is { } ended ? $", {ended}" : ", still under way")}");
@@ -652,12 +675,17 @@ public static class FlowReports
 
                 if (update.AddedIteration is { } added)
                 {
-                    text.Add($"  - {IterationSaidOf(added)} was added for update {update.Id}");
+                    text.Add(update.AddedWithdrawnBy is { } by ? $"  - {TakenBackSaidOf(added, update.Id, by)}" : $"  - {IterationSaidOf(added)} was added for update {update.Id}");
                 }
 
                 if (update.AskedAtBound is { } asked)
                 {
                     text.Add($"  - {AskedAtBoundSaidOf(asked, update.Id)}");
+                }
+
+                if (update.CheckedAgain is { } drawnAgain)
+                {
+                    text.Add($"  - {CheckedAgainSaidOf(drawnAgain, update.Id)}");
                 }
 
                 foreach (var one in update.Told ?? [])

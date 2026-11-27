@@ -289,8 +289,10 @@ steps:
         when: '!item-check.ok'
         # The agent that gave the items - the planner, or a later round's self-audit - was
         # told each problem the check finds within its own step, until it answered clean or
-        # said it could not put one right; what is still wrong is built as it is, and a fold
-        # or a test that it breaks goes to the agents that put it right.
+        # said it could not put one right, and so was the planner of the plan update the
+        # check raises, whose planning asks at its bound where it could not; what is still
+        # wrong is built as it is, and a fold or a test that it breaks goes to the agents
+        # that put it right.
         answers:
           pause: continue
         onFailure: recover

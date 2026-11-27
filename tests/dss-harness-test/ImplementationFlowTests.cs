@@ -1945,7 +1945,9 @@ public sealed class ImplementationFlowTests
         /// <summary>
         /// The answers the flow gives its own questions: work items of a round that do not pass its plan check are built as
         /// they are - the pause that asks a person is answered by the flow's own configuration, never asked, and the record
-        /// says the configuration gave it.
+        /// says the configuration gave it. The plan update the round's check raises holds the planner to the round's list
+        /// within its own step, though it answers no piece: a planner that cannot put the round's items right is held at
+        /// its planning loop's bound, which a person accepts, and only then is the round built as it is.
         /// </summary>
         [Fact]
         public async Task TheAnswersTheFlowGivesItsOwnQuestions_AreGivenByItsConfiguration_NeverAsked()
@@ -1964,9 +1966,17 @@ public sealed class ImplementationFlowTests
                         Completed(SelfAudit(clean: false, items: [One(name: "first"), One(name: "first-again", owned: "src/one/**")])));
                 });
 
-            var end = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+            var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
-            Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {string.Join(" | ", end.Details ?? [])}");
+            // The update the second round's check raised was held to that round's list though its planner answered no
+            // piece: told the round's problem in its own step, the planner could not put it right, and its loop asks.
+            var bound = Questions(kit).Open.Single();
+            Assert.Equal(("loopBound", "planning"), (bound.Kind, bound.RaisedBy?.Step));
+            Assert.Contains(kit.Agents.Of("planner"), step => step.Prompt.Contains("'first-again'", StringComparison.Ordinal));
+
+            var end = await AnswerAsync(kit, "accept");
+
+            Assert.True(HarnessExit.Success == end.ExitCode, $"{paused.Message} | {end.Message} | {string.Join(" | ", end.Details ?? [])}");
             Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
 
             var questions = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!;

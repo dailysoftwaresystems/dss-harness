@@ -553,6 +553,105 @@ public sealed class FlowPlanUpdateTests
     }
 
     /// <summary>
+    /// An update whose plan the check its <c>then</c> names refuses, where the loop around the planning is accepted at its
+    /// bound as it stood, is given up - failed, with why, nothing placed, the hold ended - and the run goes on with the
+    /// plan as it was: no plan of it will ever stand, and the run is never held for ever on it.
+    /// </summary>
+    [Fact]
+    public async Task AnUpdateWhosePlanIsRefused_WhenTheLoopAroundItsPlanningIsAcceptedAtItsBound_IsGivenUp()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            inputs:
+              - name: request
+            steps:
+              - name: ask
+                type: pause
+                question: '{input.request}'
+                options: [stay, go]
+              - name: planning
+                dependsOn: [ask]
+                repeat:
+                  until: 'check.ok'
+                  maxIterations: 1
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: planner
+                    prompt: plan.md
+                    outputs: plan.json
+                  - name: planupdate
+                    type: reason
+                    agent: planner
+                    prompt: plan.md
+                    outputs: plan.json
+                  - name: check
+                    type: validate-plan
+                    items: 'planning.plan.items'
+                    dependsOn: [plan]
+              - name: gate
+                type: pause
+                question: held?
+                options: [stay, go]
+                dependsOn: [planning]
+              - name: later
+                type: orient
+                dependsOn: [gate]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        // The plan the run began from passes its check; the update's plan never does.
+        var checks = 0;
+        var runner = new FakeRunner()
+            .On("plan", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"items": [], "scope": []}""")))
+            .On("planupdate", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"items": [], "scope": []}""")))
+            .On("check", _ => Interlocked.Increment(ref checks) == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": true, "problems": [], "items": []}"""))
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": false, "problems": ["two items own one file"], "items": []}""")));
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            _ = await coordinator.RunAsync(Token);
+            var gate = coordinator.OpenQuestions.Single();
+            Assert.Equal("held?", gate.Problem);
+
+            // The update's check refuses its plan: the loop around the planning asks at its bound, and is accepted.
+            Assert.Equal(FlowHandedOver.Taken, coordinator.AmendmentHandedOver("narrow it", "amend-orchestrator-request", out var problem));
+            Assert.Null(problem);
+            _ = await coordinator.RunAsync(Token);
+            var bound = coordinator.OpenQuestions.Single(question => question.Kind == "loopBound");
+            Assert.True(coordinator.TryAnswer(bound.Id, "accept", null, out _));
+
+            var held = await coordinator.RunAsync(Token);
+            Assert.Equal(FlowRunStatus.Paused, held.Status);
+            Assert.Equal([gate.Id], coordinator.OpenQuestions.Select(question => question.Id));
+
+            var update = harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single();
+            Assert.Equal(
+                (FlowUpdateStates.Failed, "'check' refused its plan, and nothing around its planning step 'planning#1.planupdate' plans it again: the request is recorded and no plan holds it"),
+                (update.State, update.Why));
+            Assert.Null(harness.OrchestrationStore.ReadFlow(layout)!.Hold);
+
+            // The run goes on with the plan as it was.
+            Assert.True(coordinator.TryAnswer(gate.Id, "go", null, out _));
+            var end = await coordinator.RunAsync(Token);
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Contains(runner.Started, started => started == "later");
+        }
+
+        // The architecture says it where it says how a refused plan is settled.
+        Assert.Contains(
+            "where nothing around the planning plans it again - the loop accepted at its bound as it stood, or no loop there is - the update is given up",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A changed answer that arrives while an update is under way is queued behind it, as an amendment is: the answer
     /// is not applied until its turn, and when the first update is done the change is applied and planned - the set's
     /// one change, both answers kept, the second naming the update that took it.

@@ -1269,15 +1269,17 @@ public sealed class FlowCoordinator
             // began is taken by it, and what a step spent is counted.
             EachQueued(TakeMessage);
 
-            // A resume beside an open question is not refused where something can run; it is refused only where
-            // nothing can until the question is answered - before anything of its own is written, for the held writes
-            // are never made. A session an answer began goes on, as does one whose budget question is open: it is
-            // paused again on that question, which a person answers.
+            // A resume beside an open question is not refused where something can run - a step that starts, or a
+            // redirect the run owes that can be made now, which draws its steps again and may take the question back;
+            // it is refused only where nothing can until the question is answered - before anything of its own is
+            // written, for the held writes are never made. A session an answer began goes on, as does one whose budget
+            // question is open: it is paused again on that question, which a person answers.
             if (_resume is not null
                 && _sessions == 1
                 && !_answeredAtStart
                 && OpenBudgetQuestion is null
                 && NextIds().Count == 0
+                && RedirectToMake() is null
                 && _created.FirstOrDefault(instance => instance.WaitingQuestion is not null) is { } waitsOnOne)
             {
                 throw new HarnessException(
@@ -1620,12 +1622,45 @@ public sealed class FlowCoordinator
         // from its entry, as the update's end carries it: a crash between the update's done entry and its carry leaves
         // it to this session - a loop that ended runs again, and the group is given its round - and what was carried
         // already is left as it stands, by what its entry says: the iteration or round it added, or that its loop's bound
-        // was asked for it (ReopensFor), whose answer may have ended the loop for good.
+        // was asked for it (ReopensFor), whose answer may have ended the loop for good. An iteration or a round an update
+        // added that nothing is owed any more is taken back first, as the end of the update whose withdrawal left it so
+        // takes it back - by the newest update done, which a crash before the taking left it to - and a round taken back
+        // whose closing the crash cut off is closed again, from its entry, unless a later update has added that round
+        // again: what was drawn since is that update's.
+        if (_updates.Updates.LastOrDefault(update => update.State == FlowUpdateStates.Done) is { } newest)
+        {
+            TakeBackWhatOwesNothing(newest.Id);
+        }
+
+        foreach (var taken in _updates.Updates.Where(update => update is { State: FlowUpdateStates.Done, AddedWithdrawnBy: not null, AddedIteration: { } added }
+                && !_instances.ContainsKey(added)
+                && !_updates.Updates.Any(other => other.StandingIteration == added)).ToList())
+        {
+            if (CurrentRound() is { } round && LoopAround(round) is null && string.Equals(FlowInstanceId.PathOf(taken.AddedIteration!), round.Path, StringComparison.Ordinal))
+            {
+                CloseTheRoundAgain(round, taken);
+            }
+        }
+
         CarryWhatTheLoopsOwe();
 
         foreach (var done in _updates.Updates.Where(update => update is { State: FlowUpdateStates.Done, AddedIteration: null } && update.ThePieces.Any(piece => piece.IsOwed)).ToList())
         {
             AddARoundOwed(done);
+        }
+
+        // A check an update done names as drawn again for the work it withdrew or changed, which the crash left as it
+        // stood - its redirect not decided, or decided and not written - is drawn again now, from the entry; one drawn
+        // again already is no current visit any more, and one whose redirect the records hold is reset by it.
+        if (_definition.Amend is { } amend && FlowUpdateGates.ParentOf(amend.WhenAddScope) is { } groupPath)
+        {
+            foreach (var done in _updates.Updates.Where(update => update is { State: FlowUpdateStates.Done, CheckedAgain: not null }).ToList())
+            {
+                if (_instances.GetValueOrDefault(done.CheckedAgain!) is { State: FlowInstanceState.Done or FlowInstanceState.Running } check && WaitsToExpand(check, groupPath))
+                {
+                    DrawTheCheckAgain(done, check);
+                }
+            }
         }
     }
 
@@ -2763,13 +2798,22 @@ public sealed class FlowCoordinator
     /// round opens two work items of one name.
     /// </summary>
     private IReadOnlyList<JsonNode?> OwedItems()
-        => [.. OwedPieces().Select(piece => piece.Item?.DeepClone())];
+        => [.. OwedPieces().Where(piece => piece.Withdrawal != true).Select(piece => piece.Item?.DeepClone())];
 
     /// <summary>
-    /// The pieces plan updates owe the round that opens next, whose items <see cref="OwedItems"/> are: each piece of an
-    /// update done that is owed still, in the order the updates were done, the newest piece a name has superseding every
-    /// older one owed it. The one owner of which piece a round is owed for a name, which the owed items and their kinds
-    /// are read of.
+    /// The names of the work items plan updates take out of the list the round that opens next opens with: each a
+    /// withdrawal owed still (<see cref="FlowUpdatePiece.IsWithdrawing"/>) that no newer piece of its name supersedes.
+    /// The check that opens the round drops them from its items, and the round never expands them.
+    /// </summary>
+    private IReadOnlyList<string> OwedWithdrawals()
+        => [.. OwedPieces().Where(piece => piece.Withdrawal == true).Select(piece => piece.ItemName()).OfType<string>()];
+
+    /// <summary>
+    /// The pieces plan updates owe the round that opens next, whose items <see cref="OwedItems"/> are and whose
+    /// withdrawals <see cref="OwedWithdrawals"/> are: each piece of an update done that is owed still - work, or a
+    /// withdrawal from the round's list - in the order the updates were done, the newest piece a name has superseding every
+    /// older one owed it. The one owner of which piece a round is owed for a name, which the owed items, their kinds and
+    /// the withdrawals are read of.
     /// </summary>
     private IReadOnlyList<FlowUpdatePiece> OwedPieces()
     {
@@ -2778,7 +2822,7 @@ public sealed class FlowCoordinator
         foreach (var piece in _updates.Updates
             .Where(update => update.State == FlowUpdateStates.Done)
             .SelectMany(update => update.ThePieces)
-            .Where(piece => piece.IsOwed))
+            .Where(piece => piece.IsOwed || piece.IsWithdrawing))
         {
             owed[piece.ItemName() ?? $"piece without a name::{piece.GetHashCode()}"] = piece;
         }
@@ -4122,6 +4166,17 @@ public sealed class FlowCoordinator
                     return true;
                 }
 
+                if (PlansNoMore(planner))
+                {
+                    // The check the then names refused the plan, and no loop around the planning goes round again - one
+                    // accepted at its bound as it stood, or none there is: no plan of this update will ever stand, so it
+                    // is given up, the run going on with the plan as it was, never held for ever on it.
+                    var what = update.Cause == FlowUpdateCauses.ChangedAnswer ? "answer" : update.Cause == FlowUpdateCauses.PlanCheck ? "update" : "request";
+                    GiveUpUpdate(update, $"'{_definition.Amend!.Then}' refused its plan, and nothing around its planning step '{planner.Id}' plans it again: the {what} is recorded and no plan holds it");
+                    changed = true;
+                    continue;
+                }
+
                 if (PlanStands(planner))
                 {
                     // The updated plan stands, and only now is its scope read: until it passed what the flow has it
@@ -4151,6 +4206,9 @@ public sealed class FlowCoordinator
                         continue;
                     }
 
+                    // What the updates owe the round that opens next, as it stood before this one placed anything: a check
+                    // that joined it to a round not yet expanded is drawn again where this update changes what it joined.
+                    var owedBefore = OwedSaid();
                     var placed = PlaceThePieces(update);
                     var told = TellThePieces(update, placed);
 
@@ -4162,11 +4220,18 @@ public sealed class FlowCoordinator
                             ? $"update {update.Id} is done: its plan stands, and nothing of its scope changes"
                             : $"update {update.Id} is done: its plan stands, {placed.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} piece(s) placed, and the steps that start from here on read it");
 
-                    // What the update owes a loop is carried to the loop's next iteration, whatever its until says -
-                    // an iteration added at the bound where the loop has none of its own - and what it owes a
-                    // work-item group with no loop around it, by a round of the group added for it.
+                    // An iteration or a round an earlier update added that nothing is owed any more, its work withdrawn
+                    // before it opened, is taken back first - so what this update owes is counted as if it had never
+                    // been added; then what the update owes a loop is carried to the loop's next iteration, whatever its
+                    // until says - an iteration added at the bound where the loop has none of its own - and what it owes
+                    // a work-item group with no loop around it, by a round of the group added for it.
+                    TakeBackWhatOwesNothing(update.Id);
                     CarryWhatTheLoopsOwe();
                     AddARoundOwed(update);
+
+                    // A check that had joined work this update withdrew or changed to a round not yet expanded is drawn
+                    // again, so the round opens with what the updates owe it now.
+                    CheckAgainWhatWasJoined(update.Id, owedBefore);
 
                     // The check that raised it runs again on the list as it now is, before any queued update is
                     // taken: its round opens from what that visit finds.
@@ -4287,6 +4352,34 @@ public sealed class FlowCoordinator
                 && !IterationAtRest(loop.Children[^1]))
             {
                 // A repeat it is in has not ended the iteration it is in: the plan stands between its iterations.
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Whether the update <paramref name="planner"/> plans can bring no plan that stands any more: the check the
+    /// <c>amend</c> block's <c>then</c> names refused its plan (<see cref="TheThenRefuses"/>), every redirect the then
+    /// decided is made, and no <c>repeat</c> around the planning step's scope goes round again - each has ended, accepted
+    /// at its bound as it stood or ended otherwise, or there is none. A loop that has not ended - running, asking at its
+    /// bound, or stopped by a pause - may plan it again, and the update waits for it.
+    /// </summary>
+    /// <param name="planner">The planning step the update raised, ended done.</param>
+    private bool PlansNoMore(FlowInstance planner)
+    {
+        if (planner.DeclaredScope is not { } scope
+            || _redirects.Any(redirect => ReferenceEquals(redirect.Handler, planner))
+            || !TheThenRefuses(planner, scope))
+        {
+            return false;
+        }
+
+        for (var at = scope; at is not null; at = at.Parent)
+        {
+            if (at.LoopOf is { Step.Repeat: not null } loop && loop.State is not (FlowInstanceState.Done or FlowInstanceState.Failed or FlowInstanceState.Skipped))
+            {
                 return false;
             }
         }
@@ -4431,6 +4524,19 @@ public sealed class FlowCoordinator
             if (instance is null && piece.Kind == FlowUpdatePieceKinds.Removed)
             {
                 WithdrawWhatIsOwed(update, piece.ItemName()!);
+
+                if (OpeningUnderWay() is { Items: var opening } && opening.Any(item => string.Equals(FlowWorkItems.NameOf(item), piece.ItemName(), StringComparison.Ordinal)))
+                {
+                    // An item of the list the check that opens a round was opening it with, which raised this update: no
+                    // instance carries it, and that check runs again on its own items - which still hold it - so the
+                    // piece is owed to the round as a withdrawal, which the check drops from its items and the round
+                    // never expands. It makes no loop run again: it adds no work.
+                    var (owed, _) = RoundOwed(CurrentRound());
+                    placed.Add(piece with { OwedTo = owed, Withdrawal = true });
+                    Record(FlowChangeKind.Answer, detail: $"update {update.Id} takes '{piece.ItemName()}' out of the work items {owed} opens with: nothing of it was built, and nothing is undone");
+                    continue;
+                }
+
                 placed.Add(piece with { Ended = "nothing was built and nothing is undone" });
                 Record(FlowChangeKind.Answer, detail: $"update {update.Id} withdraws '{piece.ItemName()}', which no instance of the run carries: nothing was built and nothing is undone");
                 continue;
@@ -4831,11 +4937,7 @@ public sealed class FlowCoordinator
 
         if (round is not { State: FlowInstanceState.Running or FlowInstanceState.Paused })
         {
-            var group = FlowUpdateGates.ParentOf(_definition.Amend!.WhenAddScope)!.Split('.')[^1];
-            var loop = round is null ? null : LoopAround(round);
-            var owed = round is null ? $"the round '{group}' when it opens"
-                : loop is not null ? $"the next iteration of '{loop.Step.Name}'"
-                : RoundAddedTo(group);
+            var (owed, loop) = RoundOwed(round);
 
             if (loop is not null)
             {
@@ -4870,6 +4972,22 @@ public sealed class FlowCoordinator
             item.GroupInstance!,
             detail: $"one more work item of '{round.Id}' for update {update.Id}: '{piece.ItemName()}', of kind '{piece.Kind}'");
         return piece with { Placed = item.GroupInstance!.Id };
+    }
+
+    /// <summary>
+    /// The round work is owed to where the work-item group's newest instance, <paramref name="round"/>, is not open, as a
+    /// piece's entry says it - the group's first round where none has begun, the next iteration of the loop around it
+    /// where it has ended, or a round added to the group where no loop is around it - with that loop, where one is.
+    /// </summary>
+    /// <param name="round">The work-item group's newest instance; null before any has begun.</param>
+    private (string Owed, FlowInstance? Loop) RoundOwed(FlowInstance? round)
+    {
+        var group = FlowUpdateGates.ParentOf(_definition.Amend!.WhenAddScope)!.Split('.')[^1];
+        var loop = round is null ? null : LoopAround(round);
+
+        return (round is null ? $"the round '{group}' when it opens"
+            : loop is not null ? $"the next iteration of '{loop.Step.Name}'"
+            : RoundAddedTo(group), loop);
     }
 
     /// <summary>
@@ -5701,13 +5819,28 @@ public sealed class FlowCoordinator
                 return;
             }
 
-            if (WorkItemGroupOf(instance) && _updates.Updates.Any(update => update.AddedIteration == instance.Id))
+            if (WorkItemGroupOf(instance) && _updates.Updates.Any(update => update.StandingIteration == instance.Id))
             {
                 // A round added to a work-item group with no loop around it carries the work plan updates owe it, and
                 // that alone: what the check that opens it checked as one list holds the round's own items too, which
                 // the group's round before carried already.
                 var owed = OwedItems().Select(FlowWorkItems.NameOf).OfType<string>().ToHashSet(StringComparer.Ordinal);
                 list = [.. list.Where(item => FlowWorkItems.NameOf(item.ToNode()) is { } named && owed.Contains(named))];
+            }
+
+            if (WorkItemGroupOf(instance) && OwedWithdrawals() is { Count: > 0 } withdrawn)
+            {
+                // What updates took out of the list the round opens with is never expanded: the check that opens the round
+                // dropped it, and nothing of it was built. Each withdrawal ends as the round opens without it.
+                list = [.. list.Where(item => FlowWorkItems.NameOf(item.ToNode()) is not { } named || !withdrawn.Contains(named, StringComparer.Ordinal))];
+
+                foreach (var update in _updates.Updates.Where(update => update.State == FlowUpdateStates.Done && update.ThePieces.Any(piece => piece.IsWithdrawing)).ToList())
+                {
+                    foreach (var name in update.ThePieces.Where(piece => piece.IsWithdrawing && withdrawn.Contains(piece.ItemName()!, StringComparer.Ordinal)).Select(piece => piece.ItemName()!).ToList())
+                    {
+                        PutUpdatePiece(update.Id, name, piece => piece.IsWithdrawing ? piece with { Ended = $"'{instance.Id}' opened without it: nothing was built and nothing is undone" } : piece);
+                    }
+                }
             }
 
             if (InstanceBoundOf(instance.Id, scope, declaration, list.Count) is { } bound)
@@ -5739,11 +5872,12 @@ public sealed class FlowCoordinator
                 instance.Children.Add(item);
 
                 // The pieces owed a work item of this name - the newest update's carries it, and an older one's work
-                // goes on as the newest places it.
+                // goes on as the newest places it, an older withdrawal of the name among them: the newest piece is
+                // work, for the round would not expand a name whose newest piece withdraws it.
                 var owing = WorkItemGroupOf(instance) && ItemNameOf(item) is { } named
                     ? _updates.Updates.Where(update => update.State == FlowUpdateStates.Done)
                         .SelectMany(update => update.ThePieces.Select(piece => (update.Id, Piece: piece)))
-                        .Where(held => held.Piece.IsOwed && string.Equals(held.Piece.ItemName(), named, StringComparison.Ordinal))
+                        .Where(held => (held.Piece.IsOwed || held.Piece.IsWithdrawing) && string.Equals(held.Piece.ItemName(), named, StringComparison.Ordinal))
                         .ToList()
                     : [];
 
@@ -5920,10 +6054,10 @@ public sealed class FlowCoordinator
     /// holds for, with those granted past it that its count holds (<see cref="FlowLoopCount.Given"/>) - every one, or,
     /// where a plan update was planned in it, those granted since.
     /// </summary>
-    private static int BoundOf(WorkflowStep declaration, FlowInstance instance)
+    private int BoundOf(WorkflowStep declaration, FlowInstance instance)
     {
         // blockersLimitRounds: false is no bound but the budget: no count of iterations ever reaches it.
-        return declaration.Repeat!.Bound(FlowLoopCount.Given(instance.ExtraIterations, instance.Counted));
+        return declaration.Repeat!.Bound(FlowLoopCount.Given(instance.ExtraIterations, instance.Counted, _updates.Updates));
     }
 
     /// <summary>
@@ -5952,7 +6086,10 @@ public sealed class FlowCoordinator
             return;
         }
 
-        loop.Counted = new FlowLoopCount(update.Id, before, loop.ExtraIterations);
+        // The iterations updates added that the count leaves out are named, so one a later update takes back before it
+        // opens is left out no more: the count holds what was granted since it began, whatever is taken back.
+        var added = _updates.Updates.Where(entry => FlowGrants.AddedTo(entry, loop.Id)).Select(entry => entry.Id).ToList();
+        loop.Counted = new FlowLoopCount(update.Id, before, loop.ExtraIterations, added.Count == 0 ? null : added);
         WriteStepRecordOf(loop);
     }
 
@@ -6007,7 +6144,7 @@ public sealed class FlowCoordinator
         _ = Ask(
             instance,
             "loopBound",
-            $"{stood}; {said}{(FlowLoopCount.Given(instance.ExtraIterations, instance.Counted) is > 0 and var given ? $", and {given.ToString(System.Globalization.CultureInfo.InvariantCulture)} more were given by its answers" : string.Empty)}",
+            $"{stood}; {said}{(FlowLoopCount.Given(instance.ExtraIterations, instance.Counted, _updates.Updates) is > 0 and var given ? $", and {given.ToString(System.Globalization.CultureInfo.InvariantCulture)} more were given by its answers" : string.Empty)}",
             WorkflowValidator.AnswersOf["loopBound"]);
 
         // The work plan updates owe the loop is the question's to carry from here: each owing entry says so once the
@@ -6140,7 +6277,7 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>Whether <paramref name="loop"/>'s next iteration would pass its own bound: where it asks, at an iteration's end or at its deciding step.</summary>
-    private static bool AtItsBound(FlowInstance loop)
+    private bool AtItsBound(FlowInstance loop)
         => IterationsCounted(loop) + 1 > BoundOf(loop.Step, loop);
 
     /// <summary>
@@ -6685,7 +6822,10 @@ public sealed class FlowCoordinator
 
         foreach (var between in OpeningCheckOf(scope, round.Step) is { } check ? PathFrom(scope, check, round.Step) : [])
         {
-            if (scope.Members.GetValueOrDefault(between.Name) is { } visit && _created.IndexOf(visit) < _created.IndexOf(round))
+            // A visit drawn before the round ended, or one an earlier round added and taken back ended (CloseTheRoundAgain),
+            // is drawn again; one drawn since for this round is its own already.
+            if (scope.Members.GetValueOrDefault(between.Name) is { } visit
+                && (_created.IndexOf(visit) < _created.IndexOf(round) || _updates.Updates.Any(entry => entry.AddedWithdrawnBy is not null && string.Equals(visit.SkippedBecause, TakenBackBecause(entry), StringComparison.Ordinal))))
             {
                 _ = scope.Members.Remove(between.Name);
                 _ = scope.Instantiated.Remove(between.Name);
@@ -6705,6 +6845,216 @@ public sealed class FlowCoordinator
                 InProgressAgain(around, $"in progress again: update {update} added a round of '{round.Step.Name}'");
             }
         }
+    }
+
+    /// <summary>
+    /// Takes back each iteration or round an update added that has not opened and that nothing is owed any more: the
+    /// work it was added for was withdrawn before it opened, by the update <paramref name="by"/> whose placement left it
+    /// so. Its entry says so first (<see cref="FlowUpdateEntry.AddedWithdrawnBy"/>), and from there it is counted against
+    /// no bound: a loop's iteration is no more given - the bound reads as it did before it was added, so the loop asks at
+    /// it, or its until ends it, as it would have - and a round added to a work-item group with no loop around it is
+    /// closed again (<see cref="CloseTheRoundAgain"/>). One that still carries work - another update's, owed to the same
+    /// loop or round - stands, for that work is carried by it. A withdrawal owed to a round taken back ends with it.
+    /// </summary>
+    /// <param name="by">The update whose placement left nothing owed: the one just done, or, where a session takes the run up, the newest done.</param>
+    private void TakeBackWhatOwesNothing(string by)
+    {
+        foreach (var adding in _updates.Updates.Where(entry => entry is { State: FlowUpdateStates.Done, StandingIteration: { } added }
+                && entry.Id != by
+                && !_instances.ContainsKey(added)
+                && !entry.ThePieces.Any(piece => piece.IsOwed)).ToList())
+        {
+            var added = adding.StandingIteration!;
+
+            if (_created.FirstOrDefault(loop => loop.Step.Repeat is not null && FlowGrants.AddedTo(adding, loop.Id)) is { } loop)
+            {
+                if (IterationOwed(loop))
+                {
+                    // Another update owes the loop's next iteration work: the one added carries it.
+                    continue;
+                }
+
+                PutUpdate(adding with { AddedWithdrawnBy = by });
+                loop.ExtraIterations--;
+                Record(
+                    FlowChangeKind.Answer,
+                    instance: loop,
+                    detail: $"{FlowReports.TakenBackSaidOf(added, adding.Id, by)}; '{loop.Id}' reads its bound as it did before it was added");
+                EndTheWithdrawalsOwed($"{FlowReports.IterationSaidOf(added)}, which it was owed to, was taken back before it opened");
+                continue;
+            }
+
+            if (CurrentRound() is { } round
+                && LoopAround(round) is null
+                && string.Equals(FlowInstanceId.PathOf(added), round.Path, StringComparison.Ordinal)
+                && !OwedPieces().Any(piece => piece.IsOwed))
+            {
+                var taken = adding with { AddedWithdrawnBy = by };
+                PutUpdate(taken);
+                Record(FlowChangeKind.Answer, instance: round, detail: FlowReports.TakenBackSaidOf(added, adding.Id, by));
+                EndTheWithdrawalsOwed($"{FlowReports.IterationSaidOf(added)}, which it was owed to, was taken back before it opened");
+                CloseTheRoundAgain(round, taken);
+            }
+        }
+    }
+
+    /// <summary>Ends every withdrawal owed still (<see cref="FlowUpdatePiece.IsWithdrawing"/>), saying <paramref name="why"/>: the round it was owed to opens no more.</summary>
+    private void EndTheWithdrawalsOwed(string why)
+    {
+        foreach (var update in _updates.Updates.Where(update => update.State == FlowUpdateStates.Done && update.ThePieces.Any(piece => piece.IsWithdrawing)).ToList())
+        {
+            foreach (var name in update.ThePieces.Where(piece => piece.IsWithdrawing).Select(piece => piece.ItemName()!).ToList())
+            {
+                PutUpdatePiece(update.Id, name, piece => piece.IsWithdrawing ? piece with { Ended = why } : piece);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Closes again the work-item group <paramref name="round"/> is the newest visit of, whose added round
+    /// <paramref name="adding"/>'s entry says was taken back: what <see cref="OpenTheRoundAgain"/> drew again for it - the
+    /// check that opens the group's rounds and every step between it and the group - ends skipped, saying why, each drawn
+    /// visit that had not ended and each not drawn yet alike, so none of them runs; the group's slot is its round before
+    /// again, so it is not drawn; and the groups around it that were in progress again for the round end as their members
+    /// have, as they had. Made once, however often it is called: a session that takes the run up after a crash between
+    /// the entry and the closing calls it from the entry, and ends only what has not ended.
+    /// </summary>
+    /// <param name="round">The newest visit of the work-item group, ended.</param>
+    /// <param name="adding">The update whose added round was taken back.</param>
+    private void CloseTheRoundAgain(FlowInstance round, FlowUpdateEntry adding)
+    {
+        var scope = round.DeclaredScope!;
+        var because = TakenBackBecause(adding);
+
+        foreach (var between in OpeningCheckOf(scope, round.Step) is { } check ? PathFrom(scope, check, round.Step) : [])
+        {
+            if (scope.Members.GetValueOrDefault(between.Name) is { } visit && _created.IndexOf(visit) > _created.IndexOf(round))
+            {
+                if (visit.State is FlowInstanceState.NotStarted or FlowInstanceState.Paused)
+                {
+                    if (visit.WaitingQuestion is { } question)
+                    {
+                        Withdraw(question);
+                    }
+
+                    visit.SkippedBecause = because;
+                    End(visit, FlowInstanceState.Skipped, visit.Exit, visit.Error);
+                    WriteStepRecordOf(visit);
+                    Record(FlowChangeKind.Step, visit, to: FlowInstanceState.Skipped, detail: because);
+                }
+            }
+            else if (!scope.Members.ContainsKey(between.Name) && ScopeLive(scope))
+            {
+                scope.Instantiated.Add(between.Name);
+                _ = Create(scope, between, FlowInstanceState.Skipped, made: skipped => skipped.SkippedBecause = because);
+            }
+        }
+
+        if (!scope.Members.ContainsKey(round.Step.Name))
+        {
+            // The group's slot holds its round before again: nothing draws the round that was taken back.
+            scope.Members[round.Step.Name] = round;
+            scope.Instantiated.Add(round.Step.Name);
+        }
+    }
+
+    /// <summary>
+    /// Why a step drawn for a round <paramref name="adding"/> added, and taken back, ends skipped: the one text that closes
+    /// it (<see cref="CloseTheRoundAgain"/>) and that a later round added reads to draw it again (<see cref="OpenTheRoundAgain"/>).
+    /// </summary>
+    private static string TakenBackBecause(FlowUpdateEntry adding)
+        => $"{FlowReports.IterationSaidOf(adding.AddedIteration!)}, which update {adding.Id} added, was taken back by update {adding.AddedWithdrawnBy} before it opened: nothing is owed it";
+
+    /// <summary>
+    /// What plan updates owe the round that opens next (<see cref="OwedPieces"/>), by the work item's name: its kind,
+    /// whether it withdraws, and its item, as one text. What a check that joined the owed work is held against
+    /// (<see cref="CheckAgainWhatWasJoined"/>): a name whose text changed is work it joined as it no longer is.
+    /// </summary>
+    private Dictionary<string, string> OwedSaid()
+    {
+        var said = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var piece in OwedPieces())
+        {
+            if (piece.ItemName() is { } name)
+            {
+                said[name] = $"{piece.Kind}|{piece.Withdrawal == true}|{piece.Item?.ToJsonString()}";
+            }
+        }
+
+        return said;
+    }
+
+    /// <summary>
+    /// Draws again the check that opens a round which had joined the work updates owed that round, where the update
+    /// <paramref name="id"/> changed it before the round's work-item group expanded: the owed work as it stood before the
+    /// update (<paramref name="before"/>) and as it stands now differ - a piece withdrawn, one changed, one added - and the
+    /// check ran, or runs, on the first. Left alone, the group would expand from that list: a withdrawn item built, a
+    /// changed one built as it was, an added one left to a round after it though this round has not opened. The update's
+    /// entry names the check first (<see cref="FlowUpdateEntry.CheckedAgain"/>); then the check is drawn again, with every
+    /// step of its scope that depends on it, by the redirect every going back to a step makes
+    /// (<see cref="DrawTheCheckAgain"/>): what is in flight among them runs to its end first, nothing of them is drawn
+    /// before, and the round opens on what the new visit finds.
+    /// </summary>
+    /// <param name="id">The update just done.</param>
+    /// <param name="before">What the updates owed the round that opens next before it was placed (<see cref="OwedSaid"/>).</param>
+    private void CheckAgainWhatWasJoined(string id, IReadOnlyDictionary<string, string> before)
+    {
+        if (_definition.Amend is not { } amend
+            || FlowUpdateGates.ParentOf(amend.WhenAddScope) is not { } groupPath
+            || _updates.Updates.FirstOrDefault(entry => entry.Id == id) is not { State: FlowUpdateStates.Done, CheckedAgain: null } done)
+        {
+            return;
+        }
+
+        var after = OwedSaid();
+        var changed = before.Keys.Concat(after.Keys)
+            .Where(name => !string.Equals(before.GetValueOrDefault(name), after.GetValueOrDefault(name), StringComparison.Ordinal))
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (changed.Count == 0
+            || _created.LastOrDefault(check => check is { Step.Type: "validate-plan", State: FlowInstanceState.Done or FlowInstanceState.Running }
+                && OpensTheUpdatedRound(check, groupPath)
+                && WaitsToExpand(check, groupPath)) is not { } check)
+        {
+            return;
+        }
+
+        PutUpdate(done with { CheckedAgain = check.Id });
+        DrawTheCheckAgain(done with { CheckedAgain = check.Id }, check);
+    }
+
+    /// <summary>
+    /// Whether the check that opens a round, <paramref name="check"/>, joined work to a round that has not expanded from it
+    /// yet and is not drawn again already: it is its scope's current visit of the check, in a scope still live, the
+    /// work-item group beside it has drawn no visit since, and no redirect the run owes resets it.
+    /// </summary>
+    /// <param name="check">A visit of the check that opens the rounds of the work-item group.</param>
+    /// <param name="groupPath">The declaration path of the work-item group.</param>
+    private bool WaitsToExpand(FlowInstance check, string groupPath)
+        => check is { LeftBy: null, DeclaredScope: { } scope }
+            && ScopeLive(scope)
+            && ReferenceEquals(scope.Members.GetValueOrDefault(check.Step.Name), check)
+            && DeclarationsOf(scope).FirstOrDefault(declared => string.Equals(PathOf(scope, declared), groupPath, StringComparison.Ordinal)) is { } group
+            && (scope.Members.GetValueOrDefault(group.Name) is not { } expanded || _created.IndexOf(expanded) < _created.IndexOf(check))
+            && !_redirects.Any(redirect => redirect.Set.Any(entry => ReferenceEquals(entry.Scope, scope) && ReferenceEquals(entry.Declaration, check.Step)));
+
+    /// <summary>
+    /// Decides the redirect that draws <paramref name="check"/> again for <paramref name="done"/>, whose entry names it
+    /// (<see cref="FlowUpdateEntry.CheckedAgain"/>): by the update's planning step, whose plan changed what the check had
+    /// joined, to the check in its scope - the machinery every going back to a step goes through, so it is written to the
+    /// run's records before its reset and made once nothing it resets runs. Nothing where the update names no planning
+    /// visit the run holds.
+    /// </summary>
+    private void DrawTheCheckAgain(FlowUpdateEntry done, FlowInstance check)
+    {
+        if (done.Step is not { } planning || _instances.GetValueOrDefault(planning) is not { } planner)
+        {
+            return;
+        }
+
+        Record(FlowChangeKind.Step, check, detail: FlowReports.CheckedAgainSaidOf(check.Id, done.Id));
+        DecideRedirectOf(planner, check.DeclaredScope!, check.Step);
     }
 
     /// <summary>
@@ -6802,9 +7152,13 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>How many iterations plan updates have added over the whole run, every loop's: what <c>amend.maxAddedIterations</c> bounds.</summary>
+    /// <summary>
+    /// How many iterations plan updates have added over the whole run, every loop's, that stand - none a later update
+    /// took back before it opened (<see cref="FlowUpdateEntry.StandingIteration"/>): what <c>amend.maxAddedIterations</c>
+    /// bounds.
+    /// </summary>
     private int AddedIterationsGiven()
-        => _updates.Updates.Count(update => update.AddedIteration is not null);
+        => _updates.Updates.Count(update => update.StandingIteration is not null);
 
     /// <summary>
     /// Adds the iteration plan updates owe work of <paramref name="loop"/>, where the loop is at its own bound: one for
@@ -6822,10 +7176,12 @@ public sealed class FlowCoordinator
         var allowed = _definition.Amend!.AddedIterationsAllowed;
 
         if (IterationsCounted(loop) < BoundOf(loop.Step, loop)
+            || RoundToOpenIn(loop)
             || _updates.Updates.FirstOrDefault(update => update.AddedIteration is null && IterationOwedBy(update.Id, loop)) is not { } update)
         {
-            // The loop has an iteration of its own still - the owed work joins it, and nothing is added - or nothing is
-            // owed it that has not been given its iteration.
+            // The loop has an iteration of its own still - the owed work joins it, and nothing is added - or the one under
+            // way has its round still to open, which the owed work joins at the check that opens it, or nothing is owed it
+            // that has not been given its iteration.
             return;
         }
 
@@ -6852,6 +7208,31 @@ public sealed class FlowCoordinator
             FlowChangeKind.IterationAdded,
             instance: loop,
             detail: $"iteration {iteration.ToString(System.Globalization.CultureInfo.InvariantCulture)} of '{loop.Step.Name}' was added for update {update.Id}: the run has been given {(given + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)} of the {allowed.ToString(System.Globalization.CultureInfo.InvariantCulture)} amend.maxAddedIterations allows");
+    }
+
+    /// <summary>
+    /// Whether the newest iteration of <paramref name="loop"/> is under way with its round of the work-item group still to
+    /// open: the group has drawn no visit in it yet. The work updates owe the round that opens next joins that round, at
+    /// the check that opens it - drawn again where it had run (<see cref="CheckAgainWhatWasJoined"/>) - so no iteration
+    /// is owed for it; once the iteration has ended without opening one, its work is the next iteration's.
+    /// </summary>
+    /// <param name="loop">The repeat around the work-item group.</param>
+    private bool RoundToOpenIn(FlowInstance loop)
+    {
+        if (loop.Children.Count == 0 || loop.Children[^1] is not { GroupInstance.State: FlowInstanceState.Running or FlowInstanceState.Paused } iteration)
+        {
+            return false;
+        }
+
+        for (var at = CurrentRound()?.DeclaredScope; at is not null; at = at.Parent)
+        {
+            if (ReferenceEquals(at, iteration))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -6993,7 +7374,7 @@ public sealed class FlowCoordinator
             }
         }
 
-        while (!_pausing && !_hardStop && NextRedirect() is { } apply)
+        while (!_pausing && !_hardStop && RedirectToMake() is { } apply)
         {
             // The redirects the run owes are made in the order they were decided, each once nothing it resets is
             // running: a redirect cancels nothing, and what it resets that was in flight is recorded as the visit it
@@ -7008,26 +7389,31 @@ public sealed class FlowCoordinator
         }
 
         return changed;
+    }
 
-        PendingRedirect? NextRedirect()
+    /// <summary>
+    /// The redirect the run makes next, if one can be made now: the first it owes, in the order they were decided, once
+    /// nothing it resets is running. One still asking about an open agent holds the ones after it, as one waiting for
+    /// quiet does; while a plan update holds the run, one outside the scope it is planned in is passed over.
+    /// </summary>
+    private PendingRedirect? RedirectToMake()
+    {
+        foreach (var next in _redirects)
         {
-            foreach (var next in _redirects)
+            if (next.Asking is not null)
             {
-                if (next.Asking is not null)
-                {
-                    return null;
-                }
-
-                if (_heldPlanner is { } planner && !ReferenceEquals(next.Handler, planner) && !InHeldScope(next.Handler.DeclaredScope))
-                {
-                    continue;
-                }
-
-                return RedirectQuiet(next) ? next : null;
+                return null;
             }
 
-            return null;
+            if (_heldPlanner is { } planner && !ReferenceEquals(next.Handler, planner) && !InHeldScope(next.Handler.DeclaredScope))
+            {
+                continue;
+            }
+
+            return RedirectQuiet(next) ? next : null;
         }
+
+        return null;
     }
 
     /// <summary>What admission decides of one step that has not started: it starts now, with the claims it takes, or what it waits on.</summary>
@@ -14152,15 +14538,31 @@ public sealed class FlowCoordinator
             read["carried"] = FlowValue.Of(new JsonArray([.. carried.Select(name => (JsonNode?)name)]));
             read["opened"] = FlowValue.Of(new JsonArray([.. carried.Where(name => !rebuilt.Contains(name)).Select(name => (JsonNode?)name)]));
 
+            // A round carries the owed work alone where it is one an update added to the group with no loop around it
+            // (OpenGroup): its own items, the plan's the check reads again, are those the group's round before built,
+            // under the very names it carries, and are not built again. A loop's later round is a visit of its own, and
+            // builds every item it opens with.
+            var owedAlone = PendingAddedRound() is not null;
+
+            if (opening is not null)
+            {
+                // The round the update under way joins has not opened - the check that opens it raised the update - so
+                // the update's check holds that round's list whether or not the update answers a piece, and the planner
+                // is told within its own step what the round's own items still lack: the names an earlier round carries
+                // that the list may not take - none where the round carries the owed work alone, every one but those
+                // the work updates owe it bears otherwise, as the check that opens the round holds them.
+                var owedNames = OwedPieces().Select(piece => piece.ItemName()).OfType<string>().ToHashSet(StringComparer.Ordinal);
+                read["opening"] = FlowValue.Of(new JsonArray([.. (owedAlone ? [] : carried.Where(name => !owedNames.Contains(name))).Select(name => (JsonNode?)name)]));
+            }
+
             if (string.Equals(RoundOpenedBy(check, declaredIn), groupPath, StringComparison.Ordinal))
             {
                 read["owed"] = FlowValue.Of(new JsonArray([.. OwedItems()]));
 
-                // A round an update added to the group with no loop around it carries the owed work alone (OpenGroup):
-                // its own items, the plan's the check reads again, are those the group's round before built, under the
-                // very names it carries, and are not built again. A loop's later round is a visit of its own, and
-                // builds every item it opens with.
-                read["owedAlone"] = FlowValue.Of(PendingAddedRound() is not null);
+                // What updates take out of the round's list, which the check drops from its own items: an item of the
+                // list it was opening the round with, withdrawn by the update that list raised.
+                read["withdrawn"] = FlowValue.Of(new JsonArray([.. OwedWithdrawals().Select(name => (JsonNode?)name)]));
+                read["owedAlone"] = FlowValue.Of(owedAlone);
             }
         }
     }
@@ -15561,7 +15963,7 @@ public sealed class FlowCoordinator
             if (PendingAddedRound() is { } pending
                 && CurrentRound() is { State: not (FlowInstanceState.Running or FlowInstanceState.Paused) } ended
                 && LoopAround(ended) is null
-                && _updates.Updates.FirstOrDefault(update => update.AddedIteration == pending) is { } adding)
+                && _updates.Updates.FirstOrDefault(update => update.StandingIteration == pending) is { } adding)
             {
                 // A round an update added to a work-item group with no loop around it, written into the update's entry
                 // and not opened before the session ended: the group is drawn once more, as the update left it to be.
