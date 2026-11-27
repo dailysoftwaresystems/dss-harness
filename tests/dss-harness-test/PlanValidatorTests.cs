@@ -313,14 +313,15 @@ public sealed class PlanValidatorTests : IDisposable
     }
 
     /// <summary>
-    /// An entry an item owns or must not touch, written with no trailing separator, that names a directory of the main tree
-    /// the run's start tree does not hold - one an earlier round's fold made - names that one path to every reader of the
-    /// item's paths: the builder's every write beneath it would be refused, and its fold would carry none of it. So the
-    /// check refuses it, in the words every refusal of the reading uses, saying to write it with a trailing separator; a
-    /// directory both trees hold, and the same entry written so, pass.
+    /// An entry an item owns, written with no trailing separator, that names a directory of the main tree the run's start
+    /// tree does not hold - one an earlier round's fold made - names that one path to every reader of the item's paths: the
+    /// builder's every write beneath it would be refused, and its fold would carry none of it. So the check refuses it, in
+    /// the words every refusal of the reading uses, saying to write it with a trailing separator; a directory both trees
+    /// hold, and the same entry written so, pass. An entry an item must not touch, written so, is no problem: nothing
+    /// gates a write by a forbidden path, so none would be refused for it.
     /// </summary>
     [Fact]
-    public async Task AnEntryNamingADirectoryOnlyTheMainTreeHolds_IsAProblem_SayingToWriteItEndingInASeparator()
+    public async Task AnOwnedEntryNamingADirectoryOnlyTheMainTreeHolds_IsAProblem_SayingToWriteItEndingInASeparator_AndAForbiddenOneIsNot()
     {
         var (harness, repository) = await RepositoryAsync();
         var startTree = await harness.StartTreeAsync(repository.Path, Token);
@@ -334,19 +335,56 @@ public sealed class PlanValidatorTests : IDisposable
         kept["forbiddenPaths"] = new JsonArray("src/feature");
         var there = Item("there", "src/other");
 
-        const string Said = "'src/feature' names a file of the run's start tree, which the run's lists of paths are read against, and a directory of the main tree: write it 'src/feature/'";
+        // The forbidden entry is said of nothing: the owned one alone is refused.
+        Assert.Equal(
+            ["work item 'made' owns 'src/feature', which names nothing beneath it: 'src/feature' names a file of the run's start tree, which the run's lists of paths are read against, and a directory of the main tree: write it 'src/feature/'"],
+            await CheckAsync(repository, startTree, made, kept, there));
+        Assert.Empty(await CheckAsync(repository, startTree, kept));
+
+        made["ownedPaths"] = new JsonArray("src/feature/");
+
+        Assert.Empty(await CheckAsync(repository, startTree, made, kept, there));
+    }
+
+    /// <summary>
+    /// Against a start tree that could not be read, two lists of entries that meet are named by a pair that meets whatever
+    /// the tree holds - read narrowly, as what may be written beneath each - with nothing said of the tree, before any pair
+    /// that meets only because every path was taken for one of its directories: a real conflict is never hidden behind one
+    /// the unread tree made, nor said with that tree's reason. Where no pair meets narrowly, the wide reading's pair is
+    /// named with the reason - two items' owned paths, and an item's owned and forbidden ones alike.
+    /// </summary>
+    [Fact]
+    public async Task AgainstAStartTreeThatCouldNotBeRead_AnOverlapNamesAPairThatMeetsWhateverTheTreeHolds_First()
+    {
+        var (_, repository) = await RepositoryAsync();
+        var unread = TreeDirectories.NoCommit;
+        var wide = "every path is taken for a directory of the run's start tree, which could not be read: the run names no commit it started from";
+        // Paths the main tree does not hold, so nothing but the overlaps is said.
+        var a = Item("a", "pkg/one");
+        a["ownedPaths"] = new JsonArray("pkg/one", "lib/x.c");
+        var b = Item("b", "pkg/**/*.cs");
+        b["ownedPaths"] = new JsonArray("pkg/**/*.cs", "lib/x.c");
+        var kept = Item("kept", "etc/one");
+        kept["ownedPaths"] = new JsonArray("etc/one", "etc/y.c");
+        kept["forbiddenPaths"] = new JsonArray("etc/**/*.h", "etc/y.c");
 
         Assert.Equal(
             [
-                $"work item 'made' owns 'src/feature', which names nothing beneath it: {Said}",
-                $"work item 'kept' must not touch 'src/feature', which names nothing beneath it: {Said}",
+                "work items 'a' and 'b' both own what 'lib/x.c' and 'lib/x.c' match: no file is written by two items, so give it to one",
+                "work item 'kept' owns 'etc/y.c' and must not touch 'etc/y.c', which match the same paths: an item's forbidden paths are kept by the paths it owns",
             ],
-            await CheckAsync(repository, startTree, made, kept, there));
+            await CheckAsync(repository, unread, a, b, kept));
 
-        made["ownedPaths"] = new JsonArray("src/feature/");
-        kept["forbiddenPaths"] = new JsonArray("src/feature/");
+        // With the pair that meets whatever the tree holds gone, the one the wide reading alone makes is named, saying why.
+        b["ownedPaths"] = new JsonArray("pkg/**/*.cs", "lib/z.c");
+        kept["forbiddenPaths"] = new JsonArray("etc/**/*.h", "etc/w.c");
 
-        Assert.Empty(await CheckAsync(repository, startTree, made, kept, there));
+        Assert.Equal(
+            [
+                $"work items 'a' and 'b' both own what 'pkg/one' and 'pkg/**/*.cs' match: no file is written by two items, so give it to one; {wide}",
+                $"work item 'kept' owns 'etc/one' and must not touch 'etc/**/*.h', which match the same paths: an item's forbidden paths are kept by the paths it owns; {wide}",
+            ],
+            await CheckAsync(repository, unread, a, b, kept));
     }
 
     /// <summary>

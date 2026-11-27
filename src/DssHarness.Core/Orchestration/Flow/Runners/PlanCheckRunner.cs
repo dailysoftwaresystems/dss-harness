@@ -8,7 +8,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// The <c>validate-plan</c> step: the work items its <c>items</c> yields, checked by <see cref="PlanValidator"/>; its
 /// answer is an output - <c>ok</c>, each problem as a line, and the items it checked - never a failure. The pieces of a
-/// plan update its <c>scope</c> yields are checked with them, and with the items of the round they join; where it opens
+/// plan update its <c>scope</c> yields are checked with them, and with the items of the round they join, the main tree as
+/// it now is asked of no item a round of the run already holds that the pieces leave as it was
+/// (<see cref="PlanValidator.CheckedBefore"/>); where it opens
 /// a round, it checks one list - its own items and every work item plan updates owe it - and its output <c>items</c> is
 /// that list, so nothing joins a round unchecked. A work item is known by its name across the run, so no item a round
 /// builds but an owed one, and no added piece, takes a name an instance of the work-item group carries already: a round
@@ -118,6 +120,20 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
             opening = true;
         }
 
+        // The pieces of a plan update, checked with the items where the step names them: Missing, null or an empty
+        // list is no update, and nothing more is checked; anything but a list is no pieces at all. Where the check names
+        // a scope and the engine hands it the round the update joins, the list that round opens with once the update is
+        // placed is that round joined with the pieces - or the round alone, where the update answers none - and never
+        // the plan's own: the update's work goes into that round, whatever the plan's items say.
+        var updating = read.TryGetValue("scope", out var scope) && !scope.IsMissing;
+        var pieces = updating ? scope.ToNode() : null;
+        IReadOnlyList<JsonNode?>? round = read.TryGetValue("round", out var joining) && !joining.IsMissing && joining.ToNode() is JsonArray joiningList ? [.. joiningList] : null;
+
+        if (updating && pieces is not (JsonArray or null))
+        {
+            return ([], null, $"'{run.Instance}' is given the pieces of a plan update its scope yields, and it yields no list");
+        }
+
         if (opening)
         {
             var owedNames = owed!.Select(FlowWorkItems.NameOf).OfType<string>().ToList();
@@ -141,31 +157,30 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
         }
         else
         {
-            problems.AddRange(validator.Check([.. items], context, place.Run, place.Definition, place.Directories));
+            // An update's check passes over, where it reads the main tree as it now is, every item of the plan's list a
+            // round of the run already holds that its pieces leave as it was: each was checked when its round opened,
+            // against the tree of that moment, and what a fold has made of the tree since is no breach of it.
+            problems.AddRange(validator.Check(
+                [.. items],
+                context,
+                place.Run,
+                place.Definition,
+                place.Directories,
+                checkedBefore: updating ? PlanValidator.CheckedBefore([.. pieces as JsonArray ?? []], round, carried) : null));
         }
 
-        // The pieces of a plan update, checked with the items where the step names them: Missing, null or an empty
-        // list is no update, and nothing more is checked; anything but a list is no pieces at all. Where the check names
-        // a scope and the engine hands it the round the update joins, the list that round opens with once the update is
-        // placed is that round joined with the pieces - or the round alone, where the update answers none - and never
-        // the plan's own: the update's work goes into that round, whatever the plan's items say.
         IReadOnlyList<JsonNode?>? joinedRound = null;
 
-        if (read.TryGetValue("scope", out var scope) && !scope.IsMissing)
+        if (updating)
         {
-            IReadOnlyList<JsonNode?>? round = read.TryGetValue("round", out var joining) && !joining.IsMissing && joining.ToNode() is JsonArray joiningList ? [.. joiningList] : null;
-
-            switch (scope.ToNode())
+            if (pieces is JsonArray { Count: > 0 } placed)
             {
-                case JsonArray { Count: > 0 } pieces:
-                    problems.AddRange(validator.CheckPieces([.. pieces], [.. items], round, Names(read, "known"), context, place.Run, place.Definition, place.Directories, out var joined, carried));
-                    joinedRound = round is null ? null : joined;
-                    break;
-                case JsonArray or null:
-                    joinedRound = round;
-                    break;
-                default:
-                    return ([], null, $"'{run.Instance}' is given the pieces of a plan update its scope yields, and it yields no list");
+                problems.AddRange(validator.CheckPieces([.. placed], [.. items], round, Names(read, "known"), context, place.Run, place.Definition, place.Directories, out var joined, carried));
+                joinedRound = round is null ? null : joined;
+            }
+            else
+            {
+                joinedRound = round;
             }
         }
 

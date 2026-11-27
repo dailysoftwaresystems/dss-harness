@@ -309,7 +309,9 @@ public static partial class HelpTopics
         builder.AppendLine("visit counts against the run's limits as every step does, and a visit's diagnosis goes on with");
         builder.AppendLine("the last one of what it puts right - the same failure, or the same issue whichever step met it,");
         builder.AppendLine("in whatever words a duplicate or a join of it gave, and however often after a fix that did not");
-        builder.AppendLine("hold - apart from where its bound counts it.");
+        builder.AppendLine("hold - apart from where its bound counts it. That thread is decided as the visit is made, from");
+        builder.AppendLine("what had ended then, and kept in the visit's record: a resume goes on in the same one, whatever");
+        builder.AppendLine("a duplicate or a join that ended since says of what an earlier visit fixed.");
         builder.AppendLine();
         builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");
         builder.AppendLine("may run on, or a map giving each its own - all for the rest, a model's code for one, so a");
@@ -422,10 +424,12 @@ public static partial class HelpTopics
             + "fold's within alike, whatever the run's folds make of the trees, and a path it cannot answer for counts as a "
             + "directory where two entries are weighed for meeting, as none where it is what an item may write; a class's home "
             + "or site refused beneath an entry that names a file says a directory to be made is written with a trailing "
-            + "separator, and one at a depth an entry of one name no longer reaches says '**/' reaches any depth; an entry with no "
-            + "trailing separator that names a directory the main tree holds and the start tree does not - one an earlier round "
-            + "made - is refused, for its builder's every write beneath it would be, saying to write it ending in one; a start tree "
-            + "that cannot be read is warned of once a session, and each refusal its reading causes says why; the path budget of the "
+            + "separator, and one at a depth an entry of one name no longer reaches says '**/' reaches any depth; an entry an item "
+            + "owns with no trailing separator that names a directory the main tree holds and the start tree does not - one an "
+            + "earlier round made - is refused, for its builder's every write beneath it would be, saying to write it ending in "
+            + "one, while one it must not touch never is, for no write is refused by a forbidden path; a start tree "
+            + "that cannot be read is warned of once a session, and each refusal its reading causes says why - two items' entries "
+            + "named as meeting whatever the tree holds before any the wide reading alone makes meet; the path budget of the "
             + "worktree each would get, with the copies and workers its legs keep inside it and the deepest file it owns; every "
             + "path it reuses or replaces there in the main tree, something under one of the three, and a why and a search for "
             + "each thing it creates; and each item declaring the classes of the decisions it changes or saying in noClass why it "
@@ -446,7 +450,12 @@ public static partial class HelpTopics
             + "no two pieces naming one work item; a changed or a removed piece naming a work item the plan had before the "
             + "update, and an added one naming none a round of the run carries - one that does such an item again is changed; "
             + "and the items the update places checked with those of the round it joins, as one list - among themselves "
-            + "where the run has no round. Where the check that opens a round raised the update, the round it joins is the list "
+            + "where the run has no round - the rules that read the main tree as it now is (an owned entry naming one of its "
+            + "directories, a path reused or replaced, a class's home and sites being there) passing over, in that list and in "
+            + "the plan's own, every item a round of the run already holds - of the round the update joins, or carried by an "
+            + "instance of an earlier round - that no added or changed piece places, a step whose scope yields an empty list "
+            + "alike, for each was checked when its round opened, against the tree of that moment, and what a fold has made of "
+            + "the tree since is no breach of it; a plan's first check, before any round, holds every item to it. Where the check that opens a round raised the update, the round it joins is the list "
             + "that check was opening it with, which no instance carries yet: a changed or a removed piece may name any item of "
             + "it, and the planner is shown each among the run's work, not begun. One whose items yield no list, or whose scope yields neither a list nor nothing, "
             + "fails, as a definition that does not hold does. Where its items read the output of a reason step of its own "

@@ -3215,6 +3215,298 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
+    /// A flow of three reporting steps whose recovery diagnoses - going on with its own conversation across the visits
+    /// of one thread - before it mends: what the threads of its visits are read from. Its limits let the reporters wait
+    /// at work while the triages and the diagnoses run beside them.
+    /// </summary>
+    private const string ThreeReporters = """
+        name: flow
+        maxReasoningAgents: 6
+        maxOpenAgents: 6
+        recover:
+          onSuccess: failed-step
+          onFailure: pause
+          steps:
+            - name: diagnose
+              type: reason
+              resume: diagnose
+              prompt: diagnose.md
+              resumePrompt: rediagnose.md
+              outputs: diagnosis.json
+            - name: mend
+              type: orient
+              dependsOn: [diagnose]
+        steps:
+          - name: think
+            type: reason
+            prompt: work.md
+            outputs: work.json
+            onPreExisting: triage
+          - name: other
+            type: reason
+            prompt: work.md
+            outputs: work.json
+            onPreExisting: triage
+          - name: third
+            type: reason
+            prompt: work.md
+            outputs: work.json
+            onPreExisting: triage
+          - name: triage
+            type: reason
+            prompt: triage.md
+            outputs: pre-existing.json
+            raised: preExisting
+            onAddress: recover
+        """;
+
+    /// <summary>
+    /// The thread a visit of the recovery goes on in is decided as the visit is made, and a resume reads it as that session
+    /// chose it: a visit sent for an issue no done visit had fixed then diagnoses in a thread and an agent of its own, and a
+    /// duplicate that ends later naming the issue an earlier visit fixed - widening what that visit fixed to this issue's
+    /// words - moves it to no other thread, before the resume or after it. Its diagnosis, run again after the resume, works
+    /// in the same agent and goes on with no other visit's conversation, as it began; the visit's record keeps its thread,
+    /// and a record an older build wrote without one reads it from the visits, duplicates and joins that had ended when the
+    /// visit was made, never a later one.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AVisitsThread_IsTheOneItWasMadeIn_ADuplicateThatEndedLaterMovingItNeitherBeforeAResumeNorAfter(bool recorded)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(ThreeReporters);
+        const string Hole = "a hole in the parser";
+        const string Field = "the parser drops a field";
+        var diagnosed = new Dictionary<string, (string? Agent, IReadOnlyList<FlowWorkedFrom> GoesOnWith)>(StringComparer.Ordinal);
+        var thirdRan = 0;
+        Watched? watching = null;
+        Task Seen(Func<FlowSnapshot, bool> holds) => watching!.Until(holds);
+        static bool Ended(FlowSnapshot snapshot, string instance) => snapshot.Steps.Any(step => step.Instance == instance && step.State == FlowInstanceState.Done);
+        var first = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue(Hole)]))
+
+            // Another step meets an issue in other words once the first fix is done: no done visit fixed it, so its visit
+            // takes a thread of its own.
+            .OnAsync("other", async _ =>
+            {
+                await Seen(snapshot => Ended(snapshot, "recover"));
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue(Field)]);
+            })
+
+            // A third step, at work since before the first fix ended, meets that issue too once its visit is made - it
+            // blocks this step, so a triage of its own takes it - and its triage names it a duplicate of the first issue,
+            // so the first visit's fixes now hold its words; run again once that fix settles it, it meets nothing.
+            .OnAsync("third", async _ =>
+            {
+                if (Interlocked.Increment(ref thirdRan) > 1)
+                {
+                    return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+                }
+
+                await Seen(snapshot => snapshot.Steps.Any(step => step.Instance == "recover+2.diagnose" && step.State == FlowInstanceState.Running));
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue(Field, blocks: true)]);
+            })
+            .On("triage", run => run.Instance == "triage+3" ? Naming("duplicate", run.Issue!.Title, "duplicates", "triage") : Course("fix", run.Issue!.Title))
+
+            // The second visit's diagnosis is at work when the duplicate ends, and the pause comes while it is.
+            .OnAsync("diagnose", async run =>
+            {
+                lock (diagnosed)
+                {
+                    diagnosed[run.Instance] = (run.WorksIn, run.GoesOnWith);
+                }
+
+                if (run.Instance == "recover+2.diagnose")
+                {
+                    await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task;
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        var harness = new HarnessFactory();
+        var store = new OrchestrationStore(harness.FileSystem, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new JumpingClock();
+        var cancel = TestContext.Current.CancellationToken;
+
+        FlowResumeState taken;
+        FlowRecoveryThread? made;
+        using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            watching = new Watched(records, _ => false);
+            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watching, workflowFile: (_, named) => named);
+            var session = coordinator.RunAsync(cancel);
+
+            await Seen(snapshot => Ended(snapshot, "triage+3")).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            coordinator.RequestPause("interrupt", all: true);
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+
+            // The second visit took the thread of the issue's own words, apart from the first's; the duplicate ended after
+            // it was made, and the first visit's fixes hold that issue now.
+            made = coordinator.Instances["recover+2"].RecoveryThread;
+            Assert.Equal(FlowRecoveryThread.OfIssue(string.Empty, Issue(Field)), made);
+            Assert.Equal(FlowRecoveryThread.OfIssue(string.Empty, Issue(Hole)), coordinator.Instances["recover"].RecoveryThread);
+            Assert.Equal("duplicate", coordinator.Instances["triage+3"].Output!["course"]!.GetValue<string>());
+            Assert.Same(coordinator.Instances["triage+2"], coordinator.Instances["recover+2"].RaisedBy);
+
+            taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        }
+
+        Assert.NotEqual(diagnosed["recover.diagnose"].Agent, diagnosed["recover+2.diagnose"].Agent);
+        var before = diagnosed["recover+2.diagnose"];
+        Assert.Equal([], before.GoesOnWith);
+
+        // Each visit's own record keeps the thread it was made in, and no other record keeps one; an older build's kept none.
+        Assert.Equal(
+            [("recover", FlowRecoveryThread.OfIssue(string.Empty, Issue(Hole))), ("recover+2", made)],
+            taken.File.Steps.Where(step => step.Thread is not null).Select(step => (step.Instance, step.Thread)));
+
+        if (recorded)
+        {
+            // What the record keeps is the visit's thread, as it is: never weighed again over the visits around it.
+            var kept = FlowRecoveryThread.OfIssue(string.Empty, Issue("a thread no visit's issues would choose"));
+            var told = taken with { File = taken.File with { Steps = [.. taken.File.Steps.Select(step => step.Instance == "recover+2" ? step with { Thread = kept } : step)] } };
+            Assert.Equal(kept, new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), clock, resume: told, workflowFile: (_, named) => named).Instances["recover+2"].RecoveryThread);
+        }
+        else
+        {
+            taken = taken with { File = taken.File with { Steps = [.. taken.File.Steps.Select(step => step with { Thread = null })] } };
+        }
+
+        diagnosed.Clear();
+
+        using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            watching = new Watched(again, _ => false);
+            var second = new FakeRunner().On("diagnose", run =>
+            {
+                lock (diagnosed)
+                {
+                    diagnosed[run.Instance] = (run.WorksIn, run.GoesOnWith);
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+            var resumed = new FlowCoordinator(definition, second, new RunnerFacts(), clock, records: watching, resume: taken, workflowFile: (_, named) => named);
+
+            // Read back, the thread is the one it was made in, and its diagnosis goes on as it began.
+            Assert.Equal(made, resumed.Instances["recover+2"].RecoveryThread);
+            Assert.Equal(FlowRunStatus.Done, (await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+            Assert.Equal(made, resumed.Instances["recover+2"].RecoveryThread);
+        }
+
+        Assert.Equal(["recover+2.diagnose"], diagnosed.Keys);
+        Assert.Equal(before.Agent, diagnosed["recover+2.diagnose"].Agent);
+        Assert.Equal(before.GoesOnWith, diagnosed["recover+2.diagnose"].GoesOnWith);
+    }
+
+    /// <summary>
+    /// A visit an older build recorded without its thread reads it from what had ended when the visit was made, by the run's
+    /// own order its records keep - never from what ended later, though it was made before: a duplicate whose triage began
+    /// before the visit was made, and ended after, naming the issue an earlier visit fixed, leaves the visit in the thread of
+    /// its own issue's words at the resume, as the session that made it chose.
+    /// </summary>
+    [Fact]
+    public async Task AVisitRecordedWithoutItsThread_ReadsItFromWhatHadEndedWhenItWasMade_NotFromADuplicateMadeBeforeItThatEndedAfter()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(ThreeReporters);
+        const string Hole = "a hole in the parser";
+        const string Field = "the parser drops a field";
+        Watched? watching = null;
+        Task Seen(Func<FlowSnapshot, bool> holds) => watching!.Until(holds);
+        static bool Ended(FlowSnapshot snapshot, string instance) => snapshot.Steps.Any(step => step.Instance == instance && step.State == FlowInstanceState.Done);
+        static bool Running(FlowSnapshot snapshot, string instance) => snapshot.Steps.Any(step => step.Instance == instance && step.State == FlowInstanceState.Running);
+        var first = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue(Hole)]))
+
+            // A step meets the second issue while the first is being fixed: its triage is made before the second visit is.
+            .OnAsync("third", async _ =>
+            {
+                await Seen(snapshot => Ended(snapshot, "triage"));
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue(Field)]);
+            })
+
+            // Another meets it once the first fix is done - it blocks this step, so a triage of its own takes it - and
+            // sends it to fix: the second visit.
+            .OnAsync("other", async _ =>
+            {
+                await Seen(snapshot => Ended(snapshot, "recover"));
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue(Field, blocks: true)]);
+            })
+
+            // The earlier triage of the second issue answers only once the second visit diagnoses: a duplicate of the first.
+            .OnAsync("triage", async run =>
+            {
+                if (run.Instance != "triage+2")
+                {
+                    return Course("fix", run.Issue!.Title);
+                }
+
+                await Seen(snapshot => Running(snapshot, "recover+2.diagnose"));
+                return Naming("duplicate", run.Issue!.Title, "duplicates", "triage");
+            })
+            .OnAsync("diagnose", async run =>
+            {
+                switch (run.Instance)
+                {
+                    case "recover.diagnose":
+                        // The first fix holds until the second issue's first triage is made, so the ids come in one order.
+                        await Seen(snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2"));
+                        break;
+                    case "recover+2.diagnose":
+                        await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task;
+                        break;
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        var harness = new HarnessFactory();
+        var store = new OrchestrationStore(harness.FileSystem, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new JumpingClock();
+        var cancel = TestContext.Current.CancellationToken;
+
+        FlowResumeState taken;
+        FlowRecoveryThread? made;
+        using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            watching = new Watched(records, _ => false);
+            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watching, workflowFile: (_, named) => named);
+            var session = coordinator.RunAsync(cancel);
+
+            await Seen(snapshot => Ended(snapshot, "triage+2")).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            coordinator.RequestPause("interrupt", all: true);
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+
+            Assert.Same(coordinator.Instances["triage+3"], coordinator.Instances["recover+2"].RaisedBy);
+            Assert.Equal("duplicate", coordinator.Instances["triage+2"].Output!["course"]!.GetValue<string>());
+            made = coordinator.Instances["recover+2"].RecoveryThread;
+            Assert.Equal(FlowRecoveryThread.OfIssue(string.Empty, Issue(Field)), made);
+
+            taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        }
+
+        // The duplicate's triage was made before the second visit - the records keep the order the run made them in - and
+        // ended after the second visit's diagnosis began.
+        List<string> order = [.. taken.File.Steps.Select(step => step.Instance)];
+        Assert.True(order.IndexOf("triage+2") < order.IndexOf("recover+2"), string.Join(", ", order));
+        var duplicate = taken.File.Steps.Single(step => step.Instance == "triage+2");
+        var diagnosis = taken.File.Steps.Single(step => step.Instance == "recover+2.diagnose");
+        Assert.True(duplicate.EndedIn > diagnosis.AttemptBegan, $"{duplicate.EndedIn} after {diagnosis.AttemptBegan}");
+
+        // As an older build wrote it: no thread in any record.
+        taken = taken with { File = taken.File with { Steps = [.. taken.File.Steps.Select(step => step with { Thread = null })] } };
+
+        using var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock);
+        var resumed = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: again, resume: taken, workflowFile: (_, named) => named);
+
+        Assert.Equal(FlowRecoveryThread.OfIssue(string.Empty, Issue(Hole)), resumed.Instances["recover"].RecoveryThread);
+        Assert.Equal(made, resumed.Instances["recover+2"].RecoveryThread);
+    }
+
+    /// <summary>
     /// An issue reported again after its fix was done is one the fix did not hold, and is raised anew: the run's
     /// tally does not say fixed alone of an issue a later step still meets.
     /// </summary>

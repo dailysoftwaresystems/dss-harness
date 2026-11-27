@@ -2513,7 +2513,12 @@ the visits for the same failure or issue - the thread of what a visit puts right
 visit made before it that ended done fixing the same issue in any words that visit fixed (`IssuesFixedBy`: its own,
 those joined to it and the duplicates of either), every reading of the same issue taking it alike, and the issue by its
 own title and where it is where none did - whichever step reported it and however often it was met again after a fix
-that did not hold, apart from where its bound counts it (`FlowCoordinator.ThreadOf`, which `FlowCheck.Work` reads too) - a visit for
+that did not hold, apart from where its bound counts it (`FlowCoordinator.ThreadOf`, which `FlowCheck.Work` reads too),
+decided as the visit is made over the visits, duplicates and joins that had ended then and kept in its record
+(`FlowStepRecord.Thread`, a `FlowRecoveryThread`), which a resume reads back - a duplicate that ends later naming an
+earlier visit's issue would otherwise move a visit made before it into that visit's thread and its diagnostician's
+agent; a visit an older build recorded without one is read from what had ended when it was made, by the run's own
+order (`FlowCoordinator.EndedWhenMade`), never from what came later - a visit for
 another issue diagnosing in a conversation and an agent of its own, beside it, `FlowCoordinator.SameRecoveryThread`),
 asks a person only for what only a person can give (`direction`), holds the remedy items its last word
 sets out - the diagnosis's, or the one it gives on the person's answer (`redirect`) - to the plan's own check
@@ -4005,16 +4010,28 @@ to be made - is told how to write what it meant at every refusal the reading cau
 (`GlobPattern.WrittenFor`): a step's writes denied, a fold's `foldOutside`, and the plan's check of a class's home and
 sites (P-C3, P-C4) - `'docs/generated' names a file: a directory to be made is written 'docs/generated/'`, and
 `'*.md' names the root's own: '**/*.md' names any depth`. A later round's plan update, self-audit or diagnosis is
-written beside a main tree that holds what earlier rounds folded, so the plan's check refuses an entry an item owns or
-must not touch, written with no trailing separator, that names a directory of the main tree the start tree does not
-hold - every reader would read it as that one path, and its builder's every write beneath it would be refused - in the
-same owner's words (`GlobPattern.WrittenForDirectory`): `'src/feature' names a file of the run's start tree, which the
-run's lists of paths are read against, and a directory of the main tree: write it 'src/feature/'`, at the answer within
-the step that gives it as at the check's own moment. A start tree that cannot be read is never silent: the session
+written beside a main tree that holds what earlier rounds folded, so the plan's check refuses an entry an item owns,
+written with no trailing separator, that names a directory of the main tree the start tree does not hold - every reader
+would read it as that one path, and its builder's every write beneath it would be refused - in the same owner's words
+(`GlobPattern.WrittenForDirectory`): `'src/feature' names a file of the run's start tree, which the run's lists of paths
+are read against, and a directory of the main tree: write it 'src/feature/'`, at the answer within the step that gives
+it as at the check's own moment (`PlanValidator.DirectoryProblems`). An entry an item must not touch is never refused
+so, for nothing gates a write by one: the check weighs it for meeting the item's own owned paths, and its builder is
+told it. That rule, and every other that reads the main tree as it now is - a path an item reuses or replaces, a class's
+home and sites being there - holds only the items the check introduces or changes: an update's check - one whose
+`scope` is read, whether it yields pieces or none - passes over every item a round of the run already holds, of the round
+the update joins or carried by an instance of the work-item group, that no added or changed piece places
+(`PlanValidator.CheckedBefore`, handed to `PlanValidator.Check` as `checkedBefore`), in the round the pieces join and in
+the plan's own list alike, for each was checked when its round opened, against the tree of that moment - a round's own
+item a fold since made a directory under, or took a path it reused from, would otherwise fail every update after it; a
+plan's first check, before any round, holds every item to the tree.
+A start tree that cannot be read is never silent: the session
 warns once why (`TreeDirectories.UnreadWarning`, through the records' warner), and every refusal its reading causes
 says it too - the narrow reading's after how to write the entry (`TreeDirectories.UnreadForWriting`, carried by each
 entry read for what may be written beneath it, `TreeDirectories.ForWriting`), and an overlap of the check's that the wide
-reading alone made (`TreeDirectories.UnreadForMeeting`). A pattern keeps its meaning, anchored at the root: a
+reading alone made (`TreeDirectories.UnreadForMeeting`) - which the check names only where no pair of the two lists meets
+read narrowly, a pair that meets whatever the tree holds named first and without it, so a real conflict is never hidden
+behind one the unread tree made. A pattern keeps its meaning, anchored at the root: a
 directory it matches covers what is beneath it. Two entries
 meet (`GlobPattern.Overlaps`) only where some path a tree can hold matches both: a path naming no directory holds
 nothing beneath it, unless the other names only paths beneath it by its own names - `src/new` and `src/new/a.py` -

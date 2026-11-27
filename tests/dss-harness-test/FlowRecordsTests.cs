@@ -452,6 +452,37 @@ public sealed class FlowRecordsTests
         Assert.Null((step with { Question = "q12", HandledBy = "q3" }).Problem());
     }
 
+    /// <summary>
+    /// What a visit of the recovery puts right, as its own record keeps it, names a failed step or an issue's title and
+    /// where it is - one of the two, whole - and only a visit's own record, a group's, keeps one: a record that says
+    /// otherwise is refused, naming what is wrong, rather than read as a thread no visit was made in.
+    /// </summary>
+    [Fact]
+    public void AVisitsThread_NamesAFailureOrAnIssue_AndOnlyAGroupsOwnRecordKeepsOne()
+    {
+        var visit = new FlowStepRecord("recover", "recover", true, "Running", 1, 1, [], []);
+        var issue = FlowRecoveryThread.OfIssue(string.Empty, new FlowPreExistingReport("a hole in the parser", "what it is", "src/Parser.cs", "read it", Blocks: false));
+
+        Assert.Null((visit with { Thread = issue }).Problem());
+        Assert.Null((visit with { Thread = FlowRecoveryThread.OfFailure("plan[0]", "build") }).Problem());
+        Assert.Equal(
+            [
+                "what it puts right: it names both a step and an issue",
+                "what it puts right: it names no step",
+                "what it puts right: it names neither a step nor an issue's title and where it is",
+                "what it puts right: it names neither a step nor an issue's title and where it is",
+                "it holds what a visit of the recovery puts right, and only a visit's own record does",
+            ],
+            new[]
+            {
+                visit with { Thread = issue with { Step = "build" } },
+                visit with { Thread = FlowRecoveryThread.OfFailure(string.Empty, " ") },
+                visit with { Thread = issue with { Where = null } },
+                visit with { Thread = new FlowRecoveryThread(string.Empty) },
+                visit with { Group = false, Thread = issue },
+            }.Select(record => record.Problem()));
+    }
+
     /// <summary>Every kind of event is the engine's own kind of change, by its camelCase name - one list, and a kind that is not one is never written.</summary>
     [Fact]
     public void EveryKindOfEventIsAKindOfChange_ByItsName()

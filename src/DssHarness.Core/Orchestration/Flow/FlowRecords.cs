@@ -245,6 +245,13 @@ public sealed record FlowEvent(
 /// so every session holds the loop to the same count; null for every other record, and for a loop no update was
 /// planned in, whose bound counts every iteration.
 /// </param>
+/// <param name="Thread">
+/// The record of a visit of the recovery: what it puts right (<see cref="FlowRecoveryThread"/>), decided as the visit was
+/// made and written with its first record, so a resume goes on in the thread the session that made it chose - the
+/// visits that go on with one diagnostician's conversation and work in its agent are the same in every session. Null
+/// for every other record, and for a visit a build that kept none recorded: a resume reads its thread from the visits,
+/// the duplicates and the joins that had ended when it was made.
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -299,7 +306,8 @@ public sealed record FlowStepRecord(
     FlowLoopDecision? Decided = null,
     FlowStepMeasure? Measure = null,
     long? DrawnIn = null,
-    FlowLoopCount? Counted = null)
+    FlowLoopCount? Counted = null,
+    FlowRecoveryThread? Thread = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -355,6 +363,8 @@ public sealed record FlowStepRecord(
             : Decided?.Problem() is { } decided ? $"its loop's decision: {decided}"
             : Counted is not null && !Group ? "it holds where a loop's bound counts from, and only a loop's own record does"
             : Counted?.Problem() is { } counted ? $"where its bound counts from: {counted}"
+            : Thread is not null && !Group ? "it holds what a visit of the recovery puts right, and only a visit's own record does"
+            : Thread?.Problem() is { } thread ? $"what it puts right: {thread}"
             : Measure?.Problem() is { } measure ? $"its measure: {measure}"
             : null;
 }
@@ -387,6 +397,58 @@ public sealed record FlowLoopCount(string Update, int Before, int Granted)
     public string? Problem()
         => !FlowUpdateIds.IsId(Update) ? $"'{Update}' is not an update's id"
             : Before < 0 || Granted < 0 ? "it counts fewer than no iterations"
+            : null;
+}
+
+/// <summary>
+/// What a visit of the recovery puts right - the thread its diagnostician's work goes on in, apart from where its bound
+/// counts it: a step's failure, by the scope it stands in and its path among the flow; or an issue, by the scope its
+/// triage stands in and the issue's own words, its title and where it is, whichever step reported it and whatever visit
+/// of it this is. Decided as the visit is made, from the visits made before it, and kept in its own record
+/// (<see cref="FlowStepRecord.Thread"/>), so every session reads the thread the session that made it chose, whatever a
+/// duplicate or a join that ended since says of the issues an earlier visit fixed.
+/// </summary>
+/// <param name="Scope">The id of the scope the failed step or the triage stands in; empty at the flow's root.</param>
+/// <param name="Step">A failure's: the failed step's path among the flow; null for an issue's.</param>
+/// <param name="Title">An issue's: its title, as its triage holds it; null for a failure's.</param>
+/// <param name="Where">An issue's: where it is, as its triage holds it; null for a failure's.</param>
+public sealed record FlowRecoveryThread(string Scope, string? Step = null, string? Title = null, string? Where = null)
+{
+    /// <summary>The thread of the failure of the step at <paramref name="step"/> in the scope <paramref name="scope"/>.</summary>
+    /// <param name="scope">The scope's id.</param>
+    /// <param name="step">The step's path among the flow.</param>
+    public static FlowRecoveryThread OfFailure(string scope, string step) => new(scope, Step: step);
+
+    /// <summary>The thread of <paramref name="issue"/>, by its own words, taken in the scope <paramref name="scope"/>.</summary>
+    /// <param name="scope">The scope's id.</param>
+    /// <param name="issue">The issue, as its triage holds it.</param>
+    public static FlowRecoveryThread OfIssue(string scope, FlowPreExistingReport issue)
+    {
+        ArgumentNullException.ThrowIfNull(issue);
+
+        return new(scope, Title: issue.Title, Where: issue.Where);
+    }
+
+    /// <summary>
+    /// An issue by its title and where it is, as one text: a NUL before each, which no step's path nor instance id holds,
+    /// so it never names a step. The one spelling of an issue as a key, which a thread takes (<see cref="Taken"/>), and
+    /// where the recovery's visits for an issue met again after its fix are counted.
+    /// </summary>
+    /// <param name="title">The issue's title.</param>
+    /// <param name="where">Where it is.</param>
+    public static string IssueText(string title, string where) => $"\0{title}\0{where}";
+
+    /// <summary>
+    /// What the thread takes, as one text: the step's path for a failure, the issue's words for an issue (<see cref="IssueText"/>)
+    /// - what the claim of a diagnostician's agent and the work a check within a visit checks name it by.
+    /// </summary>
+    public string Taken() => Step ?? IssueText(Title ?? string.Empty, Where ?? string.Empty);
+
+    /// <summary>What is wrong with this record; null when nothing is: it names a failure's step, or an issue's title and where it is, and never both.</summary>
+    public string? Problem()
+        => Step is not null && (Title is not null || Where is not null) ? "it names both a step and an issue"
+            : Step is not null ? (string.IsNullOrWhiteSpace(Step) ? "it names no step" : null)
+            : Title is null || Where is null ? "it names neither a step nor an issue's title and where it is"
             : null;
 }
 
@@ -1487,6 +1549,7 @@ public sealed record FlowSnapshot(
 /// <param name="Measure">What the instance's work measured (<see cref="FlowStepRecord.Measure"/>); null until the engine draws it.</param>
 /// <param name="DrawnIn">Where the pass that drew it stands in the run's own order (<see cref="FlowStepRecord.DrawnIn"/>); null until the engine draws it.</param>
 /// <param name="Counted">A repeat's that a plan update was planned in: where its bound counts from (<see cref="FlowStepRecord.Counted"/>); null for every other.</param>
+/// <param name="Thread">A visit of the recovery's: what it puts right, as it was decided when the visit was made (<see cref="FlowStepRecord.Thread"/>); null for every other.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -1541,4 +1604,5 @@ public sealed record FlowSnapshotStep(
     FlowLoopDecision? Decided = null,
     FlowStepMeasure? Measure = null,
     long? DrawnIn = null,
-    FlowLoopCount? Counted = null);
+    FlowLoopCount? Counted = null,
+    FlowRecoveryThread? Thread = null);

@@ -699,7 +699,8 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.Decided,
             step.Measure,
             step.DrawnIn,
-            step.Counted);
+            step.Counted,
+            step.Thread);
     }
 
     /// <summary>
