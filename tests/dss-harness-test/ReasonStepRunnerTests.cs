@@ -487,7 +487,8 @@ public sealed class ReasonStepRunnerTests
         var others = started.Except(gits).Select(CountingProcesses.Named).ToList();
 
         Assert.Equal(SessionTreesTests.Made(listed: kit.Harness.PathBudget.Bounds()), gits.Select(CountingProcesses.Named));
-        Assert.All(gits, git => Assert.Equal(DssHarness.Core.Git.GitOwnSettings.Locale, git.Environment[DssHarness.Core.Git.GitOwnSettings.LocaleVariable]));
+        // Untranslated, but the checkout the agent's tree is made with, which git runs hooks for: it keeps the person's locale.
+        Assert.All(gits, git => Assert.Equal(CountingProcesses.Named(git) == "git checkout" ? null : DssHarness.Core.Git.GitOwnSettings.Locale, git.Environment.GetValueOrDefault(DssHarness.Core.Git.GitOwnSettings.LocaleVariable)));
         Assert.True(others is [] or ["gh auth"], string.Join(", ", others));
     }
 

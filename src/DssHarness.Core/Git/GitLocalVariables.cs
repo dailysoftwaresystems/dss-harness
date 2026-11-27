@@ -107,8 +107,11 @@ public sealed class GitLocalVariables
 
     private async Task<IReadOnlyList<string>> AskAsync(Action<string> say, CancellationToken cancellationToken)
     {
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+        GitOwnSettings.Untranslated(environment, QueryArguments);
+
         var result = await _processRunner!
-            .RunAsync(new ProcessRequest { FileName = "git", Arguments = QueryArguments, Environment = new Dictionary<string, string?>(StringComparer.Ordinal) { [GitOwnSettings.LocaleVariable] = GitOwnSettings.Locale } }, cancellationToken)
+            .RunAsync(new ProcessRequest { FileName = "git", Arguments = QueryArguments, Environment = environment }, cancellationToken)
             .SayingUnreached($"'git {string.Join(' ', QueryArguments)}'", say)
             .ConfigureAwait(false);
 

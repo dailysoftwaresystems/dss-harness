@@ -160,8 +160,9 @@ public sealed class SessionTreesTests
 
         var gits = counted.Started.Skip(from).Where(started => started.FileName == "git").ToList();
 
-        Assert.NotEmpty(gits);
-        Assert.All(gits, git => Assert.Equal(GitOwnSettings.Locale, git.Environment[GitOwnSettings.LocaleVariable]));
+        // Untranslated, but the checkout an agent's tree is made with, which git runs hooks for: it keeps the person's locale.
+        Assert.Contains(gits, git => CountingProcesses.Named(git) == "git checkout");
+        Assert.All(gits, git => Assert.Equal(CountingProcesses.Named(git) == "git checkout" ? null : GitOwnSettings.Locale, git.Environment.GetValueOrDefault(GitOwnSettings.LocaleVariable)));
     }
 
     private static async Task DeletedAsync(OrchestrationKit kit, string agent)

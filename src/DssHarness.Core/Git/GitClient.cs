@@ -2036,7 +2036,8 @@ public sealed partial class GitClient(
     /// <summary>
     /// Runs a read-only query whose failure message is inspected: "not a git repository"
     /// (<see cref="NotARepositoryAnswers"/>) and "not a gitdir" are recognised by their text, which every git of the tool's
-    /// says untranslated (<see cref="GitOwnSettings.Locale"/>).
+    /// says untranslated but one git runs the repository's hooks for, which no question is
+    /// (<see cref="GitOwnSettings.Untranslated"/>).
     /// </summary>
     private Task<GitCommandResult> RunQueryAsync(
         string directory,

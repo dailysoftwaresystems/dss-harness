@@ -672,11 +672,23 @@ session.
 
 git's messages are matched in two places only: telling "not a repository" apart from
 "git could not look", and "not a gitdir" apart from the same when a directory among a
-worktree's submodule repositories is examined. Every git the tool starts runs with
-`LC_ALL=C`, set at the one place a git of the tool's starts (`GitOwnSettings`), never by a
-caller: a translated git still answers in the words being matched, and every message of
-git's a person is shown is in English. The hooks a commit or a push runs inherit it, as
-they inherit every variable git runs with.
+worktree's submodule repositories is examined - both questions - and a workflow source's fetch
+or listing telling "not there" from "not reached". Every git the tool starts runs with
+`LC_ALL=C` but one git runs a repository's hooks for, set at the one place for every git start
+(`GitOwnSettings.Untranslated`) - the client's (`GitOwnSettings.Apply`), the question that names
+the variables every git is started without (`GitLocalVariables`), and the isolation probe's
+`git --version` alike - never by a caller: a question is answered in the words being matched.
+The commands git runs hooks for keep the person's locale, whether a hook runs or not, so a hook
+behaves as in their shell - a JVM tool's file names, Ruby's default encoding, a shell's
+character classes and lengths, a server's hooks over ssh that `SendEnv LC_*` would forward to -
+and their messages reach the person in their language: each command `githooks(5)` names as
+running one (`GitHooks.Runners` - `am`, `commit`, `merge`, `pull`, `rebase`, `cherry-pick`,
+`revert`, `checkout`, `switch`, `clone`, `worktree add`, `push`, `receive-pack`, `send-email`,
+`gc`, `p4 submit`), by its subcommand after git's own options (`GitHooks.MayRun`). The two hooks
+it names no command for - reference-transaction, which any command that moves a ref runs, and
+post-index-change, which any that writes the index runs - make no command one of them: every
+command that writes would be, and no git of the tool's runs a hook but where it runs them on
+purpose.
 
 ### Reading config.json
 

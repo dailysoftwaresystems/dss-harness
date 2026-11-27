@@ -267,9 +267,9 @@ public sealed partial class IsolationPlatform(
             return proved;
         }
 
-        foreach (var (name, program, arguments) in WindowsTools(tree))
+        foreach (var (name, program, arguments, environment) in WindowsTools(tree))
         {
-            if (await AnsweredInsideAsync(mechanism, program, arguments, cancellationToken).ConfigureAwait(false) is { } how)
+            if (await AnsweredInsideAsync(mechanism, program, arguments, environment, cancellationToken).ConfigureAwait(false) is { } how)
             {
                 return IsolationAvailability.None(
                     $"MXC {mechanism.Version}'s process container does not run {name} ('{program}') on this Windows: inside it, {name} {how}",
@@ -282,26 +282,31 @@ public sealed partial class IsolationPlatform(
 
     /// <summary>
     /// The programs an agent's commands are made of on Windows, each found here and asked to answer: node, git and Git
-    /// Bash's sh - one on the PATH outside the tree, else the one beside the git found - each with the words it answers to.
-    /// One not on this machine is not asked: no agent here runs it.
+    /// Bash's sh - one on the PATH outside the tree, else the one beside the git found - each with the words it answers to,
+    /// and git in the locale every git of the tool's starts under (<see cref="Git.GitOwnSettings.Untranslated"/>). One not
+    /// on this machine is not asked: no agent here runs it.
     /// </summary>
-    private IEnumerable<(string Name, string Program, IReadOnlyList<string> Arguments)> WindowsTools(string tree)
+    private IEnumerable<(string Name, string Program, IReadOnlyList<string> Arguments, IReadOnlyDictionary<string, string?>? Environment)> WindowsTools(string tree)
     {
         if (OnPath(tree, "node.exe") is { } node)
         {
-            yield return ("node", node, ["--version"]);
+            yield return ("node", node, ["--version"], null);
         }
 
         var git = OnPath(tree, "git.exe");
 
         if (git is not null)
         {
-            yield return ("git", git, ["--version"]);
+            IReadOnlyList<string> version = ["--version"];
+            var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+            Git.GitOwnSettings.Untranslated(environment, version);
+
+            yield return ("git", git, version, environment);
         }
 
         if ((OnPath(tree, "sh.exe") ?? BesideGit(git)) is { } sh)
         {
-            yield return ("Git Bash's sh", sh, ["-c", "echo answered"]);
+            yield return ("Git Bash's sh", sh, ["-c", "echo answered"], null);
         }
     }
 
@@ -328,14 +333,15 @@ public sealed partial class IsolationPlatform(
     /// How <paramref name="program"/> failed to answer inside the container - started contained and inside it with nothing
     /// denied but what the container denies of itself; null where it ended 0 having said something.
     /// </summary>
-    private async Task<string?> AnsweredInsideAsync(IIsolationMechanism mechanism, string program, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    private async Task<string?> AnsweredInsideAsync(IIsolationMechanism mechanism, string program, IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string?>? environment, CancellationToken cancellationToken)
     {
         var (result, failed) = await TrialRunAsync(
             new ProcessIsolation(mechanism, IsolationProfile.Nothing),
             Path.GetDirectoryName(program)!,
             program,
             arguments,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            environment).ConfigureAwait(false);
 
         return failed
             ?? (result!.ExitCode != 0 || result.StandardOutput.Trim().Length == 0
@@ -599,7 +605,7 @@ public sealed partial class IsolationPlatform(
     /// whose end could not reach or end all it started among the ways, for a container that leaves a process of it running
     /// proves nothing (<see cref="ProcessResult.Uncontained"/>).
     /// </summary>
-    private async Task<(ProcessResult? Result, string? Failed)> TrialRunAsync(ProcessIsolation isolation, string probe, string program, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    private async Task<(ProcessResult? Result, string? Failed)> TrialRunAsync(ProcessIsolation isolation, string probe, string program, IReadOnlyList<string> arguments, CancellationToken cancellationToken, IReadOnlyDictionary<string, string?>? environment = null)
     {
         try
         {
@@ -611,6 +617,7 @@ public sealed partial class IsolationPlatform(
                     WorkingDirectory = probe,
                     Contained = true,
                     Isolation = isolation,
+                    Environment = environment ?? new Dictionary<string, string?>(StringComparer.Ordinal),
                 },
                 cancellationToken).ConfigureAwait(false);
 

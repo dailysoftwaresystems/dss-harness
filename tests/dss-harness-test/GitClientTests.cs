@@ -2944,24 +2944,34 @@ public sealed class GitClientProtocolTests
     }
 
     /// <summary>
-    /// Every git the tool starts runs untranslated, under <c>LC_ALL=C</c>, set where git starts and never by a caller: a
-    /// question whose answer is matched by its words, a command that changes the repository, one that runs the
-    /// repository's hooks - which inherit it - one that reaches a remote, and the question that names the variables every
-    /// other git is started without. A git that answered in the person's language would answer a reading made in English
-    /// with words it does not match, and a person would be shown git's messages in two languages.
+    /// Every git the tool starts runs untranslated, under <c>LC_ALL=C</c>, set where git starts and never by a caller - a
+    /// question whose answer is matched by its words, a command that changes the repository, one that reaches a remote, and
+    /// the question that names the variables every other git is started without - but one git runs the repository's hooks
+    /// for, which keeps the person's locale whether it runs them or not: a commit, a commit that runs them on purpose, a
+    /// checkout behind git's own options, a worktree added, a push. A git that answered a question in the person's
+    /// language would answer a reading made in English with words it does not match; a hook made to run under C would
+    /// read anything outside ASCII as it never does in the person's shell.
     /// </summary>
     [Fact]
-    public async Task EveryGitTheToolStarts_RunsUntranslated()
+    public async Task EveryGitTheToolStarts_RunsUntranslated_ButOneGitRunsHooksFor()
     {
         var (git, requests) = Scripted(Exited(0, "/repo\n"));
         var cancellationToken = TestContext.Current.CancellationToken;
 
         await git.GetRepositoryRootAsync("/repo", cancellationToken);
+        await git.RunAsync("/repo", ["update-ref", "refs/heads/x", "HEAD"], cancellationToken: cancellationToken);
+        await git.RunAsync("/repo", ["worktree", "remove", "/repo/.worktrees/a"], cancellationToken: cancellationToken);
+        await git.RunRemoteAsync("/repo", ["ls-remote", "origin"], values: null, standardInput: null, cancellationToken);
         await git.RunAsync("/repo", ["commit", "-m", "x"], cancellationToken: cancellationToken);
         await git.RunWithHooksAsync("/repo", ["commit", "-m", "y"], TimeSpan.FromMinutes(1), isolation: null, values: null, cancellationToken);
-        await git.RunRemoteAsync("/repo", ["ls-remote", "origin"], values: null, standardInput: null, cancellationToken);
+        await git.RunAsync("/repo", ["-c", "advice.detachedHead=false", "checkout", "main"], cancellationToken: cancellationToken);
+        await git.RunAsync("/repo", ["worktree", "add", "/repo/.worktrees/b"], cancellationToken: cancellationToken);
+        await git.RunWithHooksAsync("/repo", ["push", "origin", "main"], TimeSpan.FromMinutes(1), isolation: null, values: null, cancellationToken);
 
-        Assert.Equal(["C", "C", "C", "C"], requests.Select(request => request.Environment[GitOwnSettings.LocaleVariable]));
+        Assert.Equal(
+            new string?[] { "C", "C", "C", "C", null, null, null, null, null },
+            requests.Select(request => request.Environment.GetValueOrDefault(GitOwnSettings.LocaleVariable)));
+        Assert.DoesNotContain(requests, request => request.Environment.ContainsKey("LANG"));
 
         var asked = new List<ProcessRequest>();
         var runner = Substitute.For<IProcessRunner>();
@@ -3418,6 +3428,51 @@ public sealed class GitClientProtocolTests
 
         Assert.True(File.Exists(marker), $"The planted repository's own status ran no filter: {own.StandardError}");
         File.Delete(marker);
+    }
+
+    /// <summary>
+    /// The commands git's documentation of its hooks names as running them keep the person's locale, each by its
+    /// subcommand after git's own options - and a worktree's or git-p4's by the one command of theirs that runs them - and
+    /// every other command runs under C: a hook is the person's code, and behaves as in their shell only in their locale.
+    /// </summary>
+    [Theory]
+    [InlineData(null, "am", "--3way", "patch")]
+    [InlineData(null, "commit", "-m", "x")]
+    [InlineData(null, "merge", "--no-ff", "topic")]
+    [InlineData(null, "pull", "--rebase")]
+    [InlineData(null, "rebase", "main")]
+    [InlineData(null, "cherry-pick", "abc")]
+    [InlineData(null, "revert", "abc")]
+    [InlineData(null, "checkout", "main")]
+    [InlineData(null, "switch", "main")]
+    [InlineData(null, "clone", "url", "dir")]
+    [InlineData(null, "worktree", "add", "dir")]
+    [InlineData(null, "push", "origin", "main")]
+    [InlineData(null, "receive-pack", "dir")]
+    [InlineData(null, "send-email", "patch")]
+    [InlineData(null, "gc", "--auto")]
+    [InlineData(null, "p4", "submit")]
+    [InlineData(null, "-C", "/r", "-c", "a=b", "commit")]
+    [InlineData("C", "status", "--porcelain")]
+    [InlineData("C", "fetch", "origin")]
+    [InlineData("C", "worktree", "remove", "dir")]
+    [InlineData("C", "worktree", "list", "--porcelain")]
+    [InlineData("C", "update-ref", "refs/heads/x", "HEAD")]
+    [InlineData("C", "reset", "--mixed")]
+    [InlineData("C", "rev-parse", "--show-toplevel")]
+    [InlineData("C", "p4", "sync")]
+    [InlineData("C", "version")]
+    [InlineData("C", "commit-tree", "abc")]
+    [InlineData("C")]
+    public void TheCommandsGitRunsHooksFor_KeepThePersonsLocale_EveryOtherRunsUntranslated(string? locale, params string[] arguments)
+    {
+        foreach (var hooksRun in new[] { false, true })
+        {
+            var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+            GitOwnSettings.Apply(environment, PlatformId.Linux, arguments, hooksRun, "/r", pins: null);
+
+            Assert.Equal(locale, environment.GetValueOrDefault(GitOwnSettings.LocaleVariable));
+        }
     }
 
     /// <summary>The settings a git command that is no question runs with on <paramref name="system"/>.</summary>
