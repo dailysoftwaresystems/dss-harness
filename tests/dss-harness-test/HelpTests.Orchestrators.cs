@@ -99,7 +99,8 @@ public sealed partial class HelpTests
             "A path that is a directory, inside .orchestrators/, inside the repository's main checkout or one of its agents' trees where that tree does not "
                 + "ignore it - git's ignore rules read as a status reads them, a path the tree tracks never ignored: the zip would be one of the tree's "
                 + "uncommitted files, handed to every agent a run of it makes - or in a directory that cannot be made is refused (13) before anything runs, "
-                + "nothing started; any other work tree, another project's or a repository at the home, is none a run hands or folds from, and takes the zip.",
+                + "nothing started; any other work tree, another project's, a worktree of a bare repository or a repository at the home, is none a run hands "
+                + "or folds from, and takes the zip.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("The zip holds run/ - the run's whole directory, its folders kept - config.json, the configuration the run was read with, and manifest.json,", prose, StringComparison.Ordinal);

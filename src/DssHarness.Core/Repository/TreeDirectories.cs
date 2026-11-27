@@ -14,7 +14,12 @@ namespace DssHarness.Core.Repository;
 /// A tree that could not be read - the run names no commit it started from, or git could not list it - answers by what is
 /// asked of it: where the question is whether two entries meet (<see cref="Meeting"/>), every path counts as a directory,
 /// the wide reading, so nothing beneath one is taken to meet nothing; where it is what a step may write or a fold carry
-/// (<see cref="Writing"/>), none does, the narrow reading, so nothing beneath one is let through.
+/// (<see cref="Writing"/>), none does, the narrow reading, so nothing beneath one is let through. Neither is silent: the
+/// session that read the tree warns once why it could not (<see cref="Unread"/>), and every refusal either reading
+/// causes says it too - by the wide reading, the plan's check's overlaps (<see cref="UnreadForMeeting"/>); by the narrow
+/// one, a step's writes denied, a fold's <c>foldOutside</c> and the plan's check of a class's home and sites and of an
+/// entry naming a directory of the main tree, each through the one wording of a changed meaning
+/// (<see cref="GlobPattern.WrittenFor(string, string, StringComparison)"/>, <see cref="UnreadForWriting"/>).
 /// </remarks>
 public sealed class TreeDirectories
 {
@@ -35,6 +40,35 @@ public sealed class TreeDirectories
 
     /// <summary>Why the tree could not be read; null where it was.</summary>
     public string? Unread { get; }
+
+    /// <summary>
+    /// What a session that reads the run's start tree and could not warns of, once: why, and how each question is answered
+    /// in its place; null where it was read.
+    /// </summary>
+    public string? UnreadWarning => Unread is { } why
+        ? $"the run's start tree, which its lists of paths are read against, could not be read: {why}; until a session reads it, no path is taken for one of its directories where it is what a step may write or a fold carry, and every path where two entries are weighed for meeting, and each refusal that causes says so"
+        : null;
+
+    /// <summary>
+    /// What a refusal the narrow reading of a tree that could not be read caused says of it (<see cref="Writing"/>): that no
+    /// path is taken for one of its directories, and why; null where it was read.
+    /// </summary>
+    public string? UnreadForWriting => Unread is { } why ? $"no path is taken for a directory of the run's start tree, which could not be read: {why}" : null;
+
+    /// <summary>
+    /// What a refusal the wide reading of a tree that could not be read caused says of it (<see cref="Meeting"/>): that every
+    /// path is taken for one of its directories, and why; null where it was read.
+    /// </summary>
+    public string? UnreadForMeeting => Unread is { } why ? $"every path is taken for a directory of the run's start tree, which could not be read: {why}" : null;
+
+    /// <summary>
+    /// <paramref name="entry"/>, one entry of a list of the run's paths, read from the root for what a step may write or a
+    /// fold carry beneath it (<see cref="GlobPattern.FromRoot"/> over <see cref="Writing"/>): where this tree could not be
+    /// read, every sentence that reading causes says so (<see cref="UnreadForWriting"/>).
+    /// </summary>
+    /// <param name="entry">The entry, as written.</param>
+    /// <exception cref="HarnessException">The entry cannot be read (<see cref="GlobPattern.Problem"/>).</exception>
+    public GlobPattern ForWriting(string entry) => GlobPattern.FromRoot(entry, Writing, UnreadForWriting);
 
     /// <summary>
     /// The directories of <paramref name="commit"/>'s tree, read through git once (<see cref="IGitClient.ListDirectoriesAtCommitAsync"/>):

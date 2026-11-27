@@ -747,11 +747,16 @@ path a work item owns or must not touch, its agent's writes and its fold's withi
 what is beneath it only where it names a directory - one the run's start tree holds, the commit it started from,
 which no fold of the run changes, or one ending in `/` - and a pattern is
 anchored there too, `**` for any depth, so a root-level file such as `Makefile` or `pyproject.toml` meets no other
-path and keeps only the item that owns it waiting. The planner and the self-audit are told the same, once, by the
+path and keeps only the item that owns it waiting. A directory an earlier round made is one the start tree does not
+hold, so the plan's check refuses an item of a later round owning or keeping off it with no trailing `/`, saying to
+write it with one, before its builder's every write beneath it is refused; and a start tree that cannot be read is
+warned of once a session, each refusal its reading causes saying why. The planner and the self-audit are told the same, once, by the
 workflow's text `fixes` (`fixes.md`): no work item fixes an issue being fixed, or rewrites its lines, and an item that
 needs its fix names it; the plan's check refuses a `needs` that names no issue the recovery is fixing or fixed, nor
 one joined to an issue still being triaged - an item that needs one of those waits for that triage, and then for the
-fix it goes with - and a recovery's check refuses every `needs`, for its remedies are never held for a fix.
+fix it goes with, or, where that triage ends without a fix and the joined issue is triaged again on its own, for that
+new triage and the fix it sends - and a recovery's check refuses every `needs`, for its remedies are never held for a
+fix.
 
 Issues of one root cause take one fix: a triage that finds its issue's cause is that of an issue taken before it,
 being triaged, being fixed or fixed, answers `join` with that issue's id. Joined to one being triaged or being fixed,
@@ -1325,7 +1330,8 @@ name with no `/` is the root's own, and a path names what is beneath it only whe
 directory - one the run's start tree holds, or one ending in `/`. An entry whose meaning that
 reading changed says so where it refuses: a write beneath `docs/generated`, which names a file,
 is told a directory to be made is written `docs/generated/`, and one of `notes/a.md` under
-`*.md`, which names the root's own, that `**/*.md` names any depth. The reporter's reads are narrowed to the
+`*.md`, which names the root's own, that `**/*.md` names any depth - and, where it names a file because the run's
+start tree could not be read, why that tree could not be. The reporter's reads are narrowed to the
 run's directory alone, with no command, no write and no web at all. For Claude Code the same policy is rendered, never re-decided, into the launch's
 settings: an ask rule for every tool, and the restrictions as deny rules, absolute once for each
 root in the POSIX form Claude Code matches (`//c/x` for `C:\x`), a `Write` rule as the `Edit` rule

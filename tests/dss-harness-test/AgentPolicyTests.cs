@@ -794,6 +794,33 @@ public sealed class AgentPolicyTests
         Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(writes: ["docs/generated/", "**/*.md"]).Write(notes));
     }
 
+    /// <summary>
+    /// A write the step's writes refuse beneath an entry that names a file only because the run's start tree could not be
+    /// read - so no path was taken for one of its directories - says why that tree could not be read, once, after how to
+    /// write what the entry meant; a refusal the tree did not cause - one name read at the root, a path beneath no entry -
+    /// says nothing of it.
+    /// </summary>
+    [Fact]
+    public void AWriteRefusedBeneathAnEntryAnUnreadStartTreeMadeAFile_SaysWhyTheTreeCouldNotBeRead()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy(writes: ["docs/generated", "src", "*.md"], writesTree: TreeDirectories.NoCommit);
+        var generated = Path.Combine(ground.Worktree, "docs", "generated", "index.html");
+        var notes = Path.Combine(ground.Worktree, "docs", "notes.md");
+        var elsewhere = Path.Combine(ground.Worktree, "lib", "calc.c");
+
+        Assert.Equal(
+            $"'{generated}' is outside the paths this step may write: docs/generated, src, *.md; 'docs/generated' names a file: a directory to be made is written 'docs/generated/'; "
+                + "no path is taken for a directory of the run's start tree, which could not be read: the run names no commit it started from",
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(generated)).Reason);
+        Assert.Equal(
+            $"'{notes}' is outside the paths this step may write: docs/generated, src, *.md; '*.md' names the root's own: '**/*.md' names any depth",
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(notes)).Reason);
+        Assert.Equal(
+            $"'{elsewhere}' is outside the paths this step may write: docs/generated, src, *.md",
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(elsewhere)).Reason);
+    }
+
     /// <summary>The shipped protected-path list, pinned word for word: a change in it is a change someone made.</summary>
     [Fact]
     public void TheProtectedPathsArePinned()

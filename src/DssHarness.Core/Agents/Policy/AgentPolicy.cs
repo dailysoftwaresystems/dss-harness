@@ -437,7 +437,7 @@ public sealed partial class AgentPolicy
         // run's start tree holds that directory, the one tree the check, the holds and the folds ask too.
         _writes = ground.Writes is { } writes
             ? ground.WritesTree is { } tree
-                ? [.. writes.Select(pattern => (GlobPattern.FromRoot(pattern, tree.Writing), pattern))]
+                ? [.. writes.Select(pattern => (tree.ForWriting(pattern), pattern))]
                 : throw new ArgumentException("the ground names writes and no tree they are read against", nameof(ground))
             : [];
         _worktreeRunRules =

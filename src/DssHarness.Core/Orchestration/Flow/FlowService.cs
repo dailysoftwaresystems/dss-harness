@@ -1767,12 +1767,19 @@ public sealed class FlowService(
         {
             var (definition, runContext, resume) = begin();
 
-            using var records = new FlowRunRecords(_fileSystem, _store, layout, runContext, _clock, line => _output.Warn(command, line));
+            Action<string> warn = line => _output.Warn(command, line);
+            using var records = new FlowRunRecords(_fileSystem, _store, layout, runContext, _clock, warn);
 
             // The one tree the run's lists of paths are read against for its whole life - the tree of the commit it started
             // from, which no fold of the run changes - read once for the session: the plan's check, the holds, a step's
-            // writes and a fold's within ask it alike.
+            // writes and a fold's within ask it alike. One that could not be read is warned of once, through the records'
+            // warner, and every refusal its reading causes says why too.
             var startTree = await TreeDirectories.AtAsync(_gitClient, context.Layout.MainCheckoutRoot, runContext.StartCommit, _platform.PathComparison, cancellationToken).ConfigureAwait(false);
+
+            if (startTree.UnreadWarning is { } unread)
+            {
+                warn(unread);
+            }
 
             // Every step is handed the run it belongs to, and each create-agent step the model its agent is made for,
             // resolved from the configuration as the definition's check resolves it; a run step claims its tree as the

@@ -2509,9 +2509,11 @@ fallback, an account at its limit or a provider that fails is a pause that resum
 still fails is asked. The implementation workflow writes `onFailure: recover` on every step of its flow that tests, folds,
 checks, commits, pushes or waits - itself or through its group - and `onFailure: pause` on every
 reasoning step; its recovery diagnoses the failure (`diagnose`, which goes on with its own conversation across
-the visits for the same failure or issue - the thread of what a visit puts right, the issue by its title and where it is
-for every visit of it, whichever step reported it and however often it was met again after a fix that did not hold,
-apart from where its bound counts it (`FlowCoordinator.ThreadOf`, which `FlowCheck.Work` reads too) - a visit for
+the visits for the same failure or issue - the thread of what a visit puts right: for an issue, the thread of the last
+visit made before it that ended done fixing the same issue in any words that visit fixed (`IssuesFixedBy`: its own,
+those joined to it and the duplicates of either), every reading of the same issue taking it alike, and the issue by its
+own title and where it is where none did - whichever step reported it and however often it was met again after a fix
+that did not hold, apart from where its bound counts it (`FlowCoordinator.ThreadOf`, which `FlowCheck.Work` reads too) - a visit for
 another issue diagnosing in a conversation and an agent of its own, beside it, `FlowCoordinator.SameRecoveryThread`),
 asks a person only for what only a person can give (`direction`), holds the remedy items its last word
 sets out - the diagnosis's, or the one it gives on the person's answer (`redirect`) - to the plan's own check
@@ -2664,7 +2666,11 @@ and its reconcile meet the fix as any two changes meet. Every check whose items 
 the issues the recovery takes (`fixes`, `FlowCoordinator.IssuesTheRecoveryTakes`: each sent to fix or joined to a fix,
 being fixed or fixed, or joined to one still being triaged - the one owner of which issues an item may need, which
 `IssueHolds` reads too, so an item is held for every issue its check let it name: one joined to an issue being triaged
-holds no file, and keeps an item that needs it waiting under that triage, then under the fix it goes with), and
+holds no file, and keeps an item that needs it waiting under that triage, then under the fix it goes with - and where
+that issue ends without a fix and the join is triaged again on its own, the id the item named is followed to the
+triage that holds the issue now, by the one walk a duplicate's settling makes too (`HolderNow`, over `HolderFrom`,
+every triage walked kept), the item waiting under that triage, then under the fix it sends or goes with, whose one
+hold the named id meets too, `FlowIssueHold.NeededAlsoBy`), and
 `PlanCheckRunner` refuses an item whose `needs` names another, for no fix of another is made to wait for; a recovery's
 check is handed none, and refuses every `needs` and every `settles` saying so - its remedies are never held for a fix
 and settle no issue. The planner's prompts and the self-audit read the rule once, the
@@ -3998,7 +4004,17 @@ whose meaning the reading changed - one name that once matched at any depth, a p
 to be made - is told how to write what it meant at every refusal the reading causes, by its one owner
 (`GlobPattern.WrittenFor`): a step's writes denied, a fold's `foldOutside`, and the plan's check of a class's home and
 sites (P-C3, P-C4) - `'docs/generated' names a file: a directory to be made is written 'docs/generated/'`, and
-`'*.md' names the root's own: '**/*.md' names any depth`. A pattern keeps its meaning, anchored at the root: a
+`'*.md' names the root's own: '**/*.md' names any depth`. A later round's plan update, self-audit or diagnosis is
+written beside a main tree that holds what earlier rounds folded, so the plan's check refuses an entry an item owns or
+must not touch, written with no trailing separator, that names a directory of the main tree the start tree does not
+hold - every reader would read it as that one path, and its builder's every write beneath it would be refused - in the
+same owner's words (`GlobPattern.WrittenForDirectory`): `'src/feature' names a file of the run's start tree, which the
+run's lists of paths are read against, and a directory of the main tree: write it 'src/feature/'`, at the answer within
+the step that gives it as at the check's own moment. A start tree that cannot be read is never silent: the session
+warns once why (`TreeDirectories.UnreadWarning`, through the records' warner), and every refusal its reading causes
+says it too - the narrow reading's after how to write the entry (`TreeDirectories.UnreadForWriting`, carried by each
+entry read for what may be written beneath it, `TreeDirectories.ForWriting`), and an overlap of the check's that the wide
+reading alone made (`TreeDirectories.UnreadForMeeting`). A pattern keeps its meaning, anchored at the root: a
 directory it matches covers what is beneath it. Two entries
 meet (`GlobPattern.Overlaps`) only where some path a tree can hold matches both: a path naming no directory holds
 nothing beneath it, unless the other names only paths beneath it by its own names - `src/new` and `src/new/a.py` -
@@ -5455,12 +5471,15 @@ every command shares (`CommandSession`) holds the path before anything is weighe
 the directory the process stands in; a directory, a path inside `.orchestrators/` (where every run
 keeps its own records, and a start names its run only as it starts), one inside the repository's main
 checkout or one of its agents' trees where that tree does not ignore it - the tree found by git from the
-nearest directory on its way that is there, and held to be the run's where the one locator of a tree's
-repository (`IRepositoryLocator`) names the command's main checkout as its own; `check-ignore` read
+nearest directory on its way that is there, and held to be the run's where it shares the command's main
+checkout's git common directory - that checkout and every worktree git keeps of it - or is an agent's
+repository whose mark names that checkout (`AgentRepositoryMark`), asked of git directly and never of
+the locator of a tree's repository, which refuses a tree it runs nothing from, such as a worktree of a
+bare repository, where the question is only whose tree it is; `check-ignore` read
 against the index (`IGitClient.IsIgnoredAsync`), so a path the tree tracks is never ignored: such a zip
 is one of the tree's uncommitted files, which every agent a run of it makes is handed with its seed, and
-the next zip would hold it once for each; any other work tree, another project's checkout or a
-repository of dotfiles at the home, is none a run hands or folds from, and takes the zip - or one whose directory cannot be
+the next zip would hold it once for each; any other work tree, another project's checkout, a worktree
+of a bare repository or a repository of dotfiles at the home, is none a run hands or folds from, and takes the zip - or one whose directory cannot be
 made is refused with 13, nothing started - and at every end - the body's answer, a directory refused,
 a failure it caught - writes the zip before it says how the command ended, the operation's own end and
 the ends handed to it run first, with `--json` or without, so the manifest holds the lines they say and

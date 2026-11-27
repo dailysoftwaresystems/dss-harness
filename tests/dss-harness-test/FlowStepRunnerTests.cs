@@ -779,6 +779,45 @@ public sealed class FlowStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// A later round's plan update, self-audit or diagnosis is written beside a main tree that holds what earlier rounds
+    /// folded, and read against the run's start tree: an item owning a directory the first round made, written with no
+    /// trailing separator, names that one path there - its builder's every write beneath it would be refused. The check
+    /// refuses it at the answer itself, within the step that gives it (<see cref="PlanCheckRunner.AnswerProblemsAsync"/>,
+    /// which the engine hands that step), as at its own moment, saying to write it ending in a separator - never left to
+    /// the builder; so written, it passes.
+    /// </summary>
+    [Fact]
+    public async Task ALaterRoundsItemOwningADirectoryAnEarlierRoundMade_IsRefusedByTheCheck_WithinTheStepThatGivesIt()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var start = await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token);
+        var startTree = await harness.StartTreeAsync(repository.Path, Token);
+
+        // The first round's fold made src/feature in the main tree.
+        repository.WriteFile("src/feature/made.cs", "made by the first round\n");
+        await harness.CommitAllAsync(repository.Path, "the first round", Token);
+
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items" };
+        var owning = Item("two", "src/feature");
+        var read = new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(new JsonArray(owning.DeepClone())) };
+        var check = Run(step, repository.Path, read) with { Place = new FlowRunPlace(repository.Path, "r1", start, Flow) { StartTree = startTree } };
+        string[] refused =
+        [
+            "work item 'two' owns 'src/feature', which names nothing beneath it: 'src/feature' names a file of the run's start tree, which the run's lists of paths are read against, and a directory of the main tree: write it 'src/feature/'",
+        ];
+
+        Assert.Equal(refused, await runner.AnswerProblemsAsync(check, Token));
+        Assert.Equal(refused, (await runner.RunAsync(check, Token)).Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>()));
+
+        owning["ownedPaths"] = new JsonArray("src/feature/");
+        var written = check with { Read = new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(new JsonArray(owning.DeepClone())) } };
+
+        Assert.Empty(await runner.AnswerProblemsAsync(written, Token));
+        Assert.True((bool)(await runner.RunAsync(written, Token)).Output!["ok"]!);
+    }
+
+    /// <summary>
     /// The plan check that opens a round holds its items to the issues the run owes its next round: each named in an
     /// item's <c>settles</c>, none left unsettled, an item may name only an issue the run owes, and the items that settle
     /// them come first in its output - what the run took from its own rounds is built before the work planned around it.

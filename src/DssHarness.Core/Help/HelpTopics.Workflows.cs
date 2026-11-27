@@ -282,7 +282,9 @@ public static partial class HelpTopics
         builder.AppendLine("leaves, its record naming the fix it waits for - the issue's title and its visit - and the files");
         builder.AppendLine("it holds, or that the item needs it; every other item goes on at once. An issue joined to one");
         builder.AppendLine("still being triaged holds no file yet, but an item that needs it waits for that triage, and then");
-        builder.AppendLine("for the fix it goes with. What it holds and what an item owns are read from the repository's");
+        builder.AppendLine("for the fix it goes with - or, where that triage ends without a fix and the joined issue is triaged");
+        builder.AppendLine("again on its own, for that new triage, and then for the fix it sends or goes with, the item's needs");
+        builder.AppendLine("followed from the id it names. What it holds and what an item owns are read from the repository's");
         builder.AppendLine("root, as the plan's check reads an item's paths: a root-level file the fix holds keeps only the");
         builder.AppendLine("item owning that file waiting. The plan's check refuses a needs that names no issue the recovery");
         builder.AppendLine("is fixing or fixed, nor one joined to an issue still being triaged; a recovery's check refuses");
@@ -305,8 +307,9 @@ public static partial class HelpTopics
         builder.AppendLine("ends without a fix, it is triaged again on its own - as a duplicate is where the triage of the");
         builder.AppendLine("issue it repeats ends without a decision, its failure passed over, so neither is lost. Each");
         builder.AppendLine("visit counts against the run's limits as every step does, and a visit's diagnosis goes on with");
-        builder.AppendLine("the last one of what it puts right - the same failure, or the same issue whichever step met it");
-        builder.AppendLine("and however often after a fix that did not hold - apart from where its bound counts it.");
+        builder.AppendLine("the last one of what it puts right - the same failure, or the same issue whichever step met it,");
+        builder.AppendLine("in whatever words a duplicate or a join of it gave, and however often after a fix that did not");
+        builder.AppendLine("hold - apart from where its bound counts it.");
         builder.AppendLine();
         builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");
         builder.AppendLine("may run on, or a map giving each its own - all for the rest, a model's code for one, so a");
@@ -419,7 +422,10 @@ public static partial class HelpTopics
             + "fold's within alike, whatever the run's folds make of the trees, and a path it cannot answer for counts as a "
             + "directory where two entries are weighed for meeting, as none where it is what an item may write; a class's home "
             + "or site refused beneath an entry that names a file says a directory to be made is written with a trailing "
-            + "separator, and one at a depth an entry of one name no longer reaches says '**/' reaches any depth; the path budget of the "
+            + "separator, and one at a depth an entry of one name no longer reaches says '**/' reaches any depth; an entry with no "
+            + "trailing separator that names a directory the main tree holds and the start tree does not - one an earlier round "
+            + "made - is refused, for its builder's every write beneath it would be, saying to write it ending in one; a start tree "
+            + "that cannot be read is warned of once a session, and each refusal its reading causes says why; the path budget of the "
             + "worktree each would get, with the copies and workers its legs keep inside it and the deepest file it owns; every "
             + "path it reuses or replaces there in the main tree, something under one of the three, and a why and a search for "
             + "each thing it creates; and each item declaring the classes of the decisions it changes or saying in noClass why it "

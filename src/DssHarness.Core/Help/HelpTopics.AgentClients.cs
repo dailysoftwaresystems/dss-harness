@@ -365,7 +365,8 @@ public static partial class HelpTopics
         builder.AppendLine("the tree of the commit the run started from, which no fold changes - or one ending in a");
         builder.AppendLine("separator; a write refused beneath an entry that names a file says a directory to be made");
         builder.AppendLine("is written with a trailing separator, and one at a depth an entry of one name no longer");
-        builder.AppendLine("reaches says '**/' reaches any depth. For Claude Code the same policy is rendered, never re-decided, into");
+        builder.AppendLine("reaches says '**/' reaches any depth; where the entry names a file because the start tree");
+        builder.AppendLine("could not be read, the refusal says why. For Claude Code the same policy is rendered, never re-decided, into");
         builder.AppendLine("the launch's settings: an");
         builder.AppendLine("ask rule for every tool the launch has, and the restriction rules as deny rules, absolute");
         builder.AppendLine("once for each root in the POSIX form Claude Code matches (//c/x for C:\\x), a Write rule as");

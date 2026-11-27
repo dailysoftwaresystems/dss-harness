@@ -169,18 +169,36 @@ public sealed record AgentRepositoryMark(string MainCheckout, string Agent)
         ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentNullException.ThrowIfNull(platform);
 
-        return SessionTrees.ObjectsAsync(mainCheckout, platform.PathComparison, fileSystem, async () =>
-        {
-            var asked = await gitClient
-                .RunAsync(mainCheckout, ["rev-parse", "--path-format=absolute", "--git-common-dir"], cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
+        return SessionTrees.ObjectsAsync(
+            mainCheckout,
+            platform.PathComparison,
+            fileSystem,
+            async () => await CommonDirectoryAsync(gitClient, mainCheckout, "keeps its objects", cancellationToken).ConfigureAwait(false) + "/objects");
+    }
 
-            return asked.Succeeded && asked.OutputLines is [var common]
-                ? common + "/objects"
-                : throw new HarnessException(
-                    HarnessExit.CommandFailed,
-                    $"Where the repository of '{ReportText.Printable(mainCheckout)}' keeps its objects could not be read: {asked.FailureMessage.TrimEnd('.')}.");
-        });
+    /// <summary>
+    /// The common directory of the repository whose work tree <paramref name="tree"/> is, as git spells it: absolute - the
+    /// one git directory a main checkout and every worktree git keeps of it share, a bare repository's own for a worktree of
+    /// one, and an agent's repository's own, which is a repository of its own.
+    /// </summary>
+    /// <param name="gitClient">Asks git.</param>
+    /// <param name="tree">A directory of the work tree.</param>
+    /// <param name="asked">What the refusal says could not be read of it, after "where the repository of the tree".</param>
+    /// <param name="cancellationToken">Stops git.</param>
+    /// <exception cref="HarnessException">git could not say (<see cref="HarnessExit.CommandFailed"/>).</exception>
+    public static async Task<string> CommonDirectoryAsync(IGitClient gitClient, string tree, string asked, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(gitClient);
+
+        var answer = await gitClient
+            .RunAsync(tree, ["rev-parse", "--path-format=absolute", "--git-common-dir"], cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        return answer.Succeeded && answer.OutputLines is [var common]
+            ? common
+            : throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"Where the repository of '{ReportText.Printable(tree)}' {asked} could not be read: {answer.FailureMessage.TrimEnd('.')}.");
     }
 
     /// <summary>

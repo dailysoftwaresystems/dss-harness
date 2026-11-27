@@ -16,8 +16,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// known by its name alone; no path owned by two items; each item's forbidden paths kept by its own owned
 /// paths - each entry read from the repository's root, as the item's agent's writes and its fold's within read it
 /// (<see cref="GlobPattern.FromRoot"/>), whether it names a directory asked of the run's start tree as they ask it
-/// (<see cref="TreeDirectories"/>), so two entries meet only where some path the tree can hold is matched by both;
-/// the path budget of the worktree each would get, with the copies and workers its legs keep inside it and the
+/// (<see cref="TreeDirectories"/>), so two entries meet only where some path the tree can hold is matched by both; no
+/// entry with no trailing separator that names a directory of the main tree the start tree does not hold - one an earlier
+/// round made - for every write beneath it would be refused; the path budget of the worktree each would get, with the copies and workers its legs keep inside it and the
 /// deepest file it owns; and the lists that hold an item to what the repository has - every path it reuses or replaces
 /// there in the main tree, something under one of the three, and a reason and a search for everything it creates. Each
 /// item also carries its classes - the decisions it changes, each with its one home, its sites, its searches and its
@@ -26,7 +27,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// alone, or says in <c>noTests</c> why it affects none (P-C9). Each breach is a problem of the plan, worded once here;
 /// none is a failure.
 /// </summary>
-/// <param name="fileSystem">Reads the main tree for the paths the items reuse and replace.</param>
+/// <param name="fileSystem">Reads the main tree for the paths the items reuse and replace, and the directories it holds.</param>
 /// <param name="pathBudget">Reckons the paths of the worktree each item would get.</param>
 /// <param name="platform">This machine: its operating system, and how the tree's names compare.</param>
 public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget, IHostPlatform platform)
@@ -94,19 +95,22 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
         foreach (var (item, at) in read.Select((item, at) => (item, at)))
         {
-            // No file is written by two items: each pair is said once, by the first patterns found to meet.
+            // No file is written by two items: each pair is said once, by the first patterns found to meet - and where they
+            // meet only because the start tree could not be read, and every path was taken for a directory, it says so.
             foreach (var other in read.Skip(at + 1))
             {
                 if (Meeting(item.Owned, other.Owned, comparison) is var (mine, theirs))
                 {
-                    problems.Add($"work items '{item.Name}' and '{other.Name}' both own what '{mine}' and '{theirs}' match: no file is written by two items, so give it to one");
+                    problems.Add($"work items '{item.Name}' and '{other.Name}' both own what '{mine}' and '{theirs}' match: no file is written by two items, so give it to one{Unread(startTree, item.Writes, other.Writes, comparison)}");
                 }
             }
 
             if (Meeting(item.Owned, item.Forbidden, comparison) is var (owned, forbidden))
             {
-                problems.Add($"work item '{item.Name}' owns '{owned}' and must not touch '{forbidden}', which match the same paths: an item's forbidden paths are kept by the paths it owns");
+                problems.Add($"work item '{item.Name}' owns '{owned}' and must not touch '{forbidden}', which match the same paths: an item's forbidden paths are kept by the paths it owns{Unread(startTree, item.Writes, item.Kept, comparison)}");
             }
+
+            DirectoryProblems(item, context.Layout.MainCheckoutRoot, problems);
 
             var deepest = item.Owned.Select(pattern => Literal(pattern.Text).Length).DefaultIfEmpty(0).Max();
             var (budget, tree) = FlowRunPaths.AtStart(pathBudget, context, run, definition, platform.PlatformKey, deepest);
@@ -248,14 +252,22 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
     /// <summary>
     /// A work item read whole: its name, the paths it owns and must not touch - read for whether they meet another's - the
-    /// paths it owns read for what it may write (<paramref name="Writes"/>), and its three lists.
+    /// same read for what may be written beneath them (<paramref name="Writes"/>, <paramref name="Kept"/>), and its three
+    /// lists.
     /// </summary>
     /// <param name="Name">The item's name.</param>
     /// <param name="Owned">Its owned paths, read for whether they meet (<see cref="TreeDirectories.Meeting"/>).</param>
     /// <param name="Forbidden">Its forbidden paths, read for whether they meet.</param>
-    /// <param name="Writes">Its owned paths, read for what its agent may write and its fold carry (<see cref="TreeDirectories.Writing"/>).</param>
+    /// <param name="Writes">Its owned paths, read for what its agent may write and its fold carry (<see cref="TreeDirectories.ForWriting"/>).</param>
+    /// <param name="Kept">Its forbidden paths, read for what may be written beneath them, as its owned paths are.</param>
     /// <param name="Node">The item as the plan gives it.</param>
-    private sealed record Item(string Name, IReadOnlyList<(string Text, GlobPattern Pattern)> Owned, IReadOnlyList<(string Text, GlobPattern Pattern)> Forbidden, IReadOnlyList<(string Text, GlobPattern Pattern)> Writes, JsonObject Node);
+    private sealed record Item(
+        string Name,
+        IReadOnlyList<(string Text, GlobPattern Pattern)> Owned,
+        IReadOnlyList<(string Text, GlobPattern Pattern)> Forbidden,
+        IReadOnlyList<(string Text, GlobPattern Pattern)> Writes,
+        IReadOnlyList<(string Text, GlobPattern Pattern)> Kept,
+        JsonObject Node);
 
     /// <summary>
     /// The work item <paramref name="node"/> is, where it is of a work item's shape and its paths read from the
@@ -300,7 +312,8 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
         var owned = Patterns(item, "ownedPaths", "owns", where, startTree.Meeting, problems);
         var forbidden = Patterns(item, "forbiddenPaths", "must not touch", where, startTree.Meeting, problems);
-        var writes = owned.Select(entry => (entry.Text, GlobPattern.FromRoot(entry.Text, startTree.Writing))).ToList();
+        var writes = owned.Select(entry => (entry.Text, startTree.ForWriting(entry.Text))).ToList();
+        var kept = forbidden.Select(entry => (entry.Text, startTree.ForWriting(entry.Text))).ToList();
 
         if (owned.Count == 0 && Texts(item["ownedPaths"])!.Count == 0)
         {
@@ -343,7 +356,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             problems.Add($"{where} names a test unit that is empty, or spaces alone: a runner reads it as no filter at all, or as one that matches every test - name the tests, or take it out");
         }
 
-        return new Item(name, owned, forbidden, writes, item);
+        return new Item(name, owned, forbidden, writes, kept, item);
     }
 
     /// <summary>The entries of <paramref name="member"/>, each read from the repository's root; one that does not read is a problem, and is left out.</summary>
@@ -372,6 +385,35 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// </summary>
     private static string WrittenFor(Item item, string path, StringComparison comparison)
         => GlobPattern.WrittenFor(item.Writes.Select(entry => (entry.Pattern, entry.Text)), [path], comparison) is { } said ? $"; {said}" : string.Empty;
+
+    /// <summary>
+    /// What the start tree says of two lists of entries found to meet, as a clause after a semicolon: where it could not be
+    /// read, and the entries meet only because every path was taken for one of its directories (<see cref="TreeDirectories.UnreadForMeeting"/>)
+    /// - read narrowly, as what may be written beneath them, they would not - why; empty otherwise.
+    /// </summary>
+    private static string Unread(TreeDirectories startTree, IReadOnlyList<(string Text, GlobPattern Pattern)> left, IReadOnlyList<(string Text, GlobPattern Pattern)> right, StringComparison comparison)
+        => startTree.UnreadForMeeting is { } said && Meeting(left, right, comparison) is null ? $"; {said}" : string.Empty;
+
+    /// <summary>
+    /// An entry an item owns or must not touch that names no directory of the run's start tree, read for what may be written
+    /// beneath it - a path with no trailing separator - and a directory of the main tree at <paramref name="root"/>: one an
+    /// earlier round's fold made since the run began, or one the start tree could not say it holds. Every reader of the
+    /// item's paths reads it as that one path, so the builder's every write beneath it would be refused, and its fold would
+    /// carry none of it; the check refuses it first, saying how to write it (<see cref="GlobPattern.WrittenForDirectory"/>).
+    /// </summary>
+    private void DirectoryProblems(Item item, string root, List<string> problems)
+    {
+        foreach (var (entries, does) in new[] { (item.Writes, "owns"), (item.Kept, "must not touch") })
+        {
+            foreach (var (text, pattern) in entries)
+            {
+                if (pattern.WrittenForDirectory(text) is { } said && fileSystem.KindOf(Path.Combine(root, PathPatterns.Normalize(text))) == PathKind.Directory)
+                {
+                    problems.Add($"work item '{item.Name}' {does} '{text}', which names nothing beneath it: {said}");
+                }
+            }
+        }
+    }
 
     /// <summary>The first pattern of <paramref name="left"/> and of <paramref name="right"/> that some path matches both, in the order written; null where none meet.</summary>
     private static (string Left, string Right)? Meeting(

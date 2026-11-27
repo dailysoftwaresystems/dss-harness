@@ -49,7 +49,7 @@ public sealed class FoldStepTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>A main tree that holds no directory, for a within whose entries are patterns alone.</summary>
-    private static readonly Func<string, bool> NoDirectories = _ => false;
+    private static readonly TreeDirectories NoDirectories = TreeDirectories.Of("start", []);
 
     /// <summary>
     /// A fold applies what its dry run named, writing its intent to the run's ledger of its folds before the verb is
@@ -871,11 +871,35 @@ public sealed class FoldStepTests
         main.WriteFile("calc.c", "int calc;\n");
         main.WriteFile("src/click/types.py", "types\n");
         await harness.CommitAllAsync(main.Path, "the tree", Token);
-        Func<string, bool> directories = (await harness.StartTreeAsync(main.Path, Token)).Writing;
+        var directories = await harness.StartTreeAsync(main.Path, Token);
 
         Assert.Equal(
             ["lib/calc.c", "src/new/a.py"],
             FoldWithin.Outside(["calc.c", "lib/calc.c", "src/click/types.py", "src/click/testing.py", "src/new", "src/new/a.py"], ["calc.c", "src/click", "src/new"], directories, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A fold's within read against a start tree that could not be read takes no path for a directory, so a path beneath
+    /// an entry that names one is outside it; what the fold's question says of that path says why the tree could not be
+    /// read, once, after how to write the entry - and nothing of the tree where the entry's reading at the root alone
+    /// left a path out.
+    /// </summary>
+    [Fact]
+    public void AFoldsWithinReadAgainstAnUnreadStartTree_SaysWhyItCouldNotBeRead()
+    {
+        var unread = TreeDirectories.NoCommit;
+        IReadOnlyList<string> within = ["docs/api", "src", "*.md"];
+
+        var outside = FoldWithin.Outside(["docs/api/index.md", "src/a.c", "notes/a.md", "README.md"], within, unread, StringComparison.Ordinal);
+
+        Assert.Equal(["docs/api/index.md", "src/a.c", "notes/a.md"], outside);
+        Assert.Equal(
+            "'docs/api' names a file: a directory to be made is written 'docs/api/'; '*.md' names the root's own: '**/*.md' names any depth; "
+                + "'src' names a file: a directory to be made is written 'src/'; no path is taken for a directory of the run's start tree, which could not be read: the run names no commit it started from",
+            FoldWithin.Said(outside, within, unread, StringComparison.Ordinal));
+        Assert.Equal(
+            "'*.md' names the root's own: '**/*.md' names any depth",
+            FoldWithin.Said(["notes/a.md"], within, unread, StringComparison.Ordinal));
     }
 
     /// <summary>

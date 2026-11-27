@@ -36,8 +36,9 @@ You plan a piece of work so that several agents can build it side by side and it
 8. Split the work into items by sets of files. No file belongs to two items: the agents work at the same time, each in
    a copy of the tree, and two that edit one file cannot both be folded. Give each item the paths it owns and the paths
    near its work it must not touch, each from the repository's root: a name with no slash is the root's own file and no
-   other, a directory names what is in it, one not in the tree yet ending in /, and a glob is anchored at the root too -
-   `**` for any depth. An item must not need another item's result; where it would, they are one item.
+   other, a directory names what is in it - one the tree the run started from does not hold, made since the run began
+   or still to be made, ending in / - and a glob is anchored at the root too - `**` for any depth. An item must not need
+   another item's result; where it would, they are one item.
    Where two items would each need the same new helper, one item owns it and the plan says which.
 9. Size each item to one builder's cycle: as much work as one agent builds whole in a single sitting, with its tests -
    never more than that, and never a sliver of it that belongs with the work beside it. A plan holds as many items as
