@@ -4893,11 +4893,19 @@ held untracked, one to a line), then `flow.json` (the
 truth a resume reads), `workflow.json`, `pre-existing-issues.json` where the change listed one, and last the event
 in `events.jsonl`, each line handed to the system whole and in order as it is written and put on the disk once per
 pass of the engine's loop - as the pass ends, before the loop waits on anything, and as the session ends
-(`IFlowRecords.Flush`) - so an end of the engine's process loses no line and a power loss at most the last pass's,
-never one before them - each read back strictly: a value the engine does not name, a nested record that
+(`IFlowRecords.Flush`) - so an end of the engine's process loses no line, and a power loss what the last pass had not
+put on the disk, never a line before it: writes never put on the disk reach it in any order, so the log can come back
+with the pass's later lines and its size and NULs where an earlier page of the pass never landed, and as no line holds a
+NUL - each is JSON - the log's opening takes back from its first NUL to its end (`AppendLog.Open`, `batched`) and its
+reader sets aside the first line that holds one with every line after it, said. That holds where the file system shows a
+byte it never wrote as NUL, as ext4's ordered and journalled modes, XFS, Btrfs, APFS and NTFS do; one that can show a
+block's old bytes instead (ext4's writeback mode) can leave a line of the last pass's that reads as no event, refused by
+its number. The log's close never throws a flush's failure over the failure a session leaves by: the records say it as a
+warning (`FlowRunRecords.Dispose`), and a session that ends in order heard it at its last pass's flush. Each record is
+read back strictly: a value the engine does not name, a nested record that
 does not hold, a time in any but the one form (`yyyy-MM-dd HH:mm:ss`, UTC; one not yet come is
 written `null`), a log line out of sequence or corrupt is refused by its number, and only a torn last
-line is set aside, said. A resume reconciles `flow.json` against every step's own record, taking the
+line, or the lines from the first that holds a NUL, are set aside, said. A resume reconciles `flow.json` against every step's own record, taking the
 step's own whole wherever there is one, keeping the index's order and adopting what only a step's
 directory holds at the end. The graph is rebuilt in that order, never sorted again - `build+10` after
 `build+2`, `rounds#10` after `rounds#2`, a loop's later visit (`rounds+2`) and its items as their own,

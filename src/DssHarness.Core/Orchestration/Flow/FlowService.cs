@@ -1767,7 +1767,7 @@ public sealed class FlowService(
         {
             var (definition, runContext, resume) = begin();
 
-            using var records = new FlowRunRecords(_fileSystem, _store, layout, runContext, _clock);
+            using var records = new FlowRunRecords(_fileSystem, _store, layout, runContext, _clock, line => _output.Warn(command, line));
 
             // Every step is handed the run it belongs to, and each create-agent step the model its agent is made for,
             // resolved from the configuration as the definition's check resolves it; a run step claims its tree as the

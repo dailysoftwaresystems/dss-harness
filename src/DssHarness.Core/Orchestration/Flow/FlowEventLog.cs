@@ -9,16 +9,21 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// A run's events, <c>events.jsonl</c>: opened once for append, a per-run <see cref="FlowEvent.Seq"/>, each line handed
 /// to the system whole and in order as it is appended and put on the disk once per pass of the engine
-/// (<see cref="Flush"/>) and as the log closes - so an end of the engine's process loses none, and a power loss at most the
-/// last pass's lines, never a line before them. History, never truth - the state files are written before the event that
-/// tells of them, so a client woken by an event reads the files that tell of it already written.
+/// (<see cref="Flush"/>) and as the log closes - so an end of the engine's process loses none. A power loss loses what the
+/// last pass had not put on the disk, never a line before it - where the file system shows a byte it never wrote as a NUL,
+/// as ext4's ordered and journalled modes, XFS, Btrfs, APFS and NTFS do; one that can show a block's old bytes instead
+/// (ext4's writeback mode) can leave a line among the last pass's that reads as no event, which is refused by its number.
+/// History, never truth - the state files are written before the event that tells of them, so a client woken by an event
+/// reads the files that tell of it already written.
 /// </summary>
 /// <remarks>
-/// The log is one <see cref="AppendLog"/>: its one in-process lock keeps two writers in this process from interleaving
-/// their lines, its claim keeps a second writer out, and its opening takes back the half of a torn line a killed engine
-/// left, or a power loss left of the lines of the pass it cut off. The reader sets aside a last line with no newline,
-/// and says so - that line alone, whatever it holds, for a line is whole only once its newline is written; every whole
-/// line is an event numbered one after the one before it, and one that is not is refused by its line, never skipped.
+/// The log is one <see cref="AppendLog"/>, written a batch at a time: its one in-process lock keeps two writers in this
+/// process from interleaving their lines, its claim keeps a second writer out, and its opening takes back the half of a
+/// torn line a killed engine left, and what a power loss left of the pass it cut off - from the log's first NUL to its end,
+/// for no line holds one and the pass's unwritten pages can come back as NULs ahead of its later lines. The reader sets
+/// aside a last line with no newline, and the first that holds a NUL with every line after it, and says so - for a line is
+/// whole only once its newline is written, and on the disk only once its pass is; every whole line before them is an event
+/// numbered one after the one before it, and one that is not is refused by its line, never skipped.
 /// </remarks>
 public sealed class FlowEventLog : IDisposable
 {
@@ -37,8 +42,9 @@ public sealed class FlowEventLog : IDisposable
     public string File => _log.FilePath;
 
     /// <summary>
-    /// Opens the run's event log for appending, taking back the half of a torn line a killed engine left. Its last
-    /// whole line's seq is where the run's events go on.
+    /// Opens the run's event log for appending, taking back the half of a torn line a killed engine left and what a power
+    /// loss left of the pass it cut off, from the first NUL on - read strictly first, the lines it takes back set aside, so
+    /// a log refused is left as it was. Its last whole line's seq is where the run's events go on.
     /// </summary>
     /// <param name="fileSystem">Writes the lines.</param>
     /// <param name="file">The log's path, its directory already there.</param>
@@ -49,7 +55,7 @@ public sealed class FlowEventLog : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(file);
 
         var (events, _) = Read(fileSystem, file);
-        return new FlowEventLog(AppendLog.Open(fileSystem, file), events.Count > 0 ? events[^1].Seq : 0);
+        return new FlowEventLog(AppendLog.Open(fileSystem, file, batched: true), events.Count > 0 ? events[^1].Seq : 0);
     }
 
     /// <summary>
@@ -91,13 +97,18 @@ public sealed class FlowEventLog : IDisposable
     /// <exception cref="IOException">They could not be put on the disk.</exception>
     public void Flush() => _log.Flush();
 
-    /// <summary>Closes the log, every event appended put on the disk first. Its last line is whole, and the next open begins after it.</summary>
+    /// <summary>
+    /// Closes the log, every event appended put on the disk first where it can be - never throwing a flush's failure over
+    /// one a session leaves by (<see cref="AppendLog.Dispose"/>): a writer that must hear of it flushes first
+    /// (<see cref="Flush"/>). Its last line is whole, and the next open begins after it.
+    /// </summary>
     public void Dispose() => _log.Dispose();
 
     /// <summary>
     /// Reads the log: each whole line an event, in order, numbered one after the other from 1. A last line with no
     /// newline is the crash's own - half an append, or a whole object whose newline never reached the disk - and is set
-    /// aside and said, never read as an event and never repaired.
+    /// aside and said, never read as an event and never repaired; so is the first line that holds a NUL, with every line
+    /// after it - what a power loss left of the pass it cut off.
     /// </summary>
     /// <param name="fileSystem">Reads the log.</param>
     /// <param name="file">The log's path.</param>
@@ -114,9 +125,15 @@ public sealed class FlowEventLog : IDisposable
             (read, before) => read.Problem() ?? (read.Seq != before.Count + 1
                 ? $"its seq is {read.Seq.ToString(CultureInfo.InvariantCulture)}, and the event before it was {before.Count.ToString(CultureInfo.InvariantCulture)}"
                 : null),
-            (line, why) => Corrupt(file, line, why));
+            (line, why) => Corrupt(file, line, why),
+            batched: true);
 
-        return (events, torn is null ? null : $"the log's last line has no newline and was set aside: '{torn}'");
+        return (events, torn switch
+        {
+            null => null,
+            [.. var before, '\0'] => $"the log's lines from the one after event {events.Count.ToString(CultureInfo.InvariantCulture)} on hold a NUL, what a power loss left of a pass never put on the disk, and were set aside: '{before}'",
+            _ => $"the log's last line has no newline and was set aside: '{torn}'",
+        });
     }
 
     /// <summary>The refusal of a whole line of the log that is not the next event: history is never guessed at either.</summary>
