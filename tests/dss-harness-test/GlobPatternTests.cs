@@ -545,8 +545,13 @@ public sealed class GlobPatternTests
 
         Assert.Equal(
             "'docs' names a file: a directory to be made is written 'docs/'; '*.md' names the root's own: '**/*.md' names any depth",
-            GlobPattern.WrittenFor([(GlobPattern.FromRoot("docs", NoDirectories), "docs"), (GlobPattern.FromRoot("*.md", NoDirectories), "*.md"), (GlobPattern.FromRoot("src/**", NoDirectories), "src/**")], "docs/a.md"));
-        Assert.Null(GlobPattern.WrittenFor([(GlobPattern.FromRoot("src/**", NoDirectories), "src/**")], "docs/a.md"));
+            GlobPattern.WrittenFor([(GlobPattern.FromRoot("docs", NoDirectories), "docs"), (GlobPattern.FromRoot("*.md", NoDirectories), "*.md"), (GlobPattern.FromRoot("src/**", NoDirectories), "src/**")], ["docs/a.md"]));
+        Assert.Null(GlobPattern.WrittenFor([(GlobPattern.FromRoot("src/**", NoDirectories), "src/**")], ["docs/a.md"]));
+
+        // Of many paths, each sentence once.
+        Assert.Equal(
+            "'docs' names a file: a directory to be made is written 'docs/'",
+            GlobPattern.WrittenFor([(GlobPattern.FromRoot("docs", NoDirectories), "docs")], ["docs/a.md", "docs/b.md", "src/c.md"]));
     }
 
     /// <summary>A tree that holds the directory docs/generated.</summary>

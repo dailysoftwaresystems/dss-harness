@@ -367,11 +367,11 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
     /// <summary>
     /// What the item's owned paths say of how to write what they once meant, where <paramref name="path"/> is none of
-    /// theirs (<see cref="GlobPattern.WrittenFor(IEnumerable{ValueTuple{GlobPattern, string}}, string, StringComparison)"/>),
+    /// theirs (<see cref="GlobPattern.WrittenFor(IEnumerable{ValueTuple{GlobPattern, string}}, IEnumerable{string}, StringComparison)"/>),
     /// as a clause after a semicolon; empty where they say nothing.
     /// </summary>
     private static string WrittenFor(Item item, string path, StringComparison comparison)
-        => GlobPattern.WrittenFor(item.Writes.Select(entry => (entry.Pattern, entry.Text)), path, comparison) is { } said ? $"; {said}" : string.Empty;
+        => GlobPattern.WrittenFor(item.Writes.Select(entry => (entry.Pattern, entry.Text)), [path], comparison) is { } said ? $"; {said}" : string.Empty;
 
     /// <summary>The first pattern of <paramref name="left"/> and of <paramref name="right"/> that some path matches both, in the order written; null where none meet.</summary>
     private static (string Left, string Right)? Meeting(

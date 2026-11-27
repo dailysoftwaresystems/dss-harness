@@ -1978,7 +1978,7 @@ public sealed partial class AgentPolicy
             var said = $"'{resolved}' is outside the paths this step may write: {string.Join(", ", _writes.Select(write => write.Text))}";
 
             // An entry the reading from the root changed the meaning of says how to write what it meant.
-            if (GlobPattern.WrittenFor(_writes, relative, _platform.PathComparison) is { } written)
+            if (GlobPattern.WrittenFor(_writes, [relative], _platform.PathComparison) is { } written)
             {
                 said += $"; {written}";
             }

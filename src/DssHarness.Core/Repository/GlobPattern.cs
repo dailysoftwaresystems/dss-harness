@@ -183,17 +183,20 @@ public sealed class GlobPattern
 
     /// <summary>
     /// What each of <paramref name="entries"/> - each read from the root (<see cref="FromRoot"/>), with the entry it was
-    /// read from - says of how to write what it once meant where <paramref name="path"/> is matched by none of them
-    /// (<see cref="WrittenFor(string, string, StringComparison)"/>), joined by <c>; </c>; null where none says anything.
+    /// read from - says of how to write what it once meant where a path of <paramref name="paths"/> is matched by none of
+    /// them (<see cref="WrittenFor(string, string, StringComparison)"/>), each sentence once, joined by <c>; </c>; null where
+    /// none says anything.
     /// </summary>
     /// <param name="entries">The entries, each read and as written.</param>
-    /// <param name="path">A path from the root.</param>
+    /// <param name="paths">Paths from the root, each one the entries leave out.</param>
     /// <param name="comparison">How names are compared.</param>
-    public static string? WrittenFor(IEnumerable<(GlobPattern Read, string Written)> entries, string path, StringComparison comparison = StringComparison.Ordinal)
+    public static string? WrittenFor(IEnumerable<(GlobPattern Read, string Written)> entries, IEnumerable<string> paths, StringComparison comparison = StringComparison.Ordinal)
     {
         ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(paths);
 
-        var said = entries.Select(entry => entry.Read.WrittenFor(entry.Written, path, comparison)).OfType<string>().Distinct(StringComparer.Ordinal).ToList();
+        var read = entries.ToList();
+        var said = paths.SelectMany(path => read.Select(entry => entry.Read.WrittenFor(entry.Written, path, comparison))).OfType<string>().Distinct(StringComparer.Ordinal).ToList();
 
         return said.Count == 0 ? null : string.Join("; ", said);
     }

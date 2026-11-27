@@ -81,7 +81,7 @@ public static class FoldWithin
     /// <summary>
     /// What the entries of <paramref name="within"/> say of how to write what they once meant, where a path of
     /// <paramref name="outside"/> - each one it leaves out (<see cref="Outside"/>) - lies where an entry would have reached
-    /// before the reading from the root (<see cref="GlobPattern.WrittenFor(IEnumerable{ValueTuple{GlobPattern, string}}, string, StringComparison)"/>),
+    /// before the reading from the root (<see cref="GlobPattern.WrittenFor(IEnumerable{ValueTuple{GlobPattern, string}}, IEnumerable{string}, StringComparison)"/>),
     /// each sentence once; null where they say nothing.
     /// </summary>
     /// <param name="outside">The paths it leaves out.</param>
@@ -98,10 +98,7 @@ public static class FoldWithin
             return null;
         }
 
-        var entries = within.Select(entry => (Read: GlobPattern.FromRoot(entry, directories), Written: entry)).ToList();
-        var said = outside.SelectMany(path => entries.Select(entry => entry.Read.WrittenFor(entry.Written, path, comparison))).OfType<string>().Distinct(StringComparer.Ordinal).ToList();
-
-        return said.Count == 0 ? null : string.Join("; ", said);
+        return GlobPattern.WrittenFor(within.Select(entry => (GlobPattern.FromRoot(entry, directories), entry)), outside, comparison);
     }
 }
 
