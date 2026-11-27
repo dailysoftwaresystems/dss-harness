@@ -2513,7 +2513,12 @@ the visits for the same failure or issue - the thread of what a visit puts right
 visit made before it that ended done fixing the same issue in any words that visit fixed (`IssuesFixedBy`: its own,
 those joined to it and the duplicates of either), every reading of the same issue taking it alike, and the issue by its
 own title and where it is where none did - whichever step reported it and however often it was met again after a fix
-that did not hold, apart from where its bound counts it (`FlowCoordinator.ThreadOf`, which `FlowCheck.Work` reads too) - a visit for
+that did not hold, apart from where its bound counts it (`FlowCoordinator.ThreadOf`, which `FlowCheck.Work` reads too),
+decided as the visit is made over the visits, duplicates and joins that had ended then and kept in its record
+(`FlowStepRecord.Thread`, a `FlowRecoveryThread`), which a resume reads back - a duplicate that ends later naming an
+earlier visit's issue would otherwise move a visit made before it into that visit's thread and its diagnostician's
+agent; a visit an older build recorded without one is read from what had ended when it was made, by the run's own
+order (`FlowCoordinator.EndedWhenMade`), never from what came later - a visit for
 another issue diagnosing in a conversation and an agent of its own, beside it, `FlowCoordinator.SameRecoveryThread`),
 asks a person only for what only a person can give (`direction`), holds the remedy items its last word
 sets out - the diagnosis's, or the one it gives on the person's answer (`redirect`) - to the plan's own check

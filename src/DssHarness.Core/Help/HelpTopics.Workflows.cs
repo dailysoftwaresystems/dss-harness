@@ -309,7 +309,9 @@ public static partial class HelpTopics
         builder.AppendLine("visit counts against the run's limits as every step does, and a visit's diagnosis goes on with");
         builder.AppendLine("the last one of what it puts right - the same failure, or the same issue whichever step met it,");
         builder.AppendLine("in whatever words a duplicate or a join of it gave, and however often after a fix that did not");
-        builder.AppendLine("hold - apart from where its bound counts it.");
+        builder.AppendLine("hold - apart from where its bound counts it. That thread is decided as the visit is made, from");
+        builder.AppendLine("what had ended then, and kept in the visit's record: a resume goes on in the same one, whatever");
+        builder.AppendLine("a duplicate or a join that ended since says of what an earlier visit fixed.");
         builder.AppendLine();
         builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");
         builder.AppendLine("may run on, or a map giving each its own - all for the rest, a model's code for one, so a");
