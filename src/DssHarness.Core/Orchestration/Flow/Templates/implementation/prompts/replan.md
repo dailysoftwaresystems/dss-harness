@@ -46,10 +46,11 @@ before you add it, and extend the class's site list, its searches and its univer
 names a cell of a universe your plan leaves out, the axis was not searched whole: search the tree for every cell of that
 axis, as a class's searches are made, and hold every one you find, never only the one it named - an audit that finds
 another holds the plan back again; an axis it shows your plan said does not apply is answered with its values,
-searched whole the same way. Where it names a statement of a definition of done that breaks the rule for one you
-were given - one the run's other work would change, or one the base commit already fails for what the work does not
-touch - write it again by that rule, held to what the work makes true. An item that
-changes a decision still gives the class, and one that decides none still says why in noClass.
+searched whole the same way. Where it names a statement of a definition of done that breaks the rule for a definition
+of done below - one the run's other work would change, or one the base commit already fails for what the work does
+not touch - write it again by that rule, held to what the work makes true; and write every statement you add or
+change by it, the run's base commit being `{orient.startCommit}`. An item that changes a decision still gives the
+class, and one that decides none still says why in noClass.
 
 A finding that the plan builds what the repository already has, or writes a rule a second time, is settled by
 planning the extension of what exists, not by a better reason for the new thing - unless the code it names does not
@@ -80,6 +81,10 @@ Where this revision leaves something open that you may still ask the person, eac
 the one you recommend, by this bar as before:
 
 {recommendations}
+
+## A definition of done
+
+{text.done}
 
 ## Issues that were there before
 

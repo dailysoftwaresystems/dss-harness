@@ -210,6 +210,36 @@ public static class WorkflowTemplates
     ];
 
     /// <summary>
+    /// The texts the implementation workflow declares, by name - each the markdown file a prompt reads as
+    /// <c>{text.&lt;name&gt;}</c> - read from this build's own embedded definition by the reader's own rules
+    /// (<see cref="WorkflowFileParser.TextsOf"/>), in the order of their names: what help says the shipped flow declares
+    /// (<see cref="WorkflowKeys.File"/>), so it names every one, and the one it lacks or adds is never said. Read once,
+    /// without the table of a file's keys, which the saying is part of.
+    /// </summary>
+    /// <exception cref="HarnessException">This build's own embedded definition is missing, or its texts do not read: exit 70.</exception>
+    public static IReadOnlyList<(string Name, string File)> ShippedTexts => ShippedTextsRead.Value;
+
+    /// <summary>The texts the implementation workflow declares, read once (<see cref="ShippedTexts"/>).</summary>
+    private static readonly Lazy<IReadOnlyList<(string Name, string File)>> ShippedTextsRead = new(() =>
+    {
+        var file = $"{ShippedWorkflowName}{HarnessLayout.WorkflowFileExtension}";
+
+        if (TextOf(file) is not { } definition)
+        {
+            throw new HarnessException(HarnessExit.InternalError, $"this build embeds no '{file}'; the implementation workflow is incomplete in it");
+        }
+
+        try
+        {
+            return [.. WorkflowFileParser.TextsOf(file, definition).OrderBy(text => text.Key, StringComparer.Ordinal).Select(text => (text.Key, text.Value))];
+        }
+        catch (HarnessException exception)
+        {
+            throw new HarnessException(HarnessExit.InternalError, $"this build's own implementation workflow does not read:{Environment.NewLine}{exception.Message}", exception);
+        }
+    });
+
+    /// <summary>
     /// The implementation workflow's definition, read back from this build's own embedded set, parsed and held to
     /// <see cref="WorkflowValidator"/>'s rules as for a configuration with no <c>commit.template</c>, each embedded schema
     /// held to the subset the engine reads, its paths typed by those schemas and its prompts' placeholders checked. What only a repository can answer - that its files

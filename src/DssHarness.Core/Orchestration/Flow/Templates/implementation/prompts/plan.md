@@ -116,13 +116,14 @@ For every defect the plan fixes and every behaviour it changes, write the class 
    file whole, and text search for what the graph does not see, each such text search said in notCovered.
 4. Record each search: what was searched, how, the query as it was made, and how many places it found.
 5. Write the universe: an answer for every axis the closure text lists - your answer's schema refuses a universe that
-   leaves one out - and for each further one it names. An axis the decision ranges over gives its values whole, from
-   a search of the tree for every cell of its kind - for the legs and the references, every file of every service that
-   builds, tests, lints or checks the repository, never only the CI it names first - recorded as a class's searches
-   are, and where the repository declares them; one it does not range over says why, as something an auditor can check
-   in the code. Its cells are the product of the counts of the values of the axes that apply. An axis written from the
-   cells you happened on leaves one out, and an auditor holds the plan back for it, as it does an axis said not to apply
-   that the code shows the decision ranges over.
+   leaves one out - and for each further one it names. The references and the optimised forms it names are no axes:
+   the universe answers neither, for every cell is measured on each of them. An axis the decision ranges over gives
+   its values whole, from a search of the tree for every cell of its kind - for the targets, every file of every
+   service that builds, tests, lints or checks the repository, never only the CI it names first - recorded as a class's
+   searches are, and where the repository declares them; one it does not range over says why, as something an auditor
+   can check in the code. Its cells are the product of the counts of the values of the axes that apply. An axis
+   written from the cells you happened on leaves one out, and an auditor holds the plan back for it, as it does an axis
+   said not to apply that the code shows the decision ranges over.
 6. Where more than one site decides, the action is consolidate: the home decides, every other site reads it, and the
    item owns every path that changes. Patching some of a class's sites is never done; a class with one site names the
    home itself, and its searches prove it is the only one. The site at the home's path and symbol is marked home, and

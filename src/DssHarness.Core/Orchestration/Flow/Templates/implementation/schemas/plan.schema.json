@@ -306,7 +306,7 @@
         },
         "needs": {
           "type": "array",
-          "description": "The ids of the issues the recovery is fixing or fixed whose fix this item builds on, each exactly as the run's list of the issues it has taken names it; empty or absent where it needs none.",
+          "description": "The ids of the issues the recovery is fixing or fixed - or that are joined to one still being triaged - whose fix this item builds on, each exactly as the run's list of the issues it has taken names it; empty or absent where it needs none.",
           "items": {
             "type": "string"
           }

@@ -38,7 +38,8 @@ Where a line says that a step left no output, that thing was not read or did not
    cause:
    - **fix**: work items that put it right this time - at most four, each sized to one builder's cycle, with the
      paths it owns, the tests that show the failure is gone - or, where no test can, why in noTests - and its
-     definition of done, of which the first statement is that `{source.step}` would now pass; no file under two
+     definition of done, by the rule for a definition of done below, the run's base commit being
+     `{orient.startCommit}`, of which the first statement is that `{source.step}` would now pass; no file under two
      items;
    - **retry**: only where you can say what is different now, so that running the step again will pass;
    - **person**: where only a person can give what is needed, or every remedy the evidence supports was tried and
@@ -49,6 +50,10 @@ Where a line says that a step left no output, that thing was not read or did not
 
 The course; a summary that says what was tried, why it did not hold, and what follows; the cause; the evidence; the
 work items where the course is fix, empty otherwise; the choices where the course is person, empty otherwise.
+
+## A definition of done
+
+{text.done}
 
 ## Issues that were there before
 

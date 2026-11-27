@@ -41,8 +41,12 @@ public static class WorkflowFileParser
     /// </summary>
     private static readonly YamlRules Rules = new("a definition writes each of its steps out, so that what it says is what it reads");
 
-    /// <summary>Top-level keys a workflow file takes.</summary>
-    private static readonly IReadOnlyList<string> FileKeys = KeyDescription.Names(WorkflowKeys.File);
+    /// <summary>
+    /// Top-level keys a workflow file takes, read from the table where a file is read - never held from the reader's
+    /// first use, for the table says the shipped workflow's texts (<see cref="WorkflowTemplates.ShippedTexts"/>), which
+    /// are read by this reader in turn (<see cref="TextsOf"/>).
+    /// </summary>
+    private static IReadOnlyList<string> FileKeys => KeyDescription.Names(WorkflowKeys.File);
 
     /// <summary>
     /// Parses <paramref name="text"/> as the workflow definition at <paramref name="path"/>.
@@ -248,6 +252,26 @@ public static class WorkflowFileParser
                 CodebaseGraph = codebaseGraph,
             }
             : throw Refuse(path, problems);
+    }
+
+    /// <summary>
+    /// The texts the workflow definition <paramref name="text"/> declares, read by the rules <see cref="Parse"/> reads them
+    /// by and nothing else of the file: what help says of the shipped workflow's texts (<see cref="WorkflowTemplates.ShippedTexts"/>),
+    /// read without the table of the file's keys, which that saying is part of. None where it declares none.
+    /// </summary>
+    /// <param name="path">Where the text came from, quoted in every refusal about it.</param>
+    /// <param name="text">The file's contents.</param>
+    /// <exception cref="HarnessException">The file holds no one document, or its texts do not read.</exception>
+    public static IReadOnlyDictionary<string, string> TextsOf(string path, string text)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(text);
+
+        var problems = new List<string>();
+        var root = YamlReading.Root(text, "a workflow's definition holds one, so that nothing has to decide which of them a run ran", problems, Rules);
+        var texts = root?.Children.Where(child => YamlReading.ScalarOf(child.Key) == "texts").Select(child => ReadTexts(child.Value, problems)).FirstOrDefault();
+
+        return root is not null && problems.Count == 0 ? texts ?? new Dictionary<string, string>(StringComparer.Ordinal) : throw Refuse(path, problems);
     }
 
     /// <summary>

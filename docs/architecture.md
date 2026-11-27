@@ -2504,8 +2504,11 @@ fallback, an account at its limit or a provider that fails is a pause that resum
 still fails is asked. The implementation workflow writes `onFailure: recover` on every step of its flow that tests, folds,
 checks, commits, pushes or waits - itself or through its group - and `onFailure: pause` on every
 reasoning step; its recovery diagnoses the failure (`diagnose`, which goes on with its own conversation across
-the visits for the same failure or issue - a visit for another issue diagnosing in a conversation and an agent of its
-own, beside it, `FlowCoordinator.SameRecoveryThread`), asks a person only for what only a person can give (`direction`), holds the remedy items its last word
+the visits for the same failure or issue - the thread of what a visit puts right, the issue by its title and where it is
+for every visit of it, whichever step reported it and however often it was met again after a fix that did not hold,
+apart from where its bound counts it (`FlowCoordinator.ThreadOf`, which `FlowCheck.Work` reads too) - a visit for
+another issue diagnosing in a conversation and an agent of its own, beside it, `FlowCoordinator.SameRecoveryThread`),
+asks a person only for what only a person can give (`direction`), holds the remedy items its last word
 sets out - the diagnosis's, or the one it gives on the person's answer (`redirect`) - to the plan's own check
 (`remedy-check`), whose problems the diagnostician is told within its own step as it answers
 (`FlowCoordinator.AnswerChecksOf`), so no step after the check sends them back again, and builds, tests, folds and
@@ -2578,9 +2581,11 @@ whose root cause its own shares; see the paragraph on joins below); an answer wh
 list or send to the next round does not read back, or that names an issue it may not (`FlowCoordinator.NamedIssueRefusal`:
 for `duplicates` or `joins`, an issue not taken before its own - a triage instance, or the triage that took one the run
 listed or owes the next round, `TookUnder` - so no two issues ever name each other and both vanish (`TakenBefore`, the
-one owner of the rule); for `joins`, too, an id that names no triage instance; and one whose issue had ended without
-what the name needs before this triage began - for `joins` a fix, for `duplicates` a decision, `NamedEndedBefore`),
-fails the triage step (12) before it ends. The engine raises it for each issue a reason
+one owner of the rule); for `joins`, too, an id that names no triage instance; one whose issue had ended without
+what the name needs before this triage began - for `joins` a fix, for `duplicates` a decision, `NamedEndedBefore`);
+and, for `duplicates`, one whose fix was done before this triage's issue was met - a fix that did not hold, whose
+repeat is fixed again rather than settled by it (`FixDidNotHold`, the one owner `HolderOf` reads too)), fails the
+triage step (12) before it ends. The engine raises it for each issue a reason
 step's answer reports under `preExisting` (`FlowPreExistingReport.In`, as the shipped schemas spell
 one) - once for an issue: a repeat of the same title at the same place raises nothing while a triage
 of it holds the issue (`FlowCoordinator.HolderOf`: one waiting, running, paused, stopped or ended done,
@@ -2591,8 +2596,12 @@ instances drawn, attempts begun and instances ended that each step record keeps 
 triage `reportedIn`, the reporting attempt's; `MetAfter`) - is raised anew, its visits of
 the recovery counted against `maxVisits` by the issue, whichever triage sent it (`RecoveryOf`), and a
 configured answer to that bound counted there too, so a fix that never holds ends in `recoveryBound`;
-steps the one issue stopped side by side, each reporting it before its fix, each have it fixed with
-none spending another's bound - and keeps the list; `issue` is read only by the
+steps the one issue stopped side by side, each reporting it before its fix, each raise a triage of their own, told
+the first, which answers it a duplicate: what becomes of the issue it repeats settles it - its visits are that issue's
+(`FixesOf`), it may still be fixed while that one may (`MayStillFix`), through the chain of names it leads along
+(`RepeatSettledBy`, every one walked kept) - so the step it stops runs again once that fix ends, as a join's does
+(`RunTheReportersAgain`, over the triages a visit fixed, `TriagesFixedBy`); one that answers fix all the same waits
+for that fix and has it fixed again with none spending another's bound - and keeps the list; `issue` is read only by the
 triage and the recovery, and `source` by them and by a handler. A reason step that names a triage is told, where it starts, every issue the
 run holds then (`FlowPreExistingReport.Known`, the part `<pre-existing>` wraps at the end of its prompt, read from
 `FlowCoordinator.IssuesHeld`): the tally's lines as `{run.preExisting}` words them - each `<id>: <what became of it> -
@@ -2602,9 +2611,11 @@ with its triage's id - so a repeat it would word its own way, which `HolderOf` c
 where it stops its own work, and raises no triage only to be merged as a duplicate. A triage is told, where it starts,
 only those it may name - each taken before its own (`TakenBefore`), the tally's whose triage was and those being
 triaged - with the ids of those it may join (`JoinableBy`: of those, each whose issue had not ended without a fix as it
-began, `NamedEndedBefore` - being triaged, being fixed or fixed), both read from the rules its answer is refused
-by, so it names the issue it repeats, or the one whose root cause it shares, by the id the run gave it, and is never
-offered one it would be refused for: of two raised together, the earlier is told nothing of the later, which is
+began, `NamedEndedBefore` - being triaged, being fixed or fixed) and of those whose fix did not hold for its issue
+(`FixedBeforeMet`, over `FixDidNotHold`), all read from the rules its answer is refused by, so it names the issue it
+repeats, or the one whose root cause it shares, by the id the run gave it, is told that a duplicate is settled by what
+becomes of the issue it repeats and that the repeat of a fix that did not hold is fixed again, and is never offered
+one it would be refused for: of two raised together, the earlier is told nothing of the later, which is
 triaged after it and names it where it repeats it, and the pair resolves to the earlier.
 
 An issue a triage sends to fix is the recovery's at once, its visit beside any other at work (`FlowCoordinator.FixOf`):
@@ -2643,8 +2654,12 @@ names the fix, `the fix of '<title>' (<visit>), which holds <paths>` (`FlowWaits
 names it, and `ask-orchestrator-status` says it among what the run waits for. An item that has begun goes on - its fold
 and its reconcile meet the fix as any two changes meet. Every check whose items a round opens with is handed the ids of
 the issues the recovery takes (`fixes`, `FlowCoordinator.IssuesTheRecoveryTakes`: each sent to fix or joined to a fix,
-being fixed or fixed), and `PlanCheckRunner` refuses an item whose `needs` names another, for no fix of another is made
-to wait for; a recovery's check is handed none. The planner's prompts and the self-audit read the rule once, the
+being fixed or fixed, or joined to one still being triaged - the one owner of which issues an item may need, which
+`IssueHolds` reads too, so an item is held for every issue its check let it name: one joined to an issue being triaged
+holds no file, and keeps an item that needs it waiting under that triage, then under the fix it goes with), and
+`PlanCheckRunner` refuses an item whose `needs` names another, for no fix of another is made to wait for; a recovery's
+check is handed none, and refuses every `needs` and every `settles` saying so - its remedies are never held for a fix
+and settle no issue. The planner's prompts and the self-audit read the rule once, the
 workflow's text `fixes` (`fixes.md`, `{text.fixes}`) beside `{run.preExisting}`: an issue it lists as being fixed is the
 recovery's, no work item fixes it or rewrites its lines, and an item that needs its fix names it under `needs` and
 waits for it.
@@ -2675,14 +2690,17 @@ issue ended without what the name needs - a fix for a join (`NotFixedIn`), a dec
 each through the chain of names it leads along - and `OwesATriageOfItsOwn`, read by `SettleNamedIssues`, `HoldsIssue`,
 `MayStillFix` and `StateOf`, gives either its triage of its own; its words leave `{run.preExisting}` and the run's
 counts, which that triage's answer says, and a triage that began after the issue it would repeat had ended so is refused
-the duplicate (`NamedEndedBefore`). A visit fixes every issue that goes with it
-(`IssuesFixedBy`): a fix sent for one of them waits for it as for its own (`FixWaitsFor`), and a report of one met after
-it ended counts against the issue's own bound (`MetAfterItsFix`). Each visit is admitted against the run's own limits,
+the duplicate (`NamedEndedBefore`). A visit fixes every issue that goes with it - the one it was sent for, each joined
+to it and gone with it, and each duplicate of one of those (`TriagesFixedBy`, `IssuesFixedBy`): a fix sent for one of
+them waits for it as for its own (`FixWaitsFor`), a report of one met after it ended counts against the issue's own
+bound (`MetAfterItsFix`), and its end runs again every step one of them stops (`RunTheReportersAgain`). Each visit is admitted against the run's own limits,
 as every step is. The tally keeps a joined issue in the place it was taken, its state read where the fix it joined
 stands (`StateOf`): `joined to <id>` while that issue is triaged, `being fixed with <id>`, `fixed with <id>`, `being
 fixed after <id>` while it waits for a visit it did not go with, then `being fixed` and `fixed` with a visit of its own,
 and left out once it is triaged again; the run's counts take `fixed with` as fixed. An issue joined to a fix at work
-holds its own `where` as an issue being fixed does, under the visit that fixes it or that it waits for (`IssueHolds`).
+holds its own `where` as an issue being fixed does, under the visit that fixes it or that it waits for (`IssueHolds`);
+one joined to an issue still being triaged holds no file, as that issue holds none before it is sent to fix, but keeps
+an item that needs it waiting under that triage (`Joining.Waits`).
 
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
 against the table that owns it (`WorkflowStepTypes`, which the parser reads exactly and `help
@@ -3836,8 +3854,9 @@ owed issues is one gate (`FlowCoordinator.HoldsTheOwedIssues`): every check whos
 check that opens a round, always; the plan's while no round of its group has opened, for its plan opens the first; and
 the plan's again where the plan update under way was raised by the check that opens one, its pieces joining that
 round's own list. Each is handed the issues under `next`, and `PlanCheckRunner` - the rule's one owner - refuses a
-list that leaves one unsettled, its own items or, where its pieces join a round it is handed, that round joined with
-them, and orders the settling items first - listed and started first, they are built beside the rest, so no other item
+list that leaves one unsettled, its own items or, where it names a scope and is handed the round its update joins, that
+round joined with the update's pieces - that round alone where the update answers none, for its work goes into that
+round whatever the plan's own items say - and orders the settling items first - listed and started first, they are built beside the rest, so no other item
 may need their result. The gate holds where the check runs and within the answer of the reason step whose items it
 reads (`FlowCoordinator.AnswerChecksOf`) alike, so the planner, its update and the self-audit - whose items the next
 round's check reads through `previous` - are told an owed issue they left unsettled in their own conversation, and no
@@ -4597,7 +4616,7 @@ step whose work it goes on with, `FlowCoordinator.WorkingOf`): the start of a st
 reads resets that tree and its work writes it, so of two steps that go on with one reading step's work the second
 starts once the first has ended - two visits of one that goes on with its own, which work in the agent its first visit
 made, claiming that agent by the declaration before either is given it (`FlowCoordinator.ClaimedAgentOf`); within the
-recovery, by the declaration and the thing its visit takes (`FlowInstance.RecoveryKey`, `RecoveryThreadOf`), so visits
+recovery, by the declaration and the thing its visit puts right (`FlowInstance.RecoveryThread`, `RecoveryThreadOf`), so visits
 for different issues each make an agent of their own and diagnose side by side, each within the run's limits - and no
 step's start discards another's scratch under it. A reading step that begins work of its own is given its agent as it
 starts, and holds write on that agent's tree from then (`FlowCoordinator.ClaimsOf`, read again once `Start` names it),
