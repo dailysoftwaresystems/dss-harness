@@ -601,7 +601,7 @@ public sealed class WorkflowTemplatesTests
         // Each course is said where the agent works out which to answer.
         Assert.Equal([], courses.Where(course => !work.Contains($"course `{course}`", StringComparison.Ordinal) && !work.Contains($"course is `{course}`", StringComparison.Ordinal)));
         Assert.Contains("description: Checks an issue a step met that was there before the run, and decides what the run does with it - fixes it now, joins it to a fix, sends it to the next round, or lists it for the person", agent, StringComparison.Ordinal);
-        Assert.Contains("Where the issues already taken hold it - the same cause at the same place, whatever became of it - the course is `duplicate`, with that issue's id.", agent, StringComparison.Ordinal);
+        Assert.Contains("Where the issues taken before yours hold it - the same cause at the same place, whatever became of it - the course is `duplicate`, with that issue's id.", agent, StringComparison.Ordinal);
         Assert.Contains(
             "Where none holds and it is a defect in code this run's change does not touch, worth a round of its own, the course is `next`: it becomes a work item of the run's next round, listed and started first, built beside the rest, and nothing of this round waits for it. "
                 + "Size it - the files the fix touches, one at least, what must be built and what must be measured first - for its item is built to that size; for every other course the size is empty. Where none of these holds, the course is `list`.",
@@ -637,7 +637,7 @@ public sealed class WorkflowTemplatesTests
             .Order(StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(29, reporting.Count);
+        Assert.Equal(28, reporting.Count);
         Assert.Equal<IEnumerable<string>>(
             reporting,
             [.. WorkflowTemplates.Files.Where(file => WorkflowTemplates.TextOf(file)!.Contains("{text.issuesBefore}", StringComparison.Ordinal)).Order(StringComparer.Ordinal)]);
