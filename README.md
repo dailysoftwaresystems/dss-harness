@@ -970,10 +970,15 @@ starts no advice after it either, so the stop never waits on an advisor - its qu
 recommendation is sought at the resume, which seeks it - as it does one a crash left sought - unless
 the advice it ended still returns its recommendation, which the question keeps, so the resume never
 pays for it again. A session its cancellation token ends - a front end driving the engine in process;
-the run verbs' own interrupts and termination are the pause and the stop - ends its advice the same
-way, waits for each runner as a stop's drain does, and writes what it charged and holds all the same:
-what each advice answered, and its last record with every spend among it, saying it was cancelled and
-what it left running. A person answers a question
+the run verbs' own interrupts and termination are the pause and the stop - ends where the engine meets
+the token, at the start of each pass of its loop or once a handoff turn under way has answered, and
+from there draws, decides, starts and waits for nothing more: a pause under way never completes, and a
+plan update visits nothing again until the next session. It ends its advice as a stop does, the token
+ending none itself, so a question it was advising is deferred to the resume, never left saying no
+recommendation was obtained; it waits for each runner as a stop's drain does, and writes what it
+charged and holds all the same: what each advice answered, and its last record with every spend among
+it, saying it was cancelled and what it left running - with no end time while a step still runs,
+whatever a pause or a stop makes the run's status. A person answers a question
 recommended: `answer-orchestrator` to a question still owing its recommendation that no advisor seeks
 now - between sessions, or while a pause defers it - is refused (13), nothing answered, and `abort` is
 taken; `resume-orchestrator` seeks it first. The run's report, `ask-orchestrator-status` and every refusal of an
