@@ -182,12 +182,21 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// </param>
     /// <param name="joined">
     /// The list the round opens with once the update is placed, as it was checked: the round's items less those a
-    /// changed or a removed piece names, then each piece's item - or the pieces' items alone where the run has no round.
+    /// changed or a removed piece names, then each piece's item - or the pieces' items alone where the run has no round -
+    /// save a removed piece's whose work item no instance carries (none of <paramref name="carried"/>): it builds
+    /// nothing and is undone by nothing, so it is no item the round opens with.
     /// </param>
     /// <param name="opened">
     /// The names of the work items opened rounds hold that nothing owed is to build again, which the rules that read the
     /// main tree as it now is pass over where no piece places them (<see cref="CheckedBefore"/>) - never read of
     /// <paramref name="round"/>, which may be a round that has not opened.
+    /// </param>
+    /// <param name="unopened">
+    /// Where <paramref name="round"/> is a round that has not opened - the list the check that opens it was opening it
+    /// with, which raised the update - the names an earlier round carries that the list it opens with may not take, as
+    /// that check holds them: none where the round carries the owed work alone, those the work owed it does not bear
+    /// otherwise. Every item of the joined list but a piece's is held to them; null where the round has opened, or there
+    /// is none.
     /// </param>
     /// <returns>Every problem of the pieces, in their order; none where they pass.</returns>
     public IReadOnlyList<string> CheckPieces(
@@ -201,7 +210,8 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
         TreeDirectories startTree,
         out IReadOnlyList<JsonNode?> joined,
         IReadOnlyCollection<string>? carried = null,
-        IReadOnlyCollection<string>? opened = null)
+        IReadOnlyCollection<string>? opened = null,
+        IReadOnlyCollection<string>? unopened = null)
     {
         ArgumentNullException.ThrowIfNull(pieces);
         ArgumentNullException.ThrowIfNull(items);
@@ -263,18 +273,31 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
         // The items the update places, checked with those of the round it joins as one list - its own less the work
         // items a changed or a removed piece names, for their item replaces them - or, where the run has no round,
-        // among themselves.
+        // among themselves. A removed piece whose work item no instance carries builds nothing and nothing undoes it -
+        // an item of a round not yet opened, or owed to one, is taken out of that round's list - so its item is none
+        // of the list's.
         var namedByPieces = held.Where(piece => piece.Kind is FlowUpdatePieceKinds.Changed or FlowUpdatePieceKinds.Removed)
             .Select(piece => piece.ItemName()!)
             .ToList();
 
         joined = [.. (round ?? [])
             .Where(other => FlowWorkItems.NameOf(other) is not { } named || !namedByPieces.Contains(named, StringComparer.Ordinal))
-            .Concat(held.Select(piece => piece.Item))];
+            .Concat(held.Where(piece => piece.Kind != FlowUpdatePieceKinds.Removed || carried?.Contains(piece.ItemName()!, StringComparer.Ordinal) == true).Select(piece => piece.Item))];
 
         // The items an opened round holds were checked against the main tree as that round opened, and a removed piece's
         // item builds nothing: the pieces that build are held to it now, and so is every item of a round not yet opened.
-        problems.AddRange(Check(joined, context, run, definition, startTree, noItems: false, checkedBefore: CheckedBeforeOf(held, opened)));
+        // Such a round's own items take no name an earlier round carries, and a list of none is a problem of it, as the
+        // check that opens it holds them: a piece's item is held to the names by the rules of the pieces above.
+        var pieceNames = held.Select(piece => piece.ItemName()!).ToHashSet(StringComparer.Ordinal);
+        problems.AddRange(Check(
+            joined,
+            context,
+            run,
+            definition,
+            startTree,
+            noItems: unopened is not null,
+            carried: unopened is null ? null : [.. unopened.Where(name => !pieceNames.Contains(name))],
+            checkedBefore: CheckedBeforeOf(held, opened)));
 
         return problems;
     }

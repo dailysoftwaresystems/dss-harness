@@ -12,9 +12,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// it now is asked of every item still to be built and of none an opened round holds that nothing is to build again,
 /// whose names the engine hands the check (<c>opened</c>), nor any a removed piece takes back
 /// (<see cref="PlanValidator.CheckedBefore"/>) - an item of the list the check that opens a round was opening it with,
-/// which raised the update, is held as it is, for that round has not opened; where it opens
-/// a round, it checks one list - its own items and every work item plan updates owe it - and its output <c>items</c> is
-/// that list, so nothing joins a round unchecked. A work item is known by its name across the run, so no item a round
+/// which raised the update, is held as it is, for that round has not opened, and that list is held, the names an earlier
+/// round carries that it may not take among it (<c>opening</c>), whether or not the update answers a piece; where it opens
+/// a round, it checks one list - its own items, less each an update took out of it (<c>withdrawn</c>), and every work
+/// item plan updates owe it - and its output <c>items</c> is that list, so nothing joins a round unchecked. A work item is known by its name across the run, so no item a round
 /// builds but an owed one, and no added piece, takes a name an instance of the work-item group carries already: a round
 /// added to a work-item group with no loop around it builds the owed work alone, and its own items, which the group's
 /// round before built under those names, are held to none. An item's <c>settles</c> names one of the issues the run
@@ -128,7 +129,8 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
         }
 
         // The pieces of a plan update, checked with the items where the step names them: Missing, null or an empty
-        // list is no update, and nothing more is checked; anything but a list is no pieces at all. Where the check names
+        // list is no update, and nothing more is checked - save where the round the update joins has not opened, whose
+        // list is held all the same (below); anything but a list is no pieces at all. Where the check names
         // a scope and the engine hands it the round the update joins, the list that round opens with once the update is
         // placed is that round joined with the pieces - or the round alone, where the update answers none - and never
         // the plan's own: the update's work goes into that round, whatever the plan's items say.
@@ -145,9 +147,13 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
         {
             var owedNames = owed!.Select(FlowWorkItems.NameOf).OfType<string>().ToList();
 
+            // What updates take out of the list the round opens with: an item of its own list that a removed piece
+            // withdrew before the round opened - nothing of it was built, so it is dropped, never built and never undone.
+            var withdrawn = Names(read, "withdrawn");
+
             checkedItems = new JsonArray(
                 [.. items
-                    .Where(item => FlowWorkItems.NameOf(item) is not { } named || !owedNames.Contains(named, StringComparer.Ordinal))
+                    .Where(item => FlowWorkItems.NameOf(item) is not { } named || !owedNames.Contains(named, StringComparer.Ordinal) && !withdrawn.Contains(named, StringComparer.Ordinal))
                     .Select(item => item?.DeepClone()),
                  .. owed!.Select(item => item?.DeepClone())]);
 
@@ -184,9 +190,15 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
 
         if (updating)
         {
-            if (pieces is JsonArray { Count: > 0 } placed)
+            // Where the round the update joins has not opened - the check that opens it raised the update, and the engine
+            // hands the names an earlier round carries that its list may not take (opening) - that round's list is held
+            // whether or not the update answers a piece: an update of none leaves it as the check found it, and is told
+            // so within its own step, never left to the check that opens the round to find again.
+            var unopened = Handed(read, "opening");
+
+            if (pieces is JsonArray { Count: > 0 } || unopened is not null)
             {
-                problems.AddRange(validator.CheckPieces([.. placed], [.. items], round, Names(read, "known"), context, place.Run, place.Definition, place.Directories, out var joined, carried, opened));
+                problems.AddRange(validator.CheckPieces([.. pieces as JsonArray ?? []], [.. items], round, Names(read, "known"), context, place.Run, place.Definition, place.Directories, out var joined, carried, opened, unopened));
                 joinedRound = round is null ? null : joined;
             }
             else

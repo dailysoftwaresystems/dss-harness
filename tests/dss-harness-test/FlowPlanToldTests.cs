@@ -185,6 +185,19 @@ public sealed class FlowPlanToldTests
             + "\n      - name: review\n        type: pause\n        question: reviewed?\n        options: [stay, go]\n        dependsOn: [items]";
 
     /// <summary>
+    /// The flow of <see cref="Reviewed"/> whose loop runs two iterations, and whose round from the second iteration on
+    /// opens through a pause between the check that opens it and the work-item group - the shipped flow's audit of a
+    /// later round's items - so the check has joined the owed work and the group has not expanded while the pause waits.
+    /// </summary>
+    private static string AuditedLater()
+        => Reviewed()
+            .Replace("maxIterations: 3", "maxIterations: 2", StringComparison.Ordinal)
+            .Replace(
+                "      - name: items\n        dependsOn: [item-check]\n",
+                "      - name: item-audit\n        type: pause\n        dependsOn: [item-check]\n        when: 'iteration != 1'\n        question: audited?\n        options: [go, stop]\n      - name: items\n        dependsOn: [item-check, item-audit]\n",
+                StringComparison.Ordinal);
+
+    /// <summary>
     /// A flow whose planner is declared in the same repeat iteration as the work-item group it plans: each iteration
     /// plans, checks and expands its round, so a plan update is planned in the iteration whose round it changes.
     /// </summary>
@@ -2196,8 +2209,9 @@ public sealed class FlowPlanToldTests
     /// <summary>
     /// A removed piece whose work item no instance carries withdraws the work an earlier update owes a round under that
     /// name: an update queued behind the one that added a round for "three" takes it back before that round opens, so
-    /// the round is handed nothing owed and builds nothing - never the item the plan took back - and the earlier piece's
-    /// entry and the report say it was withdrawn before it was built.
+    /// no round builds it - never the item the plan took back - and, nothing owed the round any more, the round is taken
+    /// back with it: its check, drawn again for it, ends skipped saying why and never runs, the group is not drawn again,
+    /// and the group around it ends as it had. The earlier piece's entry, the round's and the report say each.
     /// </summary>
     [Fact]
     public async Task ARemovedPieceNamingOwedWork_WithdrawsIt_AndNoRoundBuildsIt()
@@ -2240,33 +2254,593 @@ public sealed class FlowPlanToldTests
                     ("u2", "removed", "three", null, null, "nothing was built and nothing is undone"),
                 ],
                 updates.SelectMany(update => update.ThePieces.Select(piece => (update.Id, piece.Kind, piece.ItemName()!, piece.OwedTo, piece.Placed, piece.Ended))));
+            Assert.Equal([("rounds.items+2", "u2"), (null, null)], updates.Select(update => (update.AddedIteration, update.AddedWithdrawnBy)));
 
-            // The round added for the first update opens handed nothing owed, and builds nothing: the round before's
-            // items alone were built.
-            Assert.Equal([("rounds.item-check", string.Empty), ("rounds.item-check+2", string.Empty)], checks);
+            // The round added for the first update is taken back: its check never runs, and the round before's items
+            // alone were built.
+            Assert.Equal([("rounds.item-check", string.Empty)], checks);
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps;
             Assert.Equal(
                 ["rounds.items[0].build", "rounds.items[1].build"],
-                harness.OrchestrationStore.ReadFlow(layout)!.Steps.Where(step => step.Step == "rounds.items.build").Select(step => step.Instance).Order(StringComparer.Ordinal));
+                steps.Where(step => step.Step == "rounds.items.build").Select(step => step.Instance).Order(StringComparer.Ordinal));
+            Assert.Equal(
+                (nameof(FlowInstanceState.Skipped), "round 2 of 'rounds.items', which update u1 added, was taken back by update u2 before it opened: nothing is owed it"),
+                (StepOf(harness, layout, "rounds.item-check+2").State, StepOf(harness, layout, "rounds.item-check+2").SkippedBecause));
+            Assert.DoesNotContain(steps, step => step.Instance == "rounds.items+2");
+            Assert.Equal(nameof(FlowInstanceState.Done), StepOf(harness, layout, "rounds").State);
 
             _ = FlowReports.Write(harness.FileSystem, new FlowRunReportSource(layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), harness.OrchestrationStore.ReadFlowUpdates(layout)), end.Summary, 0, DateTimeOffset.UtcNow);
             Assert.Equal(
                 [
                     "  - added 'three': owed to a round added to 'items', withdrawn by update u2 before it was built",
+                    "  - round 2 of 'rounds.items' was added for update u1, and taken back by update u2 before it opened: nothing was owed it any more",
                     "  - removed 'three': carried by no instance, nothing was built and nothing is undone",
                 ],
-                File.ReadAllLines(layout.ReportFile).Where(line => line.StartsWith("  - added", StringComparison.Ordinal) || line.StartsWith("  - removed", StringComparison.Ordinal)));
+                File.ReadAllLines(layout.ReportFile).Where(line => line.StartsWith("  - added", StringComparison.Ordinal) || line.StartsWith("  - removed", StringComparison.Ordinal) || line.StartsWith("  - round", StringComparison.Ordinal)));
         }
 
         // The help and the architecture say it where they say how the pieces are placed.
         Assert.Contains(
             "a removed piece naming work no instance carries withdraws what an earlier update owes a round under that name, so no "
-                + "round builds it, and that piece says it was withdrawn before it was built.",
+                + "round builds it, and that piece says it was withdrawn before it was built;",
             Prose.Words(DssHarness.Core.Help.HelpTopics.Render("orchestrators")),
             StringComparison.Ordinal);
         Assert.Contains(
             "such piece ends in its own update's entry as withdrawn by this one before it was built (`FlowCoordinator.WithdrawWhatIsOwed`), so no round builds what the plan took back.",
             Prose.Document("docs", "architecture.md"),
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The runner of <see cref="Ended"/> or <see cref="Looped"/> whose first update adds "three", whose second withdraws
+    /// it and whose third adds "four"; every check that opens a round notes in <paramref name="checks"/> the owed work it
+    /// was handed.
+    /// </summary>
+    private static FakeRunner AddingThenWithdrawing(List<(string Instance, string Owed)> checks, JsonNode? plan = null)
+    {
+        var planned = 0;
+
+        return AddingThree(checks, plan).On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Interlocked.Increment(ref planned) switch
+        {
+            1 => Concluded(new JsonArray(Piece("added", Item("three"), "the registry is a third work item")), Item("one"), Item("two"), Item("three")),
+            2 => Concluded(new JsonArray(Piece("removed", Item("three"), "the registry is not built after all")), Item("one"), Item("two")),
+            _ => Concluded(new JsonArray(Piece("added", Item("four"), "the cache is a fourth work item")), Item("one"), Item("two"), Item("four")),
+        }));
+    }
+
+    /// <summary>
+    /// A round an update added to a work-item group with no loop around it, whose only work a later update withdraws
+    /// before it opens, is taken back and counted against no bound: with the one round amend.maxAddedIterations allows, a
+    /// change given after it is taken - never refused as past the group's rounds - and is given the round, which opens
+    /// through a new visit of the check and carries that change's work alone.
+    /// </summary>
+    [Fact]
+    public async Task ARoundTakenBack_CountsAgainstNoBound_AndALaterChangeIsGivenItsRound()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Ended());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var checks = new List<(string Instance, string Owed)>();
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, AddingThenWithdrawing(checks), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout), runName: "r1");
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var audit = await UntilAskedAsync(coordinator, "anything else?");
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("drop the registry after all", "amend-orchestrator-request", out problem), problem ?? "taken");
+
+            // Both are planned and done while the audit asks: the round the first added is taken back by the second.
+            for (var sessions = 0; UpdatesOf(harness, layout).Updates.Any(update => update.State != FlowUpdateStates.Done); sessions++)
+            {
+                Assert.True(sessions < 20, "the updates were never done");
+                _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+            }
+
+            Assert.Equal("u2", UpdatesOf(harness, layout).Updates[0].AddedWithdrawnBy);
+
+            // The run has been given no round: a change given now is taken, and is given the round.
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the cache as well", "amend-orchestrator-request", out problem), problem ?? "taken");
+            Assert.True(coordinator.TryAnswer(audit.Id, "go", null, out _));
+
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            var updates = UpdatesOf(harness, layout).Updates;
+            Assert.Equal(
+                [("u1", "rounds.items+2", "u2", (string?)null), ("u2", null, null, null), ("u3", "rounds.items+2", null, "rounds.items+2")],
+                updates.Select(update => (update.Id, update.AddedIteration, update.AddedWithdrawnBy, update.StandingIteration)));
+            Assert.Equal([("four", "rounds.items+2[0]", "done")], updates[2].ThePieces.Select(piece => (piece.ItemName()!, piece.Placed, piece.Ended)));
+            Assert.Equal([("rounds.item-check", string.Empty), ("rounds.item-check+3", "four")], checks);
+            Assert.Equal(
+                [
+                    "round 2 of 'rounds.items' was added for update u1: the run has been given 1 of the 1 amend.maxAddedIterations allows",
+                    "round 2 of 'rounds.items' was added for update u3: the run has been given 1 of the 1 amend.maxAddedIterations allows",
+                ],
+                FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Where(written => written.Kind == "iterationAdded").Select(written => written.Detail));
+            Assert.Equal(
+                [("rounds.items+2[0].build", "four"), ("rounds.items[0].build", "one"), ("rounds.items[1].build", "two")],
+                harness.OrchestrationStore.ReadFlow(layout)!.Steps
+                    .Where(step => step.Step == "rounds.items.build" && step.State == nameof(FlowInstanceState.Done))
+                    .Select(step => (step.Instance, FlowWorkItems.NameOf(step.Item)!))
+                    .OrderBy(built => built.Instance, StringComparer.Ordinal));
+        }
+    }
+
+    /// <summary>
+    /// An iteration an update added to a loop at its bound, whose only work a later update withdraws before the iteration
+    /// is made, is taken back: the loop's bound reads as it did before it was added, so the loop asks its bound's question
+    /// again - the one the added iteration had withdrawn - and, accepted, ends with no iteration run for nothing. The
+    /// update's entry, the report and the listing say the iteration was taken back.
+    /// </summary>
+    [Fact]
+    public async Task AnIterationAddedWhoseWorkIsWithdrawnBeforeItIsMade_IsTakenBack_AndTheBoundAsksAgain()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Looped());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, AddingThenWithdrawing([], plan: Concluded(Item("one"))), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            await DriveAsync(coordinator, held: "loopBound");
+            var first = coordinator.OpenQuestions.Single(asked => asked.Kind == "loopBound");
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("drop the registry after all", "amend-orchestrator-request", out problem), problem ?? "taken");
+
+            // The first update's iteration withdraws the bound's question; the second takes the iteration back, and the
+            // bound asks again.
+            _ = await DriveAsync(coordinator, held: "loopBound");
+            var again = coordinator.OpenQuestions.Single(asked => asked.Kind == "loopBound");
+            Assert.NotEqual(first.Id, again.Id);
+            Assert.Equal(
+                [("rounds#2", "u2", (string?)null), (null, null, null)],
+                UpdatesOf(harness, layout).Updates.Select(update => (update.AddedIteration, update.AddedWithdrawnBy, update.StandingIteration)));
+
+            Assert.True(coordinator.TryAnswer(again.Id, "accept", null, out _));
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            Assert.DoesNotContain(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Instance.StartsWith("rounds#2", StringComparison.Ordinal));
+            Assert.Equal(
+                [(first.Id, "withdrawn"), (again.Id, "answered")],
+                harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions.Where(asked => asked.Kind == "loopBound").Select(asked => (asked.Id, asked.State)));
+
+            _ = FlowReports.Write(harness.FileSystem, new FlowRunReportSource(layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), harness.OrchestrationStore.ReadFlowUpdates(layout)), end.Summary, 0, DateTimeOffset.UtcNow);
+            Assert.Contains("  - round 2 of 'rounds' was added for update u1, and taken back by update u2 before it opened: nothing was owed it any more", File.ReadAllLines(layout.ReportFile));
+
+            var listed = OrchestrationReports.List(
+                [new OrchestratorInventory(
+                    layout,
+                    new OrchestratorRecord { Kind = OrchestratorRecord.KindName, Name = "r1", Model = "some-model", CreatedAt = DateTimeOffset.UtcNow, Parallel = 4 },
+                    [],
+                    [],
+                    [],
+                    new FlowRunInventory(harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), new FlowEngineState(FlowEngineState.None, null, []), harness.OrchestrationStore.ReadFlowUpdates(layout)))],
+                steps: false,
+                questions: false,
+                json: false);
+
+            Assert.Equal(
+                [
+                    "  plan update u1 (amendment): done",
+                    "    round 2 of 'rounds' was added for update u1, and taken back by update u2 before it opened: nothing was owed it any more",
+                    "  plan update u2 (amendment): done",
+                ],
+                UpdateLinesOf(listed));
+        }
+    }
+
+    /// <summary>
+    /// A crash once the entry of the update whose round was taken back says so, before the check drawn again for that round
+    /// is ended, is gone on from by the resume: the round is closed again from the entry - the check ends skipped and never
+    /// runs, the round is never made - and a record written before rounds were taken back reads as it did.
+    /// </summary>
+    [Fact]
+    public async Task ACrashOnceARoundIsTakenBack_BeforeItIsClosed_IsClosedByTheResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Ended());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var crashing = new CrashingRecords(records, updates => updates.Updates.Any(update => update.AddedWithdrawnBy is not null));
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, AddingThenWithdrawing([]), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var audit = await UntilAskedAsync(coordinator, "anything else?");
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("drop the registry after all", "amend-orchestrator-request", out problem), problem ?? "taken");
+            Assert.True(coordinator.TryAnswer(audit.Id, "go", null, out _));
+            _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+            Assert.True(crashing.Ended);
+        }
+
+        // On disk: the round taken back in the first update's entry, and the check drawn for it not ended.
+        Assert.Equal("u2", UpdatesOf(harness, layout).Updates[0].AddedWithdrawnBy);
+        Assert.Equal(nameof(FlowInstanceState.NotStarted), StepOf(harness, layout, "rounds.item-check+2").State);
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var checks = new List<(string Instance, string Owed)>();
+
+        using (again)
+        {
+            var resumed = new FlowCoordinator(definition, AddingThenWithdrawing(checks), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            var end = await DriveAsync(resumed);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+            Assert.Empty(checks);
+            Assert.Equal(nameof(FlowInstanceState.Skipped), StepOf(harness, layout, "rounds.item-check+2").State);
+            Assert.DoesNotContain(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Instance == "rounds.items+2");
+        }
+
+        // An entry written before rounds were taken back reads as one whose round stands.
+        var older = System.Text.Json.JsonSerializer.Deserialize<FlowUpdateEntry>("""{"id":"u1","cause":"amendment","state":"done","takenAt":"2026-09-30 16:32:14","amendment":"add it","addedIteration":"rounds.items+2"}""", DssHarness.Core.FileSystem.JsonStateFile.Options)!;
+        Assert.Equal(((string?)null, "rounds.items+2"), (older.AddedWithdrawnBy, older.StandingIteration));
+    }
+
+    /// <summary>
+    /// The runner of <see cref="AuditedLater"/>: the plan holds "one" and "two"; the first update adds "three", owed to
+    /// the loop's second iteration, and the second withdraws it - or, <paramref name="changed"/>, does it differently; the
+    /// second iteration's round holds only the work owed it; and every check that opens a round notes in
+    /// <paramref name="checks"/> the owed work it was handed.
+    /// </summary>
+    private static FakeRunner OwingThenChanging(List<(string Instance, string Owed)> checks, bool changed)
+    {
+        var planned = 0;
+        var again = Item("three");
+        again["title"] = "The registry, done differently";
+
+        return AddingThree(checks)
+            .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Interlocked.Increment(ref planned) == 1
+                ? Concluded(new JsonArray(Piece("added", Item("three"), "the registry is a third work item")), Item("one"), Item("two"), Item("three"))
+                : changed
+                    ? Concluded(new JsonArray(Piece("changed", again.DeepClone(), "the registry is done differently")), Item("one"), Item("two"), again.DeepClone())
+                    : Concluded(new JsonArray(Piece("removed", Item("three"), "the registry is not built after all")), Item("one"), Item("two"))))
+            .On("item-check", run =>
+            {
+                var owed = run.Read!.TryGetValue("owed", out var owing) && !owing!.IsMissing ? (owing.ToNode() as JsonArray)! : new JsonArray();
+
+                lock (checks)
+                {
+                    checks.Add((run.Instance, string.Join(",", owed.Select(FlowWorkItems.NameOf))));
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+                {
+                    ["ok"] = true,
+                    ["problems"] = new JsonArray(),
+                    ["items"] = run.Instance.StartsWith("rounds#1.", StringComparison.Ordinal) ? UnionOf(run) : owed.DeepClone(),
+                });
+            });
+    }
+
+    /// <summary>
+    /// Drives a run of <see cref="AuditedLater"/> to the audit of its second round: through the first round and its review,
+    /// where an amendment adds work owed to the second iteration, and that iteration's check, which joins it - the round's
+    /// group not expanded while the audit asks. Answers every other question to go on.
+    /// </summary>
+    private static async Task<FlowQuestion> UntilTheSecondRoundsAuditAsync(FlowCoordinator coordinator)
+    {
+        _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+        Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+        var review = await UntilAskedAsync(coordinator, "reviewed?");
+
+        Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+        Assert.True(coordinator.TryAnswer(review.Id, "go", null, out _));
+        return await UntilAskedAsync(coordinator, "audited?");
+    }
+
+    /// <summary>
+    /// An update done that withdraws or changes work the check that opens a round has joined to it, before the round's
+    /// work-item group expands, draws that check again - with every step of its scope after it, the audit that waits
+    /// between it and the group among them, its question withdrawn - so the round opens with what the updates owe it now:
+    /// a withdrawn item is never built, and a changed one is built as its newest piece says, never as the piece it
+    /// replaced. The update's entry and the report name the check drawn again.
+    /// </summary>
+    /// <param name="changed">Whether the second update does the owed work differently, rather than withdraw it.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnUpdateChangingWorkACheckJoinedToARoundNotExpanded_DrawsTheCheckAgain(bool changed)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(AuditedLater());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var checks = new List<(string Instance, string Owed)>();
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, OwingThenChanging(checks, changed), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await UntilTheSecondRoundsAuditAsync(coordinator);
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver(changed ? "do the registry differently" : "drop the registry after all", "amend-orchestrator-request", out var problem), problem ?? "taken");
+
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            var updates = UpdatesOf(harness, layout).Updates;
+            Assert.Equal(((string?)null, "rounds#2.item-check"), (updates[0].CheckedAgain, updates[1].CheckedAgain));
+
+            // The work joined the round of the iteration under way, whose check had yet to open it: no iteration was added.
+            Assert.Equal([(string?)null, null], updates.Select(update => update.AddedIteration));
+            Assert.Equal(
+                changed
+                    ? [("u1", "added", "the next iteration of 'rounds'", (string?)null, "carried on by update u2, whose piece names the same work item"), ("u2", "changed", "the next iteration of 'rounds'", "rounds#2.items[0]", "done")]
+                    : [("u1", "added", "the next iteration of 'rounds'", null, "withdrawn by update u2 before it was built"), ("u2", "removed", null, null, "nothing was built and nothing is undone")],
+                updates.SelectMany(update => update.ThePieces.Select(piece => (update.Id, piece.Kind, piece.OwedTo, piece.Placed, piece.Ended))));
+
+            // The check ran again on what the updates owe the round now, and the audit between it and the group with it;
+            // the changed item is built by the step that carries changed work.
+            Assert.Equal([("rounds#1.item-check", string.Empty), ("rounds#2.item-check", "three"), ("rounds#2.item-check+2", changed ? "three" : string.Empty)], checks);
+
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal((nameof(FlowInstanceState.Skipped), nameof(FlowInstanceState.Done)), (steps["rounds#2.item-audit"].State, steps["rounds#2.item-audit+2"].State));
+            Assert.Equal(
+                changed
+                    ? [("rounds#1.items[0].build", "The one item"), ("rounds#1.items[1].build", "The two item"), ("rounds#2.items[0].build", "The registry, done differently")]
+                    : [("rounds#1.items[0].build", "The one item"), ("rounds#1.items[1].build", "The two item")],
+                steps.Values
+                    .Where(step => step.Step is "rounds.items.build" or "rounds.items.rebuild" && step.State == nameof(FlowInstanceState.Done))
+                    .Select(step => (step.Instance, (step.Item as JsonObject)?["title"]?.GetValue<string>()))
+                    .OrderBy(built => built.Instance, StringComparer.Ordinal));
+
+            _ = FlowReports.Write(harness.FileSystem, new FlowRunReportSource(layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), harness.OrchestrationStore.ReadFlowUpdates(layout)), end.Summary, 0, DateTimeOffset.UtcNow);
+            Assert.Contains(
+                "  - 'rounds#2.item-check' is drawn again for update u2: the work updates owe its round, which it had joined, changed before the round opened",
+                File.ReadAllLines(layout.ReportFile));
+        }
+    }
+
+    /// <summary>
+    /// A crash once the update's entry names the check it draws again, before the redirect that draws it is written, is
+    /// gone on from by the resume: the session that takes the run up draws the check again from the entry, and the
+    /// withdrawn item is never built.
+    /// </summary>
+    [Fact]
+    public async Task ACrashOnceAnUpdateNamesTheCheckItDrawsAgain_IsGoneOnFromByTheResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(AuditedLater());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var crashing = new CrashingRecords(records, updates => updates.Updates.Any(update => update.CheckedAgain is not null));
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, OwingThenChanging([], changed: false), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await UntilTheSecondRoundsAuditAsync(coordinator);
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("drop the registry after all", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+            Assert.True(crashing.Ended);
+        }
+
+        // On disk: the entry names the check, and the check stands as it ran, its audit still asking.
+        Assert.Equal("rounds#2.item-check", UpdatesOf(harness, layout).Updates[1].CheckedAgain);
+        Assert.DoesNotContain(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Instance == "rounds#2.item-check+2");
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var checks = new List<(string Instance, string Owed)>();
+
+        using (again)
+        {
+            var resumed = new FlowCoordinator(definition, OwingThenChanging(checks, changed: false), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            var end = await DriveAsync(resumed);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+            Assert.Equal([("rounds#2.item-check+2", string.Empty)], checks);
+            Assert.DoesNotContain(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Instance.StartsWith("rounds#2.items[", StringComparison.Ordinal));
+        }
+    }
+
+    /// <summary>
+    /// The runner of <see cref="Reviewed"/> bounded at two iterations whose second round's own list - what the round before
+    /// wrote for it - holds "q" and "r", and whose check that opens it finds "q" wanting on its first visit, raising a plan
+    /// update; the planner answers it with <paramref name="scope"/>. Every check that opens a round notes in
+    /// <paramref name="checks"/> the names it was handed as withdrawn, and every check what it was handed as the names of a
+    /// round not opened (<c>opening</c>), in <paramref name="opening"/>.
+    /// </summary>
+    private static FakeRunner FindingQWanting(List<(string Instance, string Withdrawn)> checks, List<(string Instance, string Opening)> opening, JsonArray scope)
+    {
+        static string NamesOf(FlowStepRun run, string key)
+            => run.Read!.TryGetValue(key, out var given) && !given.IsMissing
+                ? $"[{string.Join(", ", given.ToNode()!.AsArray().Select(name => name!.GetValue<string>()))}]"
+                : "none";
+
+        return AddingThree([])
+            .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded((JsonArray)scope.DeepClone(), Item("one"), Item("two"))))
+            .On("check", run =>
+            {
+                lock (opening)
+                {
+                    opening.Add((run.Instance, NamesOf(run, "opening")));
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["ok"] = true, ["problems"] = new JsonArray(), ["items"] = UnionOf(run) });
+            })
+            .On("item-check", run =>
+            {
+                lock (checks)
+                {
+                    checks.Add((run.Instance, NamesOf(run, "withdrawn")));
+                }
+
+                lock (opening)
+                {
+                    opening.Add((run.Instance, NamesOf(run, "opening")));
+                }
+
+                var first = run.Instance.StartsWith("rounds#1.", StringComparison.Ordinal);
+                var wanting = run.Instance == "rounds#2.item-check";
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+                {
+                    ["ok"] = !wanting,
+                    ["problems"] = wanting ? new JsonArray("work item 'q' reuses 'src/old.cs', which is not in the main tree: a plan builds on what is there") : new JsonArray(),
+                    ["items"] = first ? UnionOf(run) : new JsonArray(Item("q"), Item("r")),
+                });
+            });
+    }
+
+    /// <summary>
+    /// A removed piece naming an item of the list a round is opening with - which no instance carries, for the round has
+    /// not opened - takes it out of that list: raised by the check that opens the second round, which found the item the
+    /// round before wrote for it wanting, the update's piece is owed to that round as a withdrawal; the check that runs
+    /// again on its own items, which still hold the item, is handed it as withdrawn, the round never expands it and nothing
+    /// undoes it, and the piece ends as the round opens without it - in its entry, the report and the listing.
+    /// </summary>
+    [Fact]
+    public async Task ARemovedPieceNamingAnItemOfTheListARoundOpensWith_TakesItOutOfThatList()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Reviewed().Replace("maxIterations: 3", "maxIterations: 2", StringComparison.Ordinal));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var checks = new List<(string Instance, string Withdrawn)>();
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, FindingQWanting(checks, [], new JsonArray(Piece("removed", Item("q"), "the item is not built: the file it reuses is gone"))), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            var update = UpdatesOf(harness, layout).Updates.Single();
+            Assert.Equal(FlowUpdateCauses.PlanCheck, update.Cause);
+            Assert.Equal(
+                [("removed", "q", "the next iteration of 'rounds'", (bool?)true, (string?)null, "'rounds#2.items' opened without it: nothing was built and nothing is undone")],
+                update.ThePieces.Select(piece => (piece.Kind, piece.ItemName()!, piece.OwedTo, piece.Withdrawal, piece.Placed, piece.Ended)));
+            Assert.Equal([("rounds#1.item-check", "[]"), ("rounds#2.item-check", "[]"), ("rounds#2.item-check+2", "[q]")], checks);
+
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps;
+            Assert.Equal(
+                [("rounds#1.items[0].build", "one"), ("rounds#1.items[1].build", "two"), ("rounds#2.items[0].build", "r")],
+                steps.Where(step => step.Step == "rounds.items.build" && step.State == nameof(FlowInstanceState.Done))
+                    .Select(step => (step.Instance, FlowWorkItems.NameOf(step.Item)!))
+                    .OrderBy(built => built.Instance, StringComparer.Ordinal));
+            Assert.DoesNotContain(steps, step => step.Step == "rounds.items.withdraw" && step.State == nameof(FlowInstanceState.Done));
+
+            _ = FlowReports.Write(harness.FileSystem, new FlowRunReportSource(layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), harness.OrchestrationStore.ReadFlowUpdates(layout)), end.Summary, 0, DateTimeOffset.UtcNow);
+            Assert.Contains(
+                "  - removed 'q': taken out of the work items of the next iteration of 'rounds', 'rounds#2.items' opened without it: nothing was built and nothing is undone",
+                File.ReadAllLines(layout.ReportFile));
+        }
+
+        // The help and the architecture say it where they say how a removed piece no instance carries is placed.
+        Assert.Contains(
+            "one naming an item of the list the check that opens a round was opening it with takes it out of that list, and the round opens without it.",
+            Prose.Words(DssHarness.Core.Help.HelpTopics.Render("orchestrators")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "takes it out of that list: the piece is owed to that round as a withdrawal (`FlowUpdatePiece.Withdrawal`",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A crash once the update that takes an item out of the list a round opens with is done, before the check that raised
+    /// it runs again, is gone on from by the resume: the withdrawal is read back from the update's entry, the check is
+    /// handed it, and the round never expands the item. An entry written before withdrawals were kept reads as it did.
+    /// </summary>
+    [Fact]
+    public async Task ACrashOnceAWithdrawalIsOwedARound_IsCarriedByTheResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Reviewed().Replace("maxIterations: 3", "maxIterations: 2", StringComparison.Ordinal));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var crashing = new CrashingRecords(records, updates => updates.Updates.Any(update => update.State == FlowUpdateStates.Done));
+        var scope = new JsonArray(Piece("removed", Item("q"), "the item is not built: the file it reuses is gone"));
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, FindingQWanting([], [], scope), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            for (var sessions = 0; !crashing.Ended; sessions++)
+            {
+                Assert.True(sessions < 20, "the run never reached its crash");
+                _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+                foreach (var asked in coordinator.OpenQuestions.ToList())
+                {
+                    Assert.True(coordinator.TryAnswer(asked.Id, "go", null, out _), asked.Problem);
+                }
+            }
+        }
+
+        // On disk: the withdrawal owed, and the check that raised the update still waiting on it.
+        Assert.True(UpdatesOf(harness, layout).Updates.Single().ThePieces.Single().IsWithdrawing);
+        Assert.Equal(nameof(FlowInstanceState.Paused), StepOf(harness, layout, "rounds#2.item-check").State);
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var checks = new List<(string Instance, string Withdrawn)>();
+
+        using (again)
+        {
+            var resumed = new FlowCoordinator(definition, FindingQWanting(checks, [], scope), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            var end = await DriveAsync(resumed);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+            Assert.Equal([("rounds#2.item-check+2", "[q]")], checks);
+            Assert.Equal(
+                ["r"],
+                harness.OrchestrationStore.ReadFlow(layout)!.Steps
+                    .Where(step => step.Step == "rounds.items.build" && step.Instance.StartsWith("rounds#2.", StringComparison.Ordinal))
+                    .Select(step => FlowWorkItems.NameOf(step.Item)!));
+        }
+
+        // A piece written before withdrawals were kept reads as work owed, as it always did.
+        var older = System.Text.Json.JsonSerializer.Deserialize<FlowUpdatePiece>("""{"kind":"removed","item":{"name":"q"},"changed":"it goes","owedTo":"the next iteration of 'rounds'"}""", DssHarness.Core.FileSystem.JsonStateFile.Options)!;
+        Assert.Equal(((bool?)null, true, false), (older.Withdrawal, older.IsOwed, older.IsWithdrawing));
+    }
+
+    /// <summary>
+    /// The update the check that opens a round raises joins a round that has not opened, and every check made while it is
+    /// under way - its own planning's check above all, at the step's start and at the planner's answer alike - is handed
+    /// the names an earlier round carries that the round's list may not take (<c>opening</c>), so it holds that list
+    /// whether or not the update answers a piece. No other check is handed them.
+    /// </summary>
+    [Fact]
+    public async Task TheChecksOfAnUpdateTheCheckThatOpensARoundRaised_AreHandedThatRoundNotOpened()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Reviewed().Replace("maxIterations: 3", "maxIterations: 2", StringComparison.Ordinal));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var opening = new List<(string Instance, string Opening)>();
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, FindingQWanting([], opening, []), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+        }
+
+        Assert.Equal(
+            [
+                ("planning.check", "none"),
+                ("rounds#1.item-check", "none"),
+                ("rounds#2.item-check", "none"),
+                ("planning.check+2", "[one, two]"),
+                ("rounds#2.item-check+2", "none"),
+            ],
+            opening);
     }
 
     /// <summary>
@@ -2768,6 +3342,76 @@ public sealed class FlowPlanToldTests
             var end = await DriveAsync(coordinator);
             Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
         }
+    }
+
+    /// <summary>
+    /// A loop whose own bound counts from the iteration a plan update is planned in leaves out the iterations granted
+    /// before that count began - and no more of them than stand: where the second update, planned with the first's
+    /// added iteration granted, withdraws its work and takes it back, the count names that iteration
+    /// (<see cref="FlowLoopCount.AddedBy"/>) and leaves it out no more, so the bound reads as the loop's own and a
+    /// person's more at it is one more iteration, run - never a bound below the loop's own that asks again at once.
+    /// </summary>
+    [Fact]
+    public async Task AnIterationTakenBackThatALoopsCountLeftOut_IsLeftOutNoMore_AndAPersonsMoreRunsOne()
+    {
+        using var temp = new TempDirectory();
+        var flow = Planned.ReplaceLineEndings("\n");
+        const string Repeat = "      until: 'true'\n      maxIterations: 2\n";
+        Assert.Contains(Repeat, flow, StringComparison.Ordinal);
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", flow.Replace(Repeat, "      until: 'false'\n      maxIterations: 1\n", StringComparison.Ordinal)) with
+        {
+            Amend = new FlowAmend("request", 5, null, "rounds.planupdate", null, "rounds.plan.latest.scope", "rounds.items.build", "rounds.items.rebuild", "rounds.items.withdraw", null),
+        };
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var planned = 0;
+
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"))))
+            .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Interlocked.Increment(ref planned) == 1
+                ? Concluded(new JsonArray(Piece("added", Item("two"), "the parser is a second work item")), Item("one"), Item("two"))
+                : Concluded(new JsonArray(Piece("removed", Item("two"), "the parser is not built after all")), Item("one"))))
+            .On("check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = UnionOf(run),
+            }));
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            // The loop's one iteration ends at its bound; both updates are handed while it asks, the second queued.
+            _ = await UntilAskedAsync(coordinator, "'rounds' has run");
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("build the parser too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("drop the parser after all", "amend-orchestrator-request", out problem), problem ?? "taken");
+            _ = await DriveAsync(coordinator, held: "loopBound");
+
+            // The first update's iteration was granted when the second's count began, and taken back by the second.
+            Assert.Equal(
+                [("u1", "rounds#2", "u2"), ("u2", null, null)],
+                UpdatesOf(harness, layout).Updates.Select(update => (update.Id, update.AddedIteration, update.AddedWithdrawnBy)));
+            var counted = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "rounds").Counted!;
+            Assert.Equal(("u2", 0, 1, "u1"), (counted.Update, counted.Before, counted.Granted, string.Join(",", counted.AddedBy ?? [])));
+
+            // The bound is the loop's own again: it asks, and a person's more runs one more iteration.
+            var bound = coordinator.OpenQuestions.Single(asked => asked.Kind == "loopBound");
+            Assert.Equal("'rounds' has run 1 iterations since plan update u2 was planned in it and its until still reads false; at most 1 are allowed (maxIterations)", bound.Problem);
+            Assert.True(coordinator.TryAnswer(bound.Id, "more", null, out _));
+            _ = await DriveAsync(coordinator, held: "loopBound");
+
+            var again = coordinator.OpenQuestions.Single(asked => asked.Kind == "loopBound");
+            Assert.Equal("'rounds' has run 2 iterations since plan update u2 was planned in it and its until still reads false; at most 1 are allowed (maxIterations), and 1 more were given by its answers", again.Problem);
+            Assert.Contains(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Instance == "rounds#2.items" && step.State == nameof(FlowInstanceState.Done));
+
+            Assert.True(coordinator.TryAnswer(again.Id, "accept", null, out _));
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+        }
+
+        // A count written before iterations were taken back names none, and reads as it did.
+        var older = System.Text.Json.JsonSerializer.Deserialize<FlowLoopCount>("""{"update":"u1","before":1,"granted":2}""", DssHarness.Core.FileSystem.JsonStateFile.Options)!;
+        Assert.Equal((null, 2), (older.AddedBy, FlowLoopCount.Given(4, older, [])));
     }
 
     /// <summary>

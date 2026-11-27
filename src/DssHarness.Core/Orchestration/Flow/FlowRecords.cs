@@ -381,22 +381,39 @@ public sealed record FlowStepRecord(
 /// <param name="Update">The plan update whose planning began the count, by its id.</param>
 /// <param name="Before">The iterations the loop had made before the one the update was planned in, which the count leaves out.</param>
 /// <param name="Granted">The iterations its answers and updates had granted past its bound by then, which the count leaves out too.</param>
-public sealed record FlowLoopCount(string Update, int Before, int Granted)
+/// <param name="AddedBy">
+/// The plan updates whose added iterations were among <paramref name="Granted"/>, by id: one a later update takes back
+/// before it opened (<see cref="FlowUpdateEntry.AddedWithdrawnBy"/>) is granted no more, so the count leaves it out no
+/// more either. Null where none was - and in a count written before iterations were taken back, which reads as before.
+/// </param>
+public sealed record FlowLoopCount(string Update, int Before, int Granted, IReadOnlyList<string>? AddedBy = null)
 {
     /// <summary>The iterations of <paramref name="made"/> a loop has made that its bound counts: every one, where <paramref name="count"/> is none; else those from the one its update was planned in.</summary>
     /// <param name="made">The iterations the loop has made.</param>
     /// <param name="count">Where its bound counts from; null where every iteration counts.</param>
     public static int Made(int made, FlowLoopCount? count) => made - (count?.Before ?? 0);
 
-    /// <summary>The iterations of <paramref name="granted"/> granted past a loop's bound that its count holds: every one, where <paramref name="count"/> is none; else those granted since it began.</summary>
-    /// <param name="granted">The iterations its answers and updates have granted past its bound.</param>
+    /// <summary>
+    /// The iterations of <paramref name="granted"/> granted past a loop's bound that its count holds: every one, where
+    /// <paramref name="count"/> is none; else those granted since it began - those granted before it, less each an update
+    /// added and a later one took back (<see cref="AddedBy"/>), left out.
+    /// </summary>
+    /// <param name="granted">The iterations its answers and updates have granted past its bound, as they stand.</param>
     /// <param name="count">Where its bound counts from; null where every iteration counts.</param>
-    public static int Given(int granted, FlowLoopCount? count) => granted - (count?.Granted ?? 0);
+    /// <param name="updates">The run's plan updates, whose entries say which added iteration was taken back.</param>
+    public static int Given(int granted, FlowLoopCount? count, IEnumerable<FlowUpdateEntry> updates)
+        => granted - (count is null ? 0 : count.Granted - count.TakenBackOf(updates));
+
+    /// <summary>The iterations <see cref="AddedBy"/> names that a later update has taken back: granted before the count began, and granted no more.</summary>
+    private int TakenBackOf(IEnumerable<FlowUpdateEntry> updates)
+        => AddedBy is not { Count: > 0 } added ? 0 : updates.Count(update => update.AddedWithdrawnBy is not null && added.Contains(update.Id, StringComparer.Ordinal));
 
     /// <summary>What is wrong with this count; null when nothing is.</summary>
     public string? Problem()
         => !FlowUpdateIds.IsId(Update) ? $"'{Update}' is not an update's id"
             : Before < 0 || Granted < 0 ? "it counts fewer than no iterations"
+            : AddedBy is not null && AddedBy.Any(added => !FlowUpdateIds.IsId(added)) ? "it names an iteration added by what is not an update's id"
+            : AddedBy is not null && AddedBy.Count > Granted ? "it names more iterations added by updates than it holds granted"
             : null;
 }
 

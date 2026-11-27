@@ -118,6 +118,13 @@ public static class FlowWorkItems
 /// piece brought that one to rest: it carries the piece's work out, with the agent of the one it replaces; null until it
 /// is made, and for every piece that brought nothing to rest.
 /// </param>
+/// <param name="Withdrawal">
+/// Whether the piece, a <c>removed</c> one owed to a round that has not opened (<paramref name="OwedTo"/>), takes its
+/// work item out of the list that round opens with - an item of the list the check that opens it was opening it with,
+/// which no instance carries: that check drops it from its items, the round never expands it and nothing undoes it, for
+/// nothing was built. True for such a piece alone; null for every other, and in every record written before it was
+/// kept, which reads as before.
+/// </param>
 public sealed record FlowUpdatePiece(
     string Kind,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] JsonNode? Item = null,
@@ -130,17 +137,26 @@ public sealed record FlowUpdatePiece(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? OwedTo = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? CarriedBy = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Ended = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Again = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Again = null,
+    bool? Withdrawal = null)
 {
     /// <summary>The name of the work item the piece is, where it is one; null where it is not.</summary>
     public string? ItemName()
         => Kind == FlowUpdatePieceKinds.Told ? null : FlowWorkItems.NameOf(Item);
 
     /// <summary>
-    /// Whether the piece is owed still: it was owed to a round when it was placed, has joined none since, and has not
-    /// ended - what the check that opens the next round is handed, and what makes the loop around the round run again.
+    /// Whether the piece is work owed still: it was owed to a round when it was placed, has joined none since, has not
+    /// ended, and is work - no withdrawal from a round's list (<see cref="IsWithdrawing"/>) - what the check that opens
+    /// the next round is handed to join its own items, and what makes the loop around the round run again.
     /// </summary>
-    public bool IsOwed => OwedTo is not null && Placed is null && Ended is null;
+    public bool IsOwed => OwedTo is not null && Placed is null && Ended is null && Withdrawal != true;
+
+    /// <summary>
+    /// Whether the piece is a withdrawal owed still (<see cref="Withdrawal"/>): the round it is owed to has not opened,
+    /// so the check that opens it is handed its name to drop from its items, and the round ends it as it opens without
+    /// it. It makes no loop run again: it takes work away, and adds none.
+    /// </summary>
+    public bool IsWithdrawing => Withdrawal == true && OwedTo is not null && Placed is null && Ended is null;
 
     /// <summary>
     /// What is wrong with this piece, said of it as its subject: <c>says not what the update changes for its work, and a
@@ -158,6 +174,7 @@ public sealed record FlowUpdatePiece(
             : OwedTo is not null && string.IsNullOrWhiteSpace(OwedTo) ? "is owed to a round, and says not which"
             : CarriedBy is not null && !FlowInstanceId.IsWellFormed(CarriedBy) ? $"is carried by '{CarriedBy}', which is not an instance's id"
             : Again is not null && !FlowInstanceId.IsWellFormed(Again) ? $"is visited again in '{Again}', which is not an instance's id"
+            : Withdrawal is not null && (Withdrawal != true || Kind != FlowUpdatePieceKinds.Removed || OwedTo is null) ? "is a withdrawal, and only a removed piece owed to a round that has not opened takes its item out of that round's list"
             : null;
 
     /// <summary>
@@ -274,6 +291,20 @@ public sealed record FlowNotDelivered(string For, string Why);
 /// Written once that question is asked, never before, so no later session runs again a loop its answer ended; null
 /// where no loop was asked for it.
 /// </param>
+/// <param name="AddedWithdrawnBy">
+/// The update that took back the iteration or round <paramref name="AddedIteration"/> names before it opened: its
+/// withdrawal left this update owing nothing, so nothing is owed that iteration or round - it is never made, never
+/// counted against <c>amend.maxAddedIterations</c>, and a loop's bound reads as it did before it was added. Null where
+/// none was taken back, and in every record written before it was kept, which reads as before.
+/// </param>
+/// <param name="CheckedAgain">
+/// The visit of the check that opens a round whose list this update changed: it had joined the work updates owed that
+/// round, which this update withdrew, changed or added to before the round's work-item group expanded, so the check is drawn again with
+/// every step its scope runs after it - as a redirect to it draws them - and the round opens with what the updates owe it
+/// now. Written with the update's end, before the redirect is decided, so a session that takes the run up decides it
+/// where it was not; null where the update changed no work a check had joined, and in every record written before it was
+/// kept, which reads as before.
+/// </param>
 public sealed record FlowUpdateEntry(
     string Id,
     string Cause,
@@ -296,10 +327,19 @@ public sealed record FlowUpdateEntry(
     IReadOnlyList<string>? NotConcerned = null,
     IReadOnlyList<FlowNotDelivered>? NotDelivered = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? AddedIteration = null,
-    string? AskedAtBound = null)
+    string? AskedAtBound = null,
+    string? AddedWithdrawnBy = null,
+    string? CheckedAgain = null)
 {
     /// <summary>Each piece of the update, as it was placed; empty where the planning concluded no piece.</summary>
     public IReadOnlyList<FlowUpdatePiece> ThePieces => Pieces ?? [];
+
+    /// <summary>
+    /// The iteration or round this update added that stands: <see cref="AddedIteration"/>, where no later update took it
+    /// back before it opened (<see cref="AddedWithdrawnBy"/>); null otherwise. The one reading every count of the
+    /// iterations updates added, and every reading of a round an update added that is still to open, makes.
+    /// </summary>
+    public string? StandingIteration => AddedWithdrawnBy is null ? AddedIteration : null;
 
     /// <summary>What is wrong with this entry; null when nothing is.</summary>
     public string? Problem()
@@ -323,6 +363,8 @@ public sealed record FlowUpdateEntry(
             : NotDelivered?.Any(not => string.IsNullOrWhiteSpace(not.For) || string.IsNullOrWhiteSpace(not.Why)) == true ? "one not delivered names neither the work nor why"
             : AddedIteration is not null && !FlowInstanceId.IsWellFormed(AddedIteration) ? $"'{AddedIteration}' is not an instance's id"
             : AskedAtBound is not null && !FlowInstanceId.IsWellFormed(AskedAtBound) ? $"'{AskedAtBound}' is not an instance's id"
+            : AddedWithdrawnBy is not null && (!FlowUpdateIds.IsId(AddedWithdrawnBy) || AddedIteration is null) ? $"it names '{AddedWithdrawnBy}' as taking back what it added, and it is no update's id or the update added nothing"
+            : CheckedAgain is not null && !FlowInstanceId.IsWellFormed(CheckedAgain) ? $"'{CheckedAgain}' is not an instance's id"
             : null;
 
     /// <summary>The piece of this update that names the work item <paramref name="name"/>, where one does; null where none does.</summary>
@@ -528,7 +570,7 @@ public static class FlowUpdateGates
                 return null;
             }
 
-            if (RoundNotOpened(group, steps, updates) is { } checkedRound && updates.First(update => update.AddedIteration == checkedRound) is var adding)
+            if (RoundNotOpened(group, steps, updates) is { } checkedRound && updates.First(update => update.StandingIteration == checkedRound) is var adding)
             {
                 // A round added whose check has run opens with the work that check was handed: the change joins it once
                 // it has opened.
@@ -563,8 +605,9 @@ public static class FlowUpdateGates
     /// of a plan update once its newest round has ended; null where it runs one more. The one owner of that rule: the
     /// gates read it where a change is given, and the engine where an update's plan stands and where it adds the round.
     /// Such a group runs one round of its own and at most the rounds <c>amend.maxAddedIterations</c> lets updates add -
-    /// counted by the rounds the updates' entries name, never by the group's visits, which a redirect adds to as well -
-    /// and only where every group around it draws again: one still open, or one that ended done, which is in progress
+    /// counted by the rounds the updates' entries name and that stand, never by the group's visits, which a redirect adds
+    /// to as well, nor by one a later update took back before it opened (<see cref="FlowUpdateEntry.StandingIteration"/>)
+    /// - and only where every group around it draws again: one still open, or one that ended done, which is in progress
     /// again for the round. One that ended failed, skipped or never run draws nothing more (<see cref="AroundEnded"/>).
     /// A round an update added that has not opened yet runs for every change given before the check that opens it has
     /// started, which joins it (<see cref="PendingRound"/>): the work owed to the group is handed whole to that check.
@@ -594,16 +637,17 @@ public static class FlowUpdateGates
 
         var allowed = definition.Amend?.AddedIterationsAllowed ?? 0;
 
-        return updates.Count(update => update.AddedIteration is not null) >= allowed
+        return updates.Count(update => update.StandingIteration is not null) >= allowed
             ? $"updates have added the {allowed.ToString(CultureInfo.InvariantCulture)} round(s) amend.maxAddedIterations allows"
             : null;
     }
 
     /// <summary>
     /// The round a plan update added to the work-item group at <paramref name="group"/>, which has no loop around it,
-    /// that has not opened yet, by the id of the group's visit it will be - the visit an update's entry names
-    /// (<see cref="FlowUpdateEntry.AddedIteration"/>) and the run's steps do not hold yet; null where none waits. None
-    /// waits where a group around it draws nothing more, for that round never opens (<see cref="AroundEnded"/>). The
+    /// that has not opened yet, by the id of the group's visit it will be - the visit an update's entry names and that
+    /// stands (<see cref="FlowUpdateEntry.StandingIteration"/>), which the run's steps do not hold yet; null where none
+    /// waits. None waits where a group around it draws nothing more, for that round never opens (<see cref="AroundEnded"/>),
+    /// nor where a later update took it back before it opened. The
     /// engine reads it where it adds a round, adding none while one waits, and where a resume draws the group again for
     /// the round an update's entry names.
     /// </summary>
@@ -618,7 +662,7 @@ public static class FlowUpdateGates
 
         return AroundEnded(group, steps) is not null
             ? null
-            : updates.Select(update => update.AddedIteration).FirstOrDefault(added => added is not null
+            : updates.Select(update => update.StandingIteration).FirstOrDefault(added => added is not null
                 && string.Equals(FlowInstanceId.PathOf(added), group, StringComparison.Ordinal)
                 && !steps.Any(step => string.Equals(step.Instance, added, StringComparison.Ordinal)));
     }

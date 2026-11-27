@@ -211,9 +211,9 @@ public static class FlowStatus
             line += $"; {Count(pieces.Count, "piece")} of plan updates not carried out to an end yet";
         }
 
-        foreach (var owed in (updates?.Updates ?? []).Where(update => update.AddedIteration is { } added && flow.Steps.All(step => !string.Equals(step.Instance, added, StringComparison.Ordinal))))
+        foreach (var owed in (updates?.Updates ?? []).Where(update => update.StandingIteration is { } added && flow.Steps.All(step => !string.Equals(step.Instance, added, StringComparison.Ordinal))))
         {
-            line += $"; update {owed.Id} added {FlowReports.IterationSaidOf(owed.AddedIteration!)}, and it is not made yet";
+            line += $"; update {owed.Id} added {FlowReports.IterationSaidOf(owed.StandingIteration!)}, and it is not made yet";
         }
 
         return [line];

@@ -401,7 +401,7 @@ internal sealed class FlowComing
             // A repeat instance not ended is a loop of its own, beside the iterations it made: its bound widened by what
             // was granted it, past the iterations it has made - each counted as the engine counts them, from the
             // iteration a plan update was planned in where its record says one was (FlowLoopCount).
-            var bound = repeat.Bound(FlowLoopCount.Given(FlowGrants.IterationsOf(group.Instance, questions, updates), group.Counted));
+            var bound = repeat.Bound(FlowLoopCount.Given(FlowGrants.IterationsOf(group.Instance, questions, updates), group.Counted, updates?.Updates ?? []));
 
             if (bound == int.MaxValue)
             {
