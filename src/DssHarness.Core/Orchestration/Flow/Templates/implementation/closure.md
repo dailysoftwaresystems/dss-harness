@@ -18,7 +18,9 @@ class covers, so keep it true of the repository.
 Every axis a decision ranges over. A class's universe answers each of them by the name in
 brackets - its values, named concretely, and where they are declared; or why it does not
 apply - and answers each further axis the heading "This repository" names among its
-further axes, by the name it has there:
+further axes, by the name it has there. No other heading names an axis: the references and
+the optimised forms below are no axes, for every cell is measured on each of them, and a
+universe never answers one.
 
 - Each kind or type the decision ranges over - an enum's members, a schema's keys, a
   table's rows: name them (`kinds`).
@@ -56,6 +58,6 @@ of one is a sign of.
 ## This repository
 
 (Left empty by the shipped file. This heading is where a repository writes its own
-universe: its formats x targets x tiers x optimisation pipelines x forms x both
-directions, with its references and its optimised forms named, and each further axis
-its decisions range over, by a name of its own.)
+universe: the values of its kinds, targets, configurations, formats, entryPoints, tiers,
+forms and directions, with its references and its optimised forms named, and each
+further axis its decisions range over, by a name of its own.)

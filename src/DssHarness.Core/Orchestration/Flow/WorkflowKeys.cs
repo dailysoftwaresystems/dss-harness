@@ -29,7 +29,7 @@ public static class WorkflowKeys
         new("priority", $"the run's priority in the machine's dispatch queue, which multiplies its share of the machine, a whole number from {Execution.DispatchOrder.LeastPriority}; absent, {Execution.DispatchOrder.LeastPriority}"),
         new("budget", "what a whole run's reasoning may cost, and the reserve that pauses the run first") { Keys = Budget },
         new("recommendations", "the file holding the repository's bar for recommendations, in this directory"),
-        new("texts", "the workflow's texts: each name a markdown file in this directory, read in a prompt as {text.<name>}; the shipped flow declares its recommendations and its closure here"),
+        new("texts", "the workflow's texts: each name a markdown file in this directory, read in a prompt as {text.<name>}; the shipped flow declares its recommendations, its closure, its rule for a definition of done and what a step does with an issue that was there before the run here"),
         new("advisor", "the agent that recommends an answer to a question the engine raises itself") { Keys = Advisor },
         new("reporter", "the agent that words what a run is doing for a person who asks") { Keys = Reporter },
         new("amend", "everything the workflow says about a request amended, or an answer changed, while a run works") { Keys = Amend },

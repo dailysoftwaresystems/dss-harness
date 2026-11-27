@@ -27,7 +27,8 @@ missed is yours to add and to close with the rest, and nothing of the class is d
    mutant live: a test that does not reach the arm's site, one that asserts too little, or a path the change stopped
    covering.
 2. Repair it where the class decides: the test that fails to kill the mutant is part of the class's pin, and the pin
-   is table-driven over the universe - a repair that pins one case alone is not done.
+   is table-driven over the axes of the universe a test can range over, run on each leg and in each configuration it
+   names - a repair that pins one case alone is not done.
 3. Build and run your tests as before, and measure what you changed where the record claims it. Keep to the paths this
    work owns.
 
@@ -38,3 +39,7 @@ what it showed. Your arms list holds the same arms as before, unless the repair 
 
 When you report, the engine tests your work, checks the record, folds it, commits it, and the sweep runs again on the
 bytes your fix landed as.
+
+## Issues that were there before
+
+{text.issuesBefore}

@@ -44,3 +44,7 @@ The same report as before, brought up to date, every list in full: what you chan
 showed.
 
 When you report, the engine tests your work again and tries the fold again.
+
+## Issues that were there before
+
+{text.issuesBefore}

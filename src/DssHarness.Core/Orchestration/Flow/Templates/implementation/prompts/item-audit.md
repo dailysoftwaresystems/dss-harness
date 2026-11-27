@@ -34,3 +34,7 @@ Go, or the findings; what you checked; and your closure entry for each class - t
 site list lacks, and the cells of its universe it leaves out. The round's items are built once you
 answer, and the self-audit that judges the round reads what you found: a site or a cell the build left out is its
 finding, and the items of the next round carry it.
+
+## Issues that were there before
+
+{text.issuesBefore}

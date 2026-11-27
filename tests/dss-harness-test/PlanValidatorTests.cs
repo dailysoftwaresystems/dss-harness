@@ -9,7 +9,8 @@ namespace DssHarness.Tests;
 /// class is the item's own to change and there in the tree where it exists; a site is marked home exactly where it is
 /// the home, and every other site, which must change, is the item's too, for patching some of a class's sites is never
 /// done; more than one site means consolidate, as one site that is not the home does; a class is searched by data it
-/// can name again, and its universe counts the cells its axes that apply make; and one home belongs to one item. And of
+/// can name again, and its universe answers each axis one of the two ways an axis is answered and counts the cells its
+/// axes that apply make; and one home belongs to one item. And of
 /// its tests (P-C9): an item names the units of the tests its change affects, or says why it affects none. Each rule
 /// is red with itself removed, held by the reverts this file's twin methods name.
 /// </summary>
@@ -348,6 +349,46 @@ public sealed class PlanValidatorTests : IDisposable
                 Item(classes: [Class(universe: miscounted)]),
                 Item("two", "src/two/**", classes: [Class("C2", "src/two/home.cs", universe: further), Class("C3", "src/two/home.cs", universe: none), Class("C4", "src/two/home.cs", universe: uncounted)]),
                 Item("three", "src/created/**", classes: [Class("C5", "src/created/home.cs", universe: whole), Class("C6", "src/created/home.cs", universe: Universes.Of())])));
+    }
+
+    /// <summary>
+    /// P-C7: every axis of a universe - each the schema lists and each further one - is answered in the one shape of an
+    /// axis and in one of its two ways: applying exactly where it names values, with where the repository declares them
+    /// and no why; not applying where it names none, with why and nothing declared. An answer that is neither is a
+    /// problem naming the axis and what it says wrongly, a blank declaredIn or why read as none; the plan's check holds it
+    /// within the step that gave it, as the schema holds the shape, so a planner chooses no shape and an answer neither way
+    /// is put right before an audit reads it.
+    /// </summary>
+    [Fact]
+    public async Task AnAxisAnsweredNeitherWay_IsAProblem()
+    {
+        var (_, repository) = await RepositoryAsync();
+        var undeclared = Universes.Of(("formats", ["cs", "md"]));
+        undeclared["formats"] = Universes.Answer(["cs", "md"], " ", string.Empty);
+        var reasonedToo = Universes.Of(("formats", ["cs", "md"]));
+        reasonedToo["formats"] = Universes.Answer(["cs", "md"], "closure.md", "it has one format");
+        var unreasoned = Universes.Of();
+        unreasoned["forms"] = Universes.Answer([], string.Empty, " ");
+        var declaredNone = Universes.Of();
+        declaredNone["tiers"] = Universes.Answer([], "src/Tiers.cs", "the decision passes one tier");
+        var further = Universes.Of(("region", ["eu"]));
+        further["further"]![0]!["answer"] = Universes.Answer(["eu"], string.Empty, "every region is one");
+        const string Rule = "an axis applies exactly where it names values - then it says where the repository declares them, and gives no why - and does not apply where it names none - then it says why, and declares nothing";
+
+        Assert.Equal(
+            [
+                $"work item 'one''s C1 names the values of its axis 'formats' and says not where the repository declares them: {Rule}",
+                $"work item 'one''s C2 names the values of its axis 'formats' and says why it does not apply: {Rule}",
+                $"work item 'one''s C3 names no value of its axis 'forms' and says not why it does not apply: {Rule}",
+                $"work item 'one''s C4 names no value of its axis 'tiers' and says where its values are declared: {Rule}",
+                $"work item 'one''s C5 names the values of its axis 'region' and says not where the repository declares them, and why it does not apply: {Rule}",
+            ],
+            await CheckAsync(
+                repository,
+                Item(classes: [Class(universe: undeclared), Class("C2", universe: reasonedToo), Class("C3", universe: unreasoned), Class("C4", universe: declaredNone), Class("C5", universe: further)])));
+
+        // Each answered one way or the other, the universes pass.
+        Assert.Empty(await CheckAsync(repository, Item(classes: [Class(universe: Universes.Of(("formats", ["cs", "md"]), ("region", ["eu"]))), Class("C2", universe: Universes.Of())])));
     }
 
     /// <summary>

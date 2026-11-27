@@ -2542,7 +2542,9 @@ as it records every step in flight.
 A pre-existing issue - one a reasoning step meets that was there before the run - is reported in the
 step's answer (`preExisting`, a member of every shipped reasoning schema but the triage's) and triaged by the step its
 `onPreExisting` names: a reason step of the flow's top level that says `raised: preExisting`, which
-nothing schedules, and `onAddress: recover`. The validator holds the wiring (V51): the triage is at the top level, waits for nothing, nothing waits for it and no handler sends the run to it, it
+nothing schedules, and `onAddress: recover`. The shipped flow says what a step does with one - report it, never fix
+it, and each course its triage may give it - in one text, `issues-before.md`, read as `{text.issuesBefore}` by the
+prompt of every step that reports one, continuations among them, and in none of its agents' files. The validator holds the wiring (V51): the triage is at the top level, waits for nothing, nothing waits for it and no handler sends the run to it, it
 takes no `on`, `when` or `always`, sends
 a fix to a declared `recover`, and names no triage of its own, which would be it calling itself;
 where a workflow has one, every other reasoning step names it. Its agent reproduces the issue on the
@@ -3650,12 +3652,18 @@ paths and there in the tree where it exists; a site is the home exactly where it
 compares paths, and its symbol are the home's, and only that site is marked `home`; every other site changes -
 `reads-home` or `deleted` - and is the item's too, for patching some of a class's sites is never done; more than one
 site means consolidate, as one site that is not the home does; a class is searched by data its queries name again,
-and its universe counts the cells its axes that apply make - the product of the counts of their values, 1 where none
-applies, read by the one reading of a planned universe (`ClassClosureReading.PlannedAxes`, `CellsOf`) - while that it
-answers every axis the closure text lists, by a member of its own (`kinds`, `targets`, `configurations`, `formats`,
-`entryPoints`, `tiers`, `forms`, `directions`, and `further` for the repository's own), each its values and where they
-are declared or why it does not apply, is `plan.schema.json`'s to hold, so the structured-output check sends an omission
-back within the plan step and never costs an audit or another planning iteration; and one home belongs to one item - two classes of one item
+and its universe (P-C7, read by the one reading of a planned universe, `ClassClosureReading.PlannedAxes` and
+`CellsOf`, each axis a `UniverseAxis`) answers each axis in one of the two ways an axis is answered - applying exactly
+where it names values, with where the repository declares them and no why; not applying where it names none, with
+why and nothing declared - and counts the cells its axes that apply make - the product of the counts of their values,
+1 where none applies: the size of the decision as the plan states it, which its audits, its builder and its closing
+review are each given with the class, and no other rule reads - while that it answers every axis the closure text
+lists, by a member of its own (`kinds`, `targets`, `configurations`, `formats`, `entryPoints`, `tiers`, `forms`,
+`directions`, and `further` for the further axes the text's heading "This repository" names, never its references or
+its optimised forms), each in the one shape of an axis (`plan.schema.json`'s `axis`: `values`, `declaredIn` and `why`,
+all three required, no union), is `plan.schema.json`'s to hold, so the structured-output check sends an omission
+back within the plan step, as the check's own rules send back an answer that is neither way, and neither costs an
+audit or another planning iteration; and one home belongs to one item - two classes of one item
 may share one, a place that decides more than one thing, which that item changes alone. What the check finds reaches
 the agent that gave the items within its own step: the engine holds the answer of every reason step whose output the
 `items` of a check of its scope reads - the plan and a plan update through `plan.latest`, a round's self-audit through
@@ -3721,7 +3729,8 @@ result - a failure and a pass written at the same moment read as the failure las
 stream's capped text of the answer), or reasoned, the pin's tests declared, the arm one of the
 registry's and mutating the home's own file or a reason the class has nothing to mutate, the universe holding every
 axis the planned class's universe says applies (the record names each by the name the class's universe gives it,
-`ClassClosureReading.RecordedAxes`) and the claim naming each; a record without a home audit is refused where the home was touched by other
+`ClassClosureReading.RecordedAxes`) and the claim naming each by its whole word, as the graph's searches hold a word
+(`GraphWord.Whole`), so `forms` is never named by "platforms"; a record without a home audit is refused where the home was touched by other
 work, and a home touched often enough is a hotspot in the check's answer. A class's paths - the plan's and the record's,
 read with either separator made forward (`ClassClosureReading.PathOf`, `PathPatterns.Normalize`), the paths changed, an
 arm's site and the touches - are compared by `ClassClosureProof.SamePath` under the machine's
@@ -3780,7 +3789,8 @@ iteration of a `repeat`, or the group plan updates owe their work to, to which a
 around it - is decided by one owner (`FlowUpdateGates.RoundOpenedBy`), whichever opens the round: that check is handed
 the owed issues under `next` and, where its group is the one updates owe, their work (`owed`, `owedAlone`) and the plan
 update its problems raise; and `PlanCheckRunner` refuses a round whose items leave one unsettled, and orders the
-settling items first - no other check holds its items to them. Which checks take an item that settles one is decided
+settling items first - listed and started first, they are built beside the rest, so no other item may need their
+result - no other check holds its items to them. Which checks take an item that settles one is decided
 by one owner too (`FlowUpdateGates.ChecksTheItemsARoundOpensWith`): every check whose items a round opens with - the
 check that opens it, and each whose `items` read a step the items of such a check read: the plan's, whose plan a
 round opens with, and so the one a plan update sends the run back to. Each is handed the owed issues' ids under

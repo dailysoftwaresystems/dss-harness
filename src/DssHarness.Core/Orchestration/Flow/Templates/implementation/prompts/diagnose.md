@@ -64,8 +64,9 @@ Where a line says that a step left no output, that thing was not read or did not
    the evidence whether you did.
 3. Decide the course by the cause:
    - **fix**: work items that put it right - at most four, each sized to one builder's cycle, with the paths it owns,
-     the tests that show the failure is gone, and its definition of done, of which the first statement is that
-     `{source.step}` would now pass; one whose change no test can show says why in noTests, and is tested on none.
+     the tests that show the failure is gone, and its definition of done, by the rule for a definition of done below,
+     the run's base commit being `{orient.startCommit}`, of which the first statement is that `{source.step}` would now
+     pass; one whose change no test can show says why in noTests, and is tested on none.
      Each item that changes a decision gives its class - its invariant, its one home, its sites, its searches, its
      universe, which answers every axis with its values or why it does not apply - and one that decides none says why
      in noClass; a machine check refuses an item without either. Reuse what the repository has; change only what the
@@ -79,3 +80,11 @@ Where a line says that a step left no output, that thing was not read or did not
 
 The course; a summary a person who was not there can follow; the cause; the evidence; the work items where the course
 is fix, empty otherwise; the choices where the course is person, empty otherwise.
+
+## A definition of done
+
+{text.done}
+
+## Issues that were there before
+
+{text.issuesBefore}

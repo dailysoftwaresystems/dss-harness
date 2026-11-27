@@ -259,7 +259,7 @@
               },
               "tableDriven": {
                 "type": "boolean",
-                "description": "True only where the tests are table-driven over the universe the class names - not over the reported case."
+                "description": "True only where the tests are table-driven over the universe the class names - over every axis of it a test can range over, the targets and the configurations covered by the pin run on each leg and in each configuration - not over the reported case."
               },
               "over": {
                 "type": "string",

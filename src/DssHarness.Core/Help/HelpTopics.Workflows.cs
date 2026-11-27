@@ -243,9 +243,10 @@ public static partial class HelpTopics
         builder.AppendLine("round - a validate-plan the forEach beside it expands from, where that group runs in rounds, in an");
         builder.AppendLine("iteration of a repeat or as the group plan updates add a round to with no loop around it, and no");
         builder.AppendLine("other check - holds its items to: each issue named in an item's settles, none left unsettled,");
-        builder.AppendLine("the settling items first, and the rounds going on while one is left - never holding the round the");
-        builder.AppendLine("issue came from. Every check whose items a round opens with - that one, and each whose items read");
-        builder.AppendLine("what that one's items read: the plan's, so the one a plan update sends the run back to - takes an");
+        builder.AppendLine("the settling items listed and started first, built beside the rest, and the rounds going on while");
+        builder.AppendLine("one is left - never holding the round the issue came from. Every check whose items a round opens");
+        builder.AppendLine("with - that one, and each whose items read what that one's items read: the plan's, so the one a");
+        builder.AppendLine("plan update sends the run back to - takes an");
         builder.AppendLine("item that settles one of those issues, and refuses one whose settles names an issue the run does");
         builder.AppendLine("not owe; any other check - a recovery's - refuses every settles. A forEach item that names an");
         builder.AppendLine("issue in settles settles it once it ends done with a commit of its own made, whatever the run");
@@ -405,9 +406,11 @@ public static partial class HelpTopics
             + "paths and there in the tree where it exists, a site marked home exactly where it is the home by its path and "
             + "symbol, every other site - which changes, reading the home or deleted - the item's too - patching some of a "
             + "class's sites is never done - more than one site consolidated at the home, as one site that is not the home is, "
-            + "each class searched by data its queries name again, its universe counting the cells its axes that apply make - the "
+            + "each class searched by data its queries name again, its universe answering each axis in one of the two ways an axis "
+            + "is answered - values with where they are declared and no why, or no value with why and nothing declared - and "
+            + "counting the cells its axes that apply make - the "
             + "product of the counts of their values, 1 where none applies, the plan's schema holding in the step that answers it "
-            + "that it answers every axis - and "
+            + "that it answers every axis, in the one shape of an axis - and "
             + "one home belonging to one item, two classes of one item sharing one as they may; and each item naming the tests its change affects in "
             + "tests, one unit to an entry and none blank, or saying in noTests why it affects none - exactly one of the two. A step given the pieces of a plan update (a scope that yields a list not empty) checks them "
             + "with the items, each problem among the rest: each piece of one of the four kinds (added, changed, removed, told) "

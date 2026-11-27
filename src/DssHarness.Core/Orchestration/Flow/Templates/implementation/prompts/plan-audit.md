@@ -87,12 +87,11 @@ The work of this run: {update.work}
    that, nothing beyond it, and the old one removed.
 5. Check that every part of what was asked is in an item, or is named in the summary as left out, with a reason that
    holds.
-6. Check each item's definition of done, and the plan's own: every statement concrete and checkable - a behaviour and
-   what pins it, never prose a check cannot answer - each item's covering the whole of its instructions, and the
-   plan's covering the whole of what was asked; a statement that compares with the tree before the work names the
-   run's base commit, `{orient.startCommit}`, never a branch, which names nothing in the repository of its own a
-   builder works in. And check the sizing: no item carrying more than one builder's cycle
-   of work, and none a sliver of one that belongs to the work beside it.
+6. Check each item's definition of done, and the plan's own, against the rule for a definition of done below, the
+   run's base commit being `{orient.startCommit}`: every statement one a check can answer - a behaviour and what pins
+   it, never prose - and none that the run's other work would break; each item's covering the whole of its
+   instructions, and the plan's covering the whole of what was asked. And check the sizing: no item carrying more than
+   one builder's cycle of work, and none a sliver of one that belongs to the work beside it.
 7. Read each item as its builder will, and each test as someone who wants it to fail.
 8. Where a person gave a plan, check their plan against the items and the departures, as your instructions say.
 9. Weigh each assumption: is it one a careful colleague would make, or one that should have been a question?
@@ -116,3 +115,11 @@ built as it stands; each of these is a finding that holds it back: a site the pl
 that the decision ranges over, an axis whose values leave out a cell, an item that patches one site of several, a short
 site list, a home that is one of the sites and not the place that decides, and an item that changes a decision and
 declares no class.
+
+## A definition of done
+
+{text.done}
+
+## Issues that were there before
+
+{text.issuesBefore}

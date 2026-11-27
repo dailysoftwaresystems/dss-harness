@@ -45,3 +45,7 @@ found, and its searches and measurements cite the calls that made them.
 
 When you report, the engine tests your work again, then runs the check again, and folds your work only where its tests
 pass and the record closes every class.
+
+## Issues that were there before
+
+{text.issuesBefore}

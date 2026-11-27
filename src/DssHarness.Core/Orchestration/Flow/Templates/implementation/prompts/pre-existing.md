@@ -44,8 +44,8 @@ repeats it.
    that issue's, and the run fixes it there - or, where that fix is done already, gives yours a fix of its own, told
    what that one did; `fix` where it blocks that step, is related or is critical; `next` where it is
    a defect in code this run's change does not touch, that blocks nothing, no relation of the work and not critical -
-   a defect worth a round of its own, which becomes the first work item of the run's next round and never holds this
-   one, the fold never waiting for it; `list` where none of these holds.
+   a defect worth a round of its own, which becomes a work item of the run's next round, listed and started first,
+   built beside the rest, and never holds this one, the fold never waiting for it; `list` where none of these holds.
 3. Write the title and the description from what you proved.
 4. For `next`, size it: the files the fix touches (one at least), what must be built, and what must be measured
    first - the item that settles it is built to this size.

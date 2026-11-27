@@ -56,3 +56,7 @@ The same report as before, brought up to date, every list in full: what you chan
 it showed.
 
 When you report, the engine runs the tests again.
+
+## Issues that were there before
+
+{text.issuesBefore}

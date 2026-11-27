@@ -21,7 +21,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// there in the main tree, something under one of the three, and a reason and a search for everything it creates. Each
 /// item also carries its classes - the decisions it changes, each with its one home, its sites, its searches and its
 /// universe - or says in <c>noClass</c> why it decides nothing, and the classes are held to what the tree and the
-/// item's own paths say of them, and each universe to the cells its axes make (P-C1 to P-C8); and each names the tests its change affects, the units it is tested on
+/// item's own paths say of them, and each universe to the two ways an axis is answered and to the cells its axes make (P-C1 to P-C8); and each names the tests its change affects, the units it is tested on
 /// alone, or says in <c>noTests</c> why it affects none (P-C9). Each breach is a problem of the plan, worded once here;
 /// none is a failure.
 /// </summary>
@@ -398,8 +398,8 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// change and there in the tree where it exists; a site marked the home exactly where it is the home, by its path and
     /// its symbol; every other site the item's too, for it changes - it reads the home or is deleted - and patching some
     /// of a class's sites is never done; more than one site means consolidate, as one site that is not the home does; a
-    /// class without a search and a search without a query decide nothing checkable; and a universe counts the cells its
-    /// axes that apply make.
+    /// class without a search and a search without a query decide nothing checkable; and a universe answers each axis in
+    /// one of the two ways an axis is answered, and counts the cells its axes that apply make.
     /// </summary>
     /// <param name="item">The work item, its classes read as they are given.</param>
     /// <param name="root">The main tree's root, the paths of a home and a site are checked against.</param>
@@ -532,25 +532,66 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
                 }
             }
 
-            if (CellsProblem(@class["universe"] as JsonObject) is { } cells)
+            foreach (var universe in UniverseProblems(@class["universe"] as JsonObject))
             {
-                problems.Add($"{where}'s {id} {cells}");
+                problems.Add($"{where}'s {id} {universe}");
             }
         }
     }
 
     /// <summary>
-    /// P-C7: what is wrong with the count of a universe's cells, or null where it is right - the product of the counts of
-    /// the values of the axes that apply, read by the one reading of a planned universe
-    /// (<see cref="ClassClosureReading.PlannedAxes"/>), and 1 where none applies: the cells the decision ranges over, which
-    /// its pin, its arm and its neighbours are counted against. That the universe answers every axis - its values, or why
-    /// it does not apply - is the plan's schema's to hold, in the step that answers it.
+    /// What an answer of an axis must say beside its values, said once: where it applies, where they are declared and no
+    /// why; where it does not, why and nothing declared.
+    /// </summary>
+    private const string AxisRule = "an axis applies exactly where it names values - then it says where the repository declares them, and gives no why - and does not apply where it names none - then it says why, and declares nothing";
+
+    /// <summary>
+    /// P-C7: what is wrong with a universe, each axis read by the one reading of a planned universe
+    /// (<see cref="ClassClosureReading.PlannedAxes"/>): every axis answered in the one shape the plan's schema gives an axis
+    /// (<c>axis</c>), and so in one of its two ways - applying exactly where it names values, with where the repository
+    /// declares them and no why; not applying where it names none, with why and nothing declared - and the count of its
+    /// cells the product of the counts of the values of the axes that apply, 1 where none applies. The count is the size
+    /// of the decision as the plan states it: its audits, its builder and its closing review are each given the class
+    /// whole, and read the cells a pin and a sweep cover beside it; no other rule of the engine reads it. That the universe
+    /// answers every axis the closure text lists, by a member of its own, is the plan's schema's to hold, in the step that
+    /// answers it, as it holds every answer's shape; these, which a shape cannot say, this check holds there too.
     /// </summary>
     /// <param name="universe">The class's universe, as the plan gives it.</param>
-    private static string? CellsProblem(JsonObject? universe)
+    private static IEnumerable<string> UniverseProblems(JsonObject? universe)
     {
-        var applying = ClassClosureReading.PlannedAxes(universe).Where(axis => axis.Applies).ToList();
-        var product = applying.Aggregate(BigInteger.One, (made, axis) => made * axis.Values!.Count);
+        var axes = ClassClosureReading.PlannedAxes(universe);
+
+        foreach (var axis in axes)
+        {
+            var declared = !string.IsNullOrWhiteSpace(axis.DeclaredIn);
+            var reasoned = !string.IsNullOrWhiteSpace(axis.Why);
+            List<string> wrong = axis.Applies
+                ? [.. declared ? [] : new[] { "not where the repository declares them" }, .. reasoned ? new[] { "why it does not apply" } : []]
+                : [.. reasoned ? [] : new[] { "not why it does not apply" }, .. declared ? new[] { "where its values are declared" } : []];
+
+            if (wrong.Count > 0)
+            {
+                var named = axis.Applies ? $"names the values of its axis '{axis.Name}'" : $"names no value of its axis '{axis.Name}'";
+                yield return $"{named} and says {string.Join(", and ", wrong)}: {AxisRule}";
+            }
+        }
+
+        if (CellsProblem(universe, axes) is { } cells)
+        {
+            yield return cells;
+        }
+    }
+
+    /// <summary>
+    /// What is wrong with the count of a universe's cells, or null where it is right: the product of the counts of the
+    /// values of the axes that apply, and 1 where none applies (<see cref="UniverseProblems"/>).
+    /// </summary>
+    /// <param name="universe">The class's universe, as the plan gives it.</param>
+    /// <param name="axes">Its axes, as the one reading of a planned universe gives them.</param>
+    private static string? CellsProblem(JsonObject? universe, IReadOnlyList<UniverseAxis> axes)
+    {
+        var applying = axes.Where(axis => axis.Applies).ToList();
+        var product = applying.Aggregate(BigInteger.One, (made, axis) => made * axis.Values.Count);
         var cells = ClassClosureReading.CellsOf(universe);
 
         if (cells == product)
@@ -561,7 +602,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
         var counted = cells is { } given ? $"counts {given.ToString(CultureInfo.InvariantCulture)} cells in its universe" : "counts no cells in its universe";
         var made = applying.Count == 0
             ? "no axis of it applies, which makes 1"
-            : $"its axes that apply make {product.ToString(CultureInfo.InvariantCulture)} ({string.Join(" x ", applying.Select(axis => $"{axis.Name} {axis.Values!.Count.ToString(CultureInfo.InvariantCulture)}"))})";
+            : $"its axes that apply make {product.ToString(CultureInfo.InvariantCulture)} ({string.Join(" x ", applying.Select(axis => $"{axis.Name} {axis.Values.Count.ToString(CultureInfo.InvariantCulture)}"))})";
 
         return $"{counted}, and {made}: a universe's cells are the product of the counts of the values of its axes that apply";
     }

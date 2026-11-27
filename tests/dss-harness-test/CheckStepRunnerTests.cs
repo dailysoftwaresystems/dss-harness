@@ -1093,6 +1093,29 @@ public sealed class CheckStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// The claim names an axis by its whole word, never by a longer word that holds it: <c>forms</c> is no word of
+    /// "platforms", so a claim over every target "on both platforms" leaves the planned axis of forms unnamed, and a claim
+    /// that names forms - beside a word of punctuation, as a sentence writes it - names it. The plan's further axes are
+    /// held so too: <c>region</c> is no word of "regions".
+    /// </summary>
+    [Fact]
+    public void TheClaim_NamesAnAxisByItsWholeWord_NeverByALongerWordThatHoldsIt()
+    {
+        var planned = Class("c-rate", home: "src/Home.cs", symbol: "Home");
+        planned["universe"] = Universes.Of(("targets", ["linux", "windows"]), ("forms", ["declare", "define"]), ("region", ["eu", "us"]));
+        var record = Entry("c-rate", home: "src/Home.cs", sites: [], searches: [], neighbours: [], tests: [], axes: ["targets", "forms", "region"], claim: "The rate holds over all targets and their regions, on both platforms");
+        var proof = RunProof(changed: [], calls: []);
+
+        Assert.Equal(
+            ["class 'c-rate': the claim does not name the axis 'forms'", "class 'c-rate': the claim does not name the axis 'region'"],
+            ClassClosureRules.Judge([PlannedClass.In(planned)!], [ClassClosureRecord.In(record)!], proof).Problems);
+
+        record["claim"] = "The rate holds over all targets, both forms (declare, define) and every region: on both platforms";
+
+        Assert.Empty(ClassClosureRules.Judge([PlannedClass.In(planned)!], [ClassClosureRecord.In(record)!], proof).Problems);
+    }
+
+    /// <summary>
     /// A class's paths are read as the plan check that took them reads them - either separator - and compared as this
     /// machine compares paths, so a path the plan check took is never another file here for its spelling: a plan that
     /// writes the home and the site with backslashes and in another case than git does names the record's home and site

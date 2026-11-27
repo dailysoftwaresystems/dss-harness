@@ -30,3 +30,7 @@ Your worktree is `{worktree}`. Write nothing but rows.
 ## What to return
 
 What you filed and what you left unfiled and why; and the id of every row you filed.
+
+## Issues that were there before
+
+{text.issuesBefore}
