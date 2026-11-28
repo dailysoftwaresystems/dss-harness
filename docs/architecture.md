@@ -5017,7 +5017,15 @@ join holds it (`PlanValidator.CheckPieces`: a removed piece's item joins the rou
 the instance's own records - ended for the update (`FlowStepRecord.EndedFor`), the piece it carries (`PieceOf`) and the
 instance it was visited again in place of (`AgainOf`) - so no session after runs an instance an update ended, a resume
 goes on bringing one to rest, and the pieces are placed once from the update's entry however often a crash makes the
-engine meet its plan standing, an instance an earlier update visited again among them. A visit an update ended waits on
+engine meet its plan standing, an instance an earlier update visited again among them. Placing a piece against an
+instance under way is durable as one step: the placement's first write of it is the instance's own record saying it is
+being ended for the update, before anything it owed is dropped or anything in it skipped, so a crash anywhere among the
+writes that follow leaves a session that takes the run up to complete them before anything runs - what it owed dropped,
+a redirect with the question it asks, and what never started in it or waits on a question skipped, the question
+withdrawn (`FlowCoordinator.EndWhatItHolds`, the one owner the placement and the resume go through) - and a crash before
+it leaves the piece unplaced, which that session places; neither is refused over a question the placement withdraws, for
+an update under way that moves on without a step - its plan standing among it - is something that can run
+(`FlowCoordinator.NextOfTheUpdate`). A visit an update ended waits on
 nothing and is counted ended by the engine and the status alike, by the engine's own rule of what is left
 (`FlowInstance.IsLeft`, over `FlowInstance.IsStoppedForAnUpdate`; read by `Unended` and by `FlowStatus.IsLeft`), where one
 a pause or a stop stopped is left, to run again at the resume. Every instance of the group is of one kind, and the step
@@ -5422,13 +5430,23 @@ done record and never again at a resume - and a handler's not at all, for no red
 decided is read from what that redirect left in the records: the redirect still owed, a question it asked of the agents
 it would leave open - which a `stay` that gave it up answered - or the step inside a work item a plan update is bringing
 or brought to rest, which dropped it; one made left the step, which no rerun goes back over. None of those is the crash
-between the two writes, which leaves the rerun undecided, and the resume sends the run back once. Whether a rerun is decided has that one owner, which the rerun of a failed step and of a
+between the two writes, which leaves the rerun undecided, and the resume sends the run back once. The visit's own record
+tells those shapes apart, never a question's state: that build wrote the question a redirect asks before the redirect,
+so a crash between the two leaves the question open naming the visit and no redirect owed, and the resume, withdrawing
+it as one that asks of nothing, starts the visit's list, empty - written at the session's start before the withdrawal
+(`FlowCoordinator.WriteTheListsStarted`) - so the rerun is decided again, asking anew, never read as decided by the
+question withdrawn; and a drop of such a visit's redirect starts its list in the drop's own write, naming what the
+redirect sent back. Nothing is sent back into a work item a plan update is bringing or brought to rest, whichever way
+the visit's record says what it decided. Whether a rerun is decided has that one owner, which the rerun of a failed step and of a
 reporter both ask (`FlowCoordinator.RerunDecided`). A reporter of an issue a visit fixed runs again by the same fact of
 the visit that fixed it last, once - a `stay` an older build's visit was given is never asked again when another triage
 of the reporter ends - and never into a work item a plan update is bringing or brought to rest, whose work is done again
 in the item visited in its place (`FlowCoordinator.RerunOwed`, `FlowCoordinator.RunTheReporterAgain`,
-`FlowCoordinator.GoOnFromTheRecovery`). An answer the records hold and the session never carried out - a `stay` written
-before a crash - finds its redirect's question restored with the redirect, and is carried out on it at the resume. A
+`FlowCoordinator.GoOnFromTheRecovery`). An answer the records hold and the session never carried out - a `stay` or a
+`retry` written before a crash - finds its redirect's question restored with the redirect, and is carried out on it at
+the resume, for each redirect whose record names it - never through the one question its handler waits on, for a visit
+whose two redirects each ask waits on the newer, and an answer ends the wait on its own question alone - unless the
+handler had asked again for that redirect, which then waits on the question asked again. A
 redirect and the question it asks are one fact: a redirect dropped - with a work item a plan update brings to rest, or
 with a visit a redirect leaves, whose redirects still owed go with it, never left asking a question withdrawn
 (`FlowCoordinator.Leave`) - leaves the run's records in one write before its question is withdrawn
@@ -5458,7 +5476,10 @@ step that never ended, nor one its scope never drew, and a run is never said don
 takes it up before its session - over a step a pause or a stop stopped, which runs again at the resume, nor over a
 failure or a handler's raise owed to the next session. What the session's start writes is held, in the
 order made and each with the run as it stood, until it is known the session goes on: a resume beside
-an open question is refused only where nothing can run until a question is answered, and then it has
+an open question is refused only where nothing can run until a question is answered - no step that starts, no redirect
+owed that can be made, no plan update under way that moves on without a step (its planning step raised where a crash
+cut the raise off, its end, its `then`, or its pieces placed where its plan stands, `FlowCoordinator.NextOfTheUpdate`,
+the one owner of when an update moves on, which `SettleUpdates` carries out) - and then it has
 written nothing - no event, no attempt, no state; a session an answer began, one whose budget
 question is open, and one beside a question still owing its recommendation - deferred by a stop or by a
 pause a stop cut short, left sought by a crash, or never sought in a questions file an earlier build wrote
