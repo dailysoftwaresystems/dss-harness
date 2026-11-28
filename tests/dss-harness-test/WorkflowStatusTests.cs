@@ -284,6 +284,51 @@ public sealed class WorkflowStatusTests
         Assert.Equal(0, recovered.Progress.Recovering);
     }
 
+    /// <summary>
+    /// A failure whose visit of the recovery is paused on a person - the visit ended failed and asks what its failure does,
+    /// whose retry takes the failure again - shows Recovering, by the engine's own rule of a visit at work
+    /// (<see cref="FlowInstance.IsAtWork"/>), as the engine holds the visit at work: never Failed as though nothing worked
+    /// on it, which the status said while it read only the states of a visit still running.
+    /// </summary>
+    [Fact]
+    public async Task AFailureWhoseRecoveryVisitIsPausedOnAPerson_ShowsRecovering()
+    {
+        using var temp = new TempDirectory();
+        var clock = new ManualClock();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              maxVisits: 2
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: build
+                type: orient
+                onFailure: recover
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition, clock);
+        var runner = new DoneRunner()
+            .On("build", _ => FlowStepResult.Ended(passed: false, DssHarness.Core.Results.HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("mend", _ => FlowStepResult.Ended(passed: false, DssHarness.Core.Results.HarnessExit.CommandFailed, error: "the mend did not hold"));
+
+        using (records)
+        {
+            var end = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records).RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+            Assert.Equal(["recover"], end.OpenQuestions.Select(question => question.Instance));
+        }
+
+        var status = harness.OrchestrationStore.ReadWorkflowStatus(layout)!;
+
+        Assert.Equal("Recovering", status.Steps["build"].Status);
+        Assert.Equal(new WorkflowInstanceStatus("Recovering", 1, 1, 1, clock.GetUtcNow(), clock.GetUtcNow(), 0, new WorkflowRecovery(1, 2, "fix")), status.Steps["build"].Instances["build"]);
+        Assert.Equal(1, status.Progress.Recovering);
+    }
+
     /// <summary>A resume rewrites the status from the run's state and its step records before it goes on, so after a crash it is never behind.</summary>
     [Fact]
     public async Task AResumeRewritesTheStatusBeforeItGoesOn()

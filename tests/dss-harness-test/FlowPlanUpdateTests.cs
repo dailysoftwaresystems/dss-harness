@@ -1381,4 +1381,148 @@ public sealed class FlowPlanUpdateTests
             Assert.Null(harness.OrchestrationStore.ReadFlow(layout)!.Hold);
         }
     }
+
+    /// <summary>
+    /// An updated plan stands only once what its <c>then</c> set going has ended: a step of it a pause stopped - here
+    /// <c>pause --all</c> stopping the machine step the then reset - is left of the run, to run again at the resume
+    /// (<see cref="FlowInstance.IsLeft"/>), so the update stays under way and nothing of it is placed while that step has
+    /// not ended, where the plan stood over it at once; and the resume runs the step again, and the plan stands once it ends.
+    /// </summary>
+    [Fact]
+    public async Task APlanStandsOnlyOnceWhatItsThenSetGoingHasEnded_NeverOverAStepAPauseStopped()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Lean);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = new FakeRunner();
+        TaskCompletionSource<FlowStepResult> checking;
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            _ = await coordinator.RunAsync(Token);
+            var gate = coordinator.OpenQuestions.Single().Id;
+            Assert.Equal(FlowHandedOver.Taken, coordinator.AmendmentHandedOver("in fact, build only the parser", "amend-orchestrator-request", out _));
+            Assert.True(coordinator.TryAnswer(gate, "go", null, out _));
+
+            // The check the then resets is held open by the test from here on, and a pause that stops the machine steps
+            // too is asked once its new visit runs.
+            checking = runner.Hold("check");
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("planning.check+2").WaitAsync(Bound, Token);
+            coordinator.RequestPause("command", all: true);
+
+            var paused = await session.WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            Assert.Equal(FlowInstanceState.Stopped, coordinator.Instances["planning.check+2"].State);
+            Assert.Equal(FlowUpdateStates.UnderWay, harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().State);
+            Assert.NotNull(harness.OrchestrationStore.ReadFlow(layout)!.Hold);
+        }
+
+        checking.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            var end = await resumed.RunAsync(Token);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            var update = harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single();
+            Assert.Equal(("u1", FlowUpdateStates.Done), (update.Id, update.State));
+
+            // The stopped check ran again - the same visit, a new attempt - and only then did the plan stand.
+            Assert.Equal(2, runner.Started.Count(started => started == "planning.check+2"));
+            Assert.Null(harness.OrchestrationStore.ReadFlow(layout)!.Hold);
+        }
+    }
+
+    /// <summary>
+    /// An engine made for a run that begins stands paused, never done, before its first session and as that session's
+    /// start is shown - what its top declares and has not drawn yet is left of the run - so an amendment weighed then is
+    /// taken, never refused as given to a run that is done and has nothing to go back to.
+    /// </summary>
+    [Fact]
+    public async Task AnEngineForARunThatBegins_StandsPausedBeforeAndAsItsFirstSessionBegins_AndTakesAnAmendmentThen()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Lean);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        FlowCoordinator? coordinator = null;
+        var shownAsTheSessionBegins = new List<FlowRunStatus>();
+        var driven = false;
+
+        using (records)
+        {
+            // Read as the session's first write is made, before that write is shown: what the session's start is shown.
+            var looked = new Looked(records, () =>
+            {
+                if (driven && shownAsTheSessionBegins.Count == 0)
+                {
+                    shownAsTheSessionBegins.Add(coordinator!.Status);
+                }
+            });
+            coordinator = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: looked, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            Assert.Equal(FlowRunStatus.Paused, coordinator.Status);
+            Assert.Equal(FlowHandedOver.Taken, coordinator.AmendmentHandedOver("in fact, build only the parser", "amend-orchestrator-request", out var problem));
+            Assert.Null(problem);
+
+            driven = true;
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+            Assert.Equal([FlowRunStatus.Paused], shownAsTheSessionBegins);
+        }
+
+        // Taken before the plan's scope began, the amendment is done at once: every step that starts reads it.
+        var update = harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single();
+        Assert.Equal(("u1", FlowUpdateStates.DoneAtOnce), (update.Id, update.State));
+    }
+
+    /// <summary>The run's records, each write passed on after a look the test takes at the engine as it is made.</summary>
+    private sealed class Looked(IFlowRecords inner, Action looking) : IFlowRecords
+    {
+        /// <inheritdoc/>
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+        {
+            looking();
+            inner.Write(kind, snapshot, instance, from, to, attempt, detail);
+        }
+
+        /// <inheritdoc/>
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+            => inner.Question(questions, refused);
+
+        /// <inheritdoc/>
+        public void Updates(FlowUpdatesFile updates)
+            => inner.Updates(updates);
+
+        /// <inheritdoc/>
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+            => inner.AffectedTests(entries);
+
+        /// <inheritdoc/>
+        public string NameAgent(IReadOnlyCollection<string> recorded)
+            => inner.NameAgent(recorded);
+
+        /// <inheritdoc/>
+        public void Flush()
+            => inner.Flush();
+
+        /// <inheritdoc/>
+        public void Stand(FlowStartsStanding standing, IReadOnlyCollection<string> leftSought)
+            => inner.Stand(standing, leftSought);
+
+        /// <inheritdoc/>
+        public void Unstand()
+            => inner.Unstand();
+    }
 }

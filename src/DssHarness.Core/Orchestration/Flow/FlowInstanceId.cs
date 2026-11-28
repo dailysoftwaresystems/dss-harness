@@ -164,6 +164,51 @@ public static class FlowInstanceId
     }
 
     /// <summary>
+    /// The id of a member's visit <paramref name="visit"/>, from the id its first visit has (<paramref name="first"/>): that
+    /// id itself for the first, and <c>+n</c> after it from the second - <c>fix+2</c> of <c>fix</c> at 2. The one spelling of
+    /// a visit the engine gives a member it makes and the status of a run's records names a raise the resume makes by.
+    /// </summary>
+    /// <param name="first">The id of the member's first visit, well formed.</param>
+    /// <param name="visit">The visit, from 1.</param>
+    public static string OfVisit(string first, int visit)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(first);
+        ArgumentOutOfRangeException.ThrowIfLessThan(visit, 1);
+
+        return visit == 1 ? first : $"{first}+{visit.ToString(CultureInfo.InvariantCulture)}";
+    }
+
+    /// <summary>
+    /// <paramref name="name"/> beside <paramref name="of"/>, in the scope an instance's id or a declaration's path names -
+    /// as a handler is its source's sibling: <c>rounds#2.fix</c> beside <c>rounds#2.build+2</c>, <c>rounds.fix</c> beside
+    /// <c>rounds.build</c>, and <c>fix</c> beside a step of the top.
+    /// </summary>
+    /// <param name="of">An instance's id or a declaration's path.</param>
+    /// <param name="name">The name of the step beside it.</param>
+    public static string SiblingOf(string of, string name)
+    {
+        ArgumentNullException.ThrowIfNull(of);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        return of.LastIndexOf('.') is >= 0 and var dot ? $"{of[..dot]}.{name}" : name;
+    }
+
+    /// <summary>
+    /// What the well-formed id <paramref name="id"/> is as a member of its scope: the scope's id - everything before its own
+    /// segment, empty at the top - its own segment's name, and its visit, from 1 where none is written.
+    /// </summary>
+    /// <param name="id">The instance id, well formed.</param>
+    internal static (string Scope, string Name, int Visit) MemberOf(string id)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        var dot = id.LastIndexOf('.');
+        var (name, visit, _, _) = Marked(id[(dot + 1)..]);
+
+        return (dot < 0 ? string.Empty : id[..dot], name, visit);
+    }
+
+    /// <summary>
     /// The path of the declaration <paramref name="id"/> is an instance of: each segment's name, its marks gone -
     /// <c>rounds.items.fix</c> of <c>rounds#2.items[0].fix+2</c>.
     /// </summary>

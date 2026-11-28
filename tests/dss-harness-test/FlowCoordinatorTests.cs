@@ -4911,6 +4911,42 @@ public sealed class FlowCoordinatorTests
     }
 
     /// <summary>
+    /// Every write of the run's state is shown a reader off the loop once it is made, whatever wrote it: an instance's own
+    /// record written alone among its changes is one - here the failure its policy ends the run with, the one write that
+    /// says the run failed before the session's end - and read as the next write is made, the standing shown is the one
+    /// the write before it said, never one an earlier write said while the records already said another.
+    /// </summary>
+    [Fact]
+    public async Task EveryWriteOfTheRunsState_IsShownOnceMade_TheFailureThatEndsTheRunAmongThem()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+            """);
+        var runner = new FakeRunner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "leg 'windows' ended Red (20)"));
+        var records = new Snapshots();
+        FlowCoordinator? coordinator = null;
+        var written = new List<FlowRunStatus>();
+        var shown = new List<FlowRunStatus>();
+
+        // Read as each write is made, before it is shown: what the write before it left shown.
+        records.Writing = (_, _, _) =>
+        {
+            shown.Add(coordinator!.Status);
+            written.Add(records.Last!.Status);
+        };
+        coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
+        Assert.Equal([FlowRunStatus.Running, FlowRunStatus.Running, FlowRunStatus.Running, FlowRunStatus.Running, FlowRunStatus.Running, FlowRunStatus.Failed, FlowRunStatus.Failed], written);
+        Assert.Equal(written.SkipLast(1), shown.Skip(1));
+    }
+
+    /// <summary>
     /// What the engine hands a reader off its loop is never a collection the loop goes on changing: the instances, the
     /// questions, a question's answers and a visit's answers a reader on another thread took while the loop stood held in
     /// the middle of raising a question are, once the loop has gone on - the question answered, the next step drawn and its

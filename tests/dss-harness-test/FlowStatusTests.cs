@@ -951,8 +951,9 @@ public sealed class FlowStatusTests
 
     /// <summary>
     /// A handler an ending owes a raise - a pause recorded its source's ending and raised nothing - is left by the engine's
-    /// own rule of what keeps a run from done (<see cref="FlowInstance.HandlersOwed"/>), as the instance the resume raises:
-    /// counted and named among what is left, and timed in the estimate by its step's own earlier visit, never left out as
+    /// own rule of what keeps a run from done (<see cref="FlowInstance.RaisesOwed"/>), as the instance the resume raises:
+    /// counted and named among what is left by the visit the resume makes - <c>fix+2</c>, for the scope holds the visit
+    /// <c>fix</c> an earlier ending raised - and timed in the estimate by its step's own earlier visit, never left out as
     /// though nothing were left.
     /// </summary>
     [Fact]
@@ -983,10 +984,96 @@ public sealed class FlowStatusTests
 
         Assert.Equal(
             """
-            left      at least 1 step instance, at most 1 step instance (nothing more can come); 1 handler an ending owes a raise: fix
+            left      at least 1 step instance, at most 1 step instance (nothing more can come); 1 handler an ending owes a raise: fix+2
             estimate  between 3m00s and 3m00s more, from the 1 step instance that ended Done in this run
             """,
             string.Join("\n", facts.Skip(4)));
+    }
+
+    /// <summary>
+    /// A raise whose visit is in the records is made, whatever its source's record still says - an older build wrote the
+    /// visit before it wrote its source's raise, so a crash between the two, or a status read between them, finds the raise
+    /// owed beside the visit it made: the visit is counted once, as itself, never beside a raise of the same id the facts
+    /// would invent - which counted it twice and, both timed by the handler's step, failed the whole facts call - and no
+    /// handler is said to be owed a raise. Here a loop's second iteration, whose failed build's handler a crash cut off
+    /// after its visit was recorded.
+    /// </summary>
+    [Fact]
+    public void ARaiseWhoseVisitIsRecorded_IsCountedOnceAsThatVisit_EvenWhereItsSourceStillSaysItOwed()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: rounds
+                repeat:
+                  until: 'rounds.done'
+                  maxIterations: 2
+                steps:
+                  - name: build
+                    type: orient
+                  - name: fix
+                    type: orient
+                    on:
+                      step: build
+                      outcome: failure
+            """);
+        var flow = File(
+            nameof(FlowRunStatus.Paused),
+            [
+                Step("rounds", nameof(FlowInstanceState.Running), group: true, started: At(10, 0)),
+                Step("rounds#1", nameof(FlowInstanceState.Done), group: true, started: At(10, 0), finished: At(10, 4), iteration: 1),
+                Step("rounds#1.build", nameof(FlowInstanceState.Failed), "orient", started: At(10, 0), finished: At(10, 1), handledBy: "fix", handlers: [new FlowHandlerState("fix", "done")]),
+                Step("rounds#1.fix", nameof(FlowInstanceState.Done), "orient", started: At(10, 1), finished: At(10, 4), raisedBy: "rounds#1.build"),
+                Step("rounds#2", nameof(FlowInstanceState.Running), group: true, started: At(10, 4), iteration: 2),
+                Step("rounds#2.build", nameof(FlowInstanceState.Failed), "orient", started: At(10, 4), finished: At(10, 5), handlers: [new FlowHandlerState("fix", "owed")]),
+                Step("rounds#2.fix", nameof(FlowInstanceState.NotStarted), "orient", raisedBy: "rounds#2.build"),
+            ]);
+
+        var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, NoEngine, AsOf);
+
+        Assert.Equal(
+            """
+            left      at least 3 step instances, at most 3 step instances (nothing more can come)
+            estimate  between 3m00s and 3m00s more, from the 2 step instances that ended Done in this run
+            """,
+            string.Join("\n", facts.Skip(4)));
+    }
+
+    /// <summary>
+    /// A raise its source's record says with no visit of it recorded - this build writes the source's raise before the
+    /// visit's first record, and a crash came between the two, or the status was read between them - is a raise still
+    /// owed, by the engine's own rule (<see cref="FlowInstance.RaisesOwed"/>): counted and named by the visit the resume
+    /// raises, never taken for a raise made, which no visit stands for.
+    /// </summary>
+    [Fact]
+    public void ARaiseSaidWithNoVisitRecorded_IsStillOwed_AndNamedByTheVisitTheResumeRaises()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on:
+                  step: build
+                  outcome: failure
+                then: build
+                maxVisits: 3
+            """);
+        var flow = File(
+            nameof(FlowRunStatus.Running),
+            [
+                Step("build", nameof(FlowInstanceState.Failed), "orient", started: At(10, 0), finished: At(10, 1), handledBy: "fix", handlers: [new FlowHandlerState("fix", "done")]),
+                Step("fix", nameof(FlowInstanceState.Done), "orient", started: At(10, 1), finished: At(10, 4), raisedBy: "build"),
+                Step("build+2", nameof(FlowInstanceState.Failed), "orient", started: At(10, 4), finished: At(10, 5), visit: 2, handlers: [new FlowHandlerState("fix", "raised")]),
+            ]);
+
+        var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, NoEngine, AsOf);
+
+        Assert.Equal(
+            "left      at least 1 step instance, at most 1 step instance (nothing more can come); 1 handler an ending owes a raise: fix+2",
+            facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
     }
 
     /// <summary>

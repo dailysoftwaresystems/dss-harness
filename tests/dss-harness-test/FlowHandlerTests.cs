@@ -1692,8 +1692,8 @@ public sealed class FlowHandlerRecordsTests
 
     /// <summary>
     /// A handler that is a group whose record says it never started - its block never begun, as one made in two writes
-    /// with a crash between them is left - is started by the resume that makes its raise again, and its block runs: the
-    /// ending it was raised for is never held open by a visit that cannot start.
+    /// with a crash between them is left - is started by the resume, which begins its block as its raise would have, and
+    /// its block runs: the ending it was raised for is never held open by a visit that cannot start.
     /// </summary>
     [Fact]
     public async Task AGroupHandlerItsRecordLeftUnstarted_IsStartedByTheResume_AndItsBlockRuns()
@@ -1745,6 +1745,124 @@ public sealed class FlowHandlerRecordsTests
             Assert.Equal(["mend.fix", "after"], again.Started);
             Assert.Equal(FlowInstanceState.Done, resumed.Instances["mend"].State);
         }
+    }
+
+    /// <summary>
+    /// A raise is said in its source's own record before the handler's visit's first record is written, so a crash
+    /// between the two leaves the raise said and no visit of it - never a raise owed beside the visit it made: the run's
+    /// status reads the raise as still owed, named by the visit the resume raises, and the resume makes it once, the
+    /// handler run and the failure it was raised for handled.
+    /// </summary>
+    [Fact]
+    public async Task ARaiseIsSaidBeforeItsVisitIsRecorded_ACrashBetweenLeavesItOwed_AndTheResumeMakesItOnce()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var runner = new Runner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        // The process ends at the write that says the raise while no visit of it is made yet.
+        var crashing = new CrashingRecords(records, _ => false, picksRun: run =>
+            run.Steps.Any(step => step.Instance == "build" && step.Handlers?.Contains(new FlowHandlerState("fix", "raised")) == true)
+            && run.Steps.All(step => step.Instance != "fix"));
+
+        using (records)
+        {
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
+            Assert.True(crashing.Ended);
+        }
+
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+
+        Assert.Equal([new FlowHandlerState("fix", "raised")], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build"))!.Handlers);
+        Assert.DoesNotContain(flow.Steps, step => step.Instance == "fix");
+        Assert.Equal(
+            "left      at least 1 step instance, at most 2 step instances (the engine's bounds); 1 handler an ending owes a raise: fix",
+            FlowStatus.Facts(definition, flow, questions: null, updates: null, new FlowEngineState(FlowEngineState.None, null, []), clock.GetUtcNow())
+                .First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal("done; 1 failure was handled: build, by fix", end.Summary);
+            Assert.Equal(["fix", "after"], again.Started);
+        }
+
+        Assert.Equal([new FlowHandlerState("fix", "done")], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build"))!.Handlers);
+    }
+
+    /// <summary>
+    /// A record an older build left holding a raise owed beside the visit it made - it wrote the handler's visit before its
+    /// source's raise, and a crash came between the two - is read raised, as this build writes it: the visit is that
+    /// raise, run once and never raised again beside it, and the failure it was raised for is handled.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderRecordHoldingARaiseOwedBesideItsVisit_IsReadRaised_TheVisitRunOnce()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var runner = new Runner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+        var crashing = new CrashingRecords(records, _ => false, picksStep: (instance, _) => instance == "fix");
+
+        using (records)
+        {
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
+            Assert.True(crashing.Ended);
+        }
+
+        // The source's record as the older build left it, the raise owed, in its own record and in the run's state alike.
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        harness.OrchestrationStore.WriteFlow(layout, flow with
+        {
+            Steps = [.. flow.Steps.Select(step => step.Instance == "build" ? step with { Handlers = [new FlowHandlerState("fix", "owed")] } : step)],
+        });
+        harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile("build"), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build"))! with { Handlers = [new FlowHandlerState("fix", "owed")] });
+        Assert.Equal(nameof(FlowInstanceState.NotStarted), harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "fix").State);
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal("done; 1 failure was handled: build, by fix", end.Summary);
+            Assert.Equal(["fix", "after"], again.Started);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "fix+2");
+        }
+
+        Assert.Equal([new FlowHandlerState("fix", "done")], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build"))!.Handlers);
     }
 
     /// <summary>The run's records, made whole in <paramref name="directory"/> under run <paramref name="run"/>.</summary>

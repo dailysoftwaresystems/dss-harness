@@ -236,14 +236,16 @@ public sealed class WorkflowStatusWriter
         ArgumentNullException.ThrowIfNull(snapshot);
 
         // The recovery's visits, each the group the recovery declares raised by the instance whose failure it took: how
-        // many each instance was given, and the one at work on it now, which shows the instance Recovering.
+        // many each instance was given, and the one at work on it now, by the engine's own rule of a visit at work
+        // (FlowInstance.IsAtWork) - one a pause or a stop stopped, and one that asks a person what its failure does, among
+        // them - which shows the instance Recovering.
         var visits = snapshot.Steps
             .Where(step => step.Group && string.Equals(step.Step, FlowScope.Recovery, StringComparison.Ordinal) && step.RaisedBy is not null)
             .ToList();
         var maxVisits = context.Definition.Recover?.VisitsAllowed ?? FlowRecover.MostVisits;
         var recoveries = new RecoveryView(
             visits.GroupBy(visit => visit.RaisedBy!, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal),
-            visits.Where(visit => visit.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused)
+            visits.Where(visit => FlowInstance.IsAtWork(visit.State, visit.EndedFor, visit.Question))
                 .GroupBy(visit => visit.RaisedBy!, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => new WorkflowRecovery(group.Max(visit => visit.Visit), maxVisits, "fix"), StringComparer.Ordinal));
 
