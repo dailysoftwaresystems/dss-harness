@@ -5020,12 +5020,24 @@ goes on bringing one to rest, and the pieces are placed once from the update's e
 engine meet its plan standing, an instance an earlier update visited again among them. Placing a piece against an
 instance under way is durable as one step: the placement's first write of it is the instance's own record saying it is
 being ended for the update, before anything it owed is dropped or anything in it skipped, so a crash anywhere among the
-writes that follow leaves a session that takes the run up to complete them before anything runs - what it owed dropped,
-a redirect with the question it asks, and what never started in it or waits on a question skipped, the question
-withdrawn (`FlowCoordinator.EndWhatItHolds`, the one owner the placement and the resume go through) - and a crash before
-it leaves the piece unplaced, which that session places; neither is refused over a question the placement withdraws, for
-an update under way that moves on without a step - its plan standing among it - is something that can run
-(`FlowCoordinator.NextOfTheUpdate`). A visit an update ended waits on
+writes that follow leaves a session that takes the run up to complete them before anything runs, whatever its start
+stands on - a stop pending, asked between sessions or left for the resume to take, is applied only after, so the
+instance is at rest when the stop applies and every session after reads it in one state
+(`FlowCoordinator.CompleteWhatTheSessionBeforeLeftAsync`, which first measures every attempt a crash cut off to where it
+stopped, never to the moment of a stop applied over it) - what it owed dropped, a redirect with the question it asks, the
+ending of each of its steps still owed what decides it given up, and what never started in it or waits on a question
+skipped, the question withdrawn (`FlowCoordinator.EndWhatItHolds`, the one owner the placement, the resume and each pass
+that settles the instance go through) - and a crash before it leaves the piece unplaced, which that session places;
+neither is refused over a question the placement withdraws, for an update under way that moves on without a step - its
+plan standing among it - is something that can run (`FlowCoordinator.NextOfTheUpdate`). An ending given up there - a
+machine step a safe pause left running that ended failed before the piece was placed, its failure owed to the next
+session (`FlowFailure.Owed`) with the handlers it would raise, or that ended done in the instance being ended, its
+handlers owed - is given up in one write of the step's own record: every handler it owes or raised is left, and the
+failure is owed no more and never settled (`FlowCoordinator.GiveUpTheEnding`), so no session raises a handler into the
+instance at rest or takes the failure to its policy, its group - which would fail the round the visit again runs in - or
+the recovery, and what is left of the run counts none of it, the engine and the status of its records alike
+(`FlowInstance.IsUnended`); records an older build left owing so in an instance at rest are given up the same at the
+session's start. A visit an update ended waits on
 nothing and is counted ended by the engine and the status alike, by the engine's own rule of what is left
 (`FlowInstance.IsLeft`, over `FlowInstance.IsStoppedForAnUpdate`; read by `Unended` and by `FlowStatus.IsLeft`), where one
 a pause or a stop stopped is left, to run again at the resume. Every instance of the group is of one kind, and the step
@@ -5488,7 +5500,9 @@ question left. A stop asked between
 sessions - `abort` answered with no engine running the run - ends the session it begins where the run
 stands, stopped, as a stop in a session ends it: nothing it found stopped runs again or is given the
 engine's handoff in place of its own, nothing owed is made and nothing starts; the session after it
-goes on with all of it.
+goes on with all of it. What the session before left part made is completed first, the stop applied after it: an attempt
+a crash cut off measured to where it stopped, and a placement of a plan update's piece a crash cut off made whole
+(`FlowCoordinator.CompleteWhatTheSessionBeforeLeftAsync`).
 
 Each session ends however it ends with the run's report (`report.md`, `report.json`), its owner
 released in a `finally`, its line in the run's log, and every record it wrote named in text and in

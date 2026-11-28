@@ -1909,6 +1909,12 @@ public sealed class FlowCoordinator
             // carried out now, from its entry, once.
             FinishTheChanges();
 
+            // What the session before left part made is completed now, whatever the start stands on - a stop pending is
+            // applied after it: every attempt a crash cut off measured to where it stopped, and every placement a crash cut
+            // off made whole, so an instance a plan update ended is at rest when anything else of the session touches it -
+            // and every session after reads all of it in one state.
+            await CompleteWhatTheSessionBeforeLeftAsync(cancellationToken).ConfigureAwait(false);
+
             if (stopPending)
             {
                 ApplyTheStop();
@@ -1938,10 +1944,10 @@ public sealed class FlowCoordinator
             // A stop asked between sessions - an abort answered then - ends the session it begins where the run stands,
             // as a stop in a session ends it: nothing it found stopped runs again or is given a handoff in place of its
             // own, nothing owed is made, nothing starts. All of it stays as the records hold it, for the session that
-            // goes on.
+            // goes on - save what the session before left part made, which the start completed above, before the stop.
             if (!stopPending)
             {
-                await GoOnWhereTheRunStood(cancellationToken).ConfigureAwait(false);
+                GoOnWhereTheRunStood();
             }
 
             // The session is recorded where a run's records are: begun, or taken up from one another left.
@@ -2332,22 +2338,29 @@ public sealed class FlowCoordinator
     private void EndThePass() => _records?.Flush();
 
     /// <summary>
-    /// A session's start where the run goes on, made before anything runs: what a pause, a stop or a crash stopped runs
-    /// again as a new attempt, its handoff given - an attempt a crash cut off having its measure completed from its own
-    /// stored stream, and the run's budget charged with what it spent; a failure that ended the run runs again, and
-    /// what its stop left is drawn again; the always steps are drawn for this session; and what the run owed is made -
-    /// owed failures, endings owed their handlers, endings whose handlers all ended, issues owed their triage, fixes
-    /// owed the recovery.
+    /// What the session before left part made, completed at the session's start whatever the start stands on - before a
+    /// stop pending is applied, and before anything runs - so what it left is in one state when the rest of the session
+    /// meets it, and every session after reads that state. Every attempt a crash cut off - its record says it running - is
+    /// measured to where it stopped, from its own stored stream, the run's budget charged with what it spent
+    /// (<see cref="CompleteTheCutAttemptAsync"/>): never measured to the moment a stop is applied over it, nor what it spent
+    /// past its record lost to that stop. An instance a plan update was bringing to rest goes on being brought to rest: what
+    /// was in flight in it ended with that session, and what a pause or a stop stopped in it, each stopped for the update -
+    /// its visit is over, never given a new attempt - and what it owed is dropped and what had not started in it, or waits
+    /// on a question, is skipped, as its placement does (<see cref="EndWhatItHolds"/>) - a crash among the placement's writes
+    /// left the rest of them to this session - so it comes to rest and is visited again in its place. A step of a group
+    /// nested in it, at any depth, is one of its steps (<see cref="StepsWithin"/>). And what an instance an update brought to
+    /// rest still owes in records an older build wrote - a failure owed, a raise owed of an ending of one of its steps - is
+    /// given up as bringing it to rest gives it up (<see cref="GiveUpTheEnding"/>), never decided or raised into the instance
+    /// at rest.
     /// </summary>
     /// <param name="cancellationToken">Stops the session's start; nothing of the run is changed by a cancellation.</param>
-    private async Task GoOnWhereTheRunStood(CancellationToken cancellationToken)
+    private async Task CompleteWhatTheSessionBeforeLeftAsync(CancellationToken cancellationToken)
     {
-        // An instance a plan update was bringing to rest when the session before ended goes on being brought to rest:
-        // what was in flight in it ended with that session, and what a pause or a stop stopped in it, each stopped for
-        // the update - its visit is over, never given a new attempt - and what it owed is dropped and what had not started
-        // in it, or waits on a question, is skipped, as its placement does (EndWhatItHolds) - a crash among the
-        // placement's writes left the rest of them to this session - so it comes to rest and is visited again in its
-        // place. A step of a group nested in it, at any depth, is one of its steps (StepsWithin).
+        foreach (var cut in _created.Where(instance => instance is { State: FlowInstanceState.Running, FromResume: true } && !instance.Step.IsGroup).ToList())
+        {
+            await CompleteTheCutAttemptAsync(cut, cancellationToken).ConfigureAwait(false);
+        }
+
         foreach (var item in _scopes.Where(scope => scope.EndingFor is not null).ToList())
         {
             var (update, piece) = item.EndingFor!.Value;
@@ -2356,13 +2369,6 @@ public sealed class FlowCoordinator
                     && (member is { State: FlowInstanceState.Running, FromResume: true } || member is { State: FlowInstanceState.Stopped, EndedFor: null })).ToList())
             {
                 var was = cut.State;
-
-                if (was is FlowInstanceState.Running)
-                {
-                    // What the crash cut off is measured to where it stopped before the update ends it.
-                    await CompleteTheCutAttemptAsync(cut, cancellationToken).ConfigureAwait(false);
-                }
-
                 StopForTheUpdate(cut, update, piece);
 
                 if (cut.Step.Type == "reason" && cut.Handoff is null)
@@ -2372,9 +2378,24 @@ public sealed class FlowCoordinator
                 }
             }
 
-            EndWhatItHolds(item);
+            _ = EndWhatItHolds(item);
         }
 
+        foreach (var step in _created.Where(EndedForAnUpdateAround).ToList())
+        {
+            _ = GiveUpTheEnding(step, forAnUpdate: true);
+        }
+    }
+
+    /// <summary>
+    /// A session's start where the run goes on, made before anything runs: what a pause, a stop or a crash stopped runs
+    /// again as a new attempt, its handoff given - an attempt a crash cut off measured already to where it stopped
+    /// (<see cref="CompleteWhatTheSessionBeforeLeftAsync"/>); a failure that ended the run runs again, and what its stop
+    /// left is drawn again; the always steps are drawn for this session; and what the run owed is made - owed failures,
+    /// endings owed their handlers, endings whose handlers all ended, issues owed their triage, fixes owed the recovery.
+    /// </summary>
+    private void GoOnWhereTheRunStood()
+    {
         // What a pause or a stop stopped, runs again: a new attempt of its visit, as a retry is, its handoff
         // spent. What the pause left owed - the policies of failures recorded while it recorded what it left
         // running - is made now, at the resume, before anything else runs. A visit a plan update stopped is over,
@@ -2389,7 +2410,6 @@ public sealed class FlowCoordinator
             if (was is FlowInstanceState.Running)
             {
                 Release(stopped);
-                await CompleteTheCutAttemptAsync(stopped, cancellationToken).ConfigureAwait(false);
             }
 
             if (stopped.Step.Type == "reason" && stopped.Handoff is null)
@@ -4766,7 +4786,7 @@ public sealed class FlowCoordinator
                 // neither those it still owed nor those it raised before the bound was met - and the source's record says
                 // so, before its policy decides.
                 instance.EndedByQuestion = asked.Kind;
-                GiveUpTheEnding(instance);
+                _ = GiveUpTheEnding(instance);
                 ApplyPolicy(instance);
                 break;
             case "fail":
@@ -5806,7 +5826,7 @@ public sealed class FlowCoordinator
                     FlowChangeKind.Step,
                     instance.GroupInstance!,
                     detail: $"ended for update {update.Id}: its work item '{piece.ItemName()}' is {(piece.Kind == FlowUpdatePieceKinds.Changed ? "done again" : "taken back")}, and it is visited again in its place");
-                EndWhatItHolds(instance);
+                _ = EndWhatItHolds(instance);
                 placed.Add(piece with { Placed = instance.GroupInstance!.Id });
                 continue;
             }
@@ -6229,44 +6249,45 @@ public sealed class FlowCoordinator
     /// <summary>
     /// What bringing <paramref name="item"/> to rest for a plan update ends of it at once, its own record saying already
     /// that it is being ended for the update: what it owed is dropped (<see cref="DropWhatItOwes"/>) - a redirect with the
-    /// question it asks among it - and what never started in it, or waits on a question, is skipped
-    /// (<see cref="SkipWhatNeverStartedIn"/>), the question withdrawn. The one owner the placement and the resume go
-    /// through: the placement makes it after the write that marks the instance, and a session that takes the run up with
-    /// an instance being brought to rest makes it again before anything runs - a crash anywhere among the placement's
-    /// writes left the rest to it, and what was made already is found made, so nothing is dropped, withdrawn or skipped
-    /// twice, and no question the placement withdrew is left for a person to answer.
+    /// question it asks among it, and every ending of its steps still owed what decides it, a failure owed among them - and
+    /// what never started in it, or waits on a question, is skipped (<see cref="SkipWhatNeverStartedIn"/>), the question
+    /// withdrawn. The one owner the placement, the resume and the instance's rest go through: the placement makes it after
+    /// the write that marks the instance; a session that takes the run up with an instance being brought to rest makes it
+    /// again before anything runs, whatever its start stands on (<see cref="CompleteWhatTheSessionBeforeLeftAsync"/>) - a crash anywhere
+    /// among the placement's writes left the rest to it, and what was made already is found made, so nothing is dropped,
+    /// withdrawn or skipped twice, and no question the placement withdrew is left for a person to answer; and each pass that
+    /// settles the instance makes it again (<see cref="SettlePiecesEndingAsync"/>), so what was raised in it, drawn in it or
+    /// owed by an ending in it since - a machine step a pause left running that ended there, its handlers owed to the next
+    /// session - is ended before it comes to rest, never left to be raised into it at rest. Whether it ended anything.
     /// </summary>
     /// <param name="item">The item scope of the work-item group being ended for an update.</param>
-    private void EndWhatItHolds(Scope item)
-    {
-        DropWhatItOwes(item);
-        _ = SkipWhatNeverStartedIn(item, item.EndingFor!.Value.Update);
-    }
+    private bool EndWhatItHolds(Scope item)
+        => DropWhatItOwes(item) | SkipWhatNeverStartedIn(item, item.EndingFor!.Value.Update);
 
     /// <summary>
-    /// What the instance being brought to rest for an update owed is dropped: a raise whose ending is inside it, a
-    /// redirect whose handler is - with the question it asks (<see cref="DropRedirectsOf"/>) - and the retry a step of it
-    /// waits for - they were owed to work that is now done again or taken back. A step whose retry is dropped ends stopped
-    /// for the update, never given its next attempt; and what the recovery would send back in it is never decided again
-    /// (<see cref="RerunDecided"/>).
+    /// What the instance being brought to rest for an update owed is dropped: the ending of each of its steps that still
+    /// owes what decides it - a raise owed, or made and not settled, and its failure where it is owed to the session that
+    /// goes on - given up for the update (<see cref="GiveUpTheEnding"/>), a redirect whose handler is in it - with the
+    /// question it asks (<see cref="DropRedirectsOf"/>) - and the retry a step of it waits for - they were owed to work that
+    /// is now done again or taken back. A step whose retry is dropped ends stopped for the update, never given its next
+    /// attempt; a failure given up is never settled, raised or decided in the instance; and what the recovery would send
+    /// back in it is never decided again (<see cref="RerunDecided"/>). Whether it dropped anything.
     /// </summary>
     /// <param name="item">The item scope of the work-item group being ended for an update.</param>
-    private void DropWhatItOwes(Scope item)
+    private bool DropWhatItOwes(Scope item)
     {
+        var dropped = false;
+
         foreach (var retry in _wakes.Where(wake => !wake.Drain && Inside(wake.Instance, item)).ToList())
         {
             _ = _wakes.Remove(retry);
             StopForTheUpdate(retry.Instance, item.EndingFor!.Value.Update, item.EndingFor!.Value.Piece);
+            dropped = true;
         }
 
-        foreach (var pending in _pendingEndings.Values.Where(pending => Inside(pending.Source, item)).ToList())
+        foreach (var step in StepsWithin(item).ToList())
         {
-            _ = _pendingEndings.Remove(pending.Source.Id);
-
-            foreach (var handler in pending.Handlers)
-            {
-                SetHandlerState(pending.Source, handler.Step.Name, "left");
-            }
+            dropped |= GiveUpTheEnding(step, forAnUpdate: true);
         }
 
         foreach (var handler in _redirects.Where(redirect => Inside(redirect.Handler, item)).Select(redirect => redirect.Handler).Distinct().ToList())
@@ -6275,7 +6296,10 @@ public sealed class FlowCoordinator
             // a visit of the recovery decided stays decided - its record said it with the redirect (FlowInstance.Reruns) -
             // so no session decides it again.
             DropRedirectsOf(handler, "its handler's instance ends for a plan update, and what it was owed is dropped");
+            dropped = true;
         }
+
+        return dropped;
 
         static bool Inside(FlowInstance instance, Scope item)
         {
@@ -6485,9 +6509,10 @@ public sealed class FlowCoordinator
             var (update, piece) = item.EndingFor!.Value;
 
             // What was drawn or raised in it since the piece was placed - a handler a step's ending raised - never
-            // starts, and is skipped as what never started is; the instance comes to rest once every step of it, at
-            // every depth, has ended.
-            changed |= SkipWhatNeverStartedIn(item, update);
+            // starts, and is skipped as what never started is, and what an ending in it came to owe since - a machine
+            // step a pause left running that ended there, its handlers owed - is given up, as the placement ends them
+            // (EndWhatItHolds); the instance comes to rest once every step of it, at every depth, has ended.
+            changed |= EndWhatItHolds(item);
 
             if (StepsWithin(item).Any(member => !member.Step.IsGroup && member.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused))
             {
@@ -11953,27 +11978,42 @@ public sealed class FlowCoordinator
     /// so no later session finds it owed and raises it, and every one it raised before the question - one whose
     /// <c>when</c> could not be read among them - is left (<see cref="Abandoned"/>), so no resume rebuilds an ending waiting
     /// on it, which no session held: the ending is settled by none of its handlers, and its failure, where it failed, is
-    /// what its policy or the redirect makes of it.
+    /// what its policy or the redirect makes of it. Where the source is a step of a work item a plan update is bringing to
+    /// rest, or brought to rest (<paramref name="forAnUpdate"/>), its ending is given up with what the item owed: every
+    /// handler it owes or raised is left, and a failure owed to the session that goes on (<see cref="FlowFailure.Owed"/>) is
+    /// owed no more - in the same write, so no session raises a handler into the item at rest, or settles or decides that
+    /// failure there by its policy, its group or the recovery, and what is left of the run (<see cref="FlowInstance.IsUnended"/>)
+    /// counts it neither in the engine nor in the status of the run's records. The failure stays unsettled, as nothing
+    /// decided it. Whether anything was given up.
     /// </summary>
-    private void GiveUpTheEnding(FlowInstance source)
+    /// <param name="source">The step whose ending is given up.</param>
+    /// <param name="forAnUpdate">Whether its work item is being, or was, brought to rest for a plan update.</param>
+    private bool GiveUpTheEnding(FlowInstance source, bool forAnUpdate = false)
     {
-        if (!source._handlers.Any(handler => handler.State is "owed" or "raised"))
+        if (!source._handlers.Any(handler => handler.State is "owed" or "raised")
+            && !(forAnUpdate && (source.Failure is FlowFailure.Owed || _pendingEndings.ContainsKey(source.Id))))
         {
-            return;
+            return false;
         }
 
         for (var at = 0; at < source._handlers.Count; at++)
         {
             source._handlers[at] = source._handlers[at] switch
             {
-                { State: "owed" } owed => owed with { State = "passed" },
+                { State: "owed" } owed => owed with { State = forAnUpdate ? "left" : "passed" },
                 { State: "raised" } raised => raised with { State = "left" },
                 var other => other,
             };
         }
 
+        if (forAnUpdate)
+        {
+            ClearOwed(source);
+        }
+
         _ = _pendingEndings.Remove(source.Id);
         WriteStepRecordOf(source);
+        return true;
     }
 
     /// <summary>
@@ -12391,7 +12431,7 @@ public sealed class FlowCoordinator
 
         if (waited)
         {
-            GiveUpTheEnding(visit);
+            _ = GiveUpTheEnding(visit);
         }
 
         if (visit.Step.IsGroup && visit.State is FlowInstanceState.Running or FlowInstanceState.Paused)
