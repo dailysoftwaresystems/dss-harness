@@ -1243,7 +1243,7 @@ public sealed class FlowServiceTests
         var document = JsonNode.Parse(Assert.Single(outcome.Data))!.AsObject();
 
         Assert.True(outcome.Quiet);
-        Assert.Equal(["exitCode", "summary", "run", "status", "questions", "answered", "passedOver", "handoffs", "leftForAPerson", "spent", "records", "named"], document.Select(member => member.Key));
+        Assert.Equal(["exitCode", "summary", "session", "run", "status", "questions", "answered", "passedOver", "handoffs", "leftForAPerson", "spent", "records", "named"], document.Select(member => member.Key));
         Assert.Equal(0, document["exitCode"]!.GetValue<int>());
         Assert.Equal("done", document["summary"]!.GetValue<string>());
         Assert.Equal("r1", document["run"]!.GetValue<string>());
@@ -1973,6 +1973,67 @@ public sealed class FlowServiceTests
         Assert.Equal(((DateTimeOffset?)null, (FlowPauseRecord?)null), (flow.StoppingSince, flow.Pause));
     }
 
+    /// <summary>The next step a question owing its recommendation is said to take where the engine is stopping: the resume once it has gone - the report's wording and the status's.</summary>
+    private static readonly (string Report, string Status) ResumeOnceGone = (
+        "its recommendation is still owed - the stop under way seeks none, and resume-orchestrator r1 seeks it first once the engine has gone; answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now",
+        "its recommendation is still owed - the stop under way seeks none, and 'dssharness resume-orchestrator r1' seeks it first once the engine has gone; answer with 'dssharness answer-orchestrator r1 <answer> --question q1' then, and 'dssharness answer-orchestrator r1 abort --question q1' is taken now");
+
+    /// <summary>The next step a question owing its recommendation is said to take where the engine's pause defers it: the pause's advice, then its answer - the report's wording and the status's.</summary>
+    private static readonly (string Report, string Status) AfterThePause = (
+        "its recommendation is still owed - the run seeks it once its pause is complete; answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now",
+        "its recommendation is still owed - the run seeks it once its pause is complete; answer with 'dssharness answer-orchestrator r1 <answer> --question q1' then, and 'dssharness answer-orchestrator r1 abort --question q1' is taken now");
+
+    /// <summary>
+    /// A stop or a pause asked as a resume's start begins - <c>stop-orchestrator</c>'s or <c>pause-orchestrator</c>'s, read
+    /// by its first poll before anything the start holds is written - is one that start refuses an answer handed to it
+    /// over, and the claim's mark of the start is taken back from the run's state at once: while the start goes on, the
+    /// run's state never says the engine is starting, and the status and the report name the step the stop or the pause
+    /// leaves the question - never its answer taken now, which the start would refuse.
+    /// </summary>
+    /// <param name="stop">Whether a stop is asked, after a session that ended stopped past its pause; else a pause, after one whose pause was complete.</param>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AStopOrAPauseAskedAsAResumesStartBegins_TakesTheClaimsMarkBackAtOnce_SoNoReaderNamesTheAnswerTakenNow(bool stop)
+    {
+        var (repository, runner) = await RepositoryAsync(WaitedAt);
+        using var disposed = repository;
+
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, fileSystem: files);
+        var store = repository.Harness.OrchestrationStore;
+
+        Assert.Equal(FlowExit.Paused, (await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
+
+        // The session before ended stopped once its pause was complete, or paused, the question's recommendation deferred.
+        var run = RunOf(repository);
+        var at = DateTimeOffset.UtcNow;
+        StoppedPastItsPause(store, run);
+
+        if (!stop)
+        {
+            store.WriteFlow(run, store.ReadFlow(run)! with { StoppingSince = null });
+        }
+
+        // As the resume looks at its inbox - holding the run, its state taken up - the stop or the pause is asked, and the
+        // run is read as the first poll, the request taken, reads the inbox.
+        (bool? Starting, (string Report, string Status, string Header) Next)? seen = null;
+
+        files.AfterLookingAt(run.InboxFile, () =>
+        {
+            store.WriteStopFile(run, stop ? new FlowStopFile(1, Stop: new FlowStopStop(at)) : new FlowStopFile(1, Pause: new FlowStopPause(All: false, at)));
+            files.AfterLookingAt(run.InboxFile, () => seen = (store.ReadFlow(run)!.Starting, NextStepOfQ1Async(service, repository).GetAwaiter().GetResult()));
+        });
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Cancelled, resumed.ExitCode);
+        Assert.NotNull(seen);
+        Assert.Null(seen.Value.Starting);
+        Assert.Equal(stop ? ResumeOnceGone : AfterThePause, (seen.Value.Next.Report, seen.Value.Next.Status));
+        Assert.DoesNotContain(" is starting", seen.Value.Next.Header, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// An answer a past engine left in the inbox, to a question a crash left with its recommendation sought, is met by the
     /// next person's resume as the session begins: it waits for the recommendation the start seeks first - said so - and
@@ -2063,7 +2124,8 @@ public sealed class FlowServiceTests
     /// the recommendation its question owes; where that start then takes an abort a past engine left in the inbox, a stop
     /// asked as it begins after which it seeks none, the answer is refused, and the command answers that refusal as it
     /// answers one any session weighed: 13, the run's why in its line and in its --json, whatever the session it began went
-    /// on to do - said after it - never the stopped session's 130 with nothing said of its own answer.
+    /// on to do - its own end, its line and its code, said after it and kept beside it in the --json's session - never the
+    /// stopped session's 130 with nothing said of its own answer.
     /// </summary>
     [Fact]
     public async Task AnOwnAnswerThatWaitedForTheStartsAdvice_RefusedOverAStopAskedAsItBegan_IsTheCommandsRefusal()
@@ -2093,12 +2155,13 @@ public sealed class FlowServiceTests
 
         Assert.Equal((HarnessExit.Refused, line), (outcome.ExitCode, outcome.Message));
         Assert.Equal((HarnessExit.Refused, line, "Stopped"), (document["exitCode"]!.GetValue<int>(), document["summary"]!.GetValue<string>(), document["status"]!.GetValue<string>()));
+        Assert.Equal(("stopped", HarnessExit.Cancelled), SessionOf(document));
         Assert.Equal((entry.Id, RefusedOverTheStop), (refused.Inbox, refused.Why));
 
         // The session went on with the abort, which it took, and says so after the refusal - and the run's log holds the
         // command's refusal.
         Assert.Equal(
-            ["the answer 'abort' handed over for question 'q1' was taken from the inbox", "the session it began went on without it: stopped"],
+            ["the answer 'abort' handed over for question 'q1' was taken from the inbox", "the session it began went on without it: stopped (exit 130)"],
             (outcome.Details ?? []).Where(said => said.StartsWith("the answer ", StringComparison.Ordinal) || said.StartsWith("the session ", StringComparison.Ordinal)));
         Assert.Equal("Stopped", store.ReadFlow(run)!.Status);
         Assert.Equal(HarnessExit.Refused, repository.Harness.OrchestrationLog.Read(run.LogFile("r1"))[^1].ExitCode);
@@ -2132,15 +2195,122 @@ public sealed class FlowServiceTests
 
         var outcome = await answering.WaitAsync(Bound, Token);
         var document = JsonNode.Parse(Assert.Single(outcome.Data))!;
-        var why = "question 'q2' of run 'r1' still owes the recommendation it is answered with, so nothing was answered - the run seeks it once its pause is complete; "
-            + "answer with answer-orchestrator r1 <answer> --question q2 then, and answer-orchestrator r1 abort --question q2 is taken now";
-        var line = $"the engine running 'r1' did not take 'go' for question 'q2': {why}";
+        var line = $"the engine running 'r1' did not take 'go' for question 'q2': {RefusedOverThePause}";
 
         Assert.Equal((HarnessExit.Refused, line), (outcome.ExitCode, outcome.Message));
         Assert.Equal((HarnessExit.Refused, line, "Paused"), (document["exitCode"]!.GetValue<int>(), document["summary"]!.GetValue<string>(), document["status"]!.GetValue<string>()));
-        Assert.Equal(why, Assert.Single(store.ReadFlowQuestions(run)!.Refused!).Why);
-        Assert.Contains("the session it began went on without it: paused, waiting on q1, q2", outcome.Details ?? []);
+        Assert.Equal(("paused, waiting on q1, q2", HarnessExit.Cancelled), SessionOf(document));
+        Assert.Equal(RefusedOverThePause, Assert.Single(store.ReadFlowQuestions(run)!.Refused!).Why);
+        Assert.Contains("the session it began went on without it: paused, waiting on q1, q2 (exit 130)", outcome.Details ?? []);
         Assert.NotNull(store.ReadFlow(run)!.Pause);
+    }
+
+    /// <summary>Why <c>answer-orchestrator r1 go --question q2</c> is refused where a pause asked as its own session's start began defers the recommendation q2 owes.</summary>
+    private const string RefusedOverThePause = "question 'q2' of run 'r1' still owes the recommendation it is answered with, so nothing was answered - the run seeks it once its pause is complete; "
+        + "answer with answer-orchestrator r1 <answer> --question q2 then, and answer-orchestrator r1 abort --question q2 is taken now";
+
+    /// <summary>The session's own end a command's --json keeps beside its own: its line and its code.</summary>
+    private static (string Summary, int ExitCode) SessionOf(JsonNode document)
+        => (document["session"]!["summary"]!.GetValue<string>(), document["session"]!["exitCode"]!.GetValue<int>());
+
+    /// <summary>
+    /// The command's own answer, refused as its session's start began - a pause asked then, which defers the recommendation
+    /// it waited for - is the command's refusal on every exit of that session: here the session goes on and is then refused
+    /// a record of its own, the run's issues owed its next round unreadable as it writes its report. The command answers
+    /// 13 with the run's why, its answer's refusal said - never the session's 20 with its answer said to stay in an inbox it
+    /// was emptied from as settled - and the session's own end, its line and its code, said after it and kept beside it in
+    /// the --json's session.
+    /// </summary>
+    [Fact]
+    public async Task AnOwnAnswerRefusedAsItsSessionStarted_IsTheCommandsRefusal_WhereTheSessionIsThenRefusedARecord()
+    {
+        var (repository, runner) = await RepositoryAsync(TwoWaitedAt);
+        using var disposed = repository;
+
+        var engines = new Engines(repository.Harness.Identity);
+        var run = await CrashedWhileSeekingQ2Async(repository, runner, engines);
+        var store = repository.Harness.OrchestrationStore;
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, timings: HandedOverTimings, fileSystem: files, identity: engines);
+
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: "q2", text: null, textFile: null, again: false, json: true, cancellationToken: Token);
+
+        await files.Written(run.InboxFile).WaitAsync(Bound, Token);
+        var entry = store.ReadInbox(run)!.Answers.Single();
+
+        // As the command's own session looks at its inbox, its records opened and its answer waiting: a pause is asked,
+        // which its first poll reads, and the run's issues owed its next round can no longer be read.
+        files.AfterLookingAt(run.InboxFile, () =>
+        {
+            store.WriteStopFile(run, new FlowStopFile(1, Pause: new FlowStopPause(All: false, DateTimeOffset.UtcNow)));
+            files.Unreadable(run.NextRoundFile);
+        });
+        engines.Alive = false;
+
+        var outcome = await answering.WaitAsync(Bound, Token);
+        var document = JsonNode.Parse(Assert.Single(outcome.Data))!;
+        var line = $"the engine running 'r1' did not take 'go' for question 'q2': {RefusedOverThePause}";
+        var unread = $"'{run.NextRoundFile}', {OrchestrationStore.NextRoundKind}, could not be read: {Signalling.Unread}. Nothing was changed.";
+
+        Assert.Equal((HarnessExit.Refused, line), (outcome.ExitCode, outcome.Message));
+        Assert.Equal((HarnessExit.Refused, line, "Paused"), (document["exitCode"]!.GetValue<int>(), document["summary"]!.GetValue<string>(), document["status"]!.GetValue<string>()));
+        Assert.Equal((unread, HarnessExit.CommandFailed), SessionOf(document));
+        Assert.Contains($"the session it began went on without it: {unread} (exit 20)", outcome.Details ?? []);
+
+        var refused = Assert.Single(store.ReadFlowQuestions(run)!.Refused!);
+        Assert.Equal((entry.Id, RefusedOverThePause), (refused.Inbox, refused.Why));
+
+        // Weighed and settled, the answer left the inbox, and nothing says it stays there.
+        Assert.DoesNotContain(outcome.Details ?? [], said => said.Contains(" stays in ", StringComparison.Ordinal));
+        Assert.False(File.Exists(run.InboxFile));
+        Assert.Equal(HarnessExit.Refused, repository.Harness.OrchestrationLog.Read(run.LogFile("r1"))[^1].ExitCode);
+    }
+
+    /// <summary>
+    /// The command's own answer, taken as its session began, is said taken on every exit of that session - here the session
+    /// is refused a record of its own as it writes its report: the session's refusal (20) is the command's, and its answer
+    /// is said taken, never said to stay in an inbox it was emptied from as settled.
+    /// </summary>
+    [Fact]
+    public async Task AnOwnAnswerTakenAsItsSessionBegan_IsSaidTaken_WhereTheSessionIsThenRefusedARecord()
+    {
+        var (repository, runner) = await RepositoryAsync(HoldingFlow);
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await Service(repository.Harness, runner).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var engines = new Engines(repository.Harness.Identity);
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, timings: HandedOverTimings, fileSystem: files, identity: engines);
+        var store = repository.Harness.OrchestrationStore;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        runner.Holds("after", release.Task);
+        store.WriteOwner(run, new RunOwner(engines.CurrentMachine, Engines.Engine, DateTimeOffset.UtcNow, "its start"));
+
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: true, cancellationToken: Token);
+
+        await files.Written(run.InboxFile).WaitAsync(Bound, Token);
+        var entry = Assert.Single(store.ReadInbox(run)!.Answers);
+        engines.Alive = false;
+
+        // The answer taken, the step it lets run is running: the run's issues owed its next round can no longer be read.
+        await runner.WaitStartedAsync("after").WaitAsync(Bound, Token);
+        files.Unreadable(run.NextRoundFile);
+        release.SetResult();
+
+        var outcome = await answering.WaitAsync(Bound, Token);
+        var unread = $"'{run.NextRoundFile}', {OrchestrationStore.NextRoundKind}, could not be read: {Signalling.Unread}. Nothing was changed.";
+
+        Assert.Equal((HarnessExit.CommandFailed, unread), (outcome.ExitCode, outcome.Message));
+        Assert.Equal(
+            ["the answer 'go' handed over for question 'q1' was taken as the session began"],
+            (outcome.Details ?? []).Where(said => said.StartsWith("the answer ", StringComparison.Ordinal)));
+        Assert.Null(JsonNode.Parse(Assert.Single(outcome.Data))!["session"]);
+        Assert.Equal(entry.Id, Assert.Single(Assert.Single(store.ReadFlowQuestions(run)!.Questions).Answers).By!.Inbox);
+        Assert.False(File.Exists(run.InboxFile));
     }
 
     /// <summary>
@@ -6347,6 +6517,7 @@ public sealed class FlowServiceTests
         private readonly ConcurrentDictionary<string, TaskCompletionSource> _written = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, TaskCompletionSource> _deleted = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, bool> _broken = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, bool> _unreadable = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, bool> _failsOnce = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, bool> _failsAlways = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, bool> _endsOnce = new(StringComparer.OrdinalIgnoreCase);
@@ -6410,6 +6581,12 @@ public sealed class FlowServiceTests
         /// <summary>Reads <paramref name="path"/> as it is again.</summary>
         public void Mends(string path) => _broken.TryRemove(Path.GetFullPath(path), out _);
 
+        /// <summary>What a read of a file <see cref="Unreadable"/> made meets, as the system says it.</summary>
+        public const string Unread = "The process cannot access the file because it is being used by another process";
+
+        /// <summary>Makes every read of <paramref name="path"/> fail as a file another process holds does: a harness's refusal to read the record, never a defect.</summary>
+        public void Unreadable(string path) => _unreadable[Path.GetFullPath(path)] = true;
+
         public override void WriteAtomic(string path, Action<Stream> write)
         {
             base.WriteAtomic(path, write);
@@ -6435,8 +6612,8 @@ public sealed class FlowServiceTests
         }
 
         public override Stream OpenRead(string path)
-            => _broken.ContainsKey(Path.GetFullPath(path))
-                ? throw new InvalidOperationException("the disk said something no one expected.")
+            => _broken.ContainsKey(Path.GetFullPath(path)) ? throw new InvalidOperationException("the disk said something no one expected.")
+                : _unreadable.ContainsKey(Path.GetFullPath(path)) ? throw new IOException($"{Unread}.")
                 : base.OpenRead(path);
 
         public override PathKind KindOf(string path)

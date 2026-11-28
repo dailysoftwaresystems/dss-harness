@@ -650,7 +650,9 @@ public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnly
 /// True while the live engine is taking the run up and takes an answer handed to it as it seeks the recommendation the
 /// question owes: written by its session's claim, before the owner is (<see cref="FlowRunOwner.Claim"/>), and by every
 /// write its start makes while no stop or pause is asked of it, after which it seeks no advice for such an answer and
-/// refuses it - <see cref="StoppingSince"/> saying a stop from then on - until the start's own end
+/// refuses it - the mark taken back from this file the moment one is asked, outside the start's hold
+/// (<see cref="IFlowRecords.Unmark"/>), no write made after that moment saying it, and <see cref="StoppingSince"/> saying a
+/// stop once it is applied - until the start's own end
 /// (<see cref="FlowChangeKind.StartEnded"/>), written once it has made what it held, sought every recommendation the run
 /// owes and weighed what was handed over meanwhile; left out by every write after it, by the release of a session that
 /// ended before its own writes said what its engine did (<see cref="FlowRunOwner.Release"/>), and by a run an older build
@@ -1540,7 +1542,7 @@ public enum FlowChangeKind
 /// them as they write its listed issues; null where the change says nothing of them.
 /// </param>
 /// <param name="StoppingSince">When the stop the session ends with was applied - its hard stop, or a stop once its pause was complete; null where none was (<see cref="FlowFile.StoppingSince"/>).</param>
-/// <param name="Starting">Whether the change was taken while the engine's start was under way and took what it was handed, no stop and no pause asked of it (<see cref="FlowFile.Starting"/>).</param>
+/// <param name="Starting">Whether the change was taken while the engine's start was under way and took what it was handed, no stop and no pause asked of it (<see cref="FlowFile.Starting"/>) - and, for a write a start held, still so as it is made.</param>
 public sealed record FlowSnapshot(
     FlowRunStatus Status,
     DateTimeOffset? EndedAt,

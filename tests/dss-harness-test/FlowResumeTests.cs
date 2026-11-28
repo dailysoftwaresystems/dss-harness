@@ -630,6 +630,65 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// A pause asked while a resume's start is under way - its writes held, here as it completes the attempts a crash cut
+    /// off - takes the start's mark back from the run's state at once, the claim's among it, for from that moment the start
+    /// refuses what it is handed for the advice it would have sought: the run's state says the engine is not starting from
+    /// then on, and no write the start held from before the pause says it is once the hold is made.
+    /// </summary>
+    [Fact]
+    public async Task APauseAskedWhileAStartIsUnderWay_TakesItsMarkBackAtOnce_AndNoWriteItHeldSaysStartingAfter()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+              - name: two
+                type: orient
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var watched = new Watched(records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner().Hold("one").Hold("two"), new RunnerFacts(), records: watched);
+            _ = coordinator.RunAsync(Token);
+
+            // The crash, with both steps running.
+            await watched.SeenAsync(snapshot => snapshot.Steps.Count(step => step.State == FlowInstanceState.Running) == 2).WaitAsync(Bound, Token);
+        }
+
+        // The next session's claim marks the run's state as its start.
+        harness.OrchestrationStore.WriteFlow(layout, harness.OrchestrationStore.ReadFlow(layout)! with { Starting = true });
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        FlowCoordinator? resumed = null;
+        bool? markedAsThePauseWasAsked = true;
+        var account = new AskingAtTheSecondCut(() =>
+        {
+            resumed!.RequestPause("command");
+            markedAsThePauseWasAsked = harness.OrchestrationStore.ReadFlow(layout)!.Starting;
+        });
+
+        using (again)
+        {
+            var watched = new PassWatched(again);
+            resumed = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: watched, runName: "r1", streamAccount: account);
+
+            Assert.Equal(FlowRunStatus.Paused, (await resumed.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+
+            // The first cut attempt's own record was held before the pause was asked, and is written after it.
+            Assert.Equal(2, account.Asked);
+            Assert.Contains((FlowChangeKind.Step, false), watched.Written);
+            Assert.All(watched.Written, write => Assert.False(write.Starting));
+        }
+
+        Assert.Null(markedAsThePauseWasAsked);
+        Assert.Null(harness.OrchestrationStore.ReadFlow(layout)!.Starting);
+    }
+
+    /// <summary>
     /// An abort a session's start takes - the command's own answer, given as the session begins - is the stop that start
     /// applies before anything else, and it seeks no advice after it: the run's state says the engine is stopping from the
     /// abort's own record on, at the moment it was taken, never that it is starting, and an answer handed to the start
@@ -5216,6 +5275,31 @@ public sealed class FlowResumeTests
         {
             inner.Flush();
             _ = Flushed.TrySetResult();
+        }
+
+        public void Unmark()
+            => inner.Unmark();
+    }
+
+    /// <summary>The account of each attempt a crash cut off - none read from its stream - doing what the test asks as the second is asked for.</summary>
+    /// <param name="second">What is done as the second attempt's account is asked for.</param>
+    private sealed class AskingAtTheSecondCut(Action second) : IFlowStreamAccount
+    {
+        private int _asked;
+
+        /// <summary>How many attempts' accounts were asked for.</summary>
+        public int Asked => Volatile.Read(ref _asked);
+
+        public string? Account(FlowStepRun run) => null;
+
+        public Task<FlowCutAttempt?> AttemptOf(FlowStepRun run, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref _asked) == 2)
+            {
+                second();
+            }
+
+            return Task.FromResult<FlowCutAttempt?>(null);
         }
     }
 

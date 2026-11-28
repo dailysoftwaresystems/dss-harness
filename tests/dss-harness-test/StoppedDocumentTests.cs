@@ -22,7 +22,7 @@ public sealed class StoppedDocumentTests
     private static readonly string[] Ledger = ["exitCode", "summary", "runId", "passed", "cancelled", "unfinished", "complete", "legs"];
 
     /// <summary>The flow document's members, in its order: the session a run verb would have run, empty.</summary>
-    private static readonly string[] FlowDocument = ["exitCode", "summary", "run", "status", "questions", "answered", "passedOver", "handoffs", "leftForAPerson", "spent", "records", "named"];
+    private static readonly string[] FlowDocument = ["exitCode", "summary", "session", "run", "status", "questions", "answered", "passedOver", "handoffs", "leftForAPerson", "spent", "records", "named"];
 
     /// <summary>The ask document's members, in its order: the facts and the answer apart, both empty where the command stops before a run.</summary>
     private static readonly string[] AskDocument = ["exitCode", "summary", "facts", "worded", "answer", "whyNot", "cost", "record"];

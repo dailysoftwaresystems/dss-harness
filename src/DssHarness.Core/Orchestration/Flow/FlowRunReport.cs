@@ -419,27 +419,21 @@ public static partial class FlowRunReport
         return ends.Count > 0 ? ends.Max() : source.Flow.StartedAt;
     }
 
+    /// <summary>The kinds of event that record a session's beginning: its own, or one taken up by the engine that drove the session before.</summary>
+    private static readonly string[] SessionStarts = [FlowEvent.KindOf(FlowChangeKind.SessionBegan), FlowEvent.KindOf(FlowChangeKind.Resumed)];
+
     /// <summary>
     /// The run's own section: its sessions, its times, its budget. Its active time is the union of every attempt's runs -
-    /// the time at least one step's work ran; its pause is the time between its sessions, from the last record of one to
-    /// the start of the next; its wait for a person is each question's (<see cref="PersonWaitOf"/>), summed.
+    /// the time at least one step's work ran; its pause is the time between its sessions (<see cref="PausedSecondsOf"/>);
+    /// its wait for a person is each question's (<see cref="PersonWaitOf"/>), summed.
     /// </summary>
     private static JsonObject TheRun(FlowRunReportSource source, DateTimeOffset? at)
     {
         var events = source.Events ?? [];
         var began = events.FirstOrDefault(@event => @event.Kind == FlowEvent.KindOf(FlowChangeKind.SessionBegan))?.At ?? source.Flow.StartedAt;
-        var starts = new[] { FlowEvent.KindOf(FlowChangeKind.SessionBegan), FlowEvent.KindOf(FlowChangeKind.Resumed) };
-        var sessions = events.Count(@event => starts.Contains(@event.Kind, StringComparer.Ordinal));
+        var sessions = events.Count(@event => SessionStarts.Contains(@event.Kind, StringComparer.Ordinal));
         var wall = at is { } end && end > began ? Seconds((end - began).TotalSeconds) : null;
-        var paused = 0.0;
-
-        for (var index = 1; index < events.Count; index++)
-        {
-            if (starts.Contains(events[index].Kind, StringComparer.Ordinal) && events[index].At > events[index - 1].At)
-            {
-                paused += (events[index].At - events[index - 1].At).TotalSeconds;
-            }
-        }
+        var paused = PausedSecondsOf(events);
 
         var person = (source.Questions?.Questions ?? []).Sum(question => PersonWaitOf(question, at)?.TotalSeconds ?? 0);
 
@@ -454,6 +448,60 @@ public static partial class FlowRunReport
             ["waitingForAPersonSeconds"] = person > 0 ? Seconds(person) : null,
             ["budget"] = SpentOf(source.Flow.Spent with { Usd = Math.Round(source.Flow.Spent.Usd, 4, MidpointRounding.AwayFromZero) }),
         };
+    }
+
+    /// <summary>
+    /// The time between a run's sessions, in seconds, read from its events alone - the one reading of where a session ends
+    /// and the next begins, which the events of every build read the same way: from a session's last record, its
+    /// <c>sessionEnded</c>, to the next session's first event, whatever its kind. A session records its beginning only once
+    /// its start goes on, and what that start took up is written before it - a stopped step made a new attempt, the handoff
+    /// it is given, a stop it applies, each held and stamped as the hold is made - as is an answer it took as it began; so
+    /// the time between two sessions falls before the first of those, never before the record of the beginning. A session a
+    /// crash ended wrote no last record: where it stopped is told only by the next session's record of its beginning, and
+    /// the time before that record is counted.
+    /// </summary>
+    /// <param name="events">The run's events, in the order written.</param>
+    private static double PausedSecondsOf(IReadOnlyList<FlowEvent> events)
+    {
+        var ended = FlowEvent.KindOf(FlowChangeKind.SessionEnded);
+        var paused = 0.0;
+        var open = false;
+        DateTimeOffset? endedAt = null;
+
+        for (var index = 0; index < events.Count; index++)
+        {
+            var @event = events[index];
+            var gap = TimeSpan.Zero;
+
+            if (endedAt is { } last)
+            {
+                // The first event after a session's last record is the next session's first.
+                gap = @event.At - last;
+                endedAt = null;
+            }
+            else if (open && index > 0 && SessionStarts.Contains(@event.Kind, StringComparer.Ordinal))
+            {
+                // A session begins while the one before never ended: a crash ended it, and its last record is not there.
+                gap = @event.At - events[index - 1].At;
+            }
+
+            if (gap > TimeSpan.Zero)
+            {
+                paused += gap.TotalSeconds;
+            }
+
+            if (string.Equals(@event.Kind, ended, StringComparison.Ordinal))
+            {
+                endedAt = @event.At;
+                open = false;
+            }
+            else if (SessionStarts.Contains(@event.Kind, StringComparer.Ordinal))
+            {
+                open = true;
+            }
+        }
+
+        return paused;
     }
 
     /// <summary>

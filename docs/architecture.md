@@ -4512,7 +4512,10 @@ said in its `notes` - an events file not read whole, in its reader's own words (
 or the lines from the first that holds a NUL on, what a power loss left of a pass (the report is as of the event before
 it) - a definition that is not there, or one that does not read with why it does not (`OrchestrationStore.ReadDefinitionOrWhy`; no
 critical path is named). Its sections are the run (its sessions, its wall time, its active
-time - the union of every attempt's runs, two steps at once counted once - its pauses between sessions, its waits for a
+time - the union of every attempt's runs, two steps at once counted once - its pauses between sessions, each from a
+session's last record to the next session's first event, whatever its kind (`FlowRunReport.PausedSecondsOf`: a resume
+writes what its start took up before it records that it began, its held writes stamped as the hold is made; after a
+crash, which leaves no last record, to the next session's record of its beginning), its waits for a
 person, each question's to its first answer or, still open, to the last record, and its budget), the totals (tokens by
 kind, the cache's share of input, the dollars grouped - `dollarsBy`, by the model that served each part of each attempt
 and each advice by its advisor's (by step, the run's own question's under `run`), or by provider, step, agent or type - the retries and the fallbacks), one row
@@ -4739,7 +4742,9 @@ other state - one owner, so the status, the report and the engine's refusal agre
 erasing the run's history - until the start's own end, a `startEnded` change written once the start has made what it
 held, sought every recommendation the run owes and weighed what waited for them, so a session that then writes nothing
 for as long as an advice or room takes never leaves the state saying it starts; or until the start takes an abort, which
-is the stop it applies at once (`Carry`, `stoppingSince` from the abort's own record on). The order of the reads is the
+is the stop it applies at once (`Carry`, `stoppingSince` from the abort's own record on); or until a stop or a pause is
+asked of the start, which takes the mark back from `flow.json` at once, outside its held writes, and none of those says
+`starting` once it is made (`FlowCoordinator.TakeBackTheStartsMark`, `FlowCoordinator.AsWritten`). The order of the reads is the
 rule's too: every reader of a run's engine reads its owner, then `flow.json`, then its owner again, and judges the state
 only beside an owner that stood across its read, reading again where it changed (`OrchestratorService.EngineOf`, the one
 path `list-orchestrator`, the report, the status and the advisor's facts take); and a session's release removes the owner
@@ -5371,11 +5376,23 @@ the start seeks, is weighed once that advice is under way (`FlowCoordinator.Weig
 the asking; only a start that seeks none for it - a stop asked as it began, after which it seeks none, or a pause, which
 defers it - refuses it, naming the resume once the engine has gone or the pause once it is complete. Whether the start
 takes such an answer is one rule (`FlowCoordinator.StartTakesAnswers`), which also decides whether the start's writes
-say `starting`. What became of a waiting answer is kept with what it is settled with, its why among it (`FlowWeighed`),
+say `starting` - each as it is made, so a write the start held from before a stop or a pause was asked of it says it is
+not once the hold is made (`FlowCoordinator.AsWritten`) - and a stop or a pause asked of a start under way takes the
+claim's mark back from `flow.json` at once, outside the hold, as a release does (`FlowCoordinator.TakeBackTheStartsMark`,
+`IFlowRecords.Unmark`, `OrchestrationStore.Unmark`, the one write of it), inside the one section every write of the run's
+records is made in, so it never meets one half made: the run's state never says `starting` once the start no longer
+takes such an answer, though the start writes nothing else until its hold is made. What became of a waiting answer is
+kept with what it is settled with, its why among it (`FlowWeighed`),
 and said once the start has weighed it: `answer-orchestrator`'s own answer so refused is the command's refusal (13) with
-the run's why, read from `questions.json` under its entry's id - whatever the session it began went on to do, said after
-it - by the one rule an answer the command handed over is answered by whichever session weighed it
-(`FlowService.OwnRefused`), and an inbox entry's line says it was taken once its recommendation was sought, or why not.
+the run's why, read from `questions.json` under its entry's id - whatever the session it began went on to do, its own
+end, line and code, said after it and kept beside the command's in `--json`'s `session` (`FlowRunResult.Session`) - by
+the one rule an answer the command handed over is answered by whichever session weighed it (`FlowService.OwnRefused`),
+and an inbox entry's line says it was taken once its recommendation was sought, or why not. What became of what was
+handed to a session is said by one owner on every exit of it, its end in order and a refusal met inside it alike
+(`FlowService.SayWhatWasHandedOver`), the command's own answer read from what the run's records hold under its entry's
+id and otherwise from what the session settled it with, which it keeps past the entry's leaving the inbox
+(`Offered.Weighed`) - never from what it still offers, which forgets an entry as the inbox lets it go: refused, the
+command's refusal as above; taken, said so; never weighed or handed back, said to stay in the inbox.
 Once settled it is counted, and leaves the inbox
 once the file lets it go: a removal that fails is tried again at the next poll or drive's end, and one
 the inbox still holds as the session ends - the removal failed to the last, or a crash came between the

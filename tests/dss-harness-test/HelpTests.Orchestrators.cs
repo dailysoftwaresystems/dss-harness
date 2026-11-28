@@ -502,7 +502,8 @@ public sealed partial class HelpTests
                 + "the same records and the same state of its engine, which names each open question's next step, whatever a model "
                 + "might say - and never asks one: what the run was and how it stands, with its "
                 + "sessions, its wall time, its active time (the union of every attempt's runs), its pause (the time between its "
-                + "sessions), its wait for a person and its budget; the totals of its tokens by kind",
+                + "sessions, from one's last record to the next's first event, whatever its kind), its wait for a person and its "
+                + "budget; the totals of its tokens by kind",
             Prose.Words(HelpText.Of("orchestrators").StandardOutput),
             StringComparison.Ordinal);
     }

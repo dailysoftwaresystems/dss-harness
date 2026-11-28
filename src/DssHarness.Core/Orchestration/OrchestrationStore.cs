@@ -359,6 +359,24 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         Write(orchestrator.FlowFile, FlowKind, file, file.Problem());
     }
 
+    /// <summary>
+    /// Takes the mark of an engine's start back from the run's state where it holds it (<see cref="Flow.FlowFile.Starting"/>):
+    /// what a session's release does once its owner is gone (<see cref="Flow.FlowRunOwner.Release"/>), and what a start does
+    /// at once where a stop or a pause is asked of it (<see cref="Flow.IFlowRecords.Unmark"/>). Everything else the state says
+    /// stands as written; a state that holds no mark, and a run that holds no state, are left as they are.
+    /// </summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <exception cref="HarnessException">The state cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public void Unmark(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+
+        if (ReadFlow(orchestrator) is { Starting: true } marked)
+        {
+            WriteFlow(orchestrator, marked with { Starting = null });
+        }
+    }
+
     /// <summary>The run's status, or null where the run holds none.</summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     /// <exception cref="HarnessException">The status cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
