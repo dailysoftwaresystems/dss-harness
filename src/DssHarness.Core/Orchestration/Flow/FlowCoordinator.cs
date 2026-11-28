@@ -987,6 +987,12 @@ public sealed class FlowCoordinator
     /// </summary>
     private bool _withdrawnByTheReplay;
 
+    /// <summary>
+    /// Whether the replay read the decision of the <c>then</c> of the plan update under way otherwise than its entry holds it
+    /// (<see cref="ReadTheThen"/>): the session's start writes the entry so, once, held with its other writes.
+    /// </summary>
+    private bool _thenRead;
+
     /// <summary>The alone step waiting for quiet, while it waits: nothing new is admitted until it has started.</summary>
     private FlowInstance? _barrier;
 
@@ -1892,6 +1898,15 @@ public sealed class FlowCoordinator
                 // process ended in would have written it - after the list of reruns it started for an older build's visit.
                 _withdrawnByTheReplay = false;
                 WriteQuestions();
+            }
+
+            if (_thenRead)
+            {
+                // The then of the update under way as the replay read it from the redirect it names - decided where the
+                // process ended between the redirect's write and the entry's, undecided where an older build's entry named
+                // it before a redirect the process never wrote - is written into the update's entry, once (ReadTheThen).
+                _thenRead = false;
+                Put(records => records.Updates(_updates));
             }
 
             foreach (var (waiting, asked) in _carryAtStart.ToList())
@@ -5355,12 +5370,17 @@ public sealed class FlowCoordinator
 
             if (next == UpdateNext.ItsThen)
             {
-                // The redirect then names is decided once, written into the update's entry before the machinery
-                // that makes it: a crash between the two leaves the entry to say it was decided, and a visit the
-                // redirect left says it was made.
+                // The then's decision and its redirect are one fact: the redirect is decided first, in its own write - with
+                // the question it asks, where it would leave an agent open, which is written just before it - and only then
+                // is the decision written into the update's entry. A crash before the redirect's write leaves the then
+                // undecided, and the session that takes the run up decides it again, asking again where it asked - the
+                // question written without its redirect asks of nothing, and the replay withdraws it; one between the two
+                // leaves the redirect owed, which the replay reads as the then decided, the entry completed at the session's
+                // start (ReadTheThen) - so the plan never stands on a check that never ran on it. A visit the redirect left
+                // says it was made.
                 var target = _definition.Amend!.Then!;
-                PutUpdate(update with { Then = target });
                 DecideTheThen(planner, target);
+                PutUpdate((_updates.Updates.FirstOrDefault(entry => entry.Id == update.Id) ?? update) with { Then = target });
                 return true;
             }
 
@@ -5469,13 +5489,49 @@ public sealed class FlowCoordinator
                 && !_pendingEndings.Values.Any(pending => ReferenceEquals(pending.Source, planner))
                 && !_questions.Any(asked => asked.Instance == planner.Id && _open.Contains(asked.Id)) ? UpdateNext.GivenUp
             : planner.State != FlowInstanceState.Done ? UpdateNext.Waits
-            : _definition.Amend?.Then is not null
-                && update.Then is null
-                && !_redirects.Any(redirect => ReferenceEquals(redirect.Handler, planner))
-                && !_created.Any(visit => visit.LeftBy == planner.Id) ? UpdateNext.ItsThen
+            : _definition.Amend?.Then is not null && update.Then is null ? UpdateNext.ItsThen
             : PlansNoMore(planner) ? UpdateNext.PlansNoMore
             : PlanStands(planner) ? UpdateNext.ItsPlan
             : UpdateNext.Waits;
+
+    /// <summary>
+    /// Reads, as the replay takes the run up, whether the <c>then</c> of the plan update under way was decided - by its one
+    /// fact, the redirect it names, decided in its own write before the update's entry says it (<see cref="SettleUpdates"/>)
+    /// - and puts the entry right in memory where it says otherwise, the session's start writing it (<see cref="_thenRead"/>),
+    /// so the entry is what <see cref="NextOfTheUpdate"/> reads, once. A redirect its planning step owes beside an entry
+    /// naming no then - the process ended between the two writes - is the then decided, never decided again, whatever
+    /// becomes of the redirect after, a <c>stay</c> that gives it up among it. And an entry an older build wrote, naming the
+    /// then before the redirect's write, beside nothing that redirect leaves in the records - no redirect owed, no visit it
+    /// left, no visit of the step it names made since the planning step, no question it asked open or answered - is the
+    /// process ended between those two writes, the then undecided: it is decided again, so the plan never stands on a check
+    /// that never ran on it.
+    /// </summary>
+    private void ReadTheThen()
+    {
+        if (UnderWayUpdate is not { } update
+            || _definition.Amend?.Then is not { } then
+            || PlannerOf(update) is not { State: FlowInstanceState.Done, LeftBy: null, DeclaredScope: { } scope } planner)
+        {
+            return;
+        }
+
+        var target = DeclarationsOf(scope).FirstOrDefault(declaration => declaration.Name == then);
+        var decided = _redirects.Any(redirect => ReferenceEquals(redirect.Handler, planner))
+            || update.Then is not null
+                && (target is null
+                    || _created.Any(visit => visit.LeftBy == planner.Id)
+                    || _created.Skip(_created.IndexOf(planner) + 1).Any(visit => ReferenceEquals(visit.Step, target))
+                    || _questions.Any(asked => asked is { Kind: "openAgents", State: "open" or "answered" } && asked.Instance == planner.Id));
+
+        if (decided == (update.Then is not null))
+        {
+            return;
+        }
+
+        var read = update with { Then = decided ? then : null };
+        _updates = _updates with { Updates = [.. _updates.Updates.Select(entry => entry.Id == update.Id ? read : entry)] };
+        _thenRead = true;
+    }
 
     /// <summary>What the plan update under way takes next (<see cref="NextOfTheUpdate"/>).</summary>
     private enum UpdateNext
@@ -18186,6 +18242,7 @@ public sealed class FlowCoordinator
                 }
             }
 
+            ReadTheThen();
             CountTheAnswers();
 
             // The inputs a use filled its workflow with are given back from the record of the scope they were filled in,

@@ -4958,7 +4958,17 @@ pre-existing triages once starved a recovery's remedy that way) - while the run 
 scope, a held step reserving no claim, what is in flight untouched, no next iteration of a loop outside it, no
 redirect made outside it), `flow.json` saying `hold {update, at}` (`FlowHoldRecord`). The step's `amend.then` is
 followed when it is done - the redirect's machinery inside that scope (`FlowCoordinator.SettleUpdates` ->
-`DecideRedirectOf`), a question open on a step it resets withdrawn - and once that scope has come to rest (the step
+`DecideRedirectOf`), a question open on a step it resets withdrawn. Its decision and that redirect are one fact, the
+redirect's own write - with the question it asks of agents it would leave open written just before - and only after it
+does the update's entry name the then (`FlowUpdateEntry.Then`, which `FlowCoordinator.NextOfTheUpdate` reads): a crash
+before the redirect's write leaves the then undecided, the question written without it withdrawn by the replay as one
+asking of nothing, and the session that takes the run up decides it again, asking anew; one between the two leaves the
+redirect owed, which the replay reads as the then decided and the session's start writes into the entry
+(`FlowCoordinator.ReadTheThen`), so a `stay` that gives the redirect up never has it decided again; and an entry an older
+build wrote naming the then before a redirect the process never wrote - nothing of it in the records: no redirect owed,
+no visit it left, no visit of the step it names since the planning step, no question it asked open or answered - reads
+as undecided, and the then is decided again. So the plan never stands on a check that never ran on it. Once that scope
+has come to rest (the step
 ended, what `then` set going ended - never a step of it left of the run, one a pause or a stop stopped among them, which
 runs again at the resume (`FlowInstance.IsLeft`) - and a `repeat` it is in has ended its iteration) the updated plan
 stands: the update is `done`, the hold ends, and the steps that start from here on resolve every name anew. A failed planning
