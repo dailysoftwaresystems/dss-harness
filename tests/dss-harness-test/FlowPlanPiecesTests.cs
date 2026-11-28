@@ -1249,6 +1249,225 @@ public sealed class FlowPlanPiecesTests
     }
 
     /// <summary>
+    /// The flow of <see cref="Flow"/> whose work item runs <c>tidy</c> in the item's agent - in its tree, never the main
+    /// one - beside a group that makes an agent of its own and fails to the recovery: the visit of the recovery that puts it
+    /// right sends the run back to it, which would leave that agent open, and asks.
+    /// </summary>
+    private static string WithAGroupTheRecoverySendsBack()
+        => Flow.Replace(
+            "          - name: probe\n",
+            "          - name: tidy\n            type: run\n            runner: tidy\n            in: make\n            dependsOn: [make]\n          - name: fixit\n            dependsOn: [make]\n            onFailure: recover\n            steps:\n              - name: helper\n                type: create-agent\n                agent: helper\n              - name: verify\n                type: orient\n                dependsOn: [helper]\n          - name: probe\n",
+            StringComparison.Ordinal)
+            + "\n"
+            + """
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            """;
+
+    /// <summary>
+    /// A rerun a visit of the recovery decided in a work item while a plan update held the run, the update then bringing the
+    /// item to rest, is dropped with what the item owed and stays decided: the redirect that asked whether to leave an agent
+    /// open is dropped with its question, withdrawn, and the session that takes the run up before the item comes to rest - a
+    /// stop came first - decides it no more, for the visit's own record said it with the redirect, and nothing inside an
+    /// item being brought to rest is sent back. The item comes to rest and is visited again; no question asks of the
+    /// redirect the update dropped, and nothing of the item at rest is reset for it. Whether the session before ended by a
+    /// stop, which leaves the item stopped for the update, or by a crash once the update was done, which leaves it running.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARecoveryRerunAPlanUpdateDropped_IsNeverDecidedAgain_AtTheResumeBeforeTheItemIsAtRest(bool crash)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(WithAGroupTheRecoverySendsBack()) with { MaxOpenAgents = 3 };
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var mended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var checkedAgain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var checking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var checks = 0;
+        var runner = ChangingOne()
+            .OnAsync("tidy", async (run, token) =>
+            {
+                if (run.Instance == "rounds.items[0].tidy")
+                {
+                    await Task.Delay(Timeout.Infinite, token);
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            })
+            .On("verify", run => run.Instance == "rounds.items[0].fixit.verify"
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .OnAsync("mend", async (run, token) =>
+            {
+                await mended.Task.WaitAsync(token);
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            })
+            .OnAsync("check", async (run, token) =>
+            {
+                if (Interlocked.Increment(ref checks) > 1)
+                {
+                    checking.TrySetResult();
+                    await checkedAgain.Task.WaitAsync(token);
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+
+        var crashing = new CrashingRecords(records, updates => crash && updates.Updates.Any(update => update.State == FlowUpdateStates.Done));
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, crashing, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The item's group fails and the recovery takes it, while the item's tidy is in flight; the amendment is taken
+            // and its plan is being checked when the recovery's mend puts the group right, so the visit's redirect back to
+            // the group - which would leave the group's agent open - asks while the update holds the run.
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rounds.items[0].recover.mend").WaitAsync(Bound, Token);
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
+            await checking.Task.WaitAsync(Bound, Token);
+            mended.TrySetResult();
+            _ = await UntilAsync(harness, layout, flow => flow.Redirects is [{ Handler: "rounds.items[0].recover", Question: not null }]);
+
+            // The plan stands: the item is brought to rest, dropping the redirect with its question, and the run is stopped -
+            // or the process ends once the update is done - before the item is at rest, its tidy still in flight.
+            checkedAgain.TrySetResult();
+            _ = await UntilAsync(harness, layout, flow => flow.Redirects is null or [] && (!crash || crashing.Ended));
+            Assert.Equal(FlowInstanceState.Running, coordinator.Instances["rounds.items[0].tidy"].State);
+
+            coordinator.RequestStop();
+            var stopped = await session.WaitAsync(Bound, Token);
+            Assert.True(crash || FlowRunStatus.Stopped == stopped.Status, stopped.Summary);
+        }
+
+        Assert.Equal(crash ? nameof(FlowInstanceState.Running) : nameof(FlowInstanceState.Stopped), harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "rounds.items[0]").State);
+
+        // On disk: the visit's record says the rerun it decided, the redirect is gone, and its question was withdrawn with it.
+        var visitAgent = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "rounds.items[0].recover").Agent;
+        var visit = harness.OrchestrationStore.ReadStepRecord(Path.Combine(layout.InstanceDirectory("rounds.items[0].recover", visitAgent), OrchestratorLayout.StepRecordFileName))!;
+        Assert.Equal(["rounds.items[0].fixit"], visit.Reruns);
+        Assert.True(harness.OrchestrationStore.ReadFlow(layout)!.Redirects is null or []);
+        Assert.Equal("withdrawn", Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents").State);
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var resumedRunner = ChangingOne();
+
+        using (again)
+        {
+            var resumed = CoordinatorOf(definition, resumedRunner, again, harness, layout, ResumeOf(harness, layout, definition));
+            _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+
+            // The item came to rest and was visited again, whose probe asks; nothing asks of the dropped redirect again.
+            Assert.Equal("rounds.items[1].probe", resumed.OpenQuestions.Single().Instance);
+            Assert.Null(resumed.Instances["rounds.items[0].fixit"].LeftBy);
+        }
+
+        Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents");
+    }
+
+    /// <summary>
+    /// The flow of <see cref="WithLint"/> whose work item holds <c>review</c>, a reason step in the item's agent after its
+    /// build that reports what it meets to the triage of the flow's top level, whose fix the recovery there makes.
+    /// </summary>
+    private static string WithAReviewThatReports()
+        => WithLint().Replace(
+            "          - name: probe\n",
+            "          - name: review\n            type: reason\n            agent: builder\n            in: make\n            dependsOn: [build]\n            prompt: review.md\n            outputs: review.json\n            onPreExisting: triage\n          - name: probe\n",
+            StringComparison.Ordinal)
+            + "\n"
+            + """
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            """;
+
+    /// <summary>
+    /// A reporter in a work item a plan update is bringing to rest is not run again when the fix of what it reported ends:
+    /// the visit of the recovery that fixed it ends done while the item's lint is still in flight, and its work is done
+    /// again in the item visited in its place - nothing is sent back into an item being brought to rest. The item comes to
+    /// rest and is visited again, its review run once there.
+    /// </summary>
+    [Fact]
+    public async Task AReporterInAWorkItemBeingBroughtToRest_IsNotRunAgainWhenItsFixEnds()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(WithAReviewThatReports());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var lint = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = ChangingOne()
+            .OnAsync("lint", async (run, token) =>
+            {
+                if (run.Instance == "rounds.items[0].lint")
+                {
+                    await lint.Task.WaitAsync(token);
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            })
+            .On("review", run => run.Instance == "rounds.items[0].review"
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [new FlowPreExistingReport("a hole the review met", "what it is", "src/Parser.cs", "read the file and saw it", true)])
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("triage", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["course"] = "fix",
+                ["title"] = run.Issue!.Title,
+                ["description"] = "what it is",
+                ["why"] = "it is in the work's way",
+                ["where"] = new JsonArray("src/Parser.cs"),
+            }))
+            .OnAsync("mend", async (run, token) =>
+            {
+                await mended.Task.WaitAsync(token);
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The item's review reports an issue the triage sends to fix, and the recovery's mend works on it while the
+            // item's lint is in flight; the amendment brings the item to rest, and the fix ends done before it is at rest.
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("recover.mend").WaitAsync(Bound, Token);
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
+            _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0]" && step.EndedFor == "u1"));
+            mended.TrySetResult();
+            _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "recover" && step.State == nameof(FlowInstanceState.Done)));
+
+            // Nothing of the item is sent back; it comes to rest once its lint ends, and is visited again.
+            Assert.True(harness.OrchestrationStore.ReadFlow(layout)!.Redirects is null or []);
+            Assert.Null(coordinator.Instances["rounds.items[0].review"].LeftBy);
+            lint.TrySetResult();
+            _ = await session.WaitAsync(Bound, Token);
+
+            Assert.Equal("rounds.items[1].probe", coordinator.OpenQuestions.Single().Instance);
+            Assert.Equal(["rounds.items[0].review", "rounds.items[1].review"], runner.Started.Where(started => started.Contains(".review", StringComparison.Ordinal)));
+            Assert.Equal((nameof(FlowInstanceState.Stopped), "u1"), (coordinator.Instances["rounds.items[0]"].State.ToString(), coordinator.Instances["rounds.items[0]"].EndedFor));
+        }
+    }
+
+    /// <summary>
     /// The flow of <see cref="Flow"/> whose work item holds a nested group before its build, as the shipped workflow's
     /// reconcile does: <c>catch-up</c>, a machine step, then <c>settle</c>, a reason step in the item's agent; the build
     /// waits for the group.

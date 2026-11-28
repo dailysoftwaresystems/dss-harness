@@ -264,7 +264,23 @@ public sealed record FlowEvent(
 /// A handler's visit: the attempt of the instance <paramref name="RaisedBy"/> names whose ending raised it, written with its
 /// first record - a source run again as a new attempt raises its handlers anew for that attempt's ending, so which raise
 /// answers which ending is read from here. Null for every other record, and for a visit a build that kept none recorded,
-/// whose attempt is read from its source's record (<see cref="FlowInstance.AttemptRaisedFor"/>).
+/// whose attempt is read once from its source's record (<see cref="FlowInstance.AttemptRaisedFor"/>) by the first resume
+/// that reads it, which writes it here before anything rewrites its source's.
+/// </param>
+/// <param name="Reruns">
+/// A visit of the recovery that ended done: what it sent the run back to as what it put right runs again - each by the id
+/// of the instance it sent back, the step whose failure it took or the reporter of an issue it fixed - each written in
+/// the same write as that decision, the redirect or the question the redirect asks, so a session that goes on decides
+/// none of them again, whatever became of it: made, given up by a <c>stay</c>, dropped with a work item a plan update
+/// brings to rest, or resetting nothing. Empty from its done record until one is decided; null for every other record,
+/// and for a visit a build that kept none recorded, which decided its reruns as it ended. A handler put right is run
+/// again as a new visit, whose own first record says it (<see cref="RaisedByAttempt"/>).
+/// </param>
+/// <param name="Retried">
+/// A group's visit that failed and was run again as a retry the schedule opens - answered <c>retry</c>, or its failure's
+/// stop run again at a resume: written with the write that settles its failure, so a session that takes the run up while
+/// the visit is still its scope's newest draws its new visit, which the schedule had not drawn yet. Null for every other
+/// record.
 /// </param>
 public sealed record FlowStepRecord(
     string Instance,
@@ -322,7 +338,9 @@ public sealed record FlowStepRecord(
     long? DrawnIn = null,
     FlowLoopCount? Counted = null,
     FlowRecoveryThread? Thread = null,
-    int? RaisedByAttempt = null)
+    int? RaisedByAttempt = null,
+    IReadOnlyList<string>? Reruns = null,
+    bool? Retried = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -382,6 +400,9 @@ public sealed record FlowStepRecord(
             : Counted?.Problem() is { } counted ? $"where its bound counts from: {counted}"
             : Thread is not null && !Group ? "it holds what a visit of the recovery puts right, and only a visit's own record does"
             : Thread?.Problem() is { } thread ? $"what it puts right: {thread}"
+            : Reruns is not null && (!Group || RaisedBy is null) ? "it holds what a visit of the recovery sent the run back to, and only a visit's own record does"
+            : Reruns?.FirstOrDefault(rerun => !FlowInstanceId.IsWellFormed(rerun)) is { } rerun ? $"it sent the run back to '{rerun}', which is not an instance id"
+            : Retried is not null && !Group ? "it says a retry the schedule opens, and only a group's own record does"
             : Measure?.Problem() is { } measure ? $"its measure: {measure}"
             : null;
 }
@@ -588,8 +609,9 @@ public sealed record FlowHandoffRecord(string By, string? Why = null)
 /// <param name="Handler">The handler's name, as its declaration names it.</param>
 /// <param name="State">
 /// Where it stands: <c>owed</c> (the ending is written, the raise is not made yet), <c>raised</c>, <c>done</c>,
-/// <c>passed</c>, or <c>left</c> (a redirect left its visit before it ended: it took nothing, and the ending it was raised
-/// for is abandoned - settled by none of its handlers, and never rebuilt by a resume).
+/// <c>passed</c>, or <c>left</c> (the ending it was raised for is abandoned - a redirect left its visit before it ended, a
+/// plan update brought the work item it is in to rest, or the ending's question was answered <c>fail</c> or withdrawn
+/// after it was raised: settled by none of its handlers, and never rebuilt by a resume).
 /// </param>
 public sealed record FlowHandlerState(string Handler, string State)
 {
@@ -1721,6 +1743,8 @@ public sealed record FlowStartsStanding(DateTimeOffset At, FlowPauseRequest? Pau
 /// <param name="Counted">A repeat's that a plan update was planned in: where its bound counts from (<see cref="FlowStepRecord.Counted"/>); null for every other.</param>
 /// <param name="Thread">A visit of the recovery's: what it puts right, as it was decided when the visit was made (<see cref="FlowStepRecord.Thread"/>); null for every other.</param>
 /// <param name="RaisedByAttempt">A handler's visit: the attempt of its source whose ending raised it (<see cref="FlowStepRecord.RaisedByAttempt"/>); null for every other.</param>
+/// <param name="Reruns">A visit of the recovery that ended done: what it sent the run back to, each decided once (<see cref="FlowStepRecord.Reruns"/>); null for every other.</param>
+/// <param name="Retried">A group's visit that failed: its retry the schedule opens (<see cref="FlowStepRecord.Retried"/>); null for every other.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -1777,4 +1801,6 @@ public sealed record FlowSnapshotStep(
     long? DrawnIn = null,
     FlowLoopCount? Counted = null,
     FlowRecoveryThread? Thread = null,
-    int? RaisedByAttempt = null);
+    int? RaisedByAttempt = null,
+    IReadOnlyList<string>? Reruns = null,
+    bool? Retried = null);

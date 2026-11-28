@@ -414,10 +414,27 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>
     /// A handler's visit: the attempt of its source whose ending raised it (<see cref="FlowStepRecord.RaisedByAttempt"/>) -
     /// a source run again as a new attempt has an ending of its own, which raises its handlers anew. Read back from the
-    /// record at a resume, and for a record that names none by <see cref="AttemptRaisedFor"/>; 0 for every other instance,
-    /// and until the resume has read it.
+    /// record at a resume, and for a record that names none by <see cref="AttemptRaisedFor"/> once, by the resume that
+    /// first reads it, which writes it into the visit's own record before anything rewrites its source's; 0 for every
+    /// other instance, and until the resume has read it.
     /// </summary>
     internal int RaisedByAttempt;
+
+    /// <summary>
+    /// A visit of the recovery that ended done: the id of each instance it sent the run back to as what it put right runs
+    /// again (<see cref="FlowStepRecord.Reruns"/>), each added in the same write as that decision - the one fact a session
+    /// reads of whether a rerun the visit owes was decided, whatever became of it since. Empty from its done end until one
+    /// is decided; null for every other instance, and for a visit an older build's record holds, which decided its reruns as
+    /// it ended.
+    /// </summary>
+    internal List<string>? Reruns;
+
+    /// <summary>
+    /// A group's visit that failed and is run again as a retry the schedule opens (<see cref="FlowStepRecord.Retried"/>):
+    /// set as the retry takes it out of its scope's drawn steps, so the write that settles its failure says it, and a
+    /// resume that finds it still its scope's newest - its new visit not drawn - draws that visit.
+    /// </summary>
+    internal bool Retried;
 
     /// <summary>
     /// A visit of the recovery's: what it puts right - a step's failure, or an issue, whatever visit of it this is and
@@ -519,18 +536,27 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// for a record a build that named none wrote, the attempt its source's record holds where that attempt is not unended
     /// (<see cref="IsUnended"/>) - it ended, and its failure is not owed to what decides it - and otherwise the attempt
     /// before it. An ending raises its handlers only as it is decided, so a raise beside an attempt not ended, or whose
-    /// failure is still owed, can only be an earlier attempt's; and one beside an attempt that ended and was decided is read
+    /// failure is still owed, is an earlier attempt's - save beside a failure still owed that a <c>fail</c> answer at a
+    /// handler's bound gave the attempt (<paramref name="sourceEndedByQuestion"/> <c>visitBound</c>): that attempt had
+    /// ended done, and its success ending raised what it raised before the bound was met, so the raise is its own - and
+    /// never below the first attempt, which has none before it. One beside an attempt that ended and was decided is read
     /// as the build that wrote it read it: that build matched a raise by its source's visit alone, so the source's handler
-    /// states, what took its failure and what depends on it were written over that raise as this attempt's. The one owner
-    /// of that reading: the engine's resume and the status of a run's records read it.
+    /// states, what took its failure and what depends on it were written over that raise as this attempt's. Read once, by
+    /// the first resume that reads the raise, which writes it into the raise's own record before anything rewrites its
+    /// source's - for the source's record changes as its failure is decided, and read again from it the raise would answer
+    /// another attempt. The one owner of that reading: the engine's resume and the status of a run's records read it.
     /// </summary>
     /// <param name="recorded">The attempt the handler's record names; null where its record names none.</param>
     /// <param name="sourceState">How its source stands, as its record says.</param>
     /// <param name="sourceAttempt">The attempt its source's record holds.</param>
     /// <param name="sourceEndedFor">The update a piece of which ended the source in order, as its record holds it; null where none did.</param>
     /// <param name="sourceFailure">Where its source's failure left the run, as its record names it; null where none did.</param>
-    public static int AttemptRaisedFor(int? recorded, FlowInstanceState sourceState, int sourceAttempt, string? sourceEndedFor, FlowFailure? sourceFailure)
-        => recorded ?? (IsUnended(sourceState, sourceEndedFor, sourceFailure) ? sourceAttempt - 1 : sourceAttempt);
+    /// <param name="sourceEndedByQuestion">The kind of question whose <c>fail</c> answer ended its source, as its record names it; null where none did.</param>
+    public static int AttemptRaisedFor(int? recorded, FlowInstanceState sourceState, int sourceAttempt, string? sourceEndedFor, FlowFailure? sourceFailure, string? sourceEndedByQuestion)
+        => recorded
+            ?? (IsUnended(sourceState, sourceEndedFor, sourceFailure) && !(sourceFailure is FlowFailure.Owed && sourceEndedByQuestion == "visitBound")
+                ? Math.Max(1, sourceAttempt - 1)
+                : sourceAttempt);
 
     /// <summary>
     /// The raises an ending of the visit <paramref name="source"/> still owes the session that goes on, each by the id the
@@ -934,6 +960,15 @@ public sealed class FlowCoordinator
     /// (<see cref="DrainPendingFixes"/>).
     /// </summary>
     private readonly List<FlowInstance> _pendingFixes = [];
+
+    /// <summary>
+    /// The handlers' visits whose raise an older build recorded naming no attempt, the attempt each answered read from its
+    /// source's record as the resume took the run up (<see cref="FlowInstance.AttemptRaisedFor"/>): each is written into
+    /// its own record at the session's start, before anything rewrites its source's (<see cref="WriteTheAttemptsRead"/>), so
+    /// the attempt is read once - never read again from a source its failure's deciding has changed since.
+    /// </summary>
+    private readonly List<FlowInstance> _attemptsRead = [];
+
     /// <summary>The redirects the run owes, in the order they were decided: each is made in its turn, once nothing it resets is running.</summary>
     private readonly List<PendingRedirect> _redirects = [];
 
@@ -1831,6 +1866,10 @@ public sealed class FlowCoordinator
 
         try
         {
+            // The attempt a raise an older build recorded answered, read as the resume took the run up, is the first thing
+            // the start writes - before anything it decides rewrites the raise's source.
+            WriteTheAttemptsRead();
+
             foreach (var (waiting, asked) in _carryAtStart.ToList())
             {
                 // An answer written whose change the step's record does not hold yet: carried out now, once, as it would
@@ -1911,9 +1950,11 @@ public sealed class FlowCoordinator
                     $"nothing of this run can run until the question of step '{waitsOnOne.Id}' is answered; answer-orchestrator answers it");
             }
 
-            // The session goes on: what its start wrote is written now, in the order it was made.
+            // The session goes on: what its start wrote is written now, in the order it was made - the attempts the resume
+            // read among it, never read again.
             _starting = false;
             MakeTheHold();
+            _attemptsRead.Clear();
 
             // The advice each open question still owes is sought once it is known the session goes on - a question
             // owing one is what keeps a resume beside it from being refused above, and a resume refused there owes
@@ -2349,9 +2390,11 @@ public sealed class FlowCoordinator
         {
             if (failed.Step.IsGroup)
             {
-                // The new visit is made before the failure stops standing in the visit it replaces: a crash between the
-                // two writes leaves the failure standing beside the new visit's record, which the next resume reads as the
-                // retry made (Retry), never a failure gone with no new visit made for it.
+                // The retry is made before the failure stops standing in the visit it replaces: a handler's new visit is
+                // made at once, and a crash between the two writes leaves the failure standing beside that visit's record,
+                // which the next resume reads as the retry made (Retry); a group the schedule draws is drawn later, and
+                // the write that clears the failure says the retry (Retried), so a crash before the draw leaves the new
+                // visit owed, which the next resume draws - never a failure gone with no new visit made or owed for it.
                 Retry(failed);
                 SetFailure(failed, null);
                 continue;
@@ -4689,9 +4732,11 @@ public sealed class FlowCoordinator
                 break;
             case "fail" when failed:
                 // The answer decided the failure stands: it is one a person answered fail, which a later session
-                // does not run again whatever its policy makes of it.
+                // does not run again whatever its policy makes of it. The ending waits on none of its handlers from here -
+                // neither those it still owed nor those it raised before the bound was met - and the source's record says
+                // so, before its policy decides.
                 instance.EndedByQuestion = asked.Kind;
-                PassOwed(instance);
+                GiveUpTheEnding(instance);
                 ApplyPolicy(instance);
                 break;
             case "fail":
@@ -4730,7 +4775,8 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Answers the question a redirect that would leave an agent open asks: <c>retry</c> once each was folded or
     /// deleted - and asks again where one is still open - and <c>stay</c> gives the redirect up, the run going on as
-    /// if the handler named no <c>then</c>.
+    /// if the handler named no <c>then</c>. A rerun a visit of the recovery decided stays decided either way - its record
+    /// said it with the question (<see cref="FlowInstance.Reruns"/>) - so a stay is never decided again.
     /// </summary>
     private void AnswerOpenAgents(FlowInstance handler, FlowQuestion asked, string answer)
     {
@@ -4757,11 +4803,12 @@ public sealed class FlowCoordinator
 
         if (open.Count > 0)
         {
-            redirect.Asking = Ask(
+            _ = Ask(
                 handler,
                 "openAgents",
                 $"'{handler.Step.Name}' would go back to '{redirect.Target}', and agents '{string.Join("', '", open)}' are still open",
-                FlowQuestions.OptionsOf("openAgents", handler.Step));
+                FlowQuestions.OptionsOf("openAgents", handler.Step),
+                asking: id => redirect.Asking = id);
             return;
         }
 
@@ -5004,7 +5051,11 @@ public sealed class FlowCoordinator
                 return;
             }
 
-            // Drawn again by the schedule, as it was first: what depends on it waits for the new visit.
+            // Drawn again by the schedule, as it was first: what depends on it waits for the new visit. The schedule is the
+            // one owner of drawing it - its dependencies, its when, what holds it back - so the new visit is drawn later,
+            // and the visit that failed says its retry in the write that settles its failure (Retried): a crash before the
+            // draw leaves it its scope's newest still, and the resume draws its new visit (Replay).
+            instance.Retried = true;
             _ = scope.Members.Remove(instance.Step.Name);
             _ = scope.Instantiated.Remove(instance.Step.Name);
         }
@@ -5033,15 +5084,16 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Makes <paramref name="instance"/>'s next attempt of its visit, not yet started: what the attempt before it ended with
-    /// is its own - its handlers' states among it, for that attempt's ending is over and the next attempt's own ending
-    /// raises them anew (<see cref="RaisedFor"/>).
+    /// is its own - its handlers' states, an ending of it still waiting on them and what took its failure among it, for
+    /// that attempt's ending is over and the next attempt's own ending raises them anew (<see cref="RaisedFor"/>), so
+    /// nothing settles onto the new attempt what the earlier one's handlers did. The one owner of that rule.
     /// </summary>
     /// <param name="instance">The step instance.</param>
     /// <param name="reopenAnswered">
     /// Whether a step of <c>others</c> run again gives a target a <c>fail</c> answer ended its turn again: a person's
     /// retry does; a resume leaves it standing, as it leaves a step one ended.
     /// </param>
-    private static void NewAttempt(FlowInstance instance, bool reopenAnswered = true)
+    private void NewAttempt(FlowInstance instance, bool reopenAnswered = true)
     {
         instance.Attempt++;
 
@@ -5071,6 +5123,8 @@ public sealed class FlowCoordinator
         instance.EndedIn = 0;
         instance.HeldBy = null;
         instance._handlers.Clear();
+        instance.HandledBy = null;
+        _ = _pendingEndings.Remove(instance.Id);
 
         // What the attempt before it said of its tree is its own: the next has let nothing go yet.
         instance.Copied = false;
@@ -6097,8 +6151,10 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// What the instance being brought to rest for an update owed is dropped: a raise whose ending is inside it, a
-    /// redirect whose handler is, and the retry a step of it waits for - they were owed to work that is now done again
-    /// or taken back. A step whose retry is dropped ends stopped for the update, never given its next attempt.
+    /// redirect whose handler is - with the question it asks - and the retry a step of it waits for - they were owed to
+    /// work that is now done again or taken back. A step whose retry is dropped ends stopped for the update, never given
+    /// its next attempt; and what the recovery would send back in it is never decided again (<see cref="RerunOwed"/>,
+    /// <see cref="RunTheReporterAgain"/>).
     /// </summary>
     /// <param name="item">The item scope of the work-item group being ended for an update.</param>
     private void DropWhatItOwes(Scope item)
@@ -6121,7 +6177,16 @@ public sealed class FlowCoordinator
 
         foreach (var redirect in _redirects.Where(redirect => Inside(redirect.Handler, item)).ToList())
         {
+            // The question it asks before it goes asks of nothing now: it is withdrawn with it. A rerun a visit of the
+            // recovery decided stays decided - its record said it with the redirect (FlowInstance.Reruns) - so no session
+            // decides it again.
             _ = _redirects.Remove(redirect);
+
+            if (redirect.Asking is { } asking)
+            {
+                Withdraw(asking);
+            }
+
             Record(FlowChangeKind.Step, redirect.Handler, detail: $"the run was not sent to '{redirect.Target}': its handler's instance ends for a plan update, and what it was owed is dropped");
         }
 
@@ -10094,8 +10159,13 @@ public sealed class FlowCoordinator
     /// stops it is settled - no triage of one still to answer, no fix of one waiting or at work (<see cref="MayStillFix"/>)
     /// - and where a visit of the recovery fixed one of them (<see cref="FixesOf"/>), that visit the last to end being the
     /// redirect's handler, as a visit that ends sends back the step it took. Never while a fix of another still runs, and
-    /// never twice: a reporter left by a redirect already, or that a redirect the run owes resets, is not sent again. A
-    /// reporter whose issues were all settled with none fixed stays as it ended.
+    /// never twice: the rerun decided is a fact of that visit's own record, written in the redirect's own write
+    /// (<see cref="FlowInstance.Reruns"/>) - the one fact read, whatever became of the redirect since: made, given up by a
+    /// <c>stay</c>, dropped with a work item brought to rest, or resetting nothing; nor is a reporter a redirect left
+    /// already, or one a redirect the run owes resets, sent again, for it runs again by that one; nor one in a work item a
+    /// plan update is bringing or brought to rest, whose work is done again or taken back in the item visited in its place
+    /// (<see cref="EndedForAnUpdateAround"/>, as <see cref="DropWhatItOwes"/> drops what such an item owed). A reporter
+    /// whose issues were all settled with none fixed stays as it ended.
     /// </summary>
     private void RunTheReporterAgain(FlowInstance reporter)
     {
@@ -10106,6 +10176,8 @@ public sealed class FlowCoordinator
 
         if (stopping.Any(MayStillFix)
             || stopping.SelectMany(FixesOf).Where(visit => visit.State == FlowInstanceState.Done).MaxBy(visit => visit.EndedIn) is not { } fixedLast
+            || fixedLast.Reruns?.Contains(reporter.Id, StringComparer.Ordinal) == true
+            || EndedForAnUpdateAround(reporter)
             || reporter.LeftBy is not null
             || _redirects.Any(redirect => redirect.Set.Any(entry => ReferenceEquals(entry.Scope, reporter.DeclaredScope) && entry.Declaration.Name == reporter.Step.Name)))
         {
@@ -10114,7 +10186,7 @@ public sealed class FlowCoordinator
 
         if (reporter.DeclaredScope is { } scope && ResolveStep(scope, reporter.Step.Name) is { } declaration)
         {
-            DecideRedirectOf(fixedLast, scope, declaration);
+            DecideRedirectOf(fixedLast, scope, declaration, sentBack: reporter);
         }
     }
 
@@ -11787,15 +11859,32 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Passes every handler an ending still owes where its question was settled without raising them - answered
-    /// <c>fail</c>, or withdrawn by a redirect - so no later session finds them owed in its record and raises them.
+    /// Gives up the ending of <paramref name="source"/> where its question was settled without raising what it owes -
+    /// answered <c>fail</c>, or withdrawn by a redirect - in one write of its record: every handler it still owes is passed,
+    /// so no later session finds it owed and raises it, and every one it raised before the question - one whose
+    /// <c>when</c> could not be read among them - is left (<see cref="Abandoned"/>), so no resume rebuilds an ending waiting
+    /// on it, which no session held: the ending is settled by none of its handlers, and its failure, where it failed, is
+    /// what its policy or the redirect makes of it.
     /// </summary>
-    private void PassOwed(FlowInstance source)
+    private void GiveUpTheEnding(FlowInstance source)
     {
-        foreach (var owed in source._handlers.Where(handler => handler.State == "owed").ToList())
+        if (!source._handlers.Any(handler => handler.State is "owed" or "raised"))
         {
-            SetHandlerState(source, owed.Handler, "passed");
+            return;
         }
+
+        for (var at = 0; at < source._handlers.Count; at++)
+        {
+            source._handlers[at] = source._handlers[at] switch
+            {
+                { State: "owed" } owed => owed with { State = "passed" },
+                { State: "raised" } raised => raised with { State = "left" },
+                var other => other,
+            };
+        }
+
+        _ = _pendingEndings.Remove(source.Id);
+        WriteStepRecordOf(source);
     }
 
     /// <summary>
@@ -11807,9 +11896,11 @@ public sealed class FlowCoordinator
         => Record(FlowChangeKind.Step, instance, from: instance.State, to: instance.State, attempt: instance.Attempt);
 
     /// <summary>
-    /// Whether the ending <paramref name="source"/>'s handlers were raised for was abandoned by a redirect, as its record
-    /// says it: the redirect left one of them before it ended (<see cref="Leave"/>), so the ending is never settled - by
-    /// that handler or by a sibling that ran - and no resume rebuilds it from the handlers its record holds raised.
+    /// Whether the ending <paramref name="source"/>'s handlers were raised for was abandoned, as its record says it: a
+    /// redirect left one of them before it ended (<see cref="Leave"/>), the work item it is in was brought to rest for a
+    /// plan update (<see cref="DropWhatItOwes"/>), or its question was settled without raising what it owed - answered
+    /// <c>fail</c>, or withdrawn (<see cref="GiveUpTheEnding"/>) - so the ending is never settled, by a handler it raised or
+    /// by a sibling that ran, and no resume rebuilds it from the handlers its record holds raised.
     /// </summary>
     private static bool Abandoned(FlowInstance source)
         => source._handlers.Any(handler => handler.State == "left");
@@ -12046,8 +12137,17 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>Decides one redirect: its set computed, its open agents asked about, itself written to the run's records before any reset.</summary>
-    private void DecideRedirectOf(FlowInstance handler, Scope targetScope, WorkflowStep targetDeclaration)
+    /// <summary>
+    /// Decides one redirect: its set computed, its open agents asked about, itself written to the run's records before any
+    /// reset - in one write, with the question it asks where it asks one and, for a visit of the recovery sending back what
+    /// it put right (<paramref name="sentBack"/>), that visit's record of the decision (<see cref="FlowInstance.Reruns"/>),
+    /// so a session that goes on decides it again never, whatever becomes of it.
+    /// </summary>
+    /// <param name="handler">The handler that names it - a handler's <c>then</c>, a visit of the recovery that ended done, a planning step.</param>
+    /// <param name="targetScope">The scope that declares the step the run goes to.</param>
+    /// <param name="targetDeclaration">The step the run goes to.</param>
+    /// <param name="sentBack">The instance a visit of the recovery sends back as what it put right runs again; null for every other redirect.</param>
+    private void DecideRedirectOf(FlowInstance handler, Scope targetScope, WorkflowStep targetDeclaration, FlowInstance? sentBack = null)
     {
         // A redirect decided while others wait is queued behind them, never given up: each is made in its turn.
         var redirect = new PendingRedirect(handler, targetDeclaration.Name);
@@ -12055,17 +12155,28 @@ public sealed class FlowCoordinator
         FrozenOf(redirect);
 
         _redirects.Add(redirect);
+
+        if (sentBack is not null)
+        {
+            // The rerun is decided: the visit's own record says it in the write that holds the redirect - or the question
+            // it asks - so no session decides it again, whether it goes, is given up, dropped, or resets nothing. A visit
+            // an older build's record holds kept none, and keeps this one from here.
+            (handler.Reruns ??= []).Add(sentBack.Id);
+        }
+
         var open = OpenAgentsOf(redirect);
 
         if (open.Count > 0)
         {
             // A redirect that would leave a group while an agent made in it still has its worktree does not go by
-            // itself: it asks, naming each, and the answers say whether it goes.
-            redirect.Asking = Ask(
+            // itself: it asks, naming each, and the answers say whether it goes - the redirect naming its question in the
+            // question's own write, so a session that takes the run up waits on the answer rather than making it.
+            _ = Ask(
                 handler,
                 "openAgents",
                 $"'{handler.Step.Name}' would go back to '{redirect.Target}', and agents '{string.Join("', '", open)}', made since, are still open",
-                FlowQuestions.OptionsOf("openAgents", handler.Step));
+                FlowQuestions.OptionsOf("openAgents", handler.Step),
+                asking: id => redirect.Asking = id);
             return;
         }
 
@@ -12178,7 +12289,7 @@ public sealed class FlowCoordinator
         if (visit.WaitingQuestion is { } question)
         {
             Withdraw(question);
-            PassOwed(visit);
+            GiveUpTheEnding(visit);
         }
 
         if (visit.Step.IsGroup && visit.State is FlowInstanceState.Running or FlowInstanceState.Paused)
@@ -12632,9 +12743,15 @@ public sealed class FlowCoordinator
     /// Whether the advisor is sought here where no configuration answered; false where the caller may answer the question
     /// at once itself - a <c>pause</c> step's pre-answer - and seeks it only where the question is still open after.
     /// </param>
-    private string Ask(FlowInstance instance, string kind, string problem, IReadOnlyList<string> options, string? subject = null, IReadOnlyList<Agents.AgentQuestion>? agentQuestions = null, string? agent = null, bool seekAdvice = true)
+    /// <param name="asking">
+    /// Given the question's id as it is made, before anything of it is written or answered: what waits on the question
+    /// beside its step - a redirect that asks before it goes - says it in the question's own write, and a configured answer
+    /// taken at once finds it; null for nothing.
+    /// </param>
+    private string Ask(FlowInstance instance, string kind, string problem, IReadOnlyList<string> options, string? subject = null, IReadOnlyList<Agents.AgentQuestion>? agentQuestions = null, string? agent = null, bool seekAdvice = true, Action<string>? asking = null)
     {
         var id = FlowQuestionIds.Of(++_questionsRaised);
+        asking?.Invoke(id);
         var asked = new FlowQuestion(id, kind, instance.Id, problem, options)
         {
             RaisedAt = _clock.GetUtcNow(),
@@ -13278,6 +13395,14 @@ public sealed class FlowCoordinator
         instance.Stoppable = null;
         DisarmTimeLimit(instance);
         SettleTheIssueOf(instance);
+
+        if (state is FlowInstanceState.Done && IsRecovery(instance) && instance.RaisedBy is not null)
+        {
+            // What the visit's end sends the run back to is decided from its done record on, each rerun in the write of
+            // its own decision (GoOnFromTheRecovery): none is decided yet.
+            instance.Reruns = [];
+        }
+
         Record(FlowChangeKind.Step, instance, from: was, to: state, attempt: instance.Attempt);
         SayHowThePieceEnded(instance, state);
 
@@ -13358,10 +13483,13 @@ public sealed class FlowCoordinator
     /// that gave the recovery its failure runs again from where it stopped, as a new visit with its retries whole, what
     /// depended on it waiting and starting once it ends; a handler as a new visit raised by the ending it answers, which
     /// waits on it, for no redirect resets a handler (<see cref="RaiseAgain"/>) - and an issue the recovery fixed blocks no
-    /// one where it did not block its reporter: the run goes on. The rerun is decided from the records, and owed until its
-    /// own record exists (<see cref="RerunOwed"/>): the visit's end writes its done record first, so a crash between the two
-    /// leaves it to the session that goes on, whose start makes it (<see cref="GoOnWhereTheRunStood"/>) - once, for the
-    /// rerun's record says it was made. The one owner of that rerun, the visit's end and the resume alike.
+    /// one where it did not block its reporter: the run goes on. The rerun is decided from the records, owed until its
+    /// decision is written (<see cref="RerunOwed"/>, <see cref="RunTheReporterAgain"/>): the visit's end writes its done
+    /// record first, so a crash between the two leaves it to the session that goes on, whose start decides it
+    /// (<see cref="GoOnWhereTheRunStood"/>) - once, for the decision is a fact of the visit's own record written in the
+    /// decision's own write (<see cref="FlowInstance.Reruns"/>), whatever became of it since: a redirect made, one a
+    /// <c>stay</c> gave up, one a plan update dropped with the work item it was in, one that found nothing to reset. The one
+    /// owner of that rerun, the visit's end and every session's start alike.
     /// </summary>
     /// <param name="visit">The visit of the recovery that ended done, which names what it put right.</param>
     private void GoOnFromTheRecovery(FlowInstance visit)
@@ -13376,14 +13504,22 @@ public sealed class FlowCoordinator
             _tally[at] = _tally[at] with { State = "fixed" };
         }
 
+        if (visit.Reruns is null)
+        {
+            // A visit an older build's record holds decided what its end owed as it ended, and kept none of it in its
+            // record: it is read as that build read it, never decided again at a session's start.
+            return;
+        }
+
         var (rerun, issue, _) = RecoveryOf(again);
 
         if (issue is not null)
         {
             // Every issue the visit fixed - the one it was sent for, each joined to it and gone with it, and each duplicate
             // of one of those, which that fix settles - is fixed with it: a reporter one of them stops runs again once,
-            // after every issue that stops it is settled - never twice, for a reporter a redirect left or one a redirect
-            // owed resets is not sent again (RunTheReporterAgain).
+            // after every issue that stops it is settled - never twice, for the rerun of a reporter decided is a fact of the
+            // record of the visit that decided it, and a reporter a redirect left or one a redirect owed resets is not sent
+            // again (RunTheReporterAgain).
             RunTheReportersAgain(TriagesFixedBy(visit));
         }
         else if (RerunOwed(visit) is not { } owed)
@@ -13396,7 +13532,7 @@ public sealed class FlowCoordinator
         }
         else
         {
-            DecideRedirectOf(visit, owed.Scope, owed.Declaration);
+            DecideRedirectOf(visit, owed.Scope, owed.Declaration, sentBack: rerun);
         }
     }
 
@@ -13404,17 +13540,24 @@ public sealed class FlowCoordinator
     /// The rerun of the failed step <paramref name="visit"/>, a visit of the recovery that ended done, put right - as the
     /// run's records hold it, while it is owed: the step's own declaration in its scope, and whether it is a handler, run
     /// again as a new visit raised by the ending it answers (<see cref="RaiseAgain"/>), or a step the schedule draws, run
-    /// again by a redirect the visit decides (<see cref="DecideRedirectOf"/>). Owed until the rerun's own record exists: for
-    /// a handler, until the visit put right is no longer the newest raised for that ending (<see cref="RaisedFor"/>); for
-    /// any other step, until a redirect by the visit is in the run's records, the visit put right is no longer its scope's
-    /// current one - a redirect left it - or an answer gave the redirect up and counted it handled, and never into a scope
-    /// an earlier redirect left. Null where nothing is owed: an issue the visit fixed, whose reporters run again by their
-    /// own rule, and a rerun made.
+    /// again by a redirect the visit decides (<see cref="DecideRedirectOf"/>). Owed until its decision is written: for a
+    /// handler, until the visit put right is no longer the newest raised for that ending (<see cref="RaisedFor"/>) - the new
+    /// visit's first record, which names that ending, is the decision; for any other step, until the visit's own record
+    /// names it among what it sent the run back to (<see cref="FlowInstance.Reruns"/>), written in the redirect's own write -
+    /// the one fact read, whatever became of the redirect since: made, given up by a <c>stay</c>, or dropped with a work item
+    /// a plan update brings to rest (<see cref="DropWhatItOwes"/>) - and never for a step no longer its scope's current
+    /// visit, which something else sent back, nor into a scope that is no longer live: one an earlier redirect left, or a
+    /// work item at rest. A visit in a work item being brought to rest never ends done - it ends stopped for the update
+    /// with the item - so none decides a rerun there. Null where nothing is owed: an issue the visit fixed, whose reporters
+    /// run again by their own rule; a rerun decided; and every rerun of a visit an older build's record holds, which
+    /// decided its reruns as it ended.
     /// </summary>
     /// <param name="visit">The visit of the recovery, done, which names what it put right.</param>
     private (Scope Scope, WorkflowStep Declaration, bool Handler)? RerunOwed(FlowInstance visit)
     {
-        if (visit.RaisedBy is not { } again || RecoveryOf(again) is not { Issue: null, Rerun: { DeclaredScope: { } scope } rerun })
+        if (visit.Reruns is not { } decided
+            || visit.RaisedBy is not { } again
+            || RecoveryOf(again) is not { Issue: null, Rerun: { DeclaredScope: { } scope } rerun })
         {
             return null;
         }
@@ -13424,10 +13567,9 @@ public sealed class FlowCoordinator
             return ReferenceEquals(RaisedFor(source, rerun.Step.Name, scope, rerun.RaisedByAttempt), rerun) ? (scope, rerun.Step, true) : null;
         }
 
-        return ScopeLive(scope)
+        return !decided.Contains(rerun.Id, StringComparer.Ordinal)
+            && ScopeLive(scope)
             && ReferenceEquals(scope.Members.GetValueOrDefault(rerun.Step.Name), rerun)
-            && rerun.HandledBy is null
-            && !_redirects.Any(redirect => ReferenceEquals(redirect.Handler, visit))
             && ResolveStep(scope, rerun.Step.Name) is { } declaration
                 ? (scope, declaration, false)
                 : null;
@@ -16610,6 +16752,26 @@ public sealed class FlowCoordinator
         }
     }
 
+    /// <summary>
+    /// Writes each handler's visit whose attempt the resume read from its source's record (<see cref="_attemptsRead"/>) into
+    /// its own record, the first of the session's start's writes: held with them, so a start refused writes none of them and
+    /// the next start reads the same attempts from the same records; and made before anything the start decides rewrites a
+    /// source, so the attempt is the one its source's record gave as the run was taken up.
+    /// </summary>
+    private void WriteTheAttemptsRead()
+    {
+        foreach (var read in _attemptsRead)
+        {
+            Record(
+                FlowChangeKind.Step,
+                read,
+                from: read.State,
+                to: read.State,
+                attempt: read.Attempt,
+                detail: $"raised for attempt {read.RaisedByAttempt.ToString(System.Globalization.CultureInfo.InvariantCulture)} of '{read.RaisedBy!.Id}', as its record reads it: the build that recorded the raise named no attempt");
+        }
+    }
+
     /// <summary>Drops what a session's start held and will never write: each held answer handed back, as one the loop never read is.</summary>
     private static void Drop(IEnumerable<HeldWrite> held)
     {
@@ -16758,7 +16920,9 @@ public sealed class FlowCoordinator
             instance.DrawnIn == 0 ? null : instance.DrawnIn,
             instance.Counted,
             instance.RecoveryThread,
-            instance.RaisedByAttempt == 0 ? null : instance.RaisedByAttempt);
+            instance.RaisedByAttempt == 0 ? null : instance.RaisedByAttempt,
+            instance.Reruns is { } reruns ? [.. reruns] : null,
+            instance.Retried ? true : null);
     }
 
     /// <summary>
@@ -17319,8 +17483,11 @@ public sealed class FlowCoordinator
                     if (raised.Step.On is not null && raised.RaisedByAttempt == 0)
                     {
                         // A handler's visit a build that named no attempt on a raise recorded: the attempt it answered is read
-                        // from its source's record, by the one rule of it.
-                        raised.RaisedByAttempt = FlowInstance.AttemptRaisedFor(null, source.State, source.Attempt, source.EndedFor, source.Failure);
+                        // from its source's record, by the one rule of it - once: the session's start writes it into the
+                        // visit's own record before anything rewrites its source's (AttemptsRead), so no later resume reads it
+                        // again from a source its failure's deciding has changed.
+                        raised.RaisedByAttempt = FlowInstance.AttemptRaisedFor(null, source.State, source.Attempt, source.EndedFor, source.Failure, source.EndedByQuestion);
+                        _attemptsRead.Add(raised);
                     }
                 }
             }
@@ -17396,12 +17563,13 @@ public sealed class FlowCoordinator
 
             foreach (var scope in _scopes)
             {
-                foreach (var name in scope.Members.Where(member => member.Value.LeftBy is not null || EndedForTheUpdateItRaised(member.Value)).Select(member => member.Key).ToList())
+                foreach (var name in scope.Members.Where(member => member.Value.LeftBy is not null || member.Value.Retried || EndedForTheUpdateItRaised(member.Value)).Select(member => member.Key).ToList())
                 {
-                    // A redirect took the run back past this visit, or a plan update it raised ended it to run again on
-                    // the list as it now is, and its next visit is not drawn yet - a stop or a crash came first: the
-                    // schedule draws it, as it would have had the session gone on - the redirect itself may be gone from
-                    // the run's records, which it leaves once every visit it resets says so.
+                    // A redirect took the run back past this visit, a retry the schedule opens took it out of its scope's
+                    // drawn steps (Retry), or a plan update it raised ended it to run again on the list as it now is, and
+                    // its next visit is not drawn yet - a stop or a crash came first: the schedule draws it, as it would
+                    // have had the session gone on - the redirect itself may be gone from the run's records, which it
+                    // leaves once every visit it resets says so.
                     _ = scope.Members.Remove(name);
                     _ = scope.Instantiated.Remove(name);
                 }
@@ -17667,7 +17835,13 @@ public sealed class FlowCoordinator
                     ?? throw new HarnessException(
                         HarnessExit.Refused,
                         $"the run owes a redirect by '{owed.Handler}', which its state holds no record of; the run's state is not whole, and a record is never guessed at");
-                var redirect = new PendingRedirect(handler, owed.Target) { Asking = owed.Question is { } question && _open.Contains(question) ? question : null };
+                // One asking before it goes waits on its question while it is open, and on the answer the questions file
+                // holds and the session's start carries out (_carryAtStart) - a crash came between the answer's write and
+                // the change it makes - so that answer finds it: a stay given is never lost to a redirect made instead.
+                var redirect = new PendingRedirect(handler, owed.Target)
+                {
+                    Asking = owed.Question is { } question && (_open.Contains(question) || _carryAtStart.Any(carried => carried.Asked.Id == question)) ? question : null,
+                };
 
                 foreach (var id in owed.Steps)
                 {
@@ -17784,6 +17958,8 @@ public sealed class FlowCoordinator
             instance.LeftBy = record.LeftBy;
             instance.RaisedByRecord = record.RaisedBy;
             instance.RaisedByAttempt = record.RaisedByAttempt ?? 0;
+            instance.Reruns = record.Reruns is { } reruns ? [.. reruns] : null;
+            instance.Retried = record.Retried == true;
             instance.RaisedByUpdate = record.RaisedByUpdate;
             instance.EndedFor = record.EndedFor;
             instance.Targets = record.Targets;

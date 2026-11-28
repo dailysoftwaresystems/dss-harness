@@ -2214,11 +2214,19 @@ naming the same source and the same attempt of it, which the ending waits on in 
 which raises its handlers anew: each handler's visit records the attempt whose ending raised it (`raisedByAttempt`), and
 a raise answers that attempt's ending alone (`FlowCoordinator.RaisedFor`, which `FlowCoordinator.EndingOf` and
 `FlowInstance.RaisesOwed` read), so the new attempt's failure raises the handler's next visit, its `when` read again; a
-new attempt keeps none of the handler states the attempt before it ended with, and only a step that stands as an
-ending - done or failed - owes a raise or has an ending rebuilt (`FlowInstance.StandsAsAnEnding`). A raise an older build
-recorded names no attempt and is read as the attempt its source's record holds where that attempt ended and its failure
-is not owed - as the build that wrote it read it, matching a raise by its source's visit alone - and otherwise as the
-attempt before it, for an ending raises its handlers only as it is decided (`FlowInstance.AttemptRaisedFor`). Steps nest at most ten deep; every step's name is a lower-case word,
+new attempt keeps none of the handler states the attempt before it ended with, nor an ending of it still waiting on
+them, nor what took its failure (`FlowCoordinator.NewAttempt`), and only a step that stands as an ending - done or
+failed - owes a raise or has an ending rebuilt (`FlowInstance.StandsAsAnEnding`). A `fail` answer at a handler's bound
+after a failure gives that ending up in the source's record, in one write: a handler it still owed is `passed`, one it
+raised is `left`, and the ending waits on none of them, in the session and at every resume
+(`FlowCoordinator.GiveUpTheEnding`). A raise an older build recorded names no attempt and is read as the attempt its
+source's record holds where that attempt ended and its failure is not owed - as the build that wrote it read it,
+matching a raise by its source's visit alone - or where a `fail` answer at a success bound (`visitBound`) ended that
+same attempt failed, and otherwise as the attempt before it, never before the first, for an ending raises its handlers
+only as it is decided (`FlowInstance.AttemptRaisedFor`). It is read once: the first session that takes the run up
+writes it into the visit's own record, held with what its start writes and before anything rewrites the source, and
+every session after - and the run's status facts (`FlowStatus`) - reads that record, never deriving it again from a
+source a new attempt has moved on (`FlowCoordinator.WriteTheAttemptsRead`). Steps nest at most ten deep; every step's name is a lower-case word,
 unique among its siblings and never a word a definition reads for its own. The file writes no YAML alias - a
 definition writes each of its steps out, so that what it says is what it reads - and its values are read however deep
 they nest, by the one YAML reader (see "Layering").
@@ -5402,14 +5410,25 @@ record, for it took nothing: the ending it was raised for is abandoned, settled 
 and never rebuilt by a resume - so a crash between any two writes leaves records the next session completes: an
 answer written is carried out once, a configured answer never written is given, a handler is never
 raised twice, and an ending whose handlers all ended is settled. What a visit of the recovery that ended done puts right
-runs again as decided from the records: its rerun is owed until the rerun's own record exists - a redirect of the step
-it put right in the run's records, or that step no longer its scope's visit; for a handler, a visit raised again for the
-same ending in its place - so a crash between the visit's done record and the rerun's leaves it to the resume, which
-makes it once, and the reporters of an issue it fixed run again by their own rule (`FlowCoordinator.RerunOwed`,
-`FlowCoordinator.GoOnFromTheRecovery`). A group made again for a retry is made before its failure stops standing - a
-crash between the two writes leaves that failure beside the new visit, which is the retry made - and a visit of the
-recovery answered `retry` is taken again only while it is still the newest taken for what it puts right
-(`FlowCoordinator.Retry`). A handler's visit a raise made that a failure's `stop` left NotRun before it started - the run
+runs again as decided from the records, once: the visit's done record starts the list of what it sent the run back to
+(`reruns`), and each redirect it decides puts the step in that list in the redirect's own write - with the question
+the redirect asks where it would leave an agent open, so no crash and no answer taken at once loses the question - and
+the rerun is owed until that record names it; for a handler, until a visit is raised again for the same ending in its
+place. A crash between the visit's done record and the rerun's leaves it to the resume, which makes it once; whatever
+becomes of the redirect after - made, given up by a `stay`, or dropped, its question withdrawn, with a work item a plan
+update brings to rest (`FlowCoordinator.DropWhatItOwes`) - no session decides it again, for that one fact is what is
+read, and a visit an older build recorded names none and decided its reruns as it ended. A reporter of an issue a visit
+fixed runs again by the same fact of the visit that fixed it last, once, and never into a work item a plan update is
+bringing or brought to rest, whose work is done again in the item visited in its place (`FlowCoordinator.RerunOwed`,
+`FlowCoordinator.RunTheReporterAgain`, `FlowCoordinator.GoOnFromTheRecovery`). An answer the records hold and the
+session never carried out - a `stay` written before a crash - finds its redirect's question restored with the redirect,
+and is carried out on it at the resume. A handler group made again for a retry is made before its failure stops
+standing - a crash between the two writes leaves that failure beside the new visit, which is the retry made - while a
+group the schedule draws says its retry in the very write that settles its failure (`retried`): the schedule, the one
+owner of drawing a group - its dependencies, its `when`, what holds it back - draws the new visit from that record, so a
+crash before the draw leaves the retry owed, which the resume's schedule draws, never a failure gone with no new visit
+owed for it; and a visit of the recovery answered `retry` is taken again only while it is still the newest taken for
+what it puts right (`FlowCoordinator.Retry`). A handler's visit a raise made that a failure's `stop` left NotRun before it started - the run
 ended before it - is put back by the resume that goes on with no failure standing to stop it, not started again under
 the same id and raised by the same ending, where that ending still waits on it: the schedule never draws a handler, and
 the visit never ran, held nothing and wrote nothing but its place in that ending (`FlowCoordinator.RedrawWhatTheStopLeft`).

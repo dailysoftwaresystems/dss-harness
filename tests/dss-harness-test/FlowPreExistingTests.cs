@@ -5330,6 +5330,91 @@ public sealed class FlowPreExistingTests
             store.ReadNextRound(layout)!.Issues.Select(issue => (issue.Id, issue.Title, issue.SettledBy)));
     }
 
+    /// <summary>
+    /// The rerun of a reporter a visit of the recovery decided is a fact of that visit's own record, written in the same
+    /// write as the decision: the redirect that would send the reporter of a blocking issue back - and what depends on it,
+    /// a group that made an agent still open - asks, the answer stay gives it up, and the session that takes the run up
+    /// from the records decides it no more - no second question, no reset - where a rerun read again from what the redirect
+    /// left would be decided again at every session's start, and asked again for ever.
+    /// </summary>
+    [Fact]
+    public async Task AReportersRerunGivenUpByStay_IsDecidedOnce_ASessionThatTakesTheRunUpAsksNoMore()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: round
+                dependsOn: [think]
+                steps:
+                  - name: worker
+                    type: create-agent
+                    agent: maker
+                  - name: check
+                    type: orient
+                    dependsOn: [worker]
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var runner = new FakeRunner()
+            .On("think", asked => asked == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser", blocks: true)])
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("triage", run => Course("fix", run.Issue!.Title));
+        runner.Hold("mend");
+        var harness = new HarnessFactory();
+        var store = new OrchestrationStore(harness.FileSystem, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new ManualClock();
+        var cancel = TestContext.Current.CancellationToken;
+
+        using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            // The fix ends once the group that depends on the reporter has made its agent and ended: the redirect would
+            // leave that agent open, and asks.
+            var watched = new Watched(records, run => run.Steps.Any(step => step is { Instance: "round", State: FlowInstanceState.Done }));
+            _ = watched.Seen.ContinueWith(_ => runner.Release("mend"), TaskScheduler.Default);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+
+            var paused = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            var asked = Assert.Single(coordinator.OpenQuestions);
+            Assert.Equal(("openAgents", "recover"), (asked.Kind, asked.Instance));
+            Assert.True(coordinator.TryAnswer(asked.Id, "stay", out var problem), problem);
+        }
+
+        var again = new FakeRunner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(store, layout, harness.FileSystem).Load(definition));
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.True(FlowRunStatus.Done == end.Status, $"{end.Summary} | asked: {string.Join("; ", resumed.OpenQuestions.Select(question => $"{question.Kind}: {question.Problem}"))}");
+            Assert.Empty(again.Started);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id is "think+2" or "round+2");
+            Assert.Null(resumed.Instances["think"].LeftBy);
+        }
+
+        // One question asked over the whole run, by whichever session would have asked it.
+        Assert.Single(store.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents");
+    }
+
     /// <summary>A work item of a plan, shaped as the real plan check reads one, owning paths of its own and reusing the repository's one file.</summary>
     private static JsonObject WorkItem(string name)
         => new()
