@@ -367,6 +367,40 @@ public sealed class FlowCoordinatorTests
         Assert.Equal("flush", log[^1]);
     }
 
+    /// <summary>
+    /// The coordinator drives one session at a time, over the whole of a drive: a second drive asked as the first's end is
+    /// still under way - its session over and its end recorded, what its start stood on not yet let go - is refused in its
+    /// own task, and the first ends as it would alone, nothing run twice. A session begun there would change the engine
+    /// under the end of the one before it.
+    /// </summary>
+    [Fact]
+    public async Task ASecondDriveAskedAsTheFirstsEndIsUnderWay_IsRefused()
+    {
+        var cancel = TestContext.Current.CancellationToken;
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+            """);
+        var runner = new FakeRunner();
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        Task<FlowSessionEnd>? second = null;
+
+        coordinator.BeforeTheDriveEnds = () =>
+        {
+            coordinator.BeforeTheDriveEnds = null;
+            second = coordinator.RunAsync(cancel);
+        };
+
+        var first = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => second!.WaitAsync(TimeSpan.FromSeconds(30), cancel));
+
+        Assert.Equal("A session of this run is already being driven; the coordinator owns one at a time.", refused.Message);
+        Assert.Equal(FlowRunStatus.Done, first.Status);
+        Assert.Equal(["one"], runner.Started);
+    }
+
     /// <summary>Steps ready at once start in a fixed order: declaration order, then instance id.</summary>
     [Fact]
     public async Task StepsReadyAtOnce_StartInDeclarationOrderThenInstanceId()

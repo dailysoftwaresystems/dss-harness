@@ -670,8 +670,13 @@ public sealed class FlowCoordinator
     /// </summary>
     private readonly Lock _shown = new();
 
-    /// <summary>How many drives of a session are under way (<see cref="RunAsync"/>): while any is, the loop owns the graph, and a reader off it is shown <see cref="_statusShown"/>. Under <see cref="_shown"/>.</summary>
-    private int _driving;
+    /// <summary>
+    /// Whether a session is driven (<see cref="RunAsync"/>), from its call's entry to the very end of its last line, the
+    /// standing its start took let go: while it is, the loop owns the graph, a reader off it is shown
+    /// <see cref="_statusShown"/>, and no other session is driven - the one guard of one session at a time, taken and let go
+    /// under <see cref="_shown"/> (<see cref="Drive"/>).
+    /// </summary>
+    private bool _driven;
 
     /// <summary>The run's standing as the loop last said it, which a reader off the loop is shown while a session is driven (<see cref="Status"/>). Under <see cref="_shown"/>.</summary>
     private FlowRunStatus _statusShown;
@@ -1184,7 +1189,7 @@ public sealed class FlowCoordinator
         {
             lock (_shown)
             {
-                return _driving > 0 ? _statusShown : StatusNow;
+                return _driven ? _statusShown : StatusNow;
             }
         }
     }
@@ -1627,12 +1632,9 @@ public sealed class FlowCoordinator
     /// </remarks>
     public async Task<FlowSessionEnd> RunAsync(CancellationToken cancellationToken)
     {
-        if (_inSession)
-        {
-            throw new InvalidOperationException("A session of this run is already being driven; the coordinator owns one at a time.");
-        }
-
-        Drive(1);
+        // One session at a time over the whole of a drive: a second call - from another thread, or while this one's end is
+        // still under way - is refused in its own task, and changes nothing of the session driven.
+        Drive(true);
 
         try
         {
@@ -1640,28 +1642,45 @@ public sealed class FlowCoordinator
         }
         finally
         {
-            // The session's last write is made, however it ended: what its start stood on is its own, and goes with it.
+            // The session's last write is made, however it ended: what its start stood on is its own, and goes with it -
+            // and only then is the drive over, so no other session begins before this one has wholly ended.
+            BeforeTheDriveEnds?.Invoke();
             LetTheSessionsStandingGo();
-            Drive(-1);
+            Drive(false);
         }
     }
 
     /// <summary>
-    /// Counts a session's drive in or out of the engine (<see cref="RunAsync"/>), under the guard of what a reader off the
-    /// loop is shown: from the first drive in, the run's standing a reader is shown is the one the loop last said, the
-    /// standing it had as the drive began until the loop says another (<see cref="Show"/>).
+    /// What is done once a session has ended, however it ended - its start over, its advice ended, what it held handed back,
+    /// its end recorded where it ended in order - and before what its start stood on is let go and its drive ends
+    /// (<see cref="RunAsync"/>): nothing, save where a test asks of the engine there, as a poll still under way, an interrupt
+    /// or a caller on another thread may. Null for nothing.
     /// </summary>
-    /// <param name="by">One in, minus one out.</param>
-    private void Drive(int by)
+    internal Action? BeforeTheDriveEnds { get; set; }
+
+    /// <summary>
+    /// Takes a session's drive of the engine, or lets it go (<see cref="RunAsync"/>), under the guard of what a reader off
+    /// the loop is shown: one at a time, a drive asked while another is under way refused; and from the drive's taking,
+    /// the run's standing a reader is shown is the one the loop last said, the standing it had as the drive began until the
+    /// loop says another (<see cref="Show"/>).
+    /// </summary>
+    /// <param name="taken">Whether the drive is taken; false lets it go.</param>
+    /// <exception cref="InvalidOperationException">A drive is taken while another is under way.</exception>
+    private void Drive(bool taken)
     {
         lock (_shown)
         {
-            if (_driving == 0 && by > 0)
+            if (taken)
             {
+                if (_driven)
+                {
+                    throw new InvalidOperationException("A session of this run is already being driven; the coordinator owns one at a time.");
+                }
+
                 _statusShown = StatusNow;
             }
 
-            _driving += by;
+            _driven = taken;
         }
     }
 
@@ -16240,7 +16259,7 @@ public sealed class FlowCoordinator
         {
             // A run that holds nothing writes nothing: a reader off the loop is shown the standing the change leaves, while
             // a session is driven - between sessions it reads the standing as it is.
-            if (_driving > 0)
+            if (_driven)
             {
                 Show(StatusNow);
             }

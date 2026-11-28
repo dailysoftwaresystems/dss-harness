@@ -5508,6 +5508,131 @@ public sealed class FlowServiceTests
         Assert.False(File.Exists(run.InboxFile));
     }
 
+    /// <summary>
+    /// A stop or a pause asked as the session ended - after the poller's last tick, beside an answer to the question the
+    /// session pauses on - is handed to the engine by the session's last poll as every poll hands one, never only taken from
+    /// <c>stop.json</c>: the drive the answer begins takes it as it begins, so the run ends stopped, or paused with the pause
+    /// complete, nothing more started, and the command that asked is answered by it - never left waiting for the run's next
+    /// end, nor told by the engine's leaving that nothing was stopped or paused.
+    /// </summary>
+    /// <param name="command">The command that asks: <c>stop-orchestrator</c> or <c>pause-orchestrator</c>.</param>
+    [Theory]
+    [InlineData(FlowService.StopCommand)]
+    [InlineData(FlowService.PauseCommand)]
+    public async Task AStopOrAPauseAskedAsTheSessionEnded_BesideAnAnswer_IsTakenByTheDriveTheAnswerBegins(string command)
+    {
+        var (repository, runner) = await RepositoryAsync(HeldBeforeItsQuestion);
+        using var disposed = repository;
+
+        var run = RunOf(repository);
+        var (outcome, asked) = await AskedAsTheSessionEndsAsync(repository, runner, command, answered: true);
+        var flow = repository.Harness.OrchestrationStore.ReadFlow(run)!;
+        var what = command == FlowService.StopCommand ? "stop" : "pause";
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.Contains("the answer 'go' handed over for question 'q1' was taken from the inbox", outcome.Details ?? []);
+        Assert.Contains($"a {what} asked as the session ended was handed to the engine, and the session the run is driven on with takes it as it begins", outcome.Details ?? []);
+        Assert.Equal((HarnessExit.Success, command == FlowService.StopCommand ? "run 'r1' is stopped" : "run 'r1' is paused"), (asked.ExitCode, asked.Message));
+
+        // Nothing more was started: the drive the answer began took the stop, or the pause, as it began.
+        Assert.Equal(["first"], runner.Started);
+
+        if (command == FlowService.StopCommand)
+        {
+            Assert.Equal((nameof(FlowRunStatus.Stopped), true, (FlowPauseRecord?)null), (flow.Status, flow.StoppingSince is not null, flow.Pause));
+        }
+        else
+        {
+            Assert.Equal((nameof(FlowRunStatus.Paused), (DateTimeOffset?)null, "command", false, true), (flow.Status, flow.StoppingSince, flow.Pause!.Cause, flow.Pause.All, flow.Pause.CompletedAt is not null));
+        }
+
+        Assert.False(File.Exists(run.StopFile));
+        Assert.False(File.Exists(run.InboxFile));
+    }
+
+    /// <summary>
+    /// A stop or a pause asked as the session ended - after the poller's last tick - with nothing beside it that drives the
+    /// run on ends with the session, which ended paused on its question: the line says it was taken with it, the run's state
+    /// says no stop and no pause of its own, and the command that asked is told what became of it as the engine left - a
+    /// stop that the run is paused, where it stood, and a pause that nothing was paused, for no safe pause was made.
+    /// </summary>
+    /// <param name="command">The command that asks: <c>stop-orchestrator</c> or <c>pause-orchestrator</c>.</param>
+    [Theory]
+    [InlineData(FlowService.StopCommand)]
+    [InlineData(FlowService.PauseCommand)]
+    public async Task AStopOrAPauseAskedAsTheSessionEnded_WithNothingDrivingTheRunOn_EndsWithTheSession(string command)
+    {
+        var (repository, runner) = await RepositoryAsync(HeldBeforeItsQuestion);
+        using var disposed = repository;
+
+        var run = RunOf(repository);
+        var (outcome, asked) = await AskedAsTheSessionEndsAsync(repository, runner, command, answered: false);
+        var flow = repository.Harness.OrchestrationStore.ReadFlow(run)!;
+        var what = command == FlowService.StopCommand ? "stop" : "pause";
+
+        Assert.Equal(FlowExit.Paused, outcome.ExitCode);
+        Assert.Contains($"a {what} asked as the session ended was taken with it", outcome.Details ?? []);
+        Assert.DoesNotContain($"a {what} asked as the session ended was handed to the engine, and the session the run is driven on with takes it as it begins", outcome.Details ?? []);
+        Assert.Equal(
+            command == FlowService.StopCommand
+                ? (HarnessExit.Success, "run 'r1' is paused", "its engine took the stop and left")
+                : (HarnessExit.Refused, "run 'r1' is paused; its engine took the pause and left, so nothing was paused", $"stop: {run.StopFile}"),
+            (asked.ExitCode, asked.Message, asked.Details![0]));
+        Assert.Equal(["first"], runner.Started);
+        Assert.Equal((nameof(FlowRunStatus.Paused), (DateTimeOffset?)null, (FlowPauseRecord?)null), (flow.Status, flow.StoppingSince, flow.Pause));
+        Assert.Equal("open", Assert.Single(repository.Harness.OrchestrationStore.ReadFlowQuestions(run)!.Questions).State);
+        Assert.False(File.Exists(run.StopFile));
+    }
+
+    /// <summary>A run whose first step is held, so what is asked as it runs comes after the poller's one read, then its question.</summary>
+    private const string HeldBeforeItsQuestion = """
+        name: flow
+        steps:
+          - name: first
+            type: orient
+          - name: holding
+            type: pause
+            question: what now?
+            options: [stay, go]
+            dependsOn: [first]
+          - name: after
+            type: orient
+            dependsOn: [holding]
+        """;
+
+    /// <summary>
+    /// Runs <see cref="HeldBeforeItsQuestion"/> with a poller that reads once, at the session's start, and asks of it after
+    /// that read, while its first step is held: an answer to q1 where <paramref name="answered"/>, then the stop or the pause
+    /// through <paramref name="command"/>, its file written before the step is let go and the session goes on to its end.
+    /// </summary>
+    /// <returns>What the session answered, and what the command that asked answered.</returns>
+    private static async Task<(CommandOutcome Outcome, CommandOutcome Asked)> AskedAsTheSessionEndsAsync(Repository repository, SteppedRunner runner, string command, bool answered)
+    {
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, timings: new FlowTimings(TimeSpan.FromHours(1), TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30)), fileSystem: files);
+        var run = RunOf(repository);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        runner.Holds("first", release.Task);
+
+        var driving = service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token);
+        await runner.WaitStartedAsync("first");
+
+        if (answered)
+        {
+            repository.Harness.OrchestrationStore.AddToInbox(run, new FlowInboxAnswer(FlowInboxAnswer.NewId(), "q1", "go", DateTimeOffset.UtcNow));
+        }
+
+        var written = files.Written(run.StopFile);
+        var asking = command == FlowService.StopCommand
+            ? service.StopAsync(repository.Path, "r1", now: false, json: false, Token)
+            : service.PauseAsync(repository.Path, "r1", all: false, json: false, Token);
+        await written.WaitAsync(Bound, Token);
+        _ = release.TrySetResult();
+
+        var outcome = await driving.WaitAsync(Bound, Token);
+        return (outcome, await asking.WaitAsync(Bound, Token));
+    }
+
     /// <summary>A resume takes what was handed to an engine that ended before it took it: the answer applied before anything runs.</summary>
     [Fact]
     public async Task AResumeTakesTheInbox_BeforeAnythingRuns()

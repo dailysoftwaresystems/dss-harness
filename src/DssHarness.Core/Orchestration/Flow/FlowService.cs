@@ -1941,12 +1941,21 @@ public sealed class FlowService(
                 end = await DriveAsync(layout, command, coordinator, interrupts, offered, cancellationToken).ConfigureAwait(false);
 
                 // The last poll, the poller stopped: where an answer it takes settles the question the session paused
-                // on, the run is driven again - whatever emptying the inbox of it then meets, for it is taken.
-                var (taken, seen) = LastPoll(layout, coordinator, offered, said);
+                // on, the run is driven again - whatever emptying the inbox of it then meets, for it is taken - and that
+                // drive's start takes the pause or the stop the poll handed to the engine beside it, as the line says.
+                var (taken, seen, asked) = LastPoll(layout, coordinator, offered, said);
                 inbox |= seen > 0;
                 unemptied = Empty(layout, offered);
+                var goesOn = taken > 0 && end is { Status: FlowRunStatus.Paused, Pause: null };
 
-                if (taken > 0 && end is { Status: FlowRunStatus.Paused, Pause: null })
+                if (asked is not null)
+                {
+                    said.Add(goesOn
+                        ? $"a {asked} asked as the session ended was handed to the engine, and the session the run is driven on with takes it as it begins"
+                        : $"a {asked} asked as the session ended was taken with it");
+                }
+
+                if (goesOn)
                 {
                     continue;
                 }
@@ -2115,19 +2124,7 @@ public sealed class FlowService(
     /// </summary>
     private void Tick(OrchestratorLayout layout, FlowCoordinator coordinator, Offered offered)
     {
-        switch (_store.TakeStopFile(layout))
-        {
-            case { Pause: { } pause }:
-                coordinator.RequestPause("command", pause.All);
-                break;
-
-            case { Stop: not null }:
-                // The hard stop asked of the engine from another terminal: everything in flight cancelled and ended
-                // stopped by the loop, which alone owns the graph, and the session ends with it.
-                coordinator.RequestStop();
-                break;
-        }
-
+        _ = HandOnWhatIsAsked(layout, coordinator);
         Settle(layout, offered);
 
         var inbox = _store.ReadInbox(layout);
@@ -2154,23 +2151,51 @@ public sealed class FlowService(
     }
 
     /// <summary>
-    /// The last poll of a session, its poller stopped: a request asked as the session ended was asked of this session and
-    /// of none after it, and an answer the loop never weighed - never offered it, or handed back - is taken here. What
-    /// cannot be read is said and left for the next session of the run, and the session's end stands. Emptying the inbox
-    /// of what the session settled is <see cref="Empty"/>'s, after, apart from the take: a removal that fails never
-    /// unsays an answer taken.
+    /// The last poll of a session, its poller stopped: a pause or a stop asked as the session ended is handed to the engine
+    /// as every poll hands one (<see cref="HandOnWhatIsAsked"/>) - the session an answer this poll takes drives the run on
+    /// with takes it as it begins, and where none follows it ends with this session - and an answer the loop never weighed
+    /// - never offered it, or handed back - is taken here. What cannot be read is said and left for the next session of the
+    /// run, and the session's end stands. Emptying the inbox of what the session settled is <see cref="Empty"/>'s, after,
+    /// apart from the take: a removal that fails never unsays an answer taken.
     /// </summary>
-    /// <returns>How many answers were taken, and how many were read.</returns>
-    private (int Taken, int Seen) LastPoll(OrchestratorLayout layout, FlowCoordinator coordinator, Offered offered, List<string> said)
-        => Guarded("asked of the engine as its session ended", said, () =>
+    /// <returns>How many answers were taken, how many were read, and what was asked through <c>stop.json</c> - <c>pause</c> or <c>stop</c> - or null where nothing was.</returns>
+    private (int Taken, int Seen, string? Asked) LastPoll(OrchestratorLayout layout, FlowCoordinator coordinator, Offered offered, List<string> said)
+    {
+        string? asked = null;
+        var (taken, seen) = Guarded("asked of the engine as its session ended", said, () =>
         {
-            if (_store.TakeStopFile(layout) is { } late)
-            {
-                said.Add($"a {(late.Pause is not null ? "pause" : "stop")} asked as the session ended was taken with it");
-            }
-
+            asked = HandOnWhatIsAsked(layout, coordinator);
             return TakeInbox(layout, coordinator, offered, said);
         });
+
+        return (taken, seen, asked);
+    }
+
+    /// <summary>
+    /// Takes what another process asked of the engine through <c>stop.json</c> and hands it to the engine, which alone
+    /// applies it: the safe pause - its machine steps stopped too where it says all - or the hard stop, everything in flight
+    /// cancelled and ended stopped by the loop, which alone owns the graph. The one owner of an ask a poll takes, every
+    /// tick's (<see cref="Tick"/>) and the session's last (<see cref="LastPoll"/>) alike: what is taken from the file is
+    /// never only removed, so a stop or a pause read as a session ends reaches the engine as one read while it runs does,
+    /// and the next session it drives takes it as it begins, as it takes one asked between sessions by any other way.
+    /// </summary>
+    /// <returns>What was asked - <c>pause</c> or <c>stop</c> - or null where nothing was.</returns>
+    private string? HandOnWhatIsAsked(OrchestratorLayout layout, FlowCoordinator coordinator)
+    {
+        switch (_store.TakeStopFile(layout))
+        {
+            case { Pause: { } pause }:
+                coordinator.RequestPause("command", pause.All);
+                return "pause";
+
+            case { Stop: not null }:
+                coordinator.RequestStop();
+                return "stop";
+
+            default:
+                return null;
+        }
+    }
 
     /// <summary>
     /// Empties from the inbox, between two drives, what the session settled (<see cref="Settle"/>), where what the removal

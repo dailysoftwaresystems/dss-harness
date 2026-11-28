@@ -1014,7 +1014,9 @@ session left; every write of the session says that standing after it, a held one
 or beginning the pause at that moment - read from the standing it takes itself as it does, whether or not the asker has
 taken it yet, so the stop never stands beside the pause it replaced - and a start that never goes on puts back what it
 wrote over and, once it has ended, stands for nothing asked of its engine after it; the standing is its session's, let go
-as the session ends, so what is asked between two sessions is stood on only by the next session's start - until the
+as the session ends, so what is asked between two sessions - a pause or a stop the session's last poll finds in
+`stop.json` among it, handed to the engine as every poll hands one, so the session an answer that poll takes drives the
+run on with takes it as it begins - is stood on only by the next session's start - until the
 start's own end is written, once it has sought every recommendation the run owes; a reader
 judges that state only beside an owner it found live before reading it and still after, and a session's release removes its owner before
 it takes its start's mark back. The budget's own question is recommended too: once the
