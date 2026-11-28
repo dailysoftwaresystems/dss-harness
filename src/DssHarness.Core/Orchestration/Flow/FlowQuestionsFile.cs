@@ -55,6 +55,14 @@ public sealed record FlowRecommendation(
 {
     /// <summary>The recommendation a question carries until one is sought - and for good where it was answered at once, by its configuration or the run's input, asking no person.</summary>
     public static FlowRecommendation NotSought { get; } = new("notSought", Why: "no recommendation was sought");
+
+    /// <summary>
+    /// The recommendation a question owing one carries where a pause or a stop withholds its advice - asked of the session,
+    /// its start among it, before the advice was begun: deferred to the pause's end, or to the resume where a stop came
+    /// first. The one wording of it, which the engine writes as it defers the advice and a start's standing writes at once
+    /// (<see cref="FlowStartsStanding.On(FlowQuestionsFile, IReadOnlyCollection{string})"/>).
+    /// </summary>
+    public static FlowRecommendation Withheld { get; } = new("deferred", Why: "the run is pausing, and no reason step is started before its pause is complete: the recommendation is sought then, or when the run is resumed where a stop came first");
 }
 
 /// <summary>Who gave an answer: a person (and through what), the configuration (and where), or the run's input.</summary>

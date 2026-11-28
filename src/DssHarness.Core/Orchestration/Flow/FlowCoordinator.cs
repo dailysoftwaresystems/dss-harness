@@ -614,9 +614,10 @@ public sealed class FlowCoordinator
     private readonly Lock _pauseAsks = new();
 
     /// <summary>
-    /// Held while the run's records are written - a write made at once, the hold made, and the start's mark taken back as a
-    /// stop or a pause is asked of it from another thread (<see cref="TakeBackTheStartsMark"/>) - so the mark's taking back,
-    /// which reads the run's state and writes it again, never meets a write half made nor writes over one made since.
+    /// Held while the run's records are written - a write made at once, the hold made, and the start's standing written as a
+    /// stop or a pause is asked of it from another thread (<see cref="TakeTheStartsStanding"/>) - and while that standing is
+    /// read or changed (<see cref="_startsStanding"/>), so its writing, which reads the run's state and writes it again, never
+    /// meets a write half made nor writes over one made since, and every write says the standing as it is when it is made.
     /// </summary>
     private readonly Lock _writing = new();
 
@@ -635,6 +636,41 @@ public sealed class FlowCoordinator
 
     /// <summary>The run's standing as the loop last said it, which a reader off the loop is shown while a session is driven (<see cref="Status"/>). Under <see cref="_shown"/>.</summary>
     private FlowRunStatus _statusShown;
+
+    /// <summary>
+    /// What this engine stands on once a stop or a pause is asked of its start under way - the one owner of what a start
+    /// writes when it takes such a request (<see cref="FlowStartsStanding"/>): taken as it is asked, and as each later ask
+    /// changes it while it holds, written at once over the run's state (<see cref="TakeTheStartsStanding"/>), and said by
+    /// every write made after it (<see cref="AsWritten"/>) - the stop's moment the one the loop applies the stop at
+    /// (<see cref="ApplyTheStop"/>), the pause's the one the loop begins it at (<see cref="PauseInOrderAsync"/>) - until the
+    /// next session's start, which takes its own; taken back where the start never goes on. Null where nothing was asked of
+    /// the start. Held under <see cref="_writing"/>.
+    /// </summary>
+    private FlowStartsStanding? _startsStanding;
+
+    /// <summary>
+    /// Whether the run's state may still say the engine is starting (<see cref="FlowFile.Starting"/>): from the engine's
+    /// making over the run's records - its session's claim marks the state so - and wherever a write said so since, until a
+    /// write says it is not, the start's own end among them. A stop or a pause asked while it may writes what the engine
+    /// stands on at once (<see cref="TakeTheStartsStanding"/>), whether or not the start is still under way: the start's held
+    /// writes say starting once they are made, before its own end is written. Held under <see cref="_writing"/>.
+    /// </summary>
+    private bool _startingWritten = true;
+
+    /// <summary>
+    /// The open questions the session before left sought, which no advisor of this engine seeks (<see cref="Replay"/>): what
+    /// a standing taken before this engine wrote its questions defers in them at once, as its start defers them
+    /// (<see cref="FlowStartsStanding.On(FlowQuestionsFile, IReadOnlyCollection{string})"/>). Set once, as the engine is
+    /// made over the run's records.
+    /// </summary>
+    private IReadOnlyList<string> _leftSought = [];
+
+    /// <summary>
+    /// Whether this engine has written the run's questions, which say from then on what became of each question the session
+    /// before left sought: a standing taken after it defers nothing in them (<see cref="_leftSought"/>). Held under
+    /// <see cref="_writing"/>.
+    /// </summary>
+    private bool _questionsWritten;
 
     /// <summary>Every agent name the session gave, a spent one's among them: never given again, though no step holds it any more.</summary>
     private readonly HashSet<string> _agentNamesGiven = new(StringComparer.Ordinal);
@@ -698,10 +734,11 @@ public sealed class FlowCoordinator
     private volatile bool _stopPastThePause;
 
     /// <summary>
-    /// When the stop this session ends with was applied - its hard stop (<see cref="ApplyTheStop"/>), or a stop once its
-    /// pause was complete, as the loop takes it, or an abort its start took, as it was taken (<see cref="Carry"/>) - written
-    /// into <c>flow.json</c> with every change from then on, so a reader
-    /// of the run tells the engine is stopping (<see cref="FlowFile.StoppingSince"/>); null where no stop was applied.
+    /// When the stop this session ends with was applied - its hard stop (<see cref="ApplyTheStop"/>), at the moment it was
+    /// asked where it was asked of the session's start, an abort the start took among them (<see cref="_startsStanding"/>), or
+    /// a stop once its pause was complete, as the loop takes it - written into <c>flow.json</c> with every change from then
+    /// on, so a reader of the run tells the engine is stopping (<see cref="FlowFile.StoppingSince"/>); null where no stop was
+    /// applied.
     /// </summary>
     private DateTimeOffset? _stoppingSince;
     private FlowPauseRequest? _pauseRequest;
@@ -1213,8 +1250,8 @@ public sealed class FlowCoordinator
         }
 
         // A start under way refuses from here on what it is handed for the advice it would have sought, and the run's
-        // state says so at once.
-        TakeBackTheStartsMark();
+        // state says the pause asked at once.
+        TakeTheStartsStanding();
         WakeTheLoop();
     }
 
@@ -1287,34 +1324,107 @@ public sealed class FlowCoordinator
         }
 
         DropPauseRequest();
-        TakeBackTheStartsMark();
+        TakeTheStartsStanding();
         CancelHandoffTurns();
         WakeTheLoop();
     }
 
     /// <summary>
-    /// Takes the mark of this engine's start back from the run's state at once, where a stop or a pause is asked of the
-    /// start under way (<see cref="StartUnderWay"/>): from that moment the start refuses an answer handed to it to a question
-    /// owing the recommendation it would have sought (<see cref="StartTakesAnswers"/>), so the run's state never says the
-    /// engine is starting past it - neither the claim's mark (<see cref="FlowRunOwner.Claim"/>) nor a write the start made at
-    /// once before it, which nothing the start holds would reach until the hold is made, and no held write made after it
-    /// either (<see cref="AsWritten"/>). Written outside the hold, as a session's release takes the mark back
-    /// (<see cref="IFlowRecords.Unmark"/>), and inside the one section every write of the run's records is made in, so it
-    /// never meets one half made nor writes over one made since.
+    /// Takes what this engine stands on where a stop or a pause is asked of its start under way (<see cref="StartUnderWay"/>)
+    /// or while the run's state may still say it is starting (<see cref="_startingWritten"/>) - the claim's mark, or the
+    /// start's held writes, made before its own end - or a later ask changes a standing the start took - a stop over the pause
+    /// asked, the pause's machine steps asked too - and writes it over the run's state at once
+    /// (<see cref="IFlowRecords.Stand"/>): from that moment the start refuses an
+    /// answer handed to it to a question owing the recommendation it would have sought (<see cref="StartTakesAnswers"/>),
+    /// naming the step the stop or the pause gives it (<see cref="TryAnswer(string, string, string?, out string?, string?, string?)"/>),
+    /// so the run's state says the engine is stopping, or pausing, from then on - never starting, by the claim's mark
+    /// (<see cref="FlowRunOwner.Claim"/>) or a write the start made at once before it, which nothing the start holds would
+    /// reach until the hold is made, and never what the session before left it saying, a run a crash ended running - and
+    /// every write made after it says so, a held one among them (<see cref="AsWritten"/>). Written outside the hold, inside
+    /// the one section every write of the run's records is made in, so it never meets one half made nor writes over one made
+    /// since; a standing the asks no longer give - the loop took the pause up, a later session's start asked nothing - is let
+    /// go of, nothing written.
     /// </summary>
-    private void TakeBackTheStartsMark()
+    /// <param name="anew">Whether a session's start begins, which takes its own standing: a later session's, from what is asked of it alone.</param>
+    private void TakeTheStartsStanding(bool anew = false)
     {
-        if (_records is null)
-        {
-            return;
-        }
-
         lock (_writing)
         {
-            if (StartUnderWay)
+            if (anew)
             {
-                _records.Unmark();
+                _startsStanding = null;
             }
+
+            if (!StartUnderWay && !_startingWritten && _startsStanding is null)
+            {
+                return;
+            }
+
+            var standing = StandingAsked();
+
+            if (standing == _startsStanding)
+            {
+                return;
+            }
+
+            _startsStanding = standing;
+
+            if (standing is not null)
+            {
+                _records?.Stand(standing, _questionsWritten ? [] : _leftSought);
+                _startingWritten = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// What is asked of the engine now, as its start stands on it: the stop asked - at the moment the standing took it, where
+    /// it was the stop already - or the pause asked and not taken up yet, at the moment the standing took it where it was
+    /// that pause already; null where neither is asked. Read under <see cref="_writing"/>.
+    /// </summary>
+    private FlowStartsStanding? StandingAsked()
+    {
+        bool stop;
+        FlowPauseRequest? pause;
+
+        lock (_pauseAsks)
+        {
+            (stop, pause) = (_hardStop, _pauseRequest);
+        }
+
+        var was = _startsStanding;
+
+        return stop ? new FlowStartsStanding(was is { Pause: null } ? was.At : _clock.GetUtcNow(), null)
+            : pause is { } asked ? new FlowStartsStanding(was is { Pause: not null } ? was.At : _clock.GetUtcNow(), asked)
+            : null;
+    }
+
+    /// <summary>
+    /// Puts back what the run's state said of its engine before this start's standing was written over it, where the start
+    /// never goes on - refused, ended by its token or by a defect before its hold was made - for a start that never goes on
+    /// writes nothing of itself (<see cref="IFlowRecords.Unstand"/>), and lets the standing go: the next start takes its own.
+    /// </summary>
+    private void TakeBackTheStartsStanding()
+    {
+        lock (_writing)
+        {
+            if (_startsStanding is null)
+            {
+                return;
+            }
+
+            _startsStanding = null;
+            _records?.Unstand();
+        }
+    }
+
+    /// <summary>The moment the start's standing took the stop or the pause it stands on; null where it stands on none, or on the other (<paramref name="pause"/>).</summary>
+    /// <param name="pause">Whether the pause's moment is asked; else the stop's.</param>
+    private DateTimeOffset? StoodSince(bool pause)
+    {
+        lock (_writing)
+        {
+            return _startsStanding is { } standing && (standing.Pause is not null) == pause ? standing.At : null;
         }
     }
 
@@ -1327,8 +1437,9 @@ public sealed class FlowCoordinator
     /// </summary>
     private void ApplyTheStop()
     {
+        // A stop asked of the session's start is applied at the moment it was asked, as the run's state has said since.
         _stopApplied = true;
-        _stoppingSince ??= _clock.GetUtcNow();
+        _stoppingSince ??= StoodSince(pause: false) ?? _clock.GetUtcNow();
         _pausing = false;
         DropPauseRequest();
         DeferAdvice("the run was stopped while the advisor ran");
@@ -1508,10 +1619,9 @@ public sealed class FlowCoordinator
         _pauseComplete = false;
         _stopPastThePause = false;
 
-        // A stop this engine's first start took as it began - an abort answered before the session was driven - was in the
-        // run's state from the moment it was taken, for the start applies it before anything else (Carry); any other is
-        // the last session's, which ended with it.
-        _stoppingSince = stopPending && _sessions == 0 ? _stoppingSince : null;
+        // A stop applied is the last session's, which ended with it: one asked of this session's start - an abort answered
+        // before the session was driven among them - is the start's standing, applied at the moment it was asked.
+        _stoppingSince = null;
         _pauseAllAsked = false;
         _alwaysPhase = false;
         _stopApplied = false;
@@ -1528,6 +1638,10 @@ public sealed class FlowCoordinator
         // is refused below, and a refused resume writes nothing of itself.
         _held = _records is null ? null : [];
         _starting = true;
+
+        // What is asked of the engine as its session's start begins is what the start stands on - a stop pending, a pause
+        // asked and not taken up - and a later session's start takes its own: the run's state says it at once.
+        TakeTheStartsStanding(anew: _sessions > 1);
 
         // How the session leaves: in order, through its end below; by its cancellation token once it went on, which ends
         // it now and writes what it charged and holds all the same; or by a refusal of its start or a defect, which writes
@@ -1822,6 +1936,13 @@ public sealed class FlowCoordinator
             var dropped = _held;
             _held = recorded || _records is null ? null : [];
             Drop(dropped ?? []);
+
+            if (_starting)
+            {
+                // A start that never went on takes back the standing it wrote at once, with what it held.
+                TakeBackTheStartsStanding();
+            }
+
             _starting = false;
 
             // An advice the session leaves running - its token ended it, or a defect did - is ended and waited for before
@@ -2167,7 +2288,8 @@ public sealed class FlowCoordinator
     /// </param>
     private async Task PauseInOrderAsync(FlowPauseRequest request, CancellationToken cancellationToken)
     {
-        _pause = new FlowPauseState(request.Cause, request.All, _clock.GetUtcNow());
+        // A pause asked of the session's start begins at the moment it was asked, as the run's state has said since.
+        _pause = new FlowPauseState(request.Cause, request.All, StoodSince(pause: true) ?? _clock.GetUtcNow());
         Record(FlowChangeKind.PauseBegan, detail: $"{request.Cause}{(request.All ? ", all" : string.Empty)}");
 
         // An advice already running is never ended by a pause, whatever asked for it: it finishes as a machine step the
@@ -3091,10 +3213,10 @@ public sealed class FlowCoordinator
     /// (<see cref="StartUnderWay"/>) and goes on to seek them - no stop asked of it, after which it seeks none, and no pause,
     /// which defers each (<see cref="SeekAdvice"/>). The one owner of both what an answer handed to the start meets
     /// (<see cref="WaitsForTheStartsAdvice"/>) and whether the run's state says its engine is starting
-    /// (<see cref="FlowFile.Starting"/>, written by every write the start makes while it holds, and taken back at once where a
-    /// stop or a pause is asked of it - <see cref="TakeBackTheStartsMark"/>), so a reader names the answer taken as the start
-    /// seeks its recommendation (<see cref="FlowAnswerRules.NextStepOf"/>) exactly where the start takes it - never where a
-    /// stop or a pause asked of the start will refuse it.
+    /// (<see cref="FlowFile.Starting"/>, written by every write the start makes while it holds, and written over at once where
+    /// a stop or a pause is asked of it by what the start stands on then - <see cref="TakeTheStartsStanding"/>), so a reader
+    /// names the answer taken as the start seeks its recommendation (<see cref="FlowAnswerRules.NextStepOf"/>) exactly where
+    /// the start takes it - and where a stop or a pause asked of the start will refuse it, the step the refusal names.
     /// </summary>
     private bool StartTakesAnswers => StartUnderWay && !AskedToStopOrPause;
 
@@ -4233,15 +4355,10 @@ public sealed class FlowCoordinator
         if (answer == "abort")
         {
             // abort is taken for any question, and ends the run as a hard stop ends it: everything in flight is
-            // cancelled and ends stopped. One a start takes is the stop that start applies before anything else, and
-            // seeks no advice after: the run's state says the engine is stopping from the abort's own record on, never
-            // that it is starting (FlowFile.StoppingSince), so a reader names the resume once it has gone, as this engine
-            // does for every answer it is handed meanwhile.
-            if (StartUnderWay)
-            {
-                _stoppingSince ??= _clock.GetUtcNow();
-            }
-
+            // cancelled and ends stopped. One a start takes is the stop that start stands on, applied before anything
+            // else, and it seeks no advice after: the run's state says the engine is stopping from the moment the abort is
+            // taken, never that it is starting (TakeTheStartsStanding, FlowFile.StoppingSince), so a reader names the
+            // resume once it has gone, as this engine does for every answer it is handed meanwhile.
             BeginHardStop();
         }
         else if (asked.Kind == "runBudget")
@@ -12237,7 +12354,7 @@ public sealed class FlowCoordinator
 
         if (!pastThePause && (_pausing || _hardStop || _pauseRequest is not null))
         {
-            asked.Recommendation = new FlowRecommendation("deferred", Why: "the run is pausing, and no reason step is started before its pause is complete: the recommendation is sought then, or when the run is resumed where a stop came first");
+            asked.Recommendation = FlowRecommendation.Withheld;
             WriteQuestions();
             return;
         }
@@ -12639,7 +12756,12 @@ public sealed class FlowCoordinator
 
         List<FlowQuestionEntry> entries = [.. _questions.Select(asked => asked.ToEntry())];
         List<FlowRefusedAnswer> refused = [.. _refused];
-        Put(records => records.Question(entries, refused));
+        Put(records =>
+        {
+            // Made under the one section every write is: a standing taken from here on finds the questions this engine's.
+            records.Question(entries, refused);
+            _questionsWritten = true;
+        });
     }
 
     /// <summary>
@@ -15988,13 +16110,23 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// <paramref name="snapshot"/> as it is written now: saying the engine is starting only while the start still takes what
-    /// it is handed - a write a start held from before a stop or a pause was asked of it, made once the hold is, says it is
-    /// not, as the run's state has said from the moment that was asked (<see cref="TakeBackTheStartsMark"/>). Everything else
-    /// is the run as it stood when the change was taken.
+    /// <paramref name="snapshot"/> as it is written now, under <see cref="_writing"/> as every write is: saying what the
+    /// engine stands on once a stop or a pause was asked of its start (<see cref="FlowStartsStanding.On(FlowSnapshot)"/>) - a
+    /// write the start held from before it, made once the hold is, among them, as the run's state has said from the moment
+    /// it was asked (<see cref="TakeTheStartsStanding"/>) - and the engine starting only while its start still takes what it
+    /// is handed, which is kept as what the run's state says of the start from then on (<see cref="_startingWritten"/>).
+    /// Everything else is the run as it stood when the change was taken.
     /// </summary>
     private FlowSnapshot AsWritten(FlowSnapshot snapshot)
-        => snapshot.Starting && AskedToStopOrPause ? snapshot with { Starting = false } : snapshot;
+    {
+        var written = _startsStanding is { } standing ? standing.On(snapshot)
+            : snapshot.Starting && AskedToStopOrPause ? snapshot with { Starting = false }
+            : snapshot;
+
+        // What the run's state says of the start from here on, for a stop or a pause asked before the next write.
+        _startingWritten = written.Starting;
+        return written;
+    }
 
     /// <summary>
     /// Every write of the run's records goes through here: made at once, or - while a session's start is held - kept,
@@ -17016,6 +17148,7 @@ public sealed class FlowCoordinator
             // What the run did with each answer handed over through the inbox is its file's too - one taken under its
             // entry's id comes back with its question, one refused here - so no session weighs an entry twice.
             _refused.AddRange(resume.Refused ?? []);
+            var leftSought = new List<string>();
 
             foreach (var entry in resume.Questions ?? [])
             {
@@ -17032,6 +17165,15 @@ public sealed class FlowCoordinator
                 SetOpen(asked.Id, open: true);
                 _answerable[asked.Id] = about;
 
+                if (asked.Recommendation.State == "sought" && OwesAdvice(asked) && RunSeeksAdviceFor(asked))
+                {
+                    // Sought by the session before, which ended before its advice answered: no advisor of this engine seeks
+                    // it, and it owes its recommendation as one deferred to the resume does - this session's start seeks
+                    // it, or defers it under a stop or a pause asked of it, which its standing says of it at once.
+                    asked.Recommendation = SoughtAtTheResume("the engine that sought it ended before its advice answered");
+                    leftSought.Add(asked.Id);
+                }
+
                 if (about is not null)
                 {
                     // A question is written before the record of the step that waits on it: a crash between the two
@@ -17045,6 +17187,8 @@ public sealed class FlowCoordinator
                     }
                 }
             }
+
+            _leftSought = leftSought;
 
             foreach (var waiting in _created.Where(created => created.WaitingQuestion is { } question && !_open.Contains(question)).ToList())
             {

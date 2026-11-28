@@ -1006,8 +1006,13 @@ whatever the session went on to do, as an answer any session refused is - on eve
 meets after its start among them, the session's own end said after it and kept in `--json`'s `session` - one taken is
 said taken, one never settled is said to stay in `inbox.json`, and an inbox entry's line says it was taken or why not. A
 live engine's state says `starting` only while its start takes such an answer - no stop or pause asked of it: one asked
-takes the claim's mark back from `flow.json` at once, outside the start's held writes, none of which says `starting`
-once it is made - until the start's own end is written, once it has sought every recommendation the run owes; a reader
+of the start, or while the state may still say `starting`, writes over `flow.json` at once, outside the start's held
+writes, what the start stands on then - the stop applied (`stoppingSince`, from the moment it was asked) or the pause
+asked (`pause`, begun then and not complete) - and defers in `questions.json` each recommendation the session before left
+sought, as the start defers it, so the status and the report name the step the engine's refusal names, whatever the past
+session left; every write of the session says that standing after it, a held one among them, the loop applying the stop
+or beginning the pause at that moment, and a start that never goes on puts back what it wrote over - until the start's
+own end is written, once it has sought every recommendation the run owes; a reader
 judges that state only beside an owner it found live before reading it and still after, and a session's release removes its owner before
 it takes its start's mark back. The budget's own question is recommended too: once the
 budget's pause is complete, before the session ends, the advisor is asked of the run as a whole - its

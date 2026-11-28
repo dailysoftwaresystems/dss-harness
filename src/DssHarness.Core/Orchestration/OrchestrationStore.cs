@@ -361,20 +361,42 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
 
     /// <summary>
     /// Takes the mark of an engine's start back from the run's state where it holds it (<see cref="Flow.FlowFile.Starting"/>):
-    /// what a session's release does once its owner is gone (<see cref="Flow.FlowRunOwner.Release"/>), and what a start does
-    /// at once where a stop or a pause is asked of it (<see cref="Flow.IFlowRecords.Unmark"/>). Everything else the state says
-    /// stands as written; a state that holds no mark, and a run that holds no state, are left as they are.
+    /// what a session's release does once its owner is gone (<see cref="Flow.FlowRunOwner.Release"/>). Everything else the
+    /// state says stands as written; a state that holds no mark, and a run that holds no state, are left as they are.
     /// </summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     /// <exception cref="HarnessException">The state cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
     public void Unmark(OrchestratorLayout orchestrator)
+        => _ = Rewrite(orchestrator, flow => flow.Starting is true ? flow with { Starting = null } : flow);
+
+    /// <summary>
+    /// Writes the run's state again as <paramref name="rewritten"/> says it from the state as it stands: the one read and
+    /// write of a change of part of it - the mark's taking back, and what a start stands on once a stop or a pause is asked
+    /// of it (<see cref="Flow.IFlowRecords.Stand"/>) - nothing written where it hands the state back as it stood, and a run
+    /// that holds no state left so.
+    /// </summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="rewritten">The state as it is to be, from the state as it stands.</param>
+    /// <returns>The state as it stood before; null where the run holds none.</returns>
+    /// <exception cref="HarnessException">The state cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public Flow.FlowFile? Rewrite(OrchestratorLayout orchestrator, Func<Flow.FlowFile, Flow.FlowFile> rewritten)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(rewritten);
 
-        if (ReadFlow(orchestrator) is { Starting: true } marked)
+        if (ReadFlow(orchestrator) is not { } stood)
         {
-            WriteFlow(orchestrator, marked with { Starting = null });
+            return null;
         }
+
+        var written = rewritten(stood);
+
+        if (!ReferenceEquals(written, stood))
+        {
+            WriteFlow(orchestrator, written);
+        }
+
+        return stood;
     }
 
     /// <summary>The run's status, or null where the run holds none.</summary>
@@ -612,6 +634,36 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(file);
         Write(orchestrator.QuestionsFile, QuestionsKind, file, file.Problem());
+    }
+
+    /// <summary>
+    /// Writes the run's questions again as <paramref name="rewritten"/> says them from the file as it stands - what a start
+    /// stands on once a stop or a pause is asked of it defers among them (<see cref="Flow.IFlowRecords.Stand"/>), as
+    /// <see cref="Rewrite"/> writes the run's state: nothing written where it hands the file back as it stood, and a run that
+    /// holds none left so.
+    /// </summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="rewritten">The questions as they are to be, from the file as it stands.</param>
+    /// <returns>The questions as they stood before; null where the run holds none.</returns>
+    /// <exception cref="HarnessException">The file cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public FlowQuestionsFile? RewriteFlowQuestions(OrchestratorLayout orchestrator, Func<FlowQuestionsFile, FlowQuestionsFile> rewritten)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(rewritten);
+
+        if (ReadFlowQuestions(orchestrator) is not { } stood)
+        {
+            return null;
+        }
+
+        var written = rewritten(stood);
+
+        if (!ReferenceEquals(written, stood))
+        {
+            WriteFlowQuestions(orchestrator, written);
+        }
+
+        return stood;
     }
 
     /// <summary>Every plan update the run has taken, or null where the run holds none.</summary>
