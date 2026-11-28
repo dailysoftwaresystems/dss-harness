@@ -1669,10 +1669,17 @@ public sealed class FlowPlanPiecesTests
     /// the update, so a resume after that write completes what bringing it to rest does - the probe's question withdrawn
     /// with the step that asked it, the recovery's redirect dropped with the question it asked - and one before it finds
     /// the placement not begun and makes it. Either way the update is placed once, and the item is brought to rest once
-    /// and visited again once, whose own probe is what the run then asks.
+    /// and visited again once, whose own probe is what the run then asks. So too where a stop is pending as the session
+    /// that takes the run up begins - asked between sessions, or left in the records for the resume to take: its start
+    /// completes the placement before the stop is applied, so the session the stop ends leaves the item at rest - nothing
+    /// it owed still owed, no question of it open for a person to answer, what the crash cut off in it stopped for the
+    /// update - and the session after reads it in that one state, never refused over a question of the item.
     /// </summary>
-    [Fact]
-    public async Task APlacementTheProcessEndsInTheMiddleOf_IsCompletedByTheResume_AtEveryWriteItMakes()
+    /// <param name="aStopPending">Whether a stop is pending as the first session that takes the run up begins.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task APlacementTheProcessEndsInTheMiddleOf_IsCompletedByTheResume_AtEveryWriteItMakes(bool aStopPending)
     {
         var points = new List<string>();
         var failed = new List<string>();
@@ -1717,6 +1724,37 @@ public sealed class FlowPlanPiecesTests
 
             try
             {
+                if (aStopPending)
+                {
+                    var (_, _, stopping) = Records("r1", temp.Path, definition);
+                    var taken = ResumeOf(harness, layout, definition);
+
+                    // The session the stop ends begins a day after the crash, so a measure taken to its moment is told
+                    // apart from one taken to where the crash stopped the work.
+                    var aDayLater = new JumpingClock();
+                    aDayLater.Advance(taken.LastRecordAt!.Value.AddDays(1) - aDayLater.GetUtcNow());
+
+                    using (stopping)
+                    {
+                        // The stop ends the session where the run stands, the placement completed first: nothing of the
+                        // item is left asking, and nothing it owed is owed.
+                        var stopped = CoordinatorOf(definition, ChangingOne(), stopping, harness, layout, taken, aDayLater);
+                        stopped.RequestStop();
+                        Assert.Equal(FlowRunStatus.Stopped, (await stopped.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+                        Assert.Empty(stopped.OpenQuestions);
+                    }
+
+                    var left = harness.OrchestrationStore.ReadFlow(layout)!;
+                    Assert.True(left.Redirects is null or [], "no redirect of the item is owed once the stop has ended the session");
+                    Assert.DoesNotContain(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.State == "open");
+                    var cut = left.Steps.Single(step => step.Instance == "rounds.items[0].tidy");
+                    Assert.Equal((nameof(FlowInstanceState.Stopped), 1, "u1"), (cut.State, cut.Attempt, cut.EndedFor));
+
+                    // What the crash cut off was measured to where the crash stopped it, as the start completes it before
+                    // the stop is applied - never to the moment of the stop, a day later.
+                    Assert.Equal(taken.LastRecordAt, Assert.Single(cut.Measure!.Attempts!).FinishedAt);
+                }
+
                 var (_, _, again) = Records("r1", temp.Path, definition);
 
                 using (again)
@@ -1729,11 +1767,12 @@ public sealed class FlowPlanPiecesTests
                     Assert.Equal("u1", resumed.Instances["rounds.items[0]"].EndedFor);
 
                     // What the crash cut off in an item its records say is being ended for the update is stopped for it,
-                    // its one attempt over; before the item was marked, it is drawn again as a new attempt, which the
-                    // placement then skips before it starts.
+                    // its one attempt over - and so is what a stop stopped there before the item was marked; before the
+                    // item was marked, and with no stop, it is drawn again as a new attempt, which the placement then
+                    // skips before it starts.
                     var tidy = resumed.Instances["rounds.items[0].tidy"];
                     Assert.Equal(
-                        point == 0 ? (FlowInstanceState.Skipped, 2, null) : (FlowInstanceState.Stopped, 1, "u1"),
+                        point == 0 && !aStopPending ? (FlowInstanceState.Skipped, 2, null) : (FlowInstanceState.Stopped, 1, "u1"),
                         (tidy.State, tidy.Attempt, tidy.EndedFor));
 
                     // Nothing is sent back into the item, and it is visited again once.
@@ -1769,6 +1808,137 @@ public sealed class FlowPlanPiecesTests
         // item's own record saying it is being ended for the update, before anything it owed is dropped; the redirect's
         // drop and its question's withdrawal; the probe's question withdrawn and the probe skipped; the update done.
         Assert.Equal(["the update's pieces", "the item marked", "the run's state", "the run's questions", "the run's questions", "the run's state", "the update done"], points);
+    }
+
+    /// <summary>
+    /// The flow of <see cref="Flow"/> whose work item runs <c>tidy</c>, a machine step in the item's agent, beside its probe -
+    /// with a handler of its ending where <paramref name="handled"/> names the outcome it answers.
+    /// </summary>
+    /// <param name="handled">The outcome <c>after-tidy</c> answers, <c>failure</c> or <c>success</c>; null for no handler.</param>
+    private static string WithATidy(string? handled)
+        => Flow.Replace(
+            "          - name: probe\n",
+            "          - name: tidy\n            type: run\n            runner: tidy\n            in: make\n            dependsOn: [make]\n"
+                + (handled is null ? string.Empty : $"          - name: after-tidy\n            type: orient\n            on: {{step: tidy, outcome: {handled}}}\n")
+                + "          - name: probe\n",
+            StringComparison.Ordinal);
+
+    /// <summary>
+    /// What a step's ending owes inside a work item a plan update brings to rest is given up with what the item owes, never
+    /// decided or raised into the item at rest: a machine step a safe pause left running that ends while the pause records
+    /// what it left - failed before the piece was placed, its failure owed to the next session with the handler of its
+    /// failure, or done once the item was being ended, the handler of its success owed - is ended with the item: the
+    /// failure owed no more and never settled, the handler left. So the status of the run's records counts nothing owed
+    /// of the item, and the session that takes the run up raises nothing into the item at rest and never takes the failure
+    /// to the item's group - which would fail the round its visit again runs in - but runs that visit again. Records an
+    /// older build left holding the failure and its handler owed in the item at rest read the same: the session's start
+    /// gives them up before anything runs.
+    /// </summary>
+    /// <param name="shape">What the step's ending owes, and whose records hold it.</param>
+    [Theory]
+    [InlineData("a failure owed")]
+    [InlineData("a failure owed, with its handler")]
+    [InlineData("a success, its handler owed")]
+    [InlineData("a failure owed, with its handler, in an older build's records")]
+    public async Task WhatAStepsEndingOwesInsideAWorkItemBroughtToRest_IsGivenUpWithTheItem_NeverRaisedIntoItAtRest(string shape)
+    {
+        using var temp = new TempDirectory();
+        var succeeds = shape.StartsWith("a success", StringComparison.Ordinal);
+        var handled = shape.Contains("handler", StringComparison.Ordinal);
+        var definition = Parse(WithATidy(handled ? succeeds ? "success" : "failure" : null));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var tidyEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var checkedAgain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var checking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var checks = 0;
+        var runner = ChangingOne()
+            .OnAsync("tidy", async (run, token) =>
+            {
+                if (run.Instance == "rounds.items[0].tidy")
+                {
+                    await tidyEnds.Task.WaitAsync(token);
+                    return succeeds ? FlowStepResult.Ended(passed: true, HarnessExit.Success) : FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the tidy failed");
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            })
+            .OnAsync("check", async (run, token) =>
+            {
+                if (Interlocked.Increment(ref checks) > 1)
+                {
+                    checking.TrySetResult();
+                    await checkedAgain.Task.WaitAsync(token);
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The update's plan is checked while the item's tidy runs; a safe pause is asked, which leaves the tidy running
+            // and records how it ends - before the piece is placed against the item, where it fails, and once the item is
+            // being ended for the update, where it succeeds.
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rounds.items[0].tidy").WaitAsync(Bound, Token);
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
+            await checking.Task.WaitAsync(Bound, Token);
+
+            if (succeeds)
+            {
+                checkedAgain.TrySetResult();
+                _ = await UntilAsync(harness, layout, flow => flow.Steps.Single(step => step.Instance == "rounds.items[0]").EndedFor == "u1");
+            }
+
+            coordinator.RequestPause("command");
+            _ = await UntilAsync(harness, layout, flow => flow.Pause is not null);
+            tidyEnds.TrySetResult();
+            _ = await UntilAsync(harness, layout, flow => flow.Steps.Single(step => step.Instance == "rounds.items[0].tidy").State != nameof(FlowInstanceState.Running));
+            checkedAgain.TrySetResult();
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(Bound, Token)).Status);
+        }
+
+        // The item came to rest, the tidy's ending given up with it: its failure owed no more, its handler left.
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        Assert.Equal((nameof(FlowInstanceState.Stopped), "u1"), (flow.Steps.Single(step => step.Instance == "rounds.items[0]").State, flow.Steps.Single(step => step.Instance == "rounds.items[0]").EndedFor));
+        var tidy = flow.Steps.Single(step => step.Instance == "rounds.items[0].tidy");
+        Assert.Equal((succeeds ? nameof(FlowInstanceState.Done) : nameof(FlowInstanceState.Failed), null), (tidy.State, tidy.Failure));
+        Assert.Equal<IEnumerable<FlowHandlerState>>(handled ? [new FlowHandlerState("after-tidy", "left")] : [], tidy.Handlers ?? []);
+
+        // The status of the records counts nothing the item owes: no failure owed, no raise owed.
+        var facts = FlowStatus.Facts(definition, flow, harness.OrchestrationStore.ReadFlowQuestions(layout), UpdatesOf(harness, layout), new FlowEngineState(FlowEngineState.None, null, []), DateTimeOffset.UtcNow);
+        Assert.DoesNotContain(facts, line => line.Contains("owed to the session that goes on", StringComparison.Ordinal) || line.Contains("an ending owes a raise", StringComparison.Ordinal));
+
+        if (shape.EndsWith("in an older build's records", StringComparison.Ordinal))
+        {
+            // The records as an older build left them: the failure owed in the item at rest, and its handler owed.
+            var owedFile = Path.Combine(layout.InstanceDirectory("rounds.items[0].tidy", tidy.Agent), OrchestratorLayout.StepRecordFileName);
+            var owed = tidy with { Failure = FlowStepRecord.NameOf(FlowFailure.Owed), Handlers = [new FlowHandlerState("after-tidy", "owed")] };
+            harness.OrchestrationStore.WriteFlow(layout, flow with { Steps = [.. flow.Steps.Select(step => step.Instance == tidy.Instance ? owed : step)] });
+            harness.OrchestrationStore.WriteStepRecord(owedFile, harness.OrchestrationStore.ReadStepRecord(owedFile)! with { Failure = owed.Failure, Handlers = owed.Handlers });
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            // The visit again runs in the item's place and asks at its probe: nothing is raised into the item at rest, and the
+            // failure never reaches the item's group, which would fail the round.
+            var resumed = CoordinatorOf(definition, ChangingOne(), again, harness, layout, ResumeOf(harness, layout, definition));
+            var end = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+            Assert.True(FlowRunStatus.Paused == end.Status, end.Summary);
+            Assert.Equal("rounds.items[1].probe", Assert.Single(resumed.OpenQuestions).Instance);
+            Assert.Equal(FlowInstanceState.Running, resumed.Instances["rounds.items"].State);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id.StartsWith("rounds.items[0].after-tidy+", StringComparison.Ordinal));
+            Assert.Equal(FlowInstanceState.Done, resumed.Instances["rounds.items[1].tidy"].State);
+        }
+
+        var after = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "rounds.items[0].tidy");
+        Assert.Equal((null, null), (after.Failure, after.HandledBy));
+        Assert.Equal<IEnumerable<FlowHandlerState>>(handled ? [new FlowHandlerState("after-tidy", "left")] : [], after.Handlers ?? []);
     }
 
     /// <summary>

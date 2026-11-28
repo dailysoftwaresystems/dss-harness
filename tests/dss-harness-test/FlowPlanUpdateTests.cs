@@ -818,6 +818,211 @@ public sealed class FlowPlanUpdateTests
     }
 
     /// <summary>
+    /// The flow of <see cref="Lean"/> whose planning ends with a review that makes an agent of its own after the check: the
+    /// redirect an update's <c>then</c> decides, which resets the review with the check, would leave that agent open, and asks.
+    /// </summary>
+    private const string Reviewed = """
+        name: flow
+        inputs:
+          - name: request
+        steps:
+          - name: ask
+            type: pause
+            question: '{input.request}'
+            options: [stay, go]
+          - name: planning
+            dependsOn: [ask]
+            gather: [scope]
+            steps:
+              - name: plan
+                type: reason
+                agent: planner
+                prompt: plan.md
+                outputs: plan.json
+              - name: planupdate
+                type: reason
+                agent: planner
+                prompt: plan.md
+                outputs: plan.json
+              - name: check
+                type: orient
+                dependsOn: [plan]
+              - name: review
+                dependsOn: [check]
+                steps:
+                  - name: reviewer
+                    type: create-agent
+                    agent: reviewer
+          - name: gate
+            type: pause
+            question: held?
+            options: [stay, go]
+            dependsOn: [planning]
+          - name: later
+            type: orient
+            dependsOn: [gate]
+        """;
+
+    /// <summary>
+    /// The first session of a run of <paramref name="definition"/> over <paramref name="crashing"/>, until the process ends
+    /// where it says: the run is paused at its gate once the planning has run, an amendment is handed over and the gate
+    /// answered, and the session begins the update - its planning step ends done, and its <c>then</c> is decided.
+    /// </summary>
+    private static async Task UntilTheThenIsDecidedAsync(WorkflowDefinition definition, IFlowRecords crashing, HarnessFactory harness, OrchestratorLayout layout)
+    {
+        var coordinator = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+        _ = await coordinator.RunAsync(Token);
+        Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+        _ = await coordinator.RunAsync(Token);
+        var gate = coordinator.OpenQuestions.Single().Id;
+        Assert.Equal(FlowHandedOver.Taken, coordinator.AmendmentHandedOver("in fact, build only the parser", "amend-orchestrator-request", out _));
+        Assert.True(coordinator.TryAnswer(gate, "go", null, out _));
+
+        _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+    }
+
+    /// <summary>
+    /// The decision of an update's <c>then</c> and the redirect it names are one fact, the redirect's own write: whichever
+    /// write of the decision the process ends at - the redirect's, or the update's entry naming the then after it - the
+    /// session that takes the run up runs the check the then names on the updated plan before its pieces are placed, once,
+    /// and the redirect is decided once. An entry an older build wrote naming the then before a redirect the process never
+    /// wrote reads as the then undecided, so it is decided again and the check runs all the same - never a plan standing on
+    /// a check that never ran on it.
+    /// </summary>
+    /// <param name="crashAt">The write of the decision the process ends at, and whose records hold it.</param>
+    [Theory]
+    [InlineData("the redirect")]
+    [InlineData("the update's then")]
+    [InlineData("the redirect, never written, beside an older build's entry")]
+    public async Task TheThenOfAnUpdate_IsDecidedWithItsRedirect_SoTheCheckRunsOnTheNewPlanWhereverTheProcessEnds(string crashAt)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Lean);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var older = crashAt.EndsWith("an older build's entry", StringComparison.Ordinal);
+        var crashing = crashAt == "the update's then"
+            ? new CrashingRecords(records, updates => updates.Updates.Any(update => update.Then is not null))
+            : new CrashingRecords(records, _ => false, lands: !older, picksRun: run => run.Redirects?.Any(redirect => redirect.Handler == "planning.planupdate") == true);
+
+        using (records)
+        {
+            await UntilTheThenIsDecidedAsync(definition, crashing, harness, layout);
+            Assert.True(crashing.Ended);
+        }
+
+        var entry = harness.OrchestrationStore.ReadFlowUpdates(layout)!;
+
+        if (older)
+        {
+            // The records as an older build left them: the update's entry names its then, and no redirect was written.
+            harness.OrchestrationStore.WriteFlowUpdates(layout, entry with { Updates = [.. entry.Updates.Select(update => update with { Then = "check" })] });
+        }
+
+        // On disk: the update under way, its then named only where the entry was written after the redirect, or by the
+        // older build.
+        Assert.Equal((FlowUpdateStates.UnderWay, crashAt == "the redirect" ? null : "check"), (harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().State, harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().Then));
+
+        // Each run of the check in the session that takes the run up, with where the update stood as it began.
+        var checks = new List<(string Instance, string State)>();
+        var runner = new FakeRunner().On("check", run =>
+        {
+            checks.Add((run.Instance, harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().State));
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            Assert.Equal(FlowRunStatus.Done, (await resumed.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        // The check ran once more, on the plan the update brought, while the update was still under way - before anything
+        // was placed and the update done.
+        Assert.Equal([("planning.check+2", FlowUpdateStates.UnderWay)], checks);
+        var done = harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single();
+        Assert.Equal((FlowUpdateStates.Done, "check"), (done.State, done.Then));
+        Assert.Contains(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Instance == "planning.check" && step.LeftBy == "planning.planupdate");
+
+        // The redirect was decided once, whichever session decided it.
+        Assert.Single(
+            FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Select(read => read.Detail),
+            detail => detail == "the run is sent to 'check' by 'planning.planupdate'");
+    }
+
+    /// <summary>
+    /// The decision of an update's <c>then</c> whose redirect asks - it would leave the review's agent open - is the
+    /// redirect's own write too, with the question it asks written just before: where the process ended at the question's
+    /// write, the question asks of no redirect, the replay withdraws it, and the session that takes the run up decides the
+    /// then again, asking anew; where it ended at the redirect's write or the entry's after it, the then stands decided and
+    /// the session waits on the question asked, never asking it twice - and a <c>stay</c> answered there gives the redirect
+    /// up for good, the plan standing as the stay leaves it, never the then decided again. An entry an older build wrote
+    /// naming the then before the question was written reads as undecided, and the then is asked anew all the same. Never
+    /// is the plan placed without the question asked.
+    /// </summary>
+    /// <param name="crashAt">The write of the decision the process ends at, and whose records hold it.</param>
+    [Theory]
+    [InlineData("the question")]
+    [InlineData("the redirect")]
+    [InlineData("the update's then")]
+    [InlineData("the question, beside an older build's entry")]
+    public async Task TheThenOfAnUpdateThatAsks_IsDecidedWithItsRedirect_AskedOnceWhereverTheProcessEnds(string crashAt)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Reviewed);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var anew = crashAt.StartsWith("the question", StringComparison.Ordinal);
+        var crashing = crashAt switch
+        {
+            "the update's then" => new CrashingRecords(records, updates => updates.Updates.Any(update => update.Then is not null)),
+            "the redirect" => new CrashingRecords(records, _ => false, picksRun: run => run.Redirects?.Any(redirect => redirect.Handler == "planning.planupdate") == true),
+            _ => new CrashingRecords(records, _ => false, picksQuestions: questions => questions.Any(question => question is { Kind: "openAgents", State: "open" })),
+        };
+
+        using (records)
+        {
+            await UntilTheThenIsDecidedAsync(definition, crashing, harness, layout);
+            Assert.True(crashing.Ended);
+        }
+
+        if (crashAt.EndsWith("an older build's entry", StringComparison.Ordinal))
+        {
+            // The records as an older build left them: the update's entry names its then, written before the question.
+            var entry = harness.OrchestrationStore.ReadFlowUpdates(layout)!;
+            harness.OrchestrationStore.WriteFlowUpdates(layout, entry with { Updates = [.. entry.Updates.Select(update => update with { Then = "check" })] });
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            // The session waits on the question the then's redirect asks of the review's agent, the update under way and
+            // nothing placed: asked anew where the process ended at the question's own write, or the one asked before.
+            var resumed = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            Assert.Equal(FlowRunStatus.Paused, (await resumed.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            var asked = Assert.Single(resumed.OpenQuestions);
+            Assert.Equal(("openAgents", "planning.planupdate"), (asked.Kind, asked.Instance));
+            Assert.Equal(FlowUpdateStates.UnderWay, harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().State);
+            Assert.Equal(
+                anew ? ["withdrawn", "open"] : ["open"],
+                harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions.Where(question => question.Kind == "openAgents").Select(question => question.State));
+
+            // A stay gives the redirect up, and the then stands decided: the plan stands, the update is done, and nothing
+            // asks again.
+            Assert.True(resumed.TryAnswer(asked.Id, "stay", null, out var problem), problem);
+            _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+        }
+
+        var done = harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single();
+        Assert.Equal((FlowUpdateStates.Done, "check"), (done.State, done.Then));
+        Assert.Equal(
+            anew ? ["withdrawn", "answered"] : ["answered"],
+            harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions.Where(question => question.Kind == "openAgents").Select(question => question.State));
+    }
+
+    /// <summary>
     /// The check the <c>amend</c> block's <c>then</c> names refuses an update's plan only by a word it said since the
     /// planning step was raised for the update: a loop that ended at its bound on a check that refused an earlier plan,
     /// accepted as it stood, is not gone round again on that old word when an update reopens it - the update's own check
