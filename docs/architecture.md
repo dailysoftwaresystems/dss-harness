@@ -4516,9 +4516,12 @@ or the lines from the first that holds a NUL on, what a power loss left of a pas
 it) - a definition that is not there, or one that does not read with why it does not (`OrchestrationStore.ReadDefinitionOrWhy`; no
 critical path is named). Its sections are the run (its sessions, its wall time, its active
 time - the union of every attempt's runs, two steps at once counted once - its pauses between sessions, each from a
-session's last record to the next session's first event, whatever its kind (`FlowRunReport.PausedSecondsOf`: a resume
-writes what its start took up before it records that it began, its held writes stamped as the hold is made; after a
-crash, which leaves no last record, to the next session's record of its beginning), its waits for a
+session's end - its last record, or where a crash ended it and left none, its last event - to the next session's own
+first event, whatever its kind, by the session each event names (`FlowRunReport.PausedSecondsOf`, `FlowEvent.Session`: a
+resume writes what its start took up before it records that it began, its held writes stamped as the hold is made, and
+what is written after a session's end and before the next's - an answer its last poll takes - is the ended session's and
+ends no pause; an older build's events, which name no session, are read as that build's were - from a session's last
+record to the next event, and after a crash to the next session's record of its beginning), its waits for a
 person, each question's to its first answer or, still open, to the last record, and its budget), the totals (tokens by
 kind, the cache's share of input, the dollars grouped - `dollarsBy`, by the model that served each part of each attempt
 and each advice by its advisor's (by step, the run's own question's under `run`), or by provider, step, agent or type - the retries and the fallbacks), one row
@@ -5292,7 +5295,11 @@ with the key's name alone; and, where its `writes` narrow its worktree, its `unt
 written once, as it first starts, and read by every later start: its head, then each path the worktree
 held untracked, one to a line), then `flow.json` (the
 truth a resume reads), `workflow.json`, `pre-existing-issues.json` where the change listed one, and last the event
-in `events.jsonl`, each line handed to the system whole and in order as it is written and put on the disk once per
+in `events.jsonl` - each naming the run's session it belongs to (`session`, from 1, one more for each session the run's
+engines drive: what a session's start writes, held or before the session is driven, is that session's, and what is
+written after a session's end and before the next's the ended one's; the log's opening reads the sessions it tells of,
+the highest any event names and no fewer than the beginnings it records, `FlowEventLog.Sessions`; an older build's events
+name none) - each line handed to the system whole and in order as it is written and put on the disk once per
 pass of the engine's loop - as the pass ends, before the loop waits on anything, and as the session ends, in order or by
 its cancellation token (`IFlowRecords.Flush`) - so an end of the engine's process loses no line, and a power loss what the last pass had not
 put on the disk, never a line before it: writes never put on the disk reach it in any order, so the log can come back

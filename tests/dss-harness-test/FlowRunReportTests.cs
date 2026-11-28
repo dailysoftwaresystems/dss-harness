@@ -253,6 +253,92 @@ public sealed class FlowRunReportTests
     }
 
     /// <summary>
+    /// After a crash, which leaves no last record, the run's pause runs from the crashed session's last event to the next
+    /// session's own first event, whatever its kind, by the session each event names: a resume's start writes what it takes
+    /// up - a stopped step made a new attempt, the handoff it is given - before it records that it began, so the time between
+    /// the two falls before that first write, never before the record of the beginning.
+    /// </summary>
+    /// <param name="first">The kind of the resumed session's first event.</param>
+    [Theory]
+    [InlineData(FlowChangeKind.Step)]
+    [InlineData(FlowChangeKind.Handoff)]
+    public void TheRunsPause_AfterACrash_RunsFromTheCrashedSessionsLastEvent_ToTheNextSessionsFirst(FlowChangeKind first)
+    {
+        var source = Source() with
+        {
+            Events =
+            [
+                new(1, Began, FlowEvent.KindOf(FlowChangeKind.SessionBegan), Session: 1),
+                new(2, Began.AddSeconds(100), FlowEvent.KindOf(FlowChangeKind.Step), Instance: "a", Session: 1),
+                new(3, Began.AddSeconds(1000), FlowEvent.KindOf(first), Instance: "a", Session: 2),
+                new(4, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.Step), Instance: "a", Session: 2),
+                new(5, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.SessionBegan), Detail: "taken up from a run state holding 3 steps", Session: 2),
+                new(6, Began.AddSeconds(1100), FlowEvent.KindOf(FlowChangeKind.SessionEnded), Detail: "done", Session: 2),
+            ],
+        };
+
+        var run = FlowRunReport.Of(source)["theRun"]!;
+
+        Assert.Equal((2, 900.0), (run["sessions"]!.GetValue<int>(), run["pausedSeconds"]!.GetValue<double>()));
+    }
+
+    /// <summary>
+    /// What is written after a session's end and before the next session's - an answer the session's last poll takes, an
+    /// inbox entry weighed - is the ended session's, and ends no pause: the run's pause runs from the session's last record
+    /// to the next session's own first event.
+    /// </summary>
+    [Fact]
+    public void TheRunsPause_RunsFromASessionsEnd_OverWhatIsWrittenBeforeTheNextSession()
+    {
+        var source = Source() with
+        {
+            Events =
+            [
+                new(1, Began, FlowEvent.KindOf(FlowChangeKind.SessionBegan), Session: 1),
+                new(2, Began.AddSeconds(100), FlowEvent.KindOf(FlowChangeKind.SessionEnded), Detail: "paused", Session: 1),
+                new(3, Began.AddSeconds(101), FlowEvent.KindOf(FlowChangeKind.Answer), Detail: "'q1' answered 'go' by a person", Session: 1),
+                new(4, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.Step), Instance: "a", Session: 2),
+                new(5, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.SessionBegan), Session: 2),
+                new(6, Began.AddSeconds(1100), FlowEvent.KindOf(FlowChangeKind.SessionEnded), Detail: "done", Session: 2),
+            ],
+        };
+
+        var run = FlowRunReport.Of(source)["theRun"]!;
+
+        Assert.Equal((2, 900.0), (run["sessions"]!.GetValue<int>(), run["pausedSeconds"]!.GetValue<double>()));
+    }
+
+    /// <summary>
+    /// An older build's events name no session and are read as that build's were - the pause from a session's last record
+    /// to the next event, and after a crash to the next session's record of its beginning - and one of this build's that
+    /// follows them begins a session of its own: the pause runs from the older session's last event to it.
+    /// </summary>
+    /// <param name="thenThisBuild">Whether the second session is this build's, its events naming it; else the older build's too.</param>
+    /// <param name="paused">The run's pause.</param>
+    [Theory]
+    [InlineData(false, 1.0)]
+    [InlineData(true, 900.0)]
+    public void TheRunsPause_OfEventsThatNameNoSession_IsReadAsTheirBuildReadIt(bool thenThisBuild, double paused)
+    {
+        var source = Source() with
+        {
+            Events =
+            [
+                new(1, Began, FlowEvent.KindOf(FlowChangeKind.SessionBegan)),
+                new(2, Began.AddSeconds(100), FlowEvent.KindOf(FlowChangeKind.SessionEnded), Detail: "paused"),
+                new(3, Began.AddSeconds(101), FlowEvent.KindOf(FlowChangeKind.Answer), Detail: "'q1' answered 'go' by a person"),
+                new(4, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.Step), Instance: "a", Session: thenThisBuild ? 2 : null),
+                new(5, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.SessionBegan), Session: thenThisBuild ? 2 : null),
+                new(6, Began.AddSeconds(1100), FlowEvent.KindOf(FlowChangeKind.SessionEnded), Detail: "done", Session: thenThisBuild ? 2 : null),
+            ],
+        };
+
+        var run = FlowRunReport.Of(source)["theRun"]!;
+
+        Assert.Equal((2, paused), (run["sessions"]!.GetValue<int>(), run["pausedSeconds"]!.GetValue<double>()));
+    }
+
+    /// <summary>
     /// Each signal fires on what it names - the slowest steps, the most expensive, the most retried, every fallback,
     /// the longest wait for a person, a queue wait past its share of a step's time, a cache share under its bound,
     /// a step that read past the depth of one graph answer, output a digest held unread, a review at its bound, a class

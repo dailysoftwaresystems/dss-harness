@@ -16243,7 +16243,10 @@ public sealed class FlowCoordinator
             // The start under way is what the engine does while it takes what it is handed - by the one rule that decides
             // what an answer handed to it meets - until its own end is written: a stop or a pause asked of it, which it
             // refuses such an answer over, never reads as starting.
-            Starting: StartTakesAnswers);
+            Starting: StartTakesAnswers,
+            // The session that takes the change: what is written before the first is driven is the first's, and what is
+            // written between two the one that ended's.
+            Session: Math.Max(_sessions, 1));
     }
 
     /// <summary>One instance, as its records read it, what it waits on as the admission walk said it.</summary>

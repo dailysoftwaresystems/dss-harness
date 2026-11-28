@@ -932,6 +932,123 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// Every event of a run names the run's session it belongs to, one more for each session its engines drive: what is
+    /// written after a session's end and before the next's - an answer given between them - is the ended session's, and what
+    /// an engine writes before it drives its first session - an answer it takes as it begins - is that session's; a later
+    /// engine counts on from the sessions the run's events tell of.
+    /// </summary>
+    [Fact]
+    public async Task ARunsEvents_NameTheSessionEachBelongsTo()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: first
+                type: pause
+                question: what first?
+                options: [stay, go]
+              - name: second
+                type: pause
+                question: what second?
+                options: [stay, go]
+                dependsOn: [first]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        int written;
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records, runName: "r1");
+
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.True(coordinator.TryAnswer("q1", "go", out var none), none);
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            written = FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Count;
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again, runName: "r1");
+
+            Assert.True(resumed.TryAnswer("q2", "go", out var none), none);
+            Assert.Equal(FlowRunStatus.Done, (await resumed.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var events = FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events;
+        var sessions = events.Select(read => read.Session ?? 0).ToArray();
+        var firstEnd = events.ToList().FindIndex(read => read.Kind == FlowEvent.KindOf(FlowChangeKind.SessionEnded));
+
+        // In order, each session's events together: the first engine's two sessions, then the resume's.
+        Assert.Equal(sessions.Order(), sessions);
+        Assert.Equal([1, 2, 3], sessions.Distinct());
+
+        // What the answer between the first engine's sessions wrote is the first's; what the resume wrote as it took its own
+        // answer, before it drove its session, the third's.
+        var between = events.ToList().FindIndex(read => read.Detail == "'q1' answered 'go'");
+        var taken = events.ToList().FindIndex(read => read.Detail == "'q2' answered 'go'");
+        Assert.InRange(between, firstEnd + 1, written - 1);
+        Assert.All(sessions[(firstEnd + 1)..(between + 1)], session => Assert.Equal(1, session));
+        Assert.Equal(2, sessions[between + 1]);
+        Assert.Equal(2, sessions[written - 1]);
+        Assert.InRange(taken, written, events.Count - 1);
+        Assert.All(sessions[written..], session => Assert.Equal(3, session));
+        Assert.Equal(FlowEvent.KindOf(FlowChangeKind.SessionBegan), events.Skip(taken).First(read => read.Kind is "sessionBegan" or "resumed").Kind);
+    }
+
+    /// <summary>
+    /// A crash leaves no last record, and the resume's start writes what it takes up - the attempts the crash cut off, run
+    /// again - before it records that it began: the run's report counts its pause from the crashed session's last event to
+    /// the resume's first, the hour between them, never the instant before the record of the resume's beginning.
+    /// </summary>
+    [Fact]
+    public async Task AfterACrash_TheReportsPause_RunsToTheResumesFirstEvent()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+              - name: two
+                type: orient
+            """);
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new ManualClock();
+
+        using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var watched = new Watched(records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner().Hold("one").Hold("two"), new RunnerFacts(), clock, records: watched);
+            _ = coordinator.RunAsync(Token);
+
+            // The crash, with both steps running.
+            await watched.SeenAsync(snapshot => snapshot.Steps.Count(step => step.State == FlowInstanceState.Running) == 2).WaitAsync(Bound, Token);
+        }
+
+        clock.Advance(TimeSpan.FromHours(1));
+
+        using (var again = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var kept = new Standings(again);
+            var resumed = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, resume: TakeUp(harness, layout, definition), records: kept, runName: "r1");
+
+            Assert.Equal(FlowRunStatus.Done, (await resumed.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+
+            // The resume's first write is a step's, before the record of its beginning.
+            Assert.Equal(FlowChangeKind.Step, kept.Written[0].Kind);
+        }
+
+        var events = FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events;
+        var run = FlowRunReport.Of(new FlowRunReportSource(layout, harness.OrchestrationStore.ReadFlow(layout)!, Events: events))["theRun"]!;
+
+        Assert.Equal((2, 3600.0), (run["sessions"]!.GetValue<int>(), run["pausedSeconds"]!.GetValue<double>()));
+    }
+
+    /// <summary>
     /// An abort a session's start takes - the command's own answer, given as the session begins - is the stop that start
     /// applies before anything else, and it seeks no advice after it: the run's state says the engine is stopping from the
     /// abort's own record on, at the moment it was taken, never that it is starting, and an answer handed to the start

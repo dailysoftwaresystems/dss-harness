@@ -74,6 +74,12 @@ public static class FlowRecordNames
 /// <param name="To">The state the instance stands in now; null where none applies.</param>
 /// <param name="Attempt">Which attempt of the instance's visit the event tells of; null for the run's own events.</param>
 /// <param name="Detail">What the event says in words, where the kinds alone cannot.</param>
+/// <param name="Session">
+/// The run's session the event belongs to, from 1, one more for each session the run's engines drive: what its start wrote
+/// - held, or at once before the session was driven - among it, and what was written after its end and before the next
+/// session's, which the time between the two runs over (<see cref="FlowRunReport"/>); null in an event an older build wrote,
+/// which named none.
+/// </param>
 public sealed record FlowEvent(
     int Seq,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At,
@@ -83,7 +89,8 @@ public sealed record FlowEvent(
     string? From = null,
     string? To = null,
     int? Attempt = null,
-    string? Detail = null)
+    string? Detail = null,
+    int? Session = null)
 {
     /// <summary>Every kind of event a run appends: one for each kind of change the coordinator hands the records, and no other.</summary>
     public static readonly IReadOnlyList<string> Kinds = [.. Enum.GetValues<FlowChangeKind>().Select(KindOf)];
@@ -100,6 +107,7 @@ public sealed record FlowEvent(
         => Seq < 1 ? $"its seq is {Seq.ToString(CultureInfo.InvariantCulture)}, and the first event of a run is 1"
             : !Kinds.Contains(Kind, StringComparer.Ordinal) ? $"'{Kind}' is not an event a run writes"
             : !FlowInstanceId.IsWellFormed(Instance ?? "step") && Instance is not null ? $"'{Instance}' is not an instance id"
+            : Session is < 1 ? $"its session is {Session.Value.ToString(CultureInfo.InvariantCulture)}, and a run's first session is 1"
             : null;
 }
 
@@ -1544,6 +1552,11 @@ public enum FlowChangeKind
 /// </param>
 /// <param name="StoppingSince">When the stop the session ends with was applied - its hard stop, or a stop once its pause was complete; null where none was (<see cref="FlowFile.StoppingSince"/>).</param>
 /// <param name="Starting">Whether the change was taken while the engine's start was under way and took what it was handed, no stop and no pause asked of it (<see cref="FlowFile.Starting"/>) - and, for a write a start held, still so as it is made.</param>
+/// <param name="Session">
+/// Which of its engine's sessions took the change, from 1: its first for what it writes before driving one, one more for
+/// each it drives, and between two the one that ended - which the records name the run's session by
+/// (<see cref="FlowEvent.Session"/>).
+/// </param>
 public sealed record FlowSnapshot(
     FlowRunStatus Status,
     DateTimeOffset? EndedAt,
@@ -1559,7 +1572,8 @@ public sealed record FlowSnapshot(
     IReadOnlyList<PreExistingIssue>? Issues = null,
     IReadOnlyList<FlowNextIssue>? NextRound = null,
     DateTimeOffset? StoppingSince = null,
-    bool Starting = false);
+    bool Starting = false,
+    int Session = 1);
 
 /// <summary>
 /// What an engine stands on once a stop or a pause is asked of its start under way - the one owner of what the run's state

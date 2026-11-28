@@ -130,6 +130,46 @@ public sealed class FlowRecordsTests
     }
 
     /// <summary>
+    /// The sessions a run's log tells of as it is opened are the highest session an event names - one whose engine wrote
+    /// events and never recorded its beginning among them - and no fewer than the beginnings it records, as an older build's
+    /// events, which name none, tell of theirs: what the next engine's sessions are counted on from, so no two sessions of a
+    /// run name one number, and a session named reads back as written.
+    /// </summary>
+    [Fact]
+    public void AReopenedLog_TellsOfTheSessionsItsEventsName_AndOfThoseAnOlderBuildBegan()
+    {
+        using var temp = new TempDirectory();
+        var file = temp.Combine("events.jsonl");
+
+        using (var log = FlowEventLog.Open(Files(), file))
+        {
+            Assert.Equal(0, log.Sessions);
+
+            // An older build's two sessions, which name none.
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionBegan);
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionEnded, to: "Paused");
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed);
+        }
+
+        using (var log = FlowEventLog.Open(Files(), file))
+        {
+            Assert.Equal(2, log.Sessions);
+
+            // This build's third, which wrote what it took up and never recorded its beginning.
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Step, "one", "one", "Stopped", "NotStarted", 2, session: 3);
+        }
+
+        using (var log = FlowEventLog.Open(Files(), file))
+        {
+            Assert.Equal(3, log.Sessions);
+        }
+
+        var (events, _) = FlowEventLog.Read(Files(), file);
+        Assert.Equal(new int?[] { null, null, null, 3 }, events.Select(read => read.Session));
+        Assert.Equal("its session is 0, and a run's first session is 1", (events[3] with { Session = 0 }).Problem());
+    }
+
+    /// <summary>
     /// The event log's lines are the system's as each is written - a reader beside the writer sees every one, so an end of
     /// the engine's process loses none - and on the disk at the flush the engine asks as a pass ends, all of them at once:
     /// no line is put on the disk alone, a flush with nothing written since the last costs nothing, and the log's close

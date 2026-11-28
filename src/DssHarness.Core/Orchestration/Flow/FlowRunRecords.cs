@@ -742,7 +742,9 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             from,
             kind is FlowChangeKind.SessionEnded ? snapshot.Status.ToString() : to,
             step?.Attempt ?? attempt,
-            detail);
+            detail,
+            // The run's session: its engine's own, counted on from the sessions the log told of as this engine opened it.
+            _events.Sessions + snapshot.Session);
     }
 
     /// <summary>The run's state in one file, from the coordinator's snapshot.</summary>

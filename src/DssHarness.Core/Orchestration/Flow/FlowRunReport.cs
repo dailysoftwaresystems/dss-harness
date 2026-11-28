@@ -452,13 +452,16 @@ public static partial class FlowRunReport
 
     /// <summary>
     /// The time between a run's sessions, in seconds, read from its events alone - the one reading of where a session ends
-    /// and the next begins, which the events of every build read the same way: from a session's last record, its
-    /// <c>sessionEnded</c>, to the next session's first event, whatever its kind. A session records its beginning only once
-    /// its start goes on, and what that start took up is written before it - a stopped step made a new attempt, the handoff
-    /// it is given, a stop it applies, each held and stamped as the hold is made - as is an answer it took as it began; so
-    /// the time between two sessions falls before the first of those, never before the record of the beginning. A session a
-    /// crash ended wrote no last record: where it stopped is told only by the next session's record of its beginning, and
-    /// the time before that record is counted.
+    /// and the next begins: from a session's end - its last record, its <c>sessionEnded</c>, or where a crash ended it and
+    /// left none, its last event - to the next session's own first event, whatever its kind, by the session each event names
+    /// (<see cref="FlowEvent.Session"/>). A session records its beginning only once its start goes on, and what that start
+    /// took up is written before it - a stopped step made a new attempt, the handoff it is given, a stop it applies, each
+    /// held and stamped as the hold is made - as is an answer it took as it began; and what is written after a session's
+    /// end and before the next session's - an answer the session's last poll takes, an entry of the inbox weighed - is the
+    /// session's that ended, and ends no pause. So the time between two sessions falls before the next one's first event,
+    /// never before the record of its beginning, nor at what was written between. An older build's events, which name no
+    /// session, are read as that build's were: from a session's last record to the next event, and after a crash, which
+    /// left none, to the next session's record of its beginning.
     /// </summary>
     /// <param name="events">The run's events, in the order written.</param>
     private static double PausedSecondsOf(IReadOnlyList<FlowEvent> events)
@@ -473,7 +476,17 @@ public static partial class FlowRunReport
             var @event = events[index];
             var gap = TimeSpan.Zero;
 
-            if (endedAt is { } last)
+            if (@event.Session is { } session)
+            {
+                // An event that names its session: the first of a session follows the one before's end - its last record,
+                // or where a crash ended it, its last event - whatever was written between the two.
+                if (index > 0 && events[index - 1].Session != session)
+                {
+                    gap = @event.At - (endedAt ?? events[index - 1].At);
+                    endedAt = null;
+                }
+            }
+            else if (endedAt is { } last)
             {
                 // The first event after a session's last record is the next session's first.
                 gap = @event.At - last;
