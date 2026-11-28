@@ -279,8 +279,17 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>The red legs alone, in the order they ran; the step's failure names the worst of them.</summary>
     public IReadOnlyList<FlowLeg> RedLegs { get; internal set; } = [];
 
-    /// <summary>The answers the questions of this visit were given, in the order they were given.</summary>
-    public IReadOnlyList<FlowAnswerGiven> Answers => _answers;
+    /// <summary>
+    /// The answers the questions of this visit were given, in the order they were given: each list it hands out is the
+    /// answers as they stood when it was read, never changed after - an answer makes a new one (<see cref="Answered"/>) -
+    /// so a reader off the engine's loop never reads one the loop is changing.
+    /// </summary>
+    public IReadOnlyList<FlowAnswerGiven> Answers => Volatile.Read(ref _answers);
+
+    /// <summary>Records the answers the questions of this visit were given, after every one before them.</summary>
+    /// <param name="answers">The answers, in the order they were given.</param>
+    internal void Answered(params IEnumerable<FlowAnswerGiven> answers)
+        => Volatile.Write(ref _answers, [.. _answers, .. answers]);
 
     /// <summary>
     /// The targets of a refresh or a rebase of <c>others</c>, in the order of their names, each with where it stands:
@@ -336,7 +345,8 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>What the code alone cannot say of how this attempt ended - a refusal whose only obstacle was a held lock; none for every other ending.</summary>
     public OutcomeCause Cause { get; internal set; }
 
-    internal readonly List<FlowAnswerGiven> _answers = [];
+    /// <summary>The answers given, as <see cref="Answers"/> hands them out: replaced whole by each answer, never changed in place.</summary>
+    private FlowAnswerGiven[] _answers = [];
     internal Scope? DeclaredScope;
     internal FlowInstance? GroupOf;
     internal Scope? OwnScope;
@@ -609,6 +619,22 @@ public sealed class FlowCoordinator
     /// which reads the run's state and writes it again, never meets a write half made nor writes over one made since.
     /// </summary>
     private readonly Lock _writing = new();
+
+    /// <summary>
+    /// The guard of what the engine shows a reader off its loop - a front end, a test, the session's caller, on threads of
+    /// their own while the loop changes the graph from its own: held while the loop makes or takes back an instance, raises
+    /// a question, opens or closes one, or says the run's standing (<see cref="Show"/>), and while such a reader takes its
+    /// copy (<see cref="Instances"/>, <see cref="Questions"/>, <see cref="OpenQuestions"/>, <see cref="Status"/>) - so a
+    /// reader never enumerates a collection the loop is changing, nor reads a standing of a graph the loop is changing.
+    /// Nothing is called out of it but the reading of the run's standing.
+    /// </summary>
+    private readonly Lock _shown = new();
+
+    /// <summary>How many drives of a session are under way (<see cref="RunAsync"/>): while any is, the loop owns the graph, and a reader off it is shown <see cref="_statusShown"/>. Under <see cref="_shown"/>.</summary>
+    private int _driving;
+
+    /// <summary>The run's standing as the loop last said it, which a reader off the loop is shown while a session is driven (<see cref="Status"/>). Under <see cref="_shown"/>.</summary>
+    private FlowRunStatus _statusShown;
 
     /// <summary>Every agent name the session gave, a spent one's among them: never given again, though no step holds it any more.</summary>
     private readonly HashSet<string> _agentNamesGiven = new(StringComparer.Ordinal);
@@ -963,14 +989,72 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>Every instance the run has made so far, by its id.</summary>
-    public IReadOnlyDictionary<string, FlowInstance> Instances => _instances;
+    /// <summary>
+    /// Every instance the run has made so far, by its id: a copy, taken under the guard the loop makes or takes back an
+    /// instance under (<see cref="_shown"/>), so a reader off the loop - a front end, a test, the session's caller - never
+    /// reads the dictionary the loop is changing, and what it holds never changes under it.
+    /// </summary>
+    public IReadOnlyDictionary<string, FlowInstance> Instances
+    {
+        get
+        {
+            lock (_shown)
+            {
+                return new Dictionary<string, FlowInstance>(_instances, StringComparer.Ordinal);
+            }
+        }
+    }
 
-    /// <summary>Every question the run has raised, answered and open, in the order raised.</summary>
-    public IReadOnlyList<FlowQuestion> Questions => _questions;
+    /// <summary>
+    /// Every question the run has raised, answered and open, in the order raised: a copy, taken under the guard the loop
+    /// raises a question under (<see cref="_shown"/>), never the list the loop is changing.
+    /// </summary>
+    public IReadOnlyList<FlowQuestion> Questions
+    {
+        get
+        {
+            lock (_shown)
+            {
+                return [.. _questions];
+            }
+        }
+    }
 
-    /// <summary>The questions the run leaves open, in the order raised.</summary>
-    public IReadOnlyList<FlowQuestion> OpenQuestions => [.. _questions.Where(question => _open.Contains(question.Id))];
+    /// <summary>
+    /// The questions the run leaves open, in the order raised: a copy, taken under the guard the loop raises, opens and
+    /// closes a question under (<see cref="_shown"/>), so a reader off the loop never reads the list or the set the loop is
+    /// changing.
+    /// </summary>
+    public IReadOnlyList<FlowQuestion> OpenQuestions
+    {
+        get
+        {
+            lock (_shown)
+            {
+                return [.. _questions.Where(question => _open.Contains(question.Id))];
+            }
+        }
+    }
+
+    /// <summary>Raises <paramref name="asked"/> among the run's questions, under the guard of what a reader off the loop is shown.</summary>
+    private void Raise(FlowQuestion asked)
+    {
+        lock (_shown)
+        {
+            _questions.Add(asked);
+        }
+    }
+
+    /// <summary>Opens the question <paramref name="id"/> or closes it, under the guard of what a reader off the loop is shown.</summary>
+    /// <param name="id">The question's id.</param>
+    /// <param name="open">Whether it is opened, rather than closed.</param>
+    private void SetOpen(string id, bool open)
+    {
+        lock (_shown)
+        {
+            _ = open ? _open.Add(id) : _open.Remove(id);
+        }
+    }
 
     /// <summary>The failures that stand as <paramref name="failure"/> says, in the order they ended: read from each instance's own standing, the one owner of it.</summary>
     private List<FlowInstance> Standing(FlowFailure failure)
@@ -999,7 +1083,39 @@ public sealed class FlowCoordinator
     /// run, which is running, and stands still where none does - between two sessions, or once a token ended one - paused
     /// until a session takes it up: never running with nothing running and no session driving it.
     /// </summary>
+    /// <remarks>
+    /// While a session is driven (<see cref="RunAsync"/>) the loop owns the graph this standing is read from, and changes it
+    /// from its own thread: a reader off it - a front end, a test, the session's caller - is shown the standing the loop
+    /// last said, as the run's records last said it (<see cref="Record"/>), read under the guard the loop says it under
+    /// (<see cref="_shown"/>) and never read again of what the loop is changing. Between sessions the engine is its
+    /// caller's, and the standing is read as it is now. The loop itself reads it as it is now (<see cref="StatusNow"/>).
+    /// </remarks>
     public FlowRunStatus Status
+    {
+        get
+        {
+            lock (_shown)
+            {
+                return _driving > 0 ? _statusShown : StatusNow;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Shows a reader off the loop the standing a change leaves, as the run's records say it - written with the change, or,
+    /// for a run that holds no records, as the change is made - while a session is driven, the one thing such a reader is
+    /// shown of it then (<see cref="Status"/>).
+    /// </summary>
+    private void Show(FlowRunStatus status)
+    {
+        lock (_shown)
+        {
+            _statusShown = status;
+        }
+    }
+
+    /// <summary>How the run stands now, read of the graph by whoever owns it: the loop, or the caller between sessions (<see cref="Status"/>).</summary>
+    private FlowRunStatus StatusNow
     {
         get
         {
@@ -1324,7 +1440,47 @@ public sealed class FlowCoordinator
     /// (<see cref="StillRunning"/>) - and nothing else of the run is changed: the steps it started run on, and what they
     /// answer is the next session's. One that ends the session's start writes nothing, as a refused start does.
     /// </param>
+    /// <remarks>
+    /// From the moment it is called until it returns, the loop owns the graph, and what a reader off it is shown of the run
+    /// is never a reading of what the loop is changing: the standing the loop last said (<see cref="Status"/>), and copies
+    /// taken under the guard the loop changes them under (<see cref="Instances"/>, <see cref="Questions"/>,
+    /// <see cref="OpenQuestions"/>).
+    /// </remarks>
     public async Task<FlowSessionEnd> RunAsync(CancellationToken cancellationToken)
+    {
+        Drive(1);
+
+        try
+        {
+            return await SessionAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            Drive(-1);
+        }
+    }
+
+    /// <summary>
+    /// Counts a session's drive in or out of the engine (<see cref="RunAsync"/>), under the guard of what a reader off the
+    /// loop is shown: from the first drive in, the run's standing a reader is shown is the one the loop last said, the
+    /// standing it had as the drive began until the loop says another (<see cref="Show"/>).
+    /// </summary>
+    /// <param name="by">One in, minus one out.</param>
+    private void Drive(int by)
+    {
+        lock (_shown)
+        {
+            if (_driving == 0 && by > 0)
+            {
+                _statusShown = StatusNow;
+            }
+
+            _driving += by;
+        }
+    }
+
+    /// <summary>The session <see cref="RunAsync"/> drives, the loop's own from its first line to its last.</summary>
+    private async Task<FlowSessionEnd> SessionAsync(CancellationToken cancellationToken)
     {
         if (_top is null)
         {
@@ -2567,7 +2723,7 @@ public sealed class FlowCoordinator
         if (ConfiguredAnswer(null, "runBudget", options) is { } configured)
         {
             var asked = BudgetQuestion(hit);
-            _questions.Add(asked);
+            Raise(asked);
             ApplyAnswer(null, asked, configured.Answer, null, "configuration", configured.Where, through: null);
             return;
         }
@@ -2667,7 +2823,7 @@ public sealed class FlowCoordinator
         {
             var reached = ReachedOf(_definition.Budget!);
             var question = BudgetQuestion(reached ?? ("usd", "its budget"));
-            _questions.Add(question);
+            Raise(question);
             WaitOn(null, question);
             WriteQuestions();
             raised = true;
@@ -3539,7 +3695,7 @@ public sealed class FlowCoordinator
             return null;
         }
 
-        return FlowUpdateGates.Refused(_definition, _runName ?? string.Empty, Status.ToString(), StepsAt(), _updates.Updates, cause);
+        return FlowUpdateGates.Refused(_definition, _runName ?? string.Empty, StatusNow.ToString(), StepsAt(), _updates.Updates, cause);
     }
 
     /// <summary>Every step instance the run holds, as the gates read one: what the gates and the rule of whether a work-item group runs a round more read of this engine's own state.</summary>
@@ -4022,7 +4178,7 @@ public sealed class FlowCoordinator
             asked.Recommendation = new FlowRecommendation("cancelled", Why: $"no recommendation: the question was answered by {answeredBy} while the advisor ran, and its asking was ended");
         }
 
-        _ = _open.Remove(asked.Id);
+        SetOpen(asked.Id, open: false);
         var instance = _answerable.GetValueOrDefault(asked.Id);
         _ = _answerable.Remove(asked.Id);
 
@@ -4050,7 +4206,7 @@ public sealed class FlowCoordinator
     private void ApplyAnswer(FlowInstance? instance, FlowQuestion asked, string answer, string? text, string by, string? where, string? through, string? inbox = null, string? input = null)
     {
         var did = asked.Kind == "runBudget" ? answer == "more" ? "each amount is allowed once again" : "the run ends stopped" : null;
-        asked._given.Add(new FlowAnswerEntry(answer, text, by, where, through, _clock.GetUtcNow(), did, Input: input, Inbox: inbox, Order: NextAnswerOrder()));
+        asked.Give(new FlowAnswerEntry(answer, text, by, where, through, _clock.GetUtcNow(), did, Input: input, Inbox: inbox, Order: NextAnswerOrder()));
         asked.State = "answered";
 
         if (answer == "abort")
@@ -4309,7 +4465,7 @@ public sealed class FlowCoordinator
                 // The answer lets the step's work go on in the same attempt - a limit's `more` and `compact`, an agent's
                 // `answer` and `decide` - and the runner serves it from there: the answer, its text, its kind and its
                 // attempt are the attempt's, and the step is started again as the same attempt it was.
-                instance._answers.Add(new FlowAnswerGiven(asked.Id, answer, text, asked.Kind, instance.Attempt));
+                instance.Answered(new FlowAnswerGiven(asked.Id, answer, text, asked.Kind, instance.Attempt));
                 instance.State = FlowInstanceState.NotStarted;
                 break;
         }
@@ -5976,8 +6132,12 @@ public sealed class FlowCoordinator
             _ = scope.Members.Remove(drawn.Step.Name);
             _ = scope.Instantiated.Remove(drawn.Step.Name);
             scope.Visits[drawn.Step.Name] = drawn.Visit - 1;
-            _ = _instances.Remove(drawn.Id);
-            _ = _created.Remove(drawn);
+
+            lock (_shown)
+            {
+                _ = _instances.Remove(drawn.Id);
+                _ = _created.Remove(drawn);
+            }
         }
     }
 
@@ -11753,7 +11913,7 @@ public sealed class FlowCoordinator
         }
 
         asked.State = "withdrawn";
-        _ = _open.Remove(question);
+        SetOpen(question, open: false);
 
         if (_answerable.Remove(question) && _instances.TryGetValue(asked.Instance, out var waiting))
         {
@@ -12003,7 +12163,7 @@ public sealed class FlowCoordinator
                 ? new FlowRecommendation("given", Why: "each of its questions names the answer the agent recommends", By: "agent", Agent: agent)
                 : FlowRecommendation.NotSought,
         };
-        _questions.Add(asked);
+        Raise(asked);
 
         // The question is the attempt's own that raised it - kept on its entry after it is answered, so each attempt's
         // ending says the question it raised and never the step's newest. A step that never began an attempt holds none.
@@ -12425,7 +12585,7 @@ public sealed class FlowCoordinator
     private void WaitOn(FlowInstance? instance, FlowQuestion asked)
     {
         asked.State = "open";
-        _open.Add(asked.Id);
+        SetOpen(asked.Id, open: true);
         _answerable[asked.Id] = instance;
 
         if (instance is null)
@@ -13507,8 +13667,11 @@ public sealed class FlowCoordinator
             Iteration = scope.Iteration,
         };
 
-        _instances.Add(instance.Id, instance);
-        _created.Add(instance);
+        lock (_shown)
+        {
+            _instances.Add(instance.Id, instance);
+            _created.Add(instance);
+        }
 
         scope.Visits[name] = member ? visit : Math.Max(scope.Visits.GetValueOrDefault(name), visit);
 
@@ -15788,19 +15951,40 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>Records one change of the run where its records are, whole: the snapshot is the run as it stands, and the records own the order they are written in.</summary>
+    /// <summary>
+    /// Records one change of the run where its records are, whole: the snapshot is the run as it stands, and the records own
+    /// the order they are written in. The standing the change leaves is what a reader off the loop is shown from then
+    /// (<see cref="Show"/>): with the write that says it - so a write a session's start holds is shown once it is made, and
+    /// one it drops never is - or, where the run holds no records, as the change is made.
+    /// </summary>
     private void Record(FlowChangeKind kind, FlowInstance? instance = null, FlowInstanceState? from = null, FlowInstanceState? to = null, int? attempt = null, string? detail = null)
     {
-        if (_records is null || _replaying)
+        if (_replaying)
         {
-            // A run that holds nothing writes nothing, and the replay of a taken-up run writes nothing step by step:
-            // the resume's own record, made once at its entry, says what was taken up.
+            // The replay of a taken-up run writes nothing step by step: the resume's own record, made once at its entry,
+            // says what was taken up - and no session is driven yet, so a reader reads the standing as it is.
+            return;
+        }
+
+        if (_records is null)
+        {
+            // A run that holds nothing writes nothing: a reader off the loop is shown the standing the change leaves, while
+            // a session is driven - between sessions it reads the standing as it is.
+            if (_driving > 0)
+            {
+                Show(StatusNow);
+            }
+
             return;
         }
 
         var snapshot = Snapshot();
         var id = instance?.Id;
-        Put(records => records.Write(kind, AsWritten(snapshot), id, from?.ToString(), to?.ToString(), attempt, detail));
+        Put(records =>
+        {
+            records.Write(kind, AsWritten(snapshot), id, from?.ToString(), to?.ToString(), attempt, detail);
+            Show(snapshot.Status);
+        });
     }
 
     /// <summary>
@@ -15898,7 +16082,7 @@ public sealed class FlowCoordinator
         // Every member taken by value - what was spent and the pause among them - so a write held while a session's start
         // is says the run as it stood here, never paired with what changed before it was made.
         return new FlowSnapshot(
-            Status,
+            StatusNow,
             _endedAt,
             _spent.Recorded(),
             _budgetGranted,
@@ -15977,7 +16161,7 @@ public sealed class FlowCoordinator
             instance.Item,
             instance.Index,
             instance.Iteration,
-            [.. instance._answers],
+            [.. instance.Answers],
             WaitsOnOf(instance, walk),
             [.. instance.Assumptions],
             [.. instance._handlers],
@@ -16260,7 +16444,7 @@ public sealed class FlowCoordinator
             instance.Item,
             instance.Index,
             instance.Iteration,
-            [.. instance._answers],
+            [.. instance.Answers],
             new RunEvents(this, instance, attempt),
             handoff,
             instance.Issue,
@@ -16836,7 +17020,7 @@ public sealed class FlowCoordinator
             foreach (var entry in resume.Questions ?? [])
             {
                 var asked = FlowQuestion.FromEntry(entry);
-                _questions.Add(asked);
+                Raise(asked);
                 _questionsRaised = Math.Max(_questionsRaised, int.Parse(asked.Id[1..], System.Globalization.CultureInfo.InvariantCulture));
 
                 if (asked.State != "open")
@@ -16845,7 +17029,7 @@ public sealed class FlowCoordinator
                 }
 
                 var about = _instances.GetValueOrDefault(asked.Instance);
-                _open.Add(asked.Id);
+                SetOpen(asked.Id, open: true);
                 _answerable[asked.Id] = about;
 
                 if (about is not null)
@@ -17017,7 +17201,7 @@ public sealed class FlowCoordinator
             }
 
             instance._handlers.AddRange(record.Handlers ?? []);
-            instance._answers.AddRange(record.Answers);
+            instance.Answered(record.Answers);
             instance.Assumptions = record.Assumptions ?? [];
             instance.Skills = record.Skills ?? [];
 

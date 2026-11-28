@@ -4734,6 +4734,15 @@ the session before - so no gate of a plan update takes a run with work left for 
 (`FlowUpdateGates`): an amendment queued while no engine ran, or an answer changed, that the engine taking the run up
 weighs before its session runs what a pause or a stop left, is never refused as given to a run that is done, and
 nothing that weighing writes says the run done.
+While a session is driven the loop owns the graph and changes it from its own thread, and what the engine shows a
+reader on another - a front end, a test, the session's caller - is never a reading of what the loop is changing: the
+instances and the questions it hands out (`Instances`, `Questions`, `OpenQuestions`) are copies taken under the guard
+the loop makes or takes back an instance, raises a question and opens or closes one under (`FlowCoordinator._shown`),
+a question's and a visit's answers are each a list replaced whole by every answer, never changed under a reader
+(`FlowQuestion.Given`, `FlowInstance.Answers`), and the run's standing is the one the loop last said (`Status`) - as the
+run's records last said it, shown with the write that says it, so a write a start holds is shown once made and one it
+drops never is, or as the change is made where the run holds no records (`Show`) - where between sessions the engine
+is its caller's, and its standing is read as it is.
 What the steps a token-ended session leaves running answer as it ends is kept for the coordinator's next session
 (`HandBackWhatIsLeft`); one its token ends during its start writes nothing, as a refused start does, and one a defect
 ends leaves what a crash leaves - nothing more written, each question it was advising still marked sought.
