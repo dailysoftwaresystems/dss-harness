@@ -863,6 +863,75 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// A start that takes a stop and then never goes on - a defect ends it before its hold is made - writes nothing of
+    /// itself: what its standing wrote at once over the run's state and its questions - the stop applied, and the question
+    /// the crashed session left sought deferred as the start defers it - is put back as the claim found them.
+    /// </summary>
+    [Fact]
+    public async Task AStartThatTookAStopAndNeverWentOn_PutsBackWhatItsStandingWroteOver()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            steps:
+              - name: asker
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: one
+                type: orient
+              - name: two
+                type: orient
+            """);
+        var advisor = new HeldAdvisor();
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var store = harness.OrchestrationStore;
+
+        using (records)
+        {
+            var watched = new Watched(records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner().On("asker", _ => FlowStepResult.AtLimit("turns", "12 turns")).Hold("one").Hold("two"), new RunnerFacts(), records: watched, advisor: advisor);
+            _ = coordinator.RunAsync(Token);
+
+            // The crash, while the advisor seeks q1 and both machine steps run.
+            await advisor.Begun.Task.WaitAsync(Bound, Token);
+            await watched.SeenAsync(snapshot => snapshot.Steps.Count(step => step.State == FlowInstanceState.Running) == 2).WaitAsync(Bound, Token);
+        }
+
+        // The next session's claim marks the run's state as its start.
+        store.WriteFlow(layout, store.ReadFlow(layout)! with { Starting = true });
+        var left = (store.ReadFlow(layout)!.StoppingSince, store.ReadFlowQuestions(layout)!.Of("q1")!.Recommendation);
+        Assert.Equal("sought", left.Recommendation!.State);
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        FlowCoordinator? resumed = null;
+        (DateTimeOffset? StoppingSince, FlowRecommendation? Recommendation)? stood = null;
+
+        // The stop is asked as the second cut attempt is completed, and a defect ends the start there.
+        var account = new AskingAtTheSecondCut(() =>
+        {
+            resumed!.RequestStop();
+            stood = (store.ReadFlow(layout)!.StoppingSince, store.ReadFlowQuestions(layout)!.Of("q1")!.Recommendation);
+            throw new InvalidOperationException("a defect of the test's");
+        });
+
+        using (again)
+        {
+            resumed = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again, runName: "r1", streamAccount: account, advisor: new HeldAdvisor());
+
+            Assert.Equal("a defect of the test's", (await Assert.ThrowsAsync<InvalidOperationException>(() => resumed.RunAsync(Token).WaitAsync(Bound, Token))).Message);
+        }
+
+        // The standing was written at once, and put back as the start ended.
+        Assert.Equal((true, FlowRecommendation.Withheld), (stood!.Value.StoppingSince is not null, stood.Value.Recommendation));
+        Assert.Equal(left, (store.ReadFlow(layout)!.StoppingSince, store.ReadFlowQuestions(layout)!.Of("q1")!.Recommendation));
+    }
+
+    /// <summary>
     /// An abort a session's start takes - the command's own answer, given as the session begins - is the stop that start
     /// applies before anything else, and it seeks no advice after it: the run's state says the engine is stopping from the
     /// abort's own record on, at the moment it was taken, never that it is starting, and an answer handed to the start
