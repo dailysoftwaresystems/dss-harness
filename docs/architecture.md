@@ -5417,13 +5417,28 @@ the rerun is owed until that record names it; for a handler, until a visit is ra
 place. A crash between the visit's done record and the rerun's leaves it to the resume, which makes it once; whatever
 becomes of the redirect after - made, given up by a `stay`, or dropped, its question withdrawn, with a work item a plan
 update brings to rest (`FlowCoordinator.DropWhatItOwes`) - no session decides it again, for that one fact is what is
-read, and a visit an older build recorded names none and decided its reruns as it ended. A reporter of an issue a visit
-fixed runs again by the same fact of the visit that fixed it last, once, and never into a work item a plan update is
-bringing or brought to rest, whose work is done again in the item visited in its place (`FlowCoordinator.RerunOwed`,
-`FlowCoordinator.RunTheReporterAgain`, `FlowCoordinator.GoOnFromTheRecovery`). An answer the records hold and the
-session never carried out - a `stay` written before a crash - finds its redirect's question restored with the redirect,
-and is carried out on it at the resume. A handler group made again for a retry is made before its failure stops
-standing - a crash between the two writes leaves that failure beside the new visit, which is the retry made - while a
+read. A visit an older build recorded names no list: that build decided its redirect in the write after the visit's
+done record and never again at a resume - and a handler's not at all, for no redirect resets a handler - so whether it
+decided is read from what that redirect left in the records: the redirect still owed, a question it asked of the agents
+it would leave open - which a `stay` that gave it up answered - or the step inside a work item a plan update is bringing
+or brought to rest, which dropped it; one made left the step, which no rerun goes back over. None of those is the crash
+between the two writes, which leaves the rerun undecided, and the resume sends the run back once. Whether a rerun is decided has that one owner, which the rerun of a failed step and of a
+reporter both ask (`FlowCoordinator.RerunDecided`). A reporter of an issue a visit fixed runs again by the same fact of
+the visit that fixed it last, once - a `stay` an older build's visit was given is never asked again when another triage
+of the reporter ends - and never into a work item a plan update is bringing or brought to rest, whose work is done again
+in the item visited in its place (`FlowCoordinator.RerunOwed`, `FlowCoordinator.RunTheReporterAgain`,
+`FlowCoordinator.GoOnFromTheRecovery`). An answer the records hold and the session never carried out - a `stay` written
+before a crash - finds its redirect's question restored with the redirect, and is carried out on it at the resume. A
+redirect and the question it asks are one fact: a redirect dropped - with a work item a plan update brings to rest, or
+with a visit a redirect leaves, whose redirects still owed go with it, never left asking a question withdrawn
+(`FlowCoordinator.Leave`) - leaves the run's records in one write before its question is withdrawn
+(`FlowCoordinator.DropRedirectsOf`, the one owner of dropping a redirect), so a crash between the two leaves a question
+that asks of no owed redirect, which the resume withdraws; a redirect whose record names a question withdrawn - an
+older build withdrew the question before it wrote the drop, or left the redirect of a visit a redirect left owed - is
+never made; and one whose record names no question in play while the question its handler asked for it is open - the
+process ended between that question's write and the record that would name it: an older build's first ask, which it
+named only in the write after, or a question asked again after `retry` - waits on that question. A handler group made
+again for a retry is made before its failure stops standing - a crash between the two writes leaves that failure beside the new visit, which is the retry made - while a
 group the schedule draws says its retry in the very write that settles its failure (`retried`): the schedule, the one
 owner of drawing a group - its dependencies, its `when`, what holds it back - draws the new visit from that record, so a
 crash before the draw leaves the retry owed, which the resume's schedule draws, never a failure gone with no new visit

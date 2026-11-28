@@ -4,17 +4,18 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// A run's records with a crash where a test puts one: the first write of the run's updates that <c>picks</c> chooses
-/// - or the first change of a step that <c>picksStep</c> chooses, or the first change whose run <c>picksRun</c> chooses -
-/// reaches the disk where <c>lands</c> says so, and nothing after it does - the process ended there. What the engine goes
-/// on doing in memory is never written, so a coordinator that takes the run up from the disk meets the run as the crash
-/// left it.
+/// - or the first change of a step that <c>picksStep</c> chooses, the first change whose run <c>picksRun</c> chooses, or
+/// the first write of the run's questions that <c>picksQuestions</c> chooses - reaches the disk where <c>lands</c> says
+/// so, and nothing after it does - the process ended there. What the engine goes on doing in memory is never written, so
+/// a coordinator that takes the run up from the disk meets the run as the crash left it.
 /// </summary>
 /// <param name="inner">The run's records.</param>
 /// <param name="picks">Chooses the write of the run's updates the process ends at.</param>
 /// <param name="lands">Whether that write reaches the disk before the process ends.</param>
 /// <param name="picksStep">Chooses the change of a step the process ends at, by the instance and the state it goes to; null for none.</param>
 /// <param name="picksRun">Chooses the change the process ends at by the run as that change writes it whole; null for none.</param>
-internal sealed class CrashingRecords(IFlowRecords inner, Func<FlowUpdatesFile, bool> picks, bool lands = true, Func<string?, string?, bool>? picksStep = null, Func<FlowSnapshot, bool>? picksRun = null) : IFlowRecords
+/// <param name="picksQuestions">Chooses the write of the run's questions the process ends at, by every question it writes; null for none.</param>
+internal sealed class CrashingRecords(IFlowRecords inner, Func<FlowUpdatesFile, bool> picks, bool lands = true, Func<string?, string?, bool>? picksStep = null, Func<FlowSnapshot, bool>? picksRun = null, Func<IReadOnlyList<FlowQuestionEntry>, bool>? picksQuestions = null) : IFlowRecords
 {
     private bool _ended;
 
@@ -42,10 +43,19 @@ internal sealed class CrashingRecords(IFlowRecords inner, Func<FlowUpdatesFile, 
     /// <inheritdoc/>
     public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
     {
-        if (!_ended)
+        if (_ended)
+        {
+            return;
+        }
+
+        var picked = picksQuestions?.Invoke(questions) == true;
+
+        if (!picked || lands)
         {
             inner.Question(questions, refused);
         }
+
+        _ended = picked;
     }
 
     /// <inheritdoc/>
