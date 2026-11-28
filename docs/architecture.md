@@ -4775,9 +4775,21 @@ then and not complete, and never `starting` - with each question the past sessio
 `FlowCoordinator.Replay`), and said by every write of the session after it, a held one among them, the loop applying the
 stop and beginning the pause at that moment (`FlowStartsStanding`, `FlowCoordinator.TakeTheStartsStanding`,
 `FlowCoordinator.AsWritten`, `IFlowRecords.Stand`), so the status and the report name the step the engine's refusal names
-- the resume once it has gone, or the pause once it is complete - whatever the past session left; a start that never goes
-on - refused, or ended before its hold is made - puts back what the standing wrote over, as it writes nothing else of
-itself (`IFlowRecords.Unstand`). The order of the reads is the
+- the resume once it has gone, or the pause once it is complete - whatever the past session left. The moment the loop
+applies the stop or begins the pause at is read from the standing the loop takes itself as it does so
+(`FlowCoordinator.ApplyTheStop`, `FlowCoordinator.PauseInOrderAsync`), never apart from it: an asker takes the standing
+only after its ask is made, so the loop may meet a stop first, and whichever of the two takes it first gives the moment
+the loop applies and every write says - the other finds it taken - so no write says the stop beside a pause the standing
+held before it, nor does an asker's later taking write another moment over it; the pause asked stays the standing while
+the loop carries it out. The standing is its session's: the session's end, however it ends - in order, refused, by its
+token or by a defect - lets it go once its last write is made (`FlowCoordinator.LetTheSessionsStandingGo`), so a stop or
+a pause asked of an engine between two of its sessions writes nothing until the next session's start takes it, at the
+moment that start begins, whether or not an earlier start took a standing. A start that never goes on - refused, or ended before its hold is made - puts back what the
+standing wrote over, as it writes nothing else of itself (`IFlowRecords.Unstand`), and ends at once, inside the one
+section every standing is taken and every write made in, before anything is put back
+(`FlowCoordinator.EndTheStartThatNeverWentOn`): a stop or a pause asked after it - by a poll still under way, an
+interrupt or the session's token, each bound to the engine until its drive ends - stands for nothing, so the run keeps
+the pause, or the stop, the session before left. The order of the reads is the
 rule's too: every reader of a run's engine reads its owner, then `flow.json`, then its owner again, and judges the state
 only beside an owner that stood across its read, reading again where it changed (`OrchestratorService.EngineOf`, the one
 path `list-orchestrator`, the report, the status and the advisor's facts take); and a session's release removes the owner
