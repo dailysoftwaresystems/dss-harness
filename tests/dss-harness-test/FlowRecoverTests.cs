@@ -584,4 +584,59 @@ public sealed class FlowRecoverTests
         Assert.Equal("skipped by the answer to its bound", coordinator.Instances["build+2"].SkippedBecause);
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["after"].State);
     }
+
+    /// <summary>
+    /// A handler whose failure the recovery takes holds what depends on the step it answers while the recovery works, and
+    /// once the recovery is done runs again from where it stopped - a new visit raised by the ending it answers, for no
+    /// redirect resets a handler - which that ending then waits on: the step it answers counts handled once the new visit
+    /// has ended, never at the failed one's end.
+    /// </summary>
+    [Fact]
+    public async Task AHandlerTheRecoveryTakes_RunsAgainForItsEnding_WhatDependsOnItsSourceWaiting()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: fold
+                type: orient
+              - name: reconcile
+                type: orient
+                on: {step: fold, outcome: failure}
+                onFailure: recover
+              - name: after
+                type: orient
+                dependsOn: [fold]
+            """);
+        FlowCoordinator? coordinator = null;
+        FlowInstanceState? againAtAfter = null;
+        var runner = new FakeRunner()
+            .On("fold", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("reconcile", (FlowStepRun run) => run.Visit == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("after", (FlowStepRun _) =>
+            {
+                againAtAfter = coordinator!.Instances.TryGetValue("reconcile+2", out var again) ? again.State : null;
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal("done; 1 failure was handled: fold, by reconcile", end.Summary);
+        Assert.Equal(["fold", "reconcile", "recover.mend", "reconcile+2", "after"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, againAtAfter);
+        var again = coordinator.Instances["reconcile+2"];
+        Assert.Equal((FlowInstanceState.Done, 2), (again.State, again.Visit));
+        Assert.Same(coordinator.Instances["fold"], again.RaisedBy);
+        Assert.Equal("reconcile", coordinator.Instances["fold"].HandledBy);
+    }
 }

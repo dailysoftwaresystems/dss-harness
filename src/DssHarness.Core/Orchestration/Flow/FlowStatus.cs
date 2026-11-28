@@ -522,7 +522,7 @@ public static class FlowStatus
                 failures.Add(step);
             }
 
-            if (step.Handlers is not { Count: > 0 } handlers || FlowScope.At(step.Step, definition) is not { } declared)
+            if (step.Handlers is not { Count: > 0 } handlers || FlowScope.At(step.Step, definition) is null)
             {
                 continue;
             }
@@ -530,7 +530,6 @@ public static class FlowStatus
             var beside = MemberKey(step.Instance).Scope;
 
             foreach (var (handler, id) in FlowInstance.RaisesOwed(
-                declared.Step,
                 step.Instance,
                 handlers,
                 handler => members[(beside, handler)].Any(visit => string.Equals(visit.RaisedBy, step.Instance, StringComparison.Ordinal)),
