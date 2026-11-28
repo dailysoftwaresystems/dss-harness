@@ -2319,9 +2319,9 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
-    /// The loop's read of what the run learns outlives the session that armed it, and each session's token ends its own
-    /// wait: a session that ended in order with the read still armed - its stop's drain gave up on a runner deaf to the
-    /// stop - leaves the read to the next session, whose token ends that session at once as it waits, its last record
+    /// The loop's wait for what the run learns to arrive outlives the session that armed it, and each session's token ends
+    /// its own wait: a session that ended in order with that wait still armed - its stop's drain gave up on a runner deaf
+    /// to the stop - leaves it to the next session, whose token ends that session at once as it waits, its last record
     /// written; and the token of the session before, cancelled meanwhile, ends nothing of it - never a defect that writes
     /// nothing of the session's end.
     /// </summary>
@@ -2329,7 +2329,7 @@ public sealed class FlowResumeTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task TheLoopsReadOutlivesItsSession_AndEachSessionsTokenEndsItsOwnWait(bool firstCancelled)
+    public async Task TheLoopsWaitForAnArrivalOutlivesItsSession_AndEachSessionsTokenEndsItsOwnWait(bool firstCancelled)
     {
         using var temp = new TempDirectory();
         var definition = Parse("""
@@ -2364,7 +2364,7 @@ public sealed class FlowResumeTests
                 coordinator.RequestStop();
 
                 // The stop applied and its drain's bound armed, then passed: the first session ends in order, stopped, with
-                // the read it waited on still armed.
+                // the wait for an arrival it waited on still armed.
                 await watched.SeenAsync(snapshot => snapshot.Status is FlowRunStatus.Stopped).WaitAsync(Bound, Token);
                 await clock.WaitingAsync().WaitAsync(Bound, Token);
                 clock.Advance(DssHarness.Core.Execution.PointOfNoReturn.SafePauseDrain);
