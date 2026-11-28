@@ -737,7 +737,8 @@ hold, the triage is told so, and its issue is fixed again.
 An issue sent to fix is the recovery's at once, its fix beside any other at work - save one that a step of the
 recovery itself reported, which waits for that visit to end, and one a fix at work already mends for another step,
 which waits for that fix, as one joined to that fix's issue does: one defect has one fix at a time, and a fix whose
-failure is put to a person is at work until it is answered - on retry, the waiting one waits for its next visit; a
+failure is put to a person is at work until it is answered - on retry, the waiting one waits for its next visit - and a
+visit a plan update ended, in a work item it brought to rest, is over, so the fix that waited for it is taken; a
 step two issues stop runs again once, after both are settled. While it is being fixed, the
 issue holds the files its triage names (never a command it names) and, once its diagnosis is checked, the files its
 remedy items own: a work item that has not begun and owns one of them, or names the issue under `needs` - the fix it

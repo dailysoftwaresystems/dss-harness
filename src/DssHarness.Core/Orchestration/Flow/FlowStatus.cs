@@ -14,8 +14,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// </summary>
 /// <remarks>
 /// <para>
-/// What is left counts at least the instances that exist and have not ended - a stopped one among them, which runs
-/// again at the resume - and at most those and everything the run may still make by the engine's own bounds and rules
+/// What is left counts at least what keeps the run from done, by the engine's own rule of it
+/// (<see cref="FlowInstance.IsUnended"/>): the instances that exist and have not ended - a stopped one among them, which
+/// runs again at the resume - and what an ending owes the session that goes on, each failure owed and each handler an
+/// ending owes a raise, named; and at most those and everything the run may still make by the engine's own bounds and rules
 /// (<see cref="FlowComing"/>): each member of a scope still open not drawn yet, each loop's iterations, each handler's
 /// visits with the steps its <c>then</c> sends the run back over, and each visit the recovery can still make for a
 /// failure with the steps it sends the run back over - each bound widened by what the run's answers and plan updates
@@ -31,11 +33,13 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// them. Its lower end lays the instances that are left along what depends on what, as the engine orders them - so work
 /// that runs side by side is counted once - each at its step's shortest time, and a step in progress with what is left
 /// of that; its upper end sums every instance that is left and everything the run may still make, each at its longest,
-/// one after another. A step none of whose instances has ended <c>Done</c> has no time to go by:
-/// its instances are counted and named, and are in neither end. It leaves out, and says that it does, the time a person
-/// takes to answer and a wait for room - a claim, the run to be quiet, a counter of its limits - as the admission that
-/// wrote the wait classes it (<see cref="FlowWaits"/>). Where nothing has ended, or the run has ended - done or failed,
-/// for a stopped run goes on at its resume - there is no estimate, and the facts say which.
+/// one after another - a handler an ending owes a raise among them, as the instance the resume raises. A step none of
+/// whose instances has ended <c>Done</c> has no time to go by: its instances are counted and named, and are in neither
+/// end; so is a failure owed to the session that goes on, which its handlers, its policy or the recovery decide. It leaves
+/// out, and says that it does, the time a person takes to answer and a wait for room - a claim, the run to be quiet, a
+/// counter of its limits - as the admission that wrote the wait classes it (<see cref="FlowWaits"/>). Where nothing has
+/// ended, where nothing is left - nothing keeps the run from done - or where the run has ended - done or failed, for a
+/// stopped run goes on at its resume - there is no estimate, and the facts say which.
 /// </para>
 /// </remarks>
 public static class FlowStatus
@@ -168,23 +172,29 @@ public static class FlowStatus
     }
 
     /// <summary>
-    /// What is left, at least and at most, with the bound that gave the most - and what may still come named: what no
-    /// numeric bound holds, a question open at a bound, whose answer can grant more past it, a piece of a plan update not
-    /// carried out to an end, and an iteration an update owes its loop and has not been given.
+    /// What is left, at least and at most, with the bound that gave the most - at least what keeps the run from done, a
+    /// failure owed to the session that goes on and a handler an ending owes a raise named among it - and what may still
+    /// come named: what no numeric bound holds, a question open at a bound, whose answer can grant more past it, a piece of
+    /// a plan update not carried out to an end, and an iteration an update owes its loop and has not been given.
     /// </summary>
     private static IReadOnlyList<string> Left(WorkflowDefinition definition, FlowFile flow, FlowQuestionsFile? questions, FlowUpdatesFile? updates)
     {
         var left = flow.Steps.Where(IsLeft).ToList();
+        var (failures, raises) = Owed(definition, flow);
         var coming = new FlowComing(definition, flow, left, questions, updates);
         var numeric = coming.Count;
         var unbounded = coming.Unbounded.Count > 0;
         var bound = definition.MaxInstances ?? WorkflowDefinition.DefaultMaxInstances;
         var room = (long)Math.Max(0, bound - flow.Steps.Count);
 
+        // What is left at least is what keeps the run from done, by the engine's own rule of it: each instance left, and
+        // what an ending owes the session that goes on - a failure owed, and each handler owed its raise.
+        var least = left.Count + failures.Count + raises.Count;
+
         // What no numeric bound holds is bounded only by the run's own bound of instances: where any is, the run's bound
         // is what caps the most. A question open at a bound is a person's to answer, and its more grants past the bound,
         // which no record holds yet.
-        var most = left.Count + (unbounded || numeric > room ? room : numeric);
+        var most = least + (unbounded || numeric > room ? room : numeric);
         var asking = (questions?.Open ?? []).Where(question => FlowGrants.Granting.Contains(question.Kind, StringComparer.Ordinal)).ToList();
         var said = numeric == 0 && !unbounded && asking.Count == 0
             ? "nothing more can come"
@@ -192,7 +202,17 @@ public static class FlowStatus
                 ? $"the engine's bounds and the run's own bound of at most {bound.ToString(CultureInfo.InvariantCulture)} instances"
                 : "the engine's bounds";
 
-        var line = $"at least {Count(left.Count, "step instance")}, at most {Count(most, "step instance")} ({said})";
+        var line = $"at least {Count(least, "step instance")}, at most {Count(most, "step instance")} ({said})";
+
+        if (failures.Count > 0)
+        {
+            line += $"; {FailuresOwed(failures.Count)}{Named([.. failures.Select(step => step.Instance)])}";
+        }
+
+        if (raises.Count > 0)
+        {
+            line += $"; {Count(raises.Count, "handler")} an ending owes a raise{Named([.. raises.Select(step => step.Instance)])}";
+        }
 
         foreach (var why in coming.Unbounded)
         {
@@ -234,8 +254,11 @@ public static class FlowStatus
         }
 
         var left = flow.Steps.Where(IsLeft).ToList();
+        var (failures, raises) = Owed(definition, flow);
 
-        if (left.Count == 0)
+        // Nothing is left only where nothing keeps the run from done, by the engine's own rule of it: a failure owed to the
+        // session that goes on, or a handler owed its raise, is left as an instance that has not ended is.
+        if (left.Count == 0 && failures.Count == 0 && raises.Count == 0)
         {
             return ["none: nothing is left"];
         }
@@ -248,12 +271,20 @@ public static class FlowStatus
         }
 
         // A step none of whose instances has ended Done has no time to go by: its instances are counted and named, and
-        // are in neither end.
-        var working = left.Where(step => !step.Group).ToList();
+        // are in neither end. A handler owed its raise is the instance the session that goes on raises, timed by its step.
+        var working = left.Where(step => !step.Group).Concat(raises).ToList();
         // A step that ended an instance Done is measured whatever its time: the records keep times to the second, so one
         // that ended within the second it began took no time they can tell, and still ended Done.
         var named = working.Select(step => step.Step).Where(path => !times.ContainsKey(path)).Distinct(StringComparer.Ordinal).ToList();
         var measured = working.Where(step => times.ContainsKey(step.Step)).ToList();
+
+        // A failure owed is decided by its handlers, its policy or the recovery as the session that goes on begins, and no
+        // time of this run says what that makes: it is named, and in neither end.
+        if (measured.Count == 0 && failures.Count > 0)
+        {
+            return [$"none: what is left has no time of this run to go by - {FailuresOwed(failures.Count)}{Named([.. failures.Select(step => step.Instance)])}"
+                + (named.Count > 0 ? $"; and step instances of steps that have ended no instance Done in this run{Named(named)}" : string.Empty)];
+        }
 
         if (measured.Count == 0 && named.Count > 0)
         {
@@ -269,6 +300,11 @@ public static class FlowStatus
         if (coming.Unbounded.Count > 0)
         {
             line += "; what no numeric bound holds is not in the estimate";
+        }
+
+        if (failures.Count > 0)
+        {
+            line += $"; {FailuresOwed(failures.Count)}, {(failures.Count == 1 ? "is" : "are")} not in the estimate{Named([.. failures.Select(step => step.Instance)])}";
         }
 
         if (named.Count > 0)
@@ -459,6 +495,55 @@ public static class FlowStatus
     /// </summary>
     private static bool IsLeft(FlowStepRecord step)
         => StateOf(step) is { } state && FlowInstance.IsLeft(state, step.EndedFor);
+
+    /// <summary>
+    /// What an ending owes the session that goes on, as the run's records hold it, by the engine's own rule of what keeps a
+    /// run from done (<see cref="FlowInstance.IsUnended"/>, <see cref="FlowInstance.HandlersOwed"/>) - the rest of it,
+    /// each instance left, is <see cref="IsLeft"/>'s: each instance that ended with its failure owed, which its handlers,
+    /// its policy or the recovery decide, in the order the records hold them; and each handler an ending owes a raise, as
+    /// the instance the resume raises it as - its id the source's sibling, its step the handler's declaration, not started.
+    /// </summary>
+    private static (IReadOnlyList<FlowStepRecord> Failures, IReadOnlyList<FlowStepRecord> Raises) Owed(WorkflowDefinition definition, FlowFile flow)
+    {
+        var failures = new List<FlowStepRecord>();
+        var raises = new List<FlowStepRecord>();
+
+        foreach (var step in flow.Steps)
+        {
+            if (StateOf(step) is { } state && !FlowInstance.IsLeft(state, step.EndedFor) && FlowInstance.IsUnended(state, step.EndedFor, step.FailureOf()))
+            {
+                failures.Add(step);
+            }
+
+            if (step.Handlers is not { Count: > 0 } handlers || FlowScope.At(step.Step, definition) is not { } declared)
+            {
+                continue;
+            }
+
+            foreach (var handler in FlowInstance.HandlersOwed(declared.Step, handlers))
+            {
+                raises.Add(new FlowStepRecord(
+                    SiblingOf(step.Instance, handler),
+                    SiblingOf(step.Step, handler),
+                    Group: false,
+                    nameof(FlowInstanceState.NotStarted),
+                    Attempt: 1,
+                    Visit: 1,
+                    Answers: [],
+                    WaitsOn: []));
+            }
+        }
+
+        return (failures, raises);
+    }
+
+    /// <summary><paramref name="name"/> beside <paramref name="of"/>: in the scope an instance's id or a step's path names, as a handler is its source's sibling.</summary>
+    private static string SiblingOf(string of, string name)
+        => of.LastIndexOf('.') is >= 0 and var dot ? $"{of[..dot]}.{name}" : name;
+
+    /// <summary>The failures owed to the session that goes on, counted, as the facts say them.</summary>
+    private static string FailuresOwed(int count)
+        => $"{Count(count, "failure")} owed to the session that goes on, which {(count == 1 ? "its" : "their")} handlers, {(count == 1 ? "its" : "their")} policy or the recovery decide";
 
     /// <summary>Whether <paramref name="step"/> has ended: done, failed, skipped, never run, or a visit a plan update ended - every state that is not left (<see cref="IsLeft"/>).</summary>
     private static bool IsEnded(FlowStepRecord step)

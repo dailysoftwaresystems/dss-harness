@@ -1104,6 +1104,103 @@ public sealed class FlowPlanPiecesTests
     }
 
     /// <summary>
+    /// The flow of <see cref="LintedFirst"/> whose lint gives its failure to the recovery, whose diagnosis reports what it
+    /// meets to the triage of the flow's top level: a failure in a work item is taken by a visit of the recovery inside
+    /// that item, and an issue that visit reports and the triage sends to fix waits for the visit to end, for the
+    /// recovery never calls itself.
+    /// </summary>
+    private static string WithARecoveryThatMeetsAnIssue()
+        => LintedFirst().Replace(
+            "          - name: lint\n            type: orient\n            dependsOn: [make]\n",
+            "          - name: lint\n            type: orient\n            dependsOn: [make]\n            onFailure: recover\n",
+            StringComparison.Ordinal)
+            + "\n"
+            + """
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: diagnose
+                  type: reason
+                  prompt: diagnose.md
+                  outputs: diagnosis.json
+                  onPreExisting: triage
+                - name: mend
+                  type: orient
+                  dependsOn: [diagnose]
+            """;
+
+    /// <summary>
+    /// A visit of the recovery in a work item a plan update brings to rest is over once the item is at rest - stopped for
+    /// the update, by the one rule of what is left of a run (<see cref="FlowInstance.IsLeft"/>) - and no longer at work: the
+    /// fix an issue its diagnosis reported waited for it is given to the recovery then, and the issue is fixed, where a
+    /// visit read as at work for as long as it stands stopped would hold that fix for ever, and the run would end with the
+    /// issue it sent to fix never fixed.
+    /// </summary>
+    [Fact]
+    public async Task AFixWaitingForARecoveryVisitInAWorkItemBroughtToRest_IsTakenOnceTheItemIsAtRest()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(WithARecoveryThatMeetsAnIssue());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = ChangingOne()
+            .On("lint", run => run.Instance == "rounds.items[0].lint"
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the lint met a hole")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("diagnose", run => run.Instance == "rounds.items[0].recover.diagnose"
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [new FlowPreExistingReport("a hole the diagnosis met", "what it is", "src/Parser.cs", "read the file and saw it", false)])
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("triage", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["course"] = "fix",
+                ["title"] = run.Issue!.Title,
+                ["description"] = "what it is",
+                ["why"] = "it is in the work's way",
+                ["where"] = new JsonArray("src/Parser.cs"),
+            }));
+        var mend = runner.HoldPastItsStop("mend");
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The item's lint fails and a visit of the recovery inside the item takes it; its diagnosis reports an issue
+            // the triage sends to fix, which waits for that visit while its mend works.
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rounds.items[0].recover.mend").WaitAsync(Bound, Token);
+            _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "triage" && step.State == nameof(FlowInstanceState.Done)));
+            Assert.False(coordinator.Instances.ContainsKey("recover"));
+
+            // The amendment brings the item to rest: its mend runs to its own end, and the visit around it ends stopped
+            // for the update with the item.
+            Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAmendmentAsync("the one item is different").WaitAsync(Bound, Token)).How);
+            _ = await UntilAsync(harness, layout, flow => flow.Steps.Any(step => step.Instance == "rounds.items[0]" && step.EndedFor == "u1"));
+            mend.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+            _ = await session.WaitAsync(Bound, Token);
+
+            // The visit is over, and the fix that waited for it was given to the recovery at the flow's top level, which
+            // fixed the issue; the item visited again asks at its probe.
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal((nameof(FlowInstanceState.Stopped), "u1"), (steps["rounds.items[0].recover"].State, steps["rounds.items[0].recover"].EndedFor));
+            Assert.Equal((nameof(FlowInstanceState.Done), "triage"), (steps["recover"].State, steps["recover"].RaisedBy));
+            Assert.Equal("rounds.items[1].probe", coordinator.OpenQuestions.Single().Instance);
+
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+        }
+    }
+
+    /// <summary>
     /// A step a stop stopped in an instance a plan update is bringing to rest is not run again at the resume: it ends
     /// stopped for the update, the instance comes to rest, and the session visits it again in its place.
     /// </summary>

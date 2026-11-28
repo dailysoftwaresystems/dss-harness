@@ -4803,4 +4803,157 @@ public sealed class FlowCoordinatorTests
         Assert.Equal("passed its timeoutMinutes (30, its type's), and still so after 2 attempts", map.Error);
         Assert.Equal([1, 2], runner.Runs.Select(run => run.Attempt));
     }
+
+    /// <summary>
+    /// Records a run whose loop is held in the middle of raising its first question that is open: the question is raised,
+    /// open and its step paused in memory, and the loop is held in the write of the questions - before the step's own
+    /// record is written - until the test lets it go, so a test reads the engine from its own thread while the loop stands
+    /// mid-change on its own.
+    /// </summary>
+    private sealed class HeldAtAnOpenQuestion : IFlowRecords, IDisposable
+    {
+        private readonly ManualResetEventSlim _release = new();
+        private int _held;
+
+        /// <summary>Set once the loop is held in the write of the first question that is open.</summary>
+        public TaskCompletionSource Held { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>The standing the last change written says, as the records were written with it.</summary>
+        public FlowRunStatus? Written { get; private set; }
+
+        /// <summary>Lets the held loop go on.</summary>
+        public void Release() => _release.Set();
+
+        /// <inheritdoc/>
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+            => Written = snapshot.Status;
+
+        /// <inheritdoc/>
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+        {
+            if (questions.Any(question => question.State == "open") && Interlocked.Exchange(ref _held, 1) == 0)
+            {
+                _ = Held.TrySetResult();
+                _release.Wait(TestContext.Current.CancellationToken);
+            }
+        }
+
+        /// <inheritdoc/>
+        public void Updates(FlowUpdatesFile updates)
+        {
+        }
+
+        /// <inheritdoc/>
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+        {
+        }
+
+        /// <inheritdoc/>
+        public void Dispose() => _release.Dispose();
+    }
+
+    /// <summary>
+    /// The flow the tests of what a reader off the loop is shown run: a step, then a reasoning step whose agent asks, and
+    /// once it goes on with the answer a pause step's question.
+    /// </summary>
+    private const string TwoQuestions = """
+        name: flow
+        steps:
+          - name: build
+            type: orient
+          - name: think
+            type: reason
+            ask: true
+            prompt: work.md
+            outputs: work.json
+            dependsOn: [build]
+          - name: again
+            type: pause
+            question: and again?
+            options: [stay, go]
+            dependsOn: [think]
+        """;
+
+    /// <summary>The runner of <see cref="TwoQuestions"/>: its agent asks at the first run of its reasoning step, and ends done once it is answered.</summary>
+    private static FakeRunner AskingOnce()
+        => new FakeRunner().On("think", run => run.Answers.Count == 0
+            ? FlowStepResult.Asking(new FlowQuestion("q0", "ask", "think", "the agent asked", ["answer", "decide", "abort"])
+            {
+                AgentQuestions = [new DssHarness.Core.Agents.AgentQuestion("which way?", "two ways stand", "the map", "the route", ["left", "right"], "left", "it is shorter")],
+            })
+            : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+    /// <summary>
+    /// While a session is driven the loop owns the graph, and a reader off it is shown the run's standing as the loop last
+    /// said it - as the run's records last said it - never one read of the graph the loop is changing: held in the middle of
+    /// raising a question, its step paused in memory and its record not written yet, the loop leaves a reader on another
+    /// thread shown the standing written last, running, where reading the graph the loop holds mid-change would answer
+    /// paused before any record said so. Once the session has ended, the engine is its caller's, and the standing is read as
+    /// it is.
+    /// </summary>
+    [Fact]
+    public async Task TheStandingAReaderOffTheLoopIsShown_IsWhatTheLoopLastSaid_NeverAReadingOfTheGraphItIsChanging()
+    {
+        var cancel = TestContext.Current.CancellationToken;
+        using var records = new HeldAtAnOpenQuestion();
+        var coordinator = TestAdvice.Coordinator(Parse(TwoQuestions), AskingOnce(), new RunnerFacts(), new JumpingClock(), records: records);
+
+        // The session is driven from a thread of its own, so the loop is held on its own thread and never on the test's.
+        var session = Task.Run(() => coordinator.RunAsync(cancel), cancel);
+        await records.Held.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal((FlowRunStatus.Running, FlowRunStatus.Running), (records.Written, coordinator.Status));
+
+        records.Release();
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal((FlowRunStatus.Paused, FlowRunStatus.Paused, FlowRunStatus.Paused), (end.Status, records.Written, coordinator.Status));
+    }
+
+    /// <summary>
+    /// What the engine hands a reader off its loop is never a collection the loop goes on changing: the instances, the
+    /// questions, a question's answers and a visit's answers a reader on another thread took while the loop stood held in
+    /// the middle of raising a question are, once the loop has gone on - the question answered, the next step drawn and its
+    /// own question raised - each what it was when it was read, and each enumerates to its end where an enumeration begun
+    /// over the collection the loop changed would be refused; the engine's own reads say the run as it is now.
+    /// </summary>
+    [Fact]
+    public async Task WhatAReaderOffTheLoopIsHanded_NeverChangesUnderIt_AsTheLoopGoesOn()
+    {
+        var cancel = TestContext.Current.CancellationToken;
+        using var records = new HeldAtAnOpenQuestion();
+        var coordinator = TestAdvice.Coordinator(Parse(TwoQuestions), AskingOnce(), new RunnerFacts(), new JumpingClock(), records: records);
+
+        var session = Task.Run(() => coordinator.RunAsync(cancel), cancel);
+        await records.Held.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        var instances = coordinator.Instances;
+        var questions = coordinator.Questions;
+        var given = coordinator.OpenQuestions.Single().Given;
+        var answers = instances["think"].Answers;
+        using var walkingInstances = instances.GetEnumerator();
+        using var walkingQuestions = questions.GetEnumerator();
+        using var walkingGiven = given.GetEnumerator();
+        using var walkingAnswers = answers.GetEnumerator();
+
+        Assert.Equal(["build", "think"], instances.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["q1"], questions.Select(question => question.Id));
+        Assert.True(walkingInstances.MoveNext() && walkingQuestions.MoveNext());
+
+        records.Release();
+        Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+        Assert.True(coordinator.TryAnswer("q1", "decide", out var problem), problem);
+        Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+
+        // The loop has gone on: what was handed out is what it was, and walks to its end.
+        Assert.Equal(["build", "think"], instances.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["q1"], questions.Select(question => question.Id));
+        Assert.Equal((0, 0), (given.Count, answers.Count));
+        Assert.Equal((true, false, false, false, false), (walkingInstances.MoveNext(), walkingInstances.MoveNext(), walkingQuestions.MoveNext(), walkingGiven.MoveNext(), walkingAnswers.MoveNext()));
+
+        // The engine's own reads say the run as it is now.
+        Assert.Equal(["again", "build", "think"], coordinator.Instances.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["q1", "q2"], coordinator.Questions.Select(question => question.Id));
+        Assert.Equal(("decide", "decide"), (coordinator.Questions[0].Given.Single().Answer, coordinator.Instances["think"].Answers.Single().Answer));
+    }
 }

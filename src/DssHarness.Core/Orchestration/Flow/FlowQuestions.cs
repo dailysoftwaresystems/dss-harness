@@ -42,8 +42,12 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
     /// <summary>What the answer changes, as the run's person reads it; null where the run has not said.</summary>
     public string? Means { get; internal set; }
 
-    /// <summary>Every answer it was given, in the order they were given, and who gave each.</summary>
-    public IReadOnlyList<FlowAnswerEntry> Given => _given;
+    /// <summary>
+    /// Every answer it was given, in the order they were given, and who gave each: each list it hands out is the answers as
+    /// they stood when it was read, never changed after - an answer given makes a new one (<see cref="Give"/>) - so a reader
+    /// off the engine's loop never reads one the loop is changing.
+    /// </summary>
+    public IReadOnlyList<FlowAnswerEntry> Given => Volatile.Read(ref _given);
 
     /// <summary>
     /// The answers it takes as its record holds them: each with what it does and whether it takes a text - the one owner
@@ -66,7 +70,13 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
     /// <summary>The recommendation the question carries, and who wrote it - or the plain statement that none was sought.</summary>
     public FlowRecommendation Recommendation { get; internal set; } = FlowRecommendation.NotSought;
 
-    internal readonly List<FlowAnswerEntry> _given = [];
+    /// <summary>The answers given, as <see cref="Given"/> hands them out: replaced whole by each change, never changed in place.</summary>
+    private FlowAnswerEntry[] _given = [];
+
+    /// <summary>Records one more answer given to the question, after every one it was given before.</summary>
+    /// <param name="entry">The answer, and who gave it through what.</param>
+    internal void Give(FlowAnswerEntry entry)
+        => Volatile.Write(ref _given, [.. _given, entry]);
 
     /// <summary>
     /// Changes this question's standing answer: both are kept, each with when it was given and by whom - the standing
@@ -83,14 +93,16 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
     /// <param name="order">Where the new answer stands among every answer the run recorded (<see cref="FlowAnswerEntry.Order"/>).</param>
     internal void Change(FlowAnswerEntry standing, string answer, string? text, string? through, DateTimeOffset moment, string update, string? inbox, int order)
     {
-        var at = _given.IndexOf(standing);
+        var given = new List<FlowAnswerEntry>(_given);
+        var at = given.IndexOf(standing);
 
         if (at >= 0)
         {
-            _given[at] = standing with { ReplacedAt = moment };
+            given[at] = standing with { ReplacedAt = moment };
         }
 
-        _given.Add(new FlowAnswerEntry(answer, text, "person", Where: null, Through: through, At: moment, Did: $"changed by update {update}", ReplacedAt: null, Inbox: inbox, Update: update, Order: order));
+        given.Add(new FlowAnswerEntry(answer, text, "person", Where: null, Through: through, At: moment, Did: $"changed by update {update}", ReplacedAt: null, Inbox: inbox, Update: update, Order: order));
+        Volatile.Write(ref _given, [.. given]);
     }
 
     /// <summary>
@@ -106,7 +118,7 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
             RaisedAt,
             AgentQuestions,
             Held,
-            [.. _given.Select(entry => new FlowAnswerRecord(
+            [.. Given.Select(entry => new FlowAnswerRecord(
                 entry.Answer,
                 entry.At ?? RaisedAt,
                 entry.Text,
@@ -149,7 +161,7 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
             Recommendation = entry.Recommendation ?? FlowRecommendation.NotSought,
         };
 
-        question._given.AddRange(entry.Answers.Select(answer => new FlowAnswerEntry(
+        question._given = [.. entry.Answers.Select(answer => new FlowAnswerEntry(
             answer.Answer,
             answer.Text,
             answer.By?.Who ?? "person",
@@ -161,7 +173,7 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
             answer.ReplacedAt,
             answer.By?.Inbox,
             answer.Update,
-            answer.Order)));
+            answer.Order))];
 
         return question;
     }

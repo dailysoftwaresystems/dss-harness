@@ -2640,7 +2640,10 @@ An issue a triage sends to fix is the recovery's at once, its visit beside any o
 only one that a step of a visit reported waits, for that visit to end - the recovery never calls itself (V50) - and one
 a visit at work fixes already, for another step it stopped, waits for that visit, so one defect has one fix at a time and
 the next is diagnosed on the tree the first left (`FixWaitsFor`, the triage's record saying which it waits for). A visit
-is at work until it ends, and past a failed end while a person is asked what its failure does (`FixAtWork`); a waiting
+is at work while it is left of the run by the one rule of it (`FlowInstance.IsLeft`) - not ended, or stopped by a pause
+or a stop, which runs it again at the resume, never stopped by a plan update, whose visit in the work item it brought to
+rest is over - and past a failed end while a person is asked what its failure does (`FixAtWork`); a triage holds its
+issue, and its issue is being triaged, by the same rule (`HoldsIssue`, `FateOf`, `MayStillFix`); a waiting
 fix is taken in the pass that frees it - a step of every pass, read from the run's state and never from the event that
 ended a visit (`DrainPendingFixes`), held while the run pauses or stops - so it waits through a failure's question, is
 taken once that is answered otherwise than retry, and on retry waits for the issue's next visit: never two visits of
@@ -4723,13 +4726,23 @@ where nothing of it is left unended (`Unended`, the one owner of what keeps a ru
 instance left - not started, in flight, paused, or stopped where it stood by a pause or a stop, which runs it again at
 the resume, never one a plan update ended (`FlowInstance.IsLeft`, the one rule of what is left, which the status of a
 run's records reads too) - a failure owed to the next session and each handler an ending owes a raise, as the records
-hold them and the resume makes them (`FlowFailure.Owed`, `HandlersOwed`), and a step its scope still draws. Work left
+hold them and the resume makes them (`FlowInstance.IsUnended`, `FlowInstance.HandlersOwed`, which the status of a run's
+records reads too, so its facts never say nothing is left over work owed), and a step its scope still draws. Work left
 with nothing running is the session's to go on with while one drives the run, which is `Running`, and stands `Paused`
 between sessions - an engine built from a resume reads it so before its session, which rebuilds no pause and no stop of
 the session before - so no gate of a plan update takes a run with work left for one with nothing to go back to
 (`FlowUpdateGates`): an amendment queued while no engine ran, or an answer changed, that the engine taking the run up
 weighs before its session runs what a pause or a stop left, is never refused as given to a run that is done, and
 nothing that weighing writes says the run done.
+While a session is driven the loop owns the graph and changes it from its own thread, and what the engine shows a
+reader on another - a front end, a test, the session's caller - is never a reading of what the loop is changing: the
+instances and the questions it hands out (`Instances`, `Questions`, `OpenQuestions`) are copies taken under the guard
+the loop makes or takes back an instance, raises a question and opens or closes one under (`FlowCoordinator._shown`),
+a question's and a visit's answers are each a list replaced whole by every answer, never changed under a reader
+(`FlowQuestion.Given`, `FlowInstance.Answers`), and the run's standing is the one the loop last said (`Status`) - as the
+run's records last said it, shown with the write that says it, so a write a start holds is shown once made and one it
+drops never is, or as the change is made where the run holds no records (`Show`) - where between sessions the engine
+is its caller's, and its standing is read as it is.
 What the steps a token-ended session leaves running answer as it ends is kept for the coordinator's next session
 (`HandBackWhatIsLeft`); one its token ends during its start writes nothing, as a refused start does, and one a defect
 ends leaves what a crash leaves - nothing more written, each question it was advising still marked sought.
@@ -5441,7 +5454,11 @@ now - a plan update
 under way or queued, an instance waiting on another, on a claim or room, or on the fix of an issue that holds a file its
 work item owns or that the item needs, a `ci-wait` reading the
 checks of the commit the run last pushed; what is done and what was spent of the budget; what is
-left at least and at most, with the bound that gave the most - each member of a scope still open not
+left at least and at most, with the bound that gave the most - at least what keeps the run from done,
+by the engine's own rule of it (`FlowInstance.IsUnended`, `FlowInstance.HandlersOwed`, which the
+engine's `Unended` reads too): each instance that has not ended and what an ending owes the session
+that goes on, a failure owed and each handler an ending owes a raise, named; at most besides each
+member of a scope still open not
 drawn yet, a loop's iterations to its bound, a handler's visits to its `maxVisits` with the steps its
 `then` sends the run back over, the recovery's visits to its `maxVisits` for each failure it can take
 with the steps it sends the run back over, and what no numeric bound holds named - and when it may
@@ -5450,11 +5467,15 @@ the definition that works the shortest and the longest time an instance of it to
 group's own span is its members' time, never counted beside it - (the lower end laying what is left
 along what depends on what as the engine orders two instances, `FlowInstanceId.Precedes` then
 `FlowGraph.Waits`, so work that runs side by side is counted once; the upper end summing every
-instance that is left and everything the run may still make, one after another), a step no
-instance of which has ended `Done` in this run counted and named and in neither end, the time a
+instance that is left - a handler owed its raise among them, as the instance the resume raises, timed
+by its step - and everything the run may still make, one after another), a step no
+instance of which has ended `Done` in this run counted and named and in neither end, as a failure
+owed is, which its handlers, its policy or the recovery decide, the time a
 person takes to answer and a wait for room - a claim, the run to be quiet, a counter of its limits,
 each a word the admission writes from `FlowWaits` and the facts class by it - left out and said to
-be, and no estimate at all where nothing has ended or the run has ended (done or failed: a stopped
+be, and no estimate at all where nothing has ended, where nothing is left - nothing keeps the run from
+done, so a run paused with only an owed failure or raise is never said to have nothing left - or where
+the run has ended (done or failed: a stopped
 run goes on at its resume, and its stopped instances are among what is left), the facts saying
 which. The most is everything the run may still make by the engine's own bounds and rules
 (`FlowComing`), so it is a bound: in each scope still open - the top level while the run goes on, and
