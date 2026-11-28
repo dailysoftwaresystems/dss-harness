@@ -4593,8 +4593,10 @@ public sealed class FlowCoordinator
         var instance = _answerable.GetValueOrDefault(asked.Id);
         _ = _answerable.Remove(asked.Id);
 
-        if (instance is not null)
+        if (instance is not null && instance.WaitingQuestion == asked.Id)
         {
+            // The step waits on this question no more - and on another it waits on still, where it asked two: a visit of
+            // the recovery whose two redirects each ask waits on the newer, which an answer to the older never ends.
             instance.WaitingQuestion = null;
         }
 
@@ -12611,7 +12613,8 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// What withdrawing <paramref name="question"/> changes, before it is written: it is no longer open nor answerable, and
-    /// the step that waited on it waits on it no more. The one change of a withdrawal, which <see cref="Withdraw"/> writes
+    /// the step that waited on it waits on it no more, while one that waits on another question it asked goes on waiting on
+    /// that one. The one change of a withdrawal, which <see cref="Withdraw"/> writes
     /// at once and the replay makes of a question that asks of no redirect, for its session's start to write
     /// (<see cref="_withdrawnByTheReplay"/>). Whether the run holds the question.
     /// </summary>
@@ -12625,7 +12628,7 @@ public sealed class FlowCoordinator
         asked.State = "withdrawn";
         SetOpen(question, open: false);
 
-        if (_answerable.Remove(question) && _instances.TryGetValue(asked.Instance, out var waiting))
+        if (_answerable.Remove(question) && _instances.TryGetValue(asked.Instance, out var waiting) && waiting.WaitingQuestion == question)
         {
             waiting.WaitingQuestion = null;
         }
@@ -18076,9 +18079,25 @@ public sealed class FlowCoordinator
                 // the change it makes - so that answer finds it: a stay given is never lost to a redirect made instead. And
                 // one whose record the process ended before it named the question its handler had just asked for it waits
                 // on that question all the same (AskedBeforeItsRecord).
+                var asking = owed.Question is { } question && InPlay(question) ? question : AskedBeforeItsRecord(owed, handler);
+
+                if (asking is null
+                    && owed.Question is { } named
+                    && _questions.FirstOrDefault(asked => asked.Id == named) is { Kind: "openAgents", State: "answered", Given.Count: > 0 } answered)
+                {
+                    // The redirect's own record names an answer written and never carried out - every way of carrying one
+                    // out rewrites the record: a stay drops the redirect, and a retry asks again or names no question. It is
+                    // carried out for this redirect at the session's start, once, whatever the one question its handler
+                    // waits on - a visit of the recovery whose two redirects each ask waits on the newer, which the
+                    // answer to the older never was: a stay is never lost to the redirect made instead, nor a retry to
+                    // one made without asking again of the agents still open.
+                    _carryAtStart.Add((handler, answered));
+                    asking = named;
+                }
+
                 var redirect = new PendingRedirect(handler, owed.Target)
                 {
-                    Asking = owed.Question is { } question && InPlay(question) ? question : AskedBeforeItsRecord(owed, handler),
+                    Asking = asking,
                 };
 
                 foreach (var id in owed.Steps)

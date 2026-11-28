@@ -5680,6 +5680,212 @@ public sealed class FlowPreExistingTests
         Assert.Equal<IEnumerable<string>>(["think"], store.ReadStepRecord(RecordOf(layout, flow, "recover"))!.Reruns!);
     }
 
+    /// <summary>
+    /// One visit of the recovery can owe two redirects that ask: it fixed an issue that stops one reporter and another
+    /// joined to it that stops a second, and sending each reporter back would leave an agent open, so each asks - the
+    /// first's question, then the second's, which the visit waits on. An answer to the first is carried out for that
+    /// redirect - a <c>stay</c> gives it up, a <c>retry</c> asks again of the agent still open - and the visit still waits
+    /// on the second's question, which no answer to the first ends. Where the process ended between the answer's write and
+    /// the change it makes, the redirect's own record names that answered question, and the resume carries the answer out
+    /// for that redirect - never through the one question the visit waits on, which is the second's, so the redirect is
+    /// never made over the answer as if nobody had given one: after a stay nothing can run until the second's question is
+    /// answered, so the resume is refused over it and a person's answer begins the session, and after a retry the resume
+    /// asks again.
+    /// </summary>
+    /// <param name="answer">The answer given to the first redirect's question.</param>
+    /// <param name="crashes">Whether the process ends at the answer's write, before the change it makes is recorded.</param>
+    [Theory]
+    [InlineData("stay", true)]
+    [InlineData("retry", true)]
+    [InlineData("stay", false)]
+    [InlineData("retry", false)]
+    public async Task AnAnswerToOneOfAVisitsTwoAskingRedirects_IsCarriedForThatRedirect_InTheSessionAndAtTheResume(string answer, bool crashes)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: desk
+                type: create-agent
+                agent: thinker
+              - name: ponder
+                type: reason
+                agent: thinker
+                in: desk
+                dependsOn: [desk]
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: round
+                dependsOn: [think]
+                steps:
+                  - name: worker
+                    type: create-agent
+                    agent: maker
+                  - name: check
+                    type: orient
+                    dependsOn: [worker]
+              - name: other
+                dependsOn: [ponder]
+                steps:
+                  - name: helper
+                    type: create-agent
+                    agent: helper
+                  - name: verify
+                    type: orient
+                    dependsOn: [helper]
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """) with { MaxOpenAgents = 4 };
+
+        // The second reporter, in an agent's tree of its own, meets its issue once the first's is being triaged - that
+        // triage asking, which holds nothing while it waits - and its triage joins it to that one; once answered, the first
+        // triage sends its issue to fix, the join ended before: one visit fixes both, the join going with it, and settles
+        // both at its end.
+        var triaged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pondered = 0;
+        var runner = new FakeRunner()
+            .On("think", asked => asked == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser", blocks: true)])
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .OnAsync("ponder", async _ =>
+            {
+                if (Interlocked.Increment(ref pondered) > 1)
+                {
+                    return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+                }
+
+                await triaged.Task;
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a second hole in the parser", blocks: true)]);
+            })
+            .On("triage", run => run.Instance != "triage"
+                ? Joins(run.Issue!.Title, "triage")
+                : run.Answers.Count == 0
+                    ? FlowStepResult.Asking(new FlowQuestion("q0", "ask", run.Instance, "the agent asked", ["answer", "decide", "abort"])
+                    {
+                        AgentQuestions = [new AgentQuestion("is it the parser's?", "two places hold it", "the file", "where the fix goes", ["the parser", "the lexer"], "the parser", "the proof reads it there")],
+                    })
+                    : Course("fix", run.Issue!.Title));
+        runner.Hold("mend");
+        var harness = new HarnessFactory();
+        var store = new OrchestrationStore(harness.FileSystem, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new ManualClock();
+        var cancel = TestContext.Current.CancellationToken;
+        string first;
+        string second;
+
+        using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            // The fix ends once both groups have made their agents and ended: each reporter's redirect would leave one
+            // open, and asks, the first reporter's first. Where the process ends, it ends at the write of the answer.
+            var crashing = new CrashingRecords(records, _ => false, picksQuestions: questions => crashes && questions.Any(question => question is { Kind: "openAgents", State: "answered" }));
+            var watched = new Watched(crashing, run => run.Steps.Any(step => step is { Instance: "round", State: FlowInstanceState.Done })
+                && run.Steps.Any(step => step is { Instance: "other", State: FlowInstanceState.Done }));
+            _ = watched.Until(run => run.Steps.Any(step => step.Instance == "triage")).ContinueWith(_ => triaged.TrySetResult(), TaskScheduler.Default);
+            _ = watched.Seen.ContinueWith(_ => runner.Release("mend"), TaskScheduler.Default);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+
+            var paused = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(FlowRunStatus.Paused == paused.Status, paused.Summary);
+            var ask = Assert.Single(coordinator.OpenQuestions);
+            Assert.Equal(("ask", "triage", FlowInstanceState.Done), (ask.Kind, ask.Instance, coordinator.Instances["triage+2"].State));
+            Assert.True(coordinator.TryAnswer(ask.Id, "answer", "the parser's", out var refused), refused);
+
+            paused = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(FlowRunStatus.Paused == paused.Status, paused.Summary);
+            Assert.Equal([("openAgents", "recover"), ("openAgents", "recover")], coordinator.OpenQuestions.Select(asked => (asked.Kind, asked.Instance)));
+            (first, second) = (coordinator.OpenQuestions[0].Id, coordinator.OpenQuestions[1].Id);
+            Assert.Equal([("recover", "think", first), ("recover", "ponder", second)], watched.Last!.Redirects!.Select(redirect => (redirect.Handler, redirect.Steps[0], redirect.Question)));
+            Assert.Equal(second, coordinator.Instances["recover"].WaitingQuestion);
+            Assert.True(coordinator.TryAnswer(first, answer, out var problem), problem);
+            Assert.Equal(crashes, crashing.Ended);
+
+            // The visit waits on the second's question still - or, after a retry, on the one it asks again.
+            Assert.Equal(answer == "stay" ? second : coordinator.OpenQuestions.Single(asked => asked.Id != second).Id, coordinator.Instances["recover"].WaitingQuestion);
+        }
+
+        if (crashes)
+        {
+            // On disk: the first question answered, the second open, and both redirects owed, each naming its own question.
+            Assert.Equal(
+                [(first, "answered"), (second, "open")],
+                store.ReadFlowQuestions(layout)!.Questions.Where(question => question.Kind == "openAgents").Select(question => (question.Id, question.State)));
+            Assert.Equal([first, second], store.ReadFlow(layout)!.Redirects!.Select(redirect => redirect.Question!));
+        }
+
+        var rerun = new FakeRunner();
+
+        if (answer == "stay")
+        {
+            // The stay given, nothing of the run can go on until the second's question is answered: the resume is refused
+            // over it, having written nothing - and a person's answer to it begins the session that goes on.
+            using (var refusedRecords = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+            {
+                var refusedResume = TestAdvice.Coordinator(definition, rerun, new RunnerFacts(), clock, records: refusedRecords, resume: new FlowResume(store, layout, harness.FileSystem).Load(definition));
+                var refused = await Assert.ThrowsAsync<HarnessException>(() => refusedResume.RunAsync(cancel));
+                Assert.Equal(
+                    (HarnessExit.Refused, "nothing of this run can run until the question of step 'recover' is answered; answer-orchestrator answers it"),
+                    (refused.ExitCode, refused.Message));
+                Assert.Equal([second], refusedResume.OpenQuestions.Select(asked => asked.Id));
+            }
+
+            using (var resumedRecords = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+            {
+                var resumed = TestAdvice.Coordinator(definition, rerun, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(store, layout, harness.FileSystem).Load(definition));
+                Assert.True(resumed.TryAnswer(second, "stay", out var problem), problem);
+                var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+                // Neither reporter was sent back: each redirect was given up by its stay.
+                Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+                Assert.Empty(rerun.Started);
+                Assert.DoesNotContain(resumed.Instances.Keys, id => id is "think+2" or "ponder+2" or "round+2" or "other+2");
+            }
+
+            Assert.True(store.ReadFlow(layout)!.Redirects is null or []);
+            Assert.Equal(
+                [(first, "answered"), (second, "answered")],
+                store.ReadFlowQuestions(layout)!.Questions.Where(question => question.Kind == "openAgents").Select(question => (question.Id, question.State)));
+            return;
+        }
+
+        string again;
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, rerun, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(store, layout, harness.FileSystem).Load(definition));
+            var paused = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            // Neither reporter was sent back: the first redirect asks again of the agent the retry found still open, and the
+            // second waits on its own question.
+            Assert.True(FlowRunStatus.Paused == paused.Status, paused.Summary);
+            Assert.Empty(rerun.Started);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id is "think+2" or "ponder+2" or "round+2" or "other+2");
+            Assert.Equal(2, resumed.OpenQuestions.Count);
+            Assert.Equal(second, resumed.OpenQuestions[0].Id);
+            again = resumed.OpenQuestions[1].Id;
+            Assert.NotEqual(first, again);
+        }
+
+        // The redirects the records owe now: the first's asking again, and the second's.
+        Assert.Equal([("think", again), ("ponder", second)], store.ReadFlow(layout)!.Redirects!.Select(redirect => (redirect.Steps[0], redirect.Question!)));
+    }
+
     /// <summary>The own record file of <paramref name="instance"/>, as <paramref name="flow"/> places it: in its agent's directory where it has one.</summary>
     private static string RecordOf(OrchestratorLayout layout, FlowFile flow, string instance)
         => Path.Combine(layout.InstanceDirectory(instance, flow.Steps.Single(step => step.Instance == instance).Agent), OrchestratorLayout.StepRecordFileName);

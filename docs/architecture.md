@@ -5442,8 +5442,11 @@ reporter both ask (`FlowCoordinator.RerunDecided`). A reporter of an issue a vis
 the visit that fixed it last, once - a `stay` an older build's visit was given is never asked again when another triage
 of the reporter ends - and never into a work item a plan update is bringing or brought to rest, whose work is done again
 in the item visited in its place (`FlowCoordinator.RerunOwed`, `FlowCoordinator.RunTheReporterAgain`,
-`FlowCoordinator.GoOnFromTheRecovery`). An answer the records hold and the session never carried out - a `stay` written
-before a crash - finds its redirect's question restored with the redirect, and is carried out on it at the resume. A
+`FlowCoordinator.GoOnFromTheRecovery`). An answer the records hold and the session never carried out - a `stay` or a
+`retry` written before a crash - finds its redirect's question restored with the redirect, and is carried out on it at
+the resume, for each redirect whose record names it - never through the one question its handler waits on, for a visit
+whose two redirects each ask waits on the newer, and an answer ends the wait on its own question alone - unless the
+handler had asked again for that redirect, which then waits on the question asked again. A
 redirect and the question it asks are one fact: a redirect dropped - with a work item a plan update brings to rest, or
 with a visit a redirect leaves, whose redirects still owed go with it, never left asking a question withdrawn
 (`FlowCoordinator.Leave`) - leaves the run's records in one write before its question is withdrawn
