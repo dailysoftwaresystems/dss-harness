@@ -1011,8 +1011,10 @@ writes, what the start stands on then - the stop applied (`stoppingSince`, from 
 asked (`pause`, begun then and not complete) - and defers in `questions.json` each recommendation the session before left
 sought, as the start defers it, so the status and the report name the step the engine's refusal names, whatever the past
 session left; every write of the session says that standing after it, a held one among them, the loop applying the stop
-or beginning the pause at that moment, and a start that never goes on puts back what it wrote over - until the start's
-own end is written, once it has sought every recommendation the run owes; a reader
+or beginning the pause at that moment - read from the standing it takes itself as it does, whether or not the asker has
+taken it yet, so the stop never stands beside the pause it replaced - and a start that never goes on puts back what it
+wrote over and, once it has ended, stands for nothing asked of its engine after it - until the start's own end is
+written, once it has sought every recommendation the run owes; a reader
 judges that state only beside an owner it found live before reading it and still after, and a session's release removes its owner before
 it takes its start's mark back. The budget's own question is recommended too: once the
 budget's pause is complete, before the session ends, the advisor is asked of the run as a whole - its
