@@ -4512,7 +4512,10 @@ said in its `notes` - an events file not read whole, in its reader's own words (
 or the lines from the first that holds a NUL on, what a power loss left of a pass (the report is as of the event before
 it) - a definition that is not there, or one that does not read with why it does not (`OrchestrationStore.ReadDefinitionOrWhy`; no
 critical path is named). Its sections are the run (its sessions, its wall time, its active
-time - the union of every attempt's runs, two steps at once counted once - its pauses between sessions, its waits for a
+time - the union of every attempt's runs, two steps at once counted once - its pauses between sessions, each from a
+session's last record to the next session's first event, whatever its kind (`FlowRunReport.PausedSecondsOf`: a resume
+writes what its start took up before it records that it began, its held writes stamped as the hold is made; after a
+crash, which leaves no last record, to the next session's record of its beginning), its waits for a
 person, each question's to its first answer or, still open, to the last record, and its budget), the totals (tokens by
 kind, the cache's share of input, the dollars grouped - `dollarsBy`, by the model that served each part of each attempt
 and each advice by its advisor's (by step, the run's own question's under `run`), or by provider, step, agent or type - the retries and the fallbacks), one row
