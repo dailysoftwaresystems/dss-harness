@@ -48,7 +48,8 @@ public sealed class FlowStatusTests
         string? handledBy = null,
         string? failure = null,
         string? raisedBy = null,
-        string? declared = null)
+        string? declared = null,
+        IReadOnlyList<FlowHandlerState>? handlers = null)
         => new(
             instance,
             declared ?? FlowInstanceId.PathOf(instance),
@@ -64,6 +65,7 @@ public sealed class FlowStatusTests
             Agent: agent,
             Model: model,
             Iteration: iteration,
+            Handlers: handlers,
             HandledBy: handledBy,
             Failure: failure,
             RaisedBy: raisedBy);
@@ -909,6 +911,82 @@ public sealed class FlowStatusTests
             estimate  between 2m00s and 2m00s more, from the 2 step instances that ended Done in this run
             """,
             string.Join("\n", facts));
+    }
+
+    /// <summary>
+    /// A run paused with nothing left but a failure its ending owes the session that goes on - a pause recorded the step's
+    /// failure while it drained, and raised nothing - has work left by the engine's own rule of what keeps a run from done
+    /// (<see cref="FlowInstance.IsUnended"/>): the failure is counted and named among what is left, and the estimate says it
+    /// has no time to go by - never that nothing is left, which a run its engine still owes work never is.
+    /// </summary>
+    [Fact]
+    public void AFailureOwedToTheSessionThatGoesOn_IsLeft_AndHasNoTimeToGoBy()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: verify
+                type: test
+                dependsOn: [build]
+                onFailure: pause
+            """);
+        var flow = File(
+            nameof(FlowRunStatus.Paused),
+            [
+                Step("build", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 2)),
+                Step("verify", nameof(FlowInstanceState.Failed), "test", started: At(10, 2), finished: At(10, 4), failure: FlowStepRecord.NameOf(FlowFailure.Owed)),
+            ]);
+
+        var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, NoEngine, AsOf);
+
+        Assert.Equal(
+            """
+            left      at least 1 step instance, at most 1 step instance (nothing more can come); 1 failure owed to the session that goes on, which its handlers, its policy or the recovery decide: verify
+            estimate  none: what is left has no time of this run to go by - 1 failure owed to the session that goes on, which its handlers, its policy or the recovery decide: verify
+            """,
+            string.Join("\n", facts.Skip(4)));
+    }
+
+    /// <summary>
+    /// A handler an ending owes a raise - a pause recorded its source's ending and raised nothing - is left by the engine's
+    /// own rule of what keeps a run from done (<see cref="FlowInstance.HandlersOwed"/>), as the instance the resume raises:
+    /// counted and named among what is left, and timed in the estimate by its step's own earlier visit, never left out as
+    /// though nothing were left.
+    /// </summary>
+    [Fact]
+    public void AHandlerAnEndingOwesARaise_IsLeft_AndTimedByItsStep()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on:
+                  step: build
+                  outcome: failure
+                then: build
+                maxVisits: 3
+            """);
+        var flow = File(
+            nameof(FlowRunStatus.Paused),
+            [
+                Step("build", nameof(FlowInstanceState.Failed), "orient", started: At(10, 0), finished: At(10, 1), handledBy: "fix"),
+                Step("fix", nameof(FlowInstanceState.Done), "orient", started: At(10, 1), finished: At(10, 4), raisedBy: "build"),
+                Step("build+2", nameof(FlowInstanceState.Failed), "orient", started: At(10, 4), finished: At(10, 5), visit: 2, handlers: [new FlowHandlerState("fix", "owed")]),
+            ]);
+
+        var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, NoEngine, AsOf);
+
+        Assert.Equal(
+            """
+            left      at least 1 step instance, at most 1 step instance (nothing more can come); 1 handler an ending owes a raise: fix
+            estimate  between 3m00s and 3m00s more, from the 1 step instance that ended Done in this run
+            """,
+            string.Join("\n", facts.Skip(4)));
     }
 
     /// <summary>

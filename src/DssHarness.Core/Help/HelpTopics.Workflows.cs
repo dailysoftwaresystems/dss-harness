@@ -275,7 +275,9 @@ public static partial class HelpTopics
         builder.AppendLine("never calls itself, and one a visit at work fixes already for another step it stopped, which");
         builder.AppendLine("waits for that visit, or for the one it joined to - so one defect has one fix at a time: a visit");
         builder.AppendLine("that ended failed is at work until what its failure does is answered, and answered retry, the");
-        builder.AppendLine("fix waits for its next visit; a step two issues stop runs again once, after both are settled.");
+        builder.AppendLine("fix waits for its next visit; one a plan update ended, in a work item it brought to rest, is");
+        builder.AppendLine("over, and the fix that waited for it is taken; a step two issues stop runs again once, after");
+        builder.AppendLine("both are settled.");
         builder.AppendLine("From the moment it is sent to fix until its visit ends, the issue holds the files its triage's where");
         builder.AppendLine("names - each a path from the repository's root, never a command - and, once a check of its");
         builder.AppendLine("visit has read the remedy items its diagnosis gives, the paths those items own: an instance of");
