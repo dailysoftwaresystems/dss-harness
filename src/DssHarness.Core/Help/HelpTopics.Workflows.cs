@@ -111,10 +111,13 @@ public static partial class HelpTopics
         builder.AppendLine("step's name is a lower-case word with dashes within, unique among its siblings; steps");
         builder.AppendLine($"nest at most {WorkflowFileParser.MaxDepth} deep. A step raised by another step's ending says on - by the outcome");
         builder.AppendLine("(failure, success or end, a failure by exit code) - and sends the run back with then;");
-        builder.AppendLine("the schedule never starts it. What depends on the step it answers waits for it to end -");
-        builder.AppendLine("one that failed once its failure is decided, never while it asks, the recovery works on it");
-        builder.AppendLine("or the run it stopped is still to resume - and a handler made again, a group answered retry");
-        builder.AppendLine("or one the recovery put right, is a new visit raised by the same ending, which waits on it.");
+        builder.AppendLine("the schedule never starts it. What depends on a step that failed waits for each handler its");
+        builder.AppendLine("failure raised to end - one that failed once its failure is decided, never while it asks,");
+        builder.AppendLine("the recovery works on it or the run it stopped is still to resume - while what depends on a");
+        builder.AppendLine("step that ended done starts beside the handlers its success raised. A handler made again, a");
+        builder.AppendLine("group answered retry or one the recovery put right, is a new visit raised by the same ending,");
+        builder.AppendLine("which waits on it; and a step run again as a new attempt raises its handlers anew, for that");
+        builder.AppendLine("attempt's own ending.");
         builder.AppendLine("A step gives a failure nothing handles to the workflow's");
         builder.AppendLine("recover by saying onFailure: recover, itself or through a group around it - never a");
         builder.AppendLine("reasoning step, whose agent is tried again (retries, waiting backoffSeconds, twice as long");

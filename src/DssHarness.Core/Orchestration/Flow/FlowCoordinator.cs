@@ -412,6 +412,14 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     internal string? RaisedByRecord;
 
     /// <summary>
+    /// A handler's visit: the attempt of its source whose ending raised it (<see cref="FlowStepRecord.RaisedByAttempt"/>) -
+    /// a source run again as a new attempt has an ending of its own, which raises its handlers anew. Read back from the
+    /// record at a resume, and for a record that names none by <see cref="AttemptRaisedFor"/>; 0 for every other instance,
+    /// and until the resume has read it.
+    /// </summary>
+    internal int RaisedByAttempt;
+
+    /// <summary>
     /// A visit of the recovery's: what it puts right - a step's failure, or an issue, whatever visit of it this is and
     /// whichever step reported it (the coordinator's <c>ThreadOf</c>) - apart from the key its visits are counted under
     /// against the recovery's bound; set where the visit is made, kept in its record, and read back from it at a resume -
@@ -496,25 +504,58 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
         => IsLeft(state, endedFor) || failure is FlowFailure.Owed;
 
     /// <summary>
+    /// Whether a visit in <paramref name="state"/> stands as an ending its handlers answer: done or failed. A visit that has
+    /// not ended its attempt, and one skipped or never run, has raised nothing - what its record still says of its
+    /// handlers is an earlier attempt's ending, which is over - so it owes no raise and no ending of it waits. The one owner
+    /// of that rule: what an ending owes (<see cref="RaisesOwed"/>) and the resume's rebuilding of an ending its records
+    /// leave waiting read it.
+    /// </summary>
+    /// <param name="state">How the visit stands.</param>
+    public static bool StandsAsAnEnding(FlowInstanceState state)
+        => state is FlowInstanceState.Done or FlowInstanceState.Failed;
+
+    /// <summary>
+    /// The attempt of its source a handler's visit was raised for: the one its record names (<paramref name="recorded"/>);
+    /// for a record a build that named none wrote, the attempt its source's record holds where that attempt is not unended
+    /// (<see cref="IsUnended"/>) - it ended, and its failure is not owed to what decides it - and otherwise the attempt
+    /// before it. An ending raises its handlers only as it is decided, so a raise beside an attempt not ended, or whose
+    /// failure is still owed, can only be an earlier attempt's; and one beside an attempt that ended and was decided is read
+    /// as the build that wrote it read it: that build matched a raise by its source's visit alone, so the source's handler
+    /// states, what took its failure and what depends on it were written over that raise as this attempt's. The one owner
+    /// of that reading: the engine's resume and the status of a run's records read it.
+    /// </summary>
+    /// <param name="recorded">The attempt the handler's record names; null where its record names none.</param>
+    /// <param name="sourceState">How its source stands, as its record says.</param>
+    /// <param name="sourceAttempt">The attempt its source's record holds.</param>
+    /// <param name="sourceEndedFor">The update a piece of which ended the source in order, as its record holds it; null where none did.</param>
+    /// <param name="sourceFailure">Where its source's failure left the run, as its record names it; null where none did.</param>
+    public static int AttemptRaisedFor(int? recorded, FlowInstanceState sourceState, int sourceAttempt, string? sourceEndedFor, FlowFailure? sourceFailure)
+        => recorded ?? (IsUnended(sourceState, sourceEndedFor, sourceFailure) ? sourceAttempt - 1 : sourceAttempt);
+
+    /// <summary>
     /// The raises an ending of the visit <paramref name="source"/> still owes the session that goes on, each by the id the
     /// resume raises it as, as its own record holds where each handler stands (<paramref name="handlers"/>) - the ending of
     /// a handler among them, which the ending it answers waits on while its failure is its own handlers' to settle: each
     /// handler written owed - by a pause, which raises nothing while it records what it left running, or by a crash between
     /// the ending's record and the raise - or written raised with no visit of it recorded, for the source's record says a
     /// raise before the visit's first record is written and a crash came between the two; never one whose visit this ending
-    /// raised is recorded (<paramref name="raised"/>) - an older build's record left such a raise owed beside the visit it
-    /// made - for that raise is made, and its visit is counted as itself. Each is named the next visit of the handler beside
-    /// its source - one more than the visits its scope holds (<paramref name="visits"/>), as the engine makes a member
+    /// raised is recorded (<paramref name="raised"/>: raised for the attempt that ended, <see cref="AttemptRaisedFor"/>) -
+    /// an older build's record left such a raise owed beside the visit it made - for that raise is made, and its visit is
+    /// counted as itself; and none of a source that does not stand as an ending (<see cref="StandsAsAnEnding"/>), which has
+    /// raised nothing in the attempt it is in. Each is named the next visit of the handler beside its source - one more
+    /// than the visits its scope holds (<paramref name="visits"/>), as the engine makes a member
     /// (<see cref="FlowInstanceId.OfVisit"/>): <c>fix+2</c> where the scope holds <c>fix</c>. The one reading of them: the
     /// resume raises them, and what is left of a run counts them - the engine's (<c>FlowCoordinator.Unended</c>) and the
     /// status of a run's records alike (<see cref="IsUnended"/>).
     /// </summary>
     /// <param name="source">The visit's id.</param>
+    /// <param name="state">How the visit stands.</param>
     /// <param name="handlers">Where each handler of its ending stands, as its record names it.</param>
-    /// <param name="raised">Whether a visit of the handler, by its name, that this ending raised is recorded.</param>
+    /// <param name="raised">Whether a visit of the handler, by its name, raised for the ending of the attempt the visit is in is recorded.</param>
     /// <param name="visits">How many visits of the handler, by its name, the scope beside the visit holds: the highest it names, 0 for none.</param>
     public static IEnumerable<(string Handler, string Id)> RaisesOwed(
         string source,
+        FlowInstanceState state,
         IEnumerable<FlowHandlerState> handlers,
         Func<string, bool> raised,
         Func<string, int> visits)
@@ -524,9 +565,11 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
         ArgumentNullException.ThrowIfNull(raised);
         ArgumentNullException.ThrowIfNull(visits);
 
-        return handlers
-            .Where(handler => handler.State is "owed" or "raised" && !raised(handler.Handler))
-            .Select(handler => (handler.Handler, FlowInstanceId.OfVisit(FlowInstanceId.SiblingOf(source, handler.Handler), visits(handler.Handler) + 1)));
+        return !StandsAsAnEnding(state)
+            ? []
+            : handlers
+                .Where(handler => handler.State is "owed" or "raised" && !raised(handler.Handler))
+                .Select(handler => (handler.Handler, FlowInstanceId.OfVisit(FlowInstanceId.SiblingOf(source, handler.Handler), visits(handler.Handler) + 1)));
     }
 
     /// <summary>
@@ -2183,7 +2226,7 @@ public sealed class FlowCoordinator
     private IEnumerable<string> RaisesOwedBy(FlowInstance source)
         => source.DeclaredScope is not { } scope
             ? []
-            : FlowInstance.RaisesOwed(source.Id, source._handlers, handler => RaisedFor(source, handler, scope) is not null, handler => scope.Visits.GetValueOrDefault(handler))
+            : FlowInstance.RaisesOwed(source.Id, source.State, source._handlers, handler => RaisedFor(source, handler, scope) is not null, handler => scope.Visits.GetValueOrDefault(handler))
                 .Select(raise => raise.Id);
 
     /// <summary>
@@ -2306,8 +2349,11 @@ public sealed class FlowCoordinator
         {
             if (failed.Step.IsGroup)
             {
-                SetFailure(failed, null);
+                // The new visit is made before the failure stops standing in the visit it replaces: a crash between the
+                // two writes leaves the failure standing beside the new visit's record, which the next resume reads as the
+                // retry made (Retry), never a failure gone with no new visit made for it.
                 Retry(failed);
+                SetFailure(failed, null);
                 continue;
             }
 
@@ -2364,6 +2410,15 @@ public sealed class FlowCoordinator
             {
                 _ = RaiseFor(owed);
             }
+        }
+
+        foreach (var done in _created.Where(created => IsRecovery(created) && created.State == FlowInstanceState.Done && created.RaisedBy is not null).ToList())
+        {
+            // A visit of the recovery that ended done goes on to where its onSuccess sends the run, as its end went on: a
+            // rerun its records do not hold - a crash came between the visit's done record and the rerun's - is made now,
+            // and one they hold is never made again (RerunOwed); the reporters of what it fixed run again by their own
+            // rule, once.
+            GoOnFromTheRecovery(done);
         }
 
         foreach (var pending in _pendingEndings.Values.Where(pending => pending.Handlers.All(Ended)).ToList())
@@ -4626,9 +4681,9 @@ public sealed class FlowCoordinator
             case "accept":
                 if (!RaiseFor(instance, without: handler) && failed)
                 {
-                    instance.HandledBy = asked.Id;
-                    instance.FailureSettled = true;
-                    WriteStepRecordOf(instance);
+                    // Taken as it stands, handled by the answer: settled through the one owner, so an ending the source is
+                    // itself a handler of settles with it.
+                    Settle(instance, handledBy: asked.Id);
                 }
 
                 break;
@@ -4692,9 +4747,7 @@ public sealed class FlowCoordinator
 
             if (handler.RaisedBy is { } source && source.State == FlowInstanceState.Failed && source.HandledBy is null)
             {
-                source.HandledBy = handler.Step.Name;
-                source.FailureSettled = true;
-                WriteStepRecordOf(source);
+                Settle(source, handledBy: handler.Step.Name);
             }
 
             return;
@@ -4925,13 +4978,19 @@ public sealed class FlowCoordinator
             return;
         }
 
-        // The visit that failed stands as it ended, its failure settled by the answer.
+        // The visit that failed stands as it ended, its failure settled by the answer. Its new visit is made once: where the
+        // records hold one made in its place already - a crash came between that visit's record and the next write, and the
+        // answer or the stop is carried out again - the retry is made.
         instance.State = FlowInstanceState.Failed;
         instance.FailureSettled = true;
 
         if (IsRecovery(instance) && instance.RaisedBy is { } source)
         {
-            TakeRecoveryOf(source);
+            if (ReferenceEquals(_created.LastOrDefault(created => IsRecovery(created) && ReferenceEquals(created.RaisedBy, source)), instance))
+            {
+                TakeRecoveryOf(source);
+            }
+
             return;
         }
 
@@ -4972,7 +5031,11 @@ public sealed class FlowCoordinator
         return null;
     }
 
-    /// <summary>Makes <paramref name="instance"/>'s next attempt of its visit, not yet started: what the attempt before it ended with is its own.</summary>
+    /// <summary>
+    /// Makes <paramref name="instance"/>'s next attempt of its visit, not yet started: what the attempt before it ended with
+    /// is its own - its handlers' states among it, for that attempt's ending is over and the next attempt's own ending
+    /// raises them anew (<see cref="RaisedFor"/>).
+    /// </summary>
     /// <param name="instance">The step instance.</param>
     /// <param name="reopenAnswered">
     /// Whether a step of <c>others</c> run again gives a target a <c>fail</c> answer ended its turn again: a person's
@@ -5007,6 +5070,7 @@ public sealed class FlowCoordinator
         instance.FinishedAt = null;
         instance.EndedIn = 0;
         instance.HeldBy = null;
+        instance._handlers.Clear();
 
         // What the attempt before it said of its tree is its own: the next has let nothing go yet.
         instance.Copied = false;
@@ -6374,7 +6438,14 @@ public sealed class FlowCoordinator
     /// - it runs again, or was itself drawn afresh. Each is drawn again by the schedule, as it would have been had the
     /// run not ended, under the same id: what it waits on, its <c>when</c>, its group. One its group's failure or a
     /// failure that still stands blocks stays NotRun, and so does a handler's place-holder whose source is not drawn
-    /// again; one whose source is, goes with it, for the source's ending decides it.
+    /// again; one whose source is, goes with it, for the source's ending decides it. A handler's visit a raise made, which
+    /// the stop left NotRun before it started, is put back in its place where the ending it was raised for still waits on
+    /// it (<see cref="EndingHandledBy"/>) - the schedule never draws a handler, so the redraw does not reach it, and the
+    /// ending names that visit (<see cref="EndingOf"/>): not started again, under the same id, raised by the same ending,
+    /// for it never ran, held nothing and wrote nothing but its place in that ending. The stop's own records stay as they
+    /// are - what it had not started is NotRun, the run ended before it, and a session that ends stopped is left nothing
+    /// that waits to start - and it is what the stop left that the session going on considers afresh, here, as for every
+    /// step the stop left.
     /// </summary>
     private void RedrawWhatTheStopLeft()
     {
@@ -6393,6 +6464,17 @@ public sealed class FlowCoordinator
                 Redraw(notRun);
                 drawn = true;
             }
+        }
+
+        foreach (var raised in _created.Where(instance => instance is { State: FlowInstanceState.NotRun, NotRunCause: FlowNotRunCause.RunEnded, RaisedBy: not null, Step.On: not null }
+                && EndingHandledBy(instance) is not null).ToList())
+        {
+            raised.State = FlowInstanceState.NotStarted;
+            raised.NotRunCause = null;
+            raised.NotRunBecause = null;
+            raised.FinishedAt = null;
+            raised.EndedIn = 0;
+            Record(FlowChangeKind.Step, raised, from: FlowInstanceState.NotRun, to: FlowInstanceState.NotStarted, attempt: raised.Attempt, detail: $"put back for the ending of '{raised.RaisedBy!.Id}', which waits on it: the run ended before it started");
         }
     }
 
@@ -11372,6 +11454,7 @@ public sealed class FlowCoordinator
                     var unread = Create(scope, handler, FlowInstanceState.Failed, made: unread =>
                     {
                         unread.RaisedBy = instance;
+                        unread.RaisedByAttempt = instance.Attempt;
                         unread.Exit = HarnessExit.ConfigInvalid;
                         unread.Error = Unreadable("when", unread.Id, problem);
                     });
@@ -11434,7 +11517,7 @@ public sealed class FlowCoordinator
             // (FlowInstance.RaisesOwed). A handler that is a group is made running in its first record (RaiseVisit): no
             // crash leaves a record of it that never starts.
             SetHandlerState(instance, handler.Name, "raised");
-            _ = RaiseVisit(instance, handler, scope, RaisedFor(instance, handler.Name, scope));
+            _ = RaiseVisit(instance, instance.Attempt, handler, scope, RaisedFor(instance, handler.Name, scope));
         }
 
         // The ending waits on the visits just raised, read as a resume reads them back: each handler the record now holds
@@ -11454,22 +11537,33 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// The visit of the handler named <paramref name="handler"/> raised for <paramref name="source"/>'s ending, where one
-    /// was made: a source raises each handler once for an ending, so one found is that raise.
+    /// The visit of the handler named <paramref name="handler"/> raised for the ending of <paramref name="source"/>'s
+    /// attempt - the one it is in, or <paramref name="attempt"/> - the newest where one was made: a source raises each
+    /// handler once for an ending, and a visit made again in a failed one's place (<see cref="RaiseAgain"/>) answers the
+    /// same ending, so the newest found is the one that ending waits on. A visit raised for an earlier attempt's ending
+    /// answers that ending alone: a source run again as a new attempt raises its handlers anew.
     /// </summary>
-    private FlowInstance? RaisedFor(FlowInstance source, string handler, Scope scope)
-        => _created.LastOrDefault(visit => ReferenceEquals(visit.DeclaredScope, scope) && visit.Step.Name == handler && ReferenceEquals(visit.RaisedBy, source));
+    private FlowInstance? RaisedFor(FlowInstance source, string handler, Scope scope, int? attempt = null)
+        => _created.LastOrDefault(visit => ReferenceEquals(visit.DeclaredScope, scope)
+            && visit.Step.Name == handler
+            && ReferenceEquals(visit.RaisedBy, source)
+            && visit.RaisedByAttempt == (attempt ?? source.Attempt));
 
     /// <summary>
-    /// A visit of <paramref name="handler"/>, declared in <paramref name="scope"/>, raised for <paramref name="source"/>'s
-    /// ending: <paramref name="made"/>, one made already, or a new one, naming the source as what raised it. A handler that
-    /// is a group is a block of its own in the scope its source stands in, its steps scheduled as any scope's are - the
-    /// admission walk starts no group, so it is made running, in its first record, as the recovery's own raise makes its
-    /// (<see cref="TakeRecoveryOf"/>), and its block begun (<see cref="BeginTheBlockOf"/>).
+    /// A visit of <paramref name="handler"/>, declared in <paramref name="scope"/>, raised for the ending of
+    /// <paramref name="source"/>'s attempt <paramref name="attempt"/>: <paramref name="made"/>, one made already, or a new
+    /// one, naming the source and that attempt as what raised it. A handler that is a group is a block of its own in the
+    /// scope its source stands in, its steps scheduled as any scope's are - the admission walk starts no group, so it is
+    /// made running, in its first record, as the recovery's own raise makes its (<see cref="TakeRecoveryOf"/>), and its
+    /// block begun (<see cref="BeginTheBlockOf"/>).
     /// </summary>
-    private FlowInstance RaiseVisit(FlowInstance source, WorkflowStep handler, Scope scope, FlowInstance? made)
+    private FlowInstance RaiseVisit(FlowInstance source, int attempt, WorkflowStep handler, Scope scope, FlowInstance? made)
     {
-        var raised = made ?? Create(scope, handler, handler.IsGroup ? FlowInstanceState.Running : FlowInstanceState.NotStarted, made: visit => visit.RaisedBy = source);
+        var raised = made ?? Create(scope, handler, handler.IsGroup ? FlowInstanceState.Running : FlowInstanceState.NotStarted, made: visit =>
+        {
+            visit.RaisedBy = source;
+            visit.RaisedByAttempt = attempt;
+        });
 
         if (handler.IsGroup)
         {
@@ -11483,11 +11577,12 @@ public sealed class FlowCoordinator
     /// Raises the handler <paramref name="visit"/> is a visit of again, for the ending it was raised for, where that visit
     /// is run again as a new one - a group retried (<see cref="Retry"/>), a handler whose failure the recovery put right:
     /// the schedule never draws a handler and a redirect never resets one (<see cref="FlowResets"/>), so its next visit is
-    /// made as its raise made the first, naming the same source - whose ending its steps read as <c>source</c>. The ending,
-    /// where it still waits, follows the new visit: read again by the one reading of the handlers an ending waits on
-    /// (<see cref="EndingOf"/>), which takes the newest visit raised for it (<see cref="RaisedFor"/>), as a resume rebuilds
-    /// it - so the new visit's end settles it (<see cref="MaybeSettle"/>), and the visit it replaced, which stands as it
-    /// ended, holds it no longer. The source's record holds the handler raised already, and its raise stays said.
+    /// made as its raise made the first, naming the same source and the same attempt of it - whose ending its steps read as
+    /// <c>source</c>. The ending, where it still waits, follows the new visit: read again by the one reading of the handlers
+    /// an ending waits on (<see cref="EndingOf"/>), which takes the newest visit raised for it (<see cref="RaisedFor"/>), as
+    /// a resume rebuilds it - so the new visit's end settles it (<see cref="MaybeSettle"/>), and the visit it replaced,
+    /// which stands as it ended, holds it no longer. The source's record holds the handler raised already, and its raise
+    /// stays said.
     /// </summary>
     /// <param name="visit">The handler's visit run again, which names what raised it.</param>
     /// <param name="scope">The scope that declares the handler.</param>
@@ -11495,7 +11590,7 @@ public sealed class FlowCoordinator
     {
         var source = visit.RaisedBy!;
         var waiting = EndingHandledBy(visit);
-        _ = RaiseVisit(source, visit.Step, scope, made: null);
+        _ = RaiseVisit(source, visit.RaisedByAttempt, visit.Step, scope, made: null);
 
         if (waiting is not null)
         {
@@ -11504,8 +11599,9 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// The ending of <paramref name="source"/>, declared in <paramref name="scope"/>, as it waits on its handlers: the visit
-    /// of each handler its own record holds raised (<see cref="RaisedFor"/>), in the order the scope declares them - the
+    /// The ending of <paramref name="source"/>'s attempt, declared in <paramref name="scope"/>, as it waits on its handlers:
+    /// the visit of each handler its own record holds raised for that attempt's ending (<see cref="RaisedFor"/>) - never one
+    /// an earlier attempt's ending raised - in the order the scope declares them - the
     /// one reading of which instances an ending waits on and settles with, made where the raise is made
     /// (<see cref="RaiseFor"/>) and where a resume rebuilds an ending its records left waiting, so the two hold the same
     /// handlers. Never every instance that names the source as what raised it: a triage of an issue it reported
@@ -11770,20 +11866,33 @@ public sealed class FlowCoordinator
             source._handlers.Add(new FlowHandlerState(handler.Step.Name, "done"));
         }
 
-        if (pending.Failed)
+        // The ending settled in one record: every handler done, and a failure handled - by the handler that took it,
+        // whatever the handler went on to do with its then - so what depends on the source starts on what it left; and a
+        // source that is itself a handler has ended, settling the ending it was raised for where that one waited on it
+        // alone.
+        Settle(source, handledBy: pending.Failed ? pending.Handlers[0].Step.Name : null);
+    }
+
+    /// <summary>
+    /// Settles the ending of <paramref name="instance"/>, decided: a failure taken as handled - by the handler that took
+    /// it, the question whose answer took it as it stood, the recovery whose redirect an answer gave up
+    /// (<paramref name="handledBy"/>) - counts as handled, the instance's record says it, and the ending the instance
+    /// answers, where it is a handler of one, settles with it once every handler of that ending has ended
+    /// (<see cref="MaybeSettle"/>). The one owner every decision that settles a failure goes through, so no ending waits on
+    /// a handler whose failure is settled; an ending done, its handlers all ended, passes no <paramref name="handledBy"/>.
+    /// </summary>
+    /// <param name="instance">The instance whose ending is settled.</param>
+    /// <param name="handledBy">What took its failure; null for an ending done.</param>
+    private void Settle(FlowInstance instance, string? handledBy)
+    {
+        if (handledBy is not null)
         {
-            // The failure counts as handled - by the handler that took it, whatever the handler went on to do with
-            // its then - and what depends on the source starts on what it left.
-            source.HandledBy = pending.Handlers[0].Step.Name;
-            source.FailureSettled = true;
+            instance.HandledBy = handledBy;
+            instance.FailureSettled = true;
         }
 
-        // The ending settled in one record: every handler done, and the failure handled.
-        WriteStepRecordOf(source);
-
-        // A source that is itself a handler has ended with its failure handled, and settles the ending it was raised for
-        // where that one waited on it alone.
-        MaybeSettle(source);
+        WriteStepRecordOf(instance);
+        MaybeSettle(instance);
     }
 
     /// <summary>
@@ -11805,7 +11914,8 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Where an instance's ending leaves what waits on it: a handler that ended (<see cref="Ended"/>) settles its source's
     /// ending once every handler of it has. The one owner every way a handler's visit ends goes through - its own end, its
-    /// failure decided by its policy or settled by its own handlers (<see cref="SettleEnding"/>) - and a visit made again in
+    /// failure decided by its policy, settled by its own handlers (<see cref="SettleEnding"/>) or taken as handled by an
+    /// answer (<see cref="Settle"/>) - and a visit made again in
     /// its place (<see cref="RaiseAgain"/>) settles it as its successor ends, so no ending waits for ever.
     /// </summary>
     private void MaybeSettle(FlowInstance instance)
@@ -13237,40 +13347,90 @@ public sealed class FlowCoordinator
             _ = DecideAt(loop);
         }
 
-        if (IsRecovery(instance) && state == FlowInstanceState.Done && instance.RaisedBy is { } again)
+        if (IsRecovery(instance) && state == FlowInstanceState.Done && instance.RaisedBy is not null)
         {
-            // onSuccess: failed-step - the step that gave the recovery its failure runs again from where it stopped,
-            // as a new visit with its retries whole; what depended on it was waiting, and starts when it ends. An
-            // issue the recovery fixed blocks no one, where it did not block its reporter: the run goes on.
-            again.FailureSettled = true;
-
-            if (again.Issue is not null && _tally.FindIndex(entry => ReferenceEquals(entry.Triage, again)) is >= 0 and var at)
-            {
-                // Fixed in its place: {run.preExisting} says each issue in the order it was taken, whichever of the
-                // visits side by side ended first.
-                _tally[at] = _tally[at] with { State = "fixed" };
-            }
-
-            var (rerun, issue, _) = RecoveryOf(again);
-
-            if (issue is not null)
-            {
-                // Every issue the visit fixed - the one it was sent for, each joined to it and gone with it, and each
-                // duplicate of one of those, which that fix settles - is fixed with it: a reporter one of them stops runs
-                // again once, after every issue that stops it is settled.
-                RunTheReportersAgain(TriagesFixedBy(instance));
-            }
-            else if (rerun is { Step.On: not null, RaisedBy: not null, DeclaredScope: { } handlerScope } handler)
-            {
-                // A handler runs again as a new visit raised by the ending it answers, which waits on it: no redirect
-                // resets a handler.
-                RaiseAgain(handler, handlerScope);
-            }
-            else if (rerun is { DeclaredScope: { } targetScope } target && ResolveStep(targetScope, target.Step.Name) is { } declaration)
-            {
-                DecideRedirectOf(instance, targetScope, declaration);
-            }
+            GoOnFromTheRecovery(instance);
         }
+    }
+
+    /// <summary>
+    /// Where a visit of the recovery that ended done sends the run, by its <c>onSuccess</c>: <c>failed-step</c> - the step
+    /// that gave the recovery its failure runs again from where it stopped, as a new visit with its retries whole, what
+    /// depended on it waiting and starting once it ends; a handler as a new visit raised by the ending it answers, which
+    /// waits on it, for no redirect resets a handler (<see cref="RaiseAgain"/>) - and an issue the recovery fixed blocks no
+    /// one where it did not block its reporter: the run goes on. The rerun is decided from the records, and owed until its
+    /// own record exists (<see cref="RerunOwed"/>): the visit's end writes its done record first, so a crash between the two
+    /// leaves it to the session that goes on, whose start makes it (<see cref="GoOnWhereTheRunStood"/>) - once, for the
+    /// rerun's record says it was made. The one owner of that rerun, the visit's end and the resume alike.
+    /// </summary>
+    /// <param name="visit">The visit of the recovery that ended done, which names what it put right.</param>
+    private void GoOnFromTheRecovery(FlowInstance visit)
+    {
+        var again = visit.RaisedBy!;
+        again.FailureSettled = true;
+
+        if (again.Issue is not null && _tally.FindIndex(entry => ReferenceEquals(entry.Triage, again)) is >= 0 and var at)
+        {
+            // Fixed in its place: {run.preExisting} says each issue in the order it was taken, whichever of the visits
+            // side by side ended first.
+            _tally[at] = _tally[at] with { State = "fixed" };
+        }
+
+        var (rerun, issue, _) = RecoveryOf(again);
+
+        if (issue is not null)
+        {
+            // Every issue the visit fixed - the one it was sent for, each joined to it and gone with it, and each duplicate
+            // of one of those, which that fix settles - is fixed with it: a reporter one of them stops runs again once,
+            // after every issue that stops it is settled - never twice, for a reporter a redirect left or one a redirect
+            // owed resets is not sent again (RunTheReporterAgain).
+            RunTheReportersAgain(TriagesFixedBy(visit));
+        }
+        else if (RerunOwed(visit) is not { } owed)
+        {
+            return;
+        }
+        else if (owed.Handler)
+        {
+            RaiseAgain(rerun!, rerun!.DeclaredScope!);
+        }
+        else
+        {
+            DecideRedirectOf(visit, owed.Scope, owed.Declaration);
+        }
+    }
+
+    /// <summary>
+    /// The rerun of the failed step <paramref name="visit"/>, a visit of the recovery that ended done, put right - as the
+    /// run's records hold it, while it is owed: the step's own declaration in its scope, and whether it is a handler, run
+    /// again as a new visit raised by the ending it answers (<see cref="RaiseAgain"/>), or a step the schedule draws, run
+    /// again by a redirect the visit decides (<see cref="DecideRedirectOf"/>). Owed until the rerun's own record exists: for
+    /// a handler, until the visit put right is no longer the newest raised for that ending (<see cref="RaisedFor"/>); for
+    /// any other step, until a redirect by the visit is in the run's records, the visit put right is no longer its scope's
+    /// current one - a redirect left it - or an answer gave the redirect up and counted it handled, and never into a scope
+    /// an earlier redirect left. Null where nothing is owed: an issue the visit fixed, whose reporters run again by their
+    /// own rule, and a rerun made.
+    /// </summary>
+    /// <param name="visit">The visit of the recovery, done, which names what it put right.</param>
+    private (Scope Scope, WorkflowStep Declaration, bool Handler)? RerunOwed(FlowInstance visit)
+    {
+        if (visit.RaisedBy is not { } again || RecoveryOf(again) is not { Issue: null, Rerun: { DeclaredScope: { } scope } rerun })
+        {
+            return null;
+        }
+
+        if (rerun is { Step.On: not null, RaisedBy: { } source })
+        {
+            return ReferenceEquals(RaisedFor(source, rerun.Step.Name, scope, rerun.RaisedByAttempt), rerun) ? (scope, rerun.Step, true) : null;
+        }
+
+        return ScopeLive(scope)
+            && ReferenceEquals(scope.Members.GetValueOrDefault(rerun.Step.Name), rerun)
+            && rerun.HandledBy is null
+            && !_redirects.Any(redirect => ReferenceEquals(redirect.Handler, visit))
+            && ResolveStep(scope, rerun.Step.Name) is { } declaration
+                ? (scope, declaration, false)
+                : null;
     }
 
     /// <summary>
@@ -16597,7 +16757,8 @@ public sealed class FlowCoordinator
             instance.Measure,
             instance.DrawnIn == 0 ? null : instance.DrawnIn,
             instance.Counted,
-            instance.RecoveryThread);
+            instance.RecoveryThread,
+            instance.RaisedByAttempt == 0 ? null : instance.RaisedByAttempt);
     }
 
     /// <summary>
@@ -17154,6 +17315,13 @@ public sealed class FlowCoordinator
                 if (_instances.TryGetValue(raised.RaisedByRecord!, out var source))
                 {
                     raised.RaisedBy = source;
+
+                    if (raised.Step.On is not null && raised.RaisedByAttempt == 0)
+                    {
+                        // A handler's visit a build that named no attempt on a raise recorded: the attempt it answered is read
+                        // from its source's record, by the one rule of it.
+                        raised.RaisedByAttempt = FlowInstance.AttemptRaisedFor(null, source.State, source.Attempt, source.EndedFor, source.Failure);
+                    }
                 }
             }
 
@@ -17196,7 +17364,9 @@ public sealed class FlowCoordinator
                 FailGroup(member.GroupOf!, member.Exit ?? HarnessExit.InternalError, member.Error, member.Path);
             }
 
-            foreach (var source in _created.Where(created => created._handlers.Any(handler => handler.State is "owed" or "raised")))
+            // Only a source that stands as an ending holds one: what an attempt not ended, skipped or never run still says of
+            // its handlers is an earlier attempt's ending, which is over (FlowInstance.StandsAsAnEnding).
+            foreach (var source in _created.Where(created => FlowInstance.StandsAsAnEnding(created.State) && created._handlers.Any(handler => handler.State is "owed" or "raised")))
             {
                 // A raise an older build's record left owed beside the visit it made - a crash between the visit's first
                 // record and the source's - is read raised, as this build writes it: the source's record says the raise
@@ -17613,6 +17783,7 @@ public sealed class FlowCoordinator
             instance.Direction = record.Direction;
             instance.LeftBy = record.LeftBy;
             instance.RaisedByRecord = record.RaisedBy;
+            instance.RaisedByAttempt = record.RaisedByAttempt ?? 0;
             instance.RaisedByUpdate = record.RaisedByUpdate;
             instance.EndedFor = record.EndedFor;
             instance.Targets = record.Targets;

@@ -665,10 +665,11 @@ where it ships it now. A file of that older layout still there that the definiti
 a prompt the repository made its own before the move - is read by nothing, so a change made to it
 reaches no step, and `init` says so in a note, naming the file read now.
 
-A step that says `on` is a handler, raised by another step's ending: what depends on that step waits for every handler
-of the ending to end - one that failed once its failure is decided, never while it asks, the recovery works on it or a
-run it stopped is still to resume - and a handler that is a group answered `retry` is a new visit raised by the same
-ending, which waits on it.
+A step that says `on` is a handler, raised by another step's ending: what depends on a step that failed waits for every
+handler of that ending to end - one that failed once its failure is decided, never while it asks, the recovery works on
+it or a run it stopped is still to resume - while what depends on a step that ended done starts beside the handlers its
+success raised. A handler that is a group answered `retry` is a new visit raised by the same ending, which waits on it,
+and a step run again as a new attempt raises its handlers anew, for that attempt's own ending.
 
 A step gives a failure nothing handles to the workflow's `recover` by saying `onFailure: recover`,
 itself or through a group around it: steps written once that find what went wrong and put it right.

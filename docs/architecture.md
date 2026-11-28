@@ -2200,14 +2200,25 @@ review loop decides at its `route`, where the review's findings are routed, so t
 its bound is reviewed by the round after it and what it leaves is what its last routing left - its rework and its home
 audits alike. A step raised by another step's ending
 says `on` - by the outcome, a failure by exit code - and sends the run back with `then`; the
-schedule never starts it, and no redirect resets it (`FlowResets`). What depends on the step it answers waits until
+schedule never starts it, and no redirect resets it (`FlowResets`). What depends on a step that failed waits until
 every handler raised for that ending has ended (`FlowCoordinator.Ended`): one that failed once its failure is decided -
 passed over, settled by its own handlers or by an answer - never while it is owed to what decides it, asks a person,
 is the recovery's, or stopped the run, which the next session runs again; a failure is unsettled from its end until
-then, as a resume reads one owed. Every way a handler's visit ends settles the ending through the one owner
-(`FlowCoordinator.MaybeSettle`), and a handler made again - a group answered `retry`, or one the recovery put right
-going on as `failed-step` - is a new visit raised by the same ending, naming the same source, which the ending waits on
-in the place of the one it replaced (`FlowCoordinator.RaiseAgain`), as a resume rebuilds it. Steps nest at most ten deep; every step's name is a lower-case word,
+then, as a resume reads one owed. What depends on a step that ended done starts beside the handlers its success raised,
+for a success is settled as it ends. Every way a handler's visit ends settles the ending through the one owner
+(`FlowCoordinator.MaybeSettle`) - a failure its handlers or an answer took as handled through `FlowCoordinator.Settle`,
+which says what took it and settles with it the ending its instance answers - and a handler made again - a group
+answered `retry`, or one the recovery put right going on as `failed-step` - is a new visit raised by the same ending,
+naming the same source and the same attempt of it, which the ending waits on in the place of the one it replaced
+(`FlowCoordinator.RaiseAgain`), as a resume rebuilds it. A step run again as a new attempt has an ending of its own,
+which raises its handlers anew: each handler's visit records the attempt whose ending raised it (`raisedByAttempt`), and
+a raise answers that attempt's ending alone (`FlowCoordinator.RaisedFor`, which `FlowCoordinator.EndingOf` and
+`FlowInstance.RaisesOwed` read), so the new attempt's failure raises the handler's next visit, its `when` read again; a
+new attempt keeps none of the handler states the attempt before it ended with, and only a step that stands as an
+ending - done or failed - owes a raise or has an ending rebuilt (`FlowInstance.StandsAsAnEnding`). A raise an older build
+recorded names no attempt and is read as the attempt its source's record holds where that attempt ended and its failure
+is not owed - as the build that wrote it read it, matching a raise by its source's visit alone - and otherwise as the
+attempt before it, for an ending raises its handlers only as it is decided (`FlowInstance.AttemptRaisedFor`). Steps nest at most ten deep; every step's name is a lower-case word,
 unique among its siblings and never a word a definition reads for its own. The file writes no YAML alias - a
 definition writes each of its steps out, so that what it says is what it reads - and its values are read however deep
 they nest, by the one YAML reader (see "Layering").
@@ -5390,13 +5401,25 @@ the run's records, and a handler a redirect leaves before it ended marked `left`
 record, for it took nothing: the ending it was raised for is abandoned, settled by none of its handlers
 and never rebuilt by a resume - so a crash between any two writes leaves records the next session completes: an
 answer written is carried out once, a configured answer never written is given, a handler is never
-raised twice, and an ending whose handlers all ended is settled. An ending the records leave waiting - a handler's own
+raised twice, and an ending whose handlers all ended is settled. What a visit of the recovery that ended done puts right
+runs again as decided from the records: its rerun is owed until the rerun's own record exists - a redirect of the step
+it put right in the run's records, or that step no longer its scope's visit; for a handler, a visit raised again for the
+same ending in its place - so a crash between the visit's done record and the rerun's leaves it to the resume, which
+makes it once, and the reporters of an issue it fixed run again by their own rule (`FlowCoordinator.RerunOwed`,
+`FlowCoordinator.GoOnFromTheRecovery`). A group made again for a retry is made before its failure stops standing - a
+crash between the two writes leaves that failure beside the new visit, which is the retry made - and a visit of the
+recovery answered `retry` is taken again only while it is still the newest taken for what it puts right
+(`FlowCoordinator.Retry`). A handler's visit a raise made that a failure's `stop` left NotRun before it started - the run
+ended before it - is put back by the resume that goes on with no failure standing to stop it, not started again under
+the same id and raised by the same ending, where that ending still waits on it: the schedule never draws a handler, and
+the visit never ran, held nothing and wrote nothing but its place in that ending (`FlowCoordinator.RedrawWhatTheStopLeft`).
+An ending the records leave waiting - a handler's own
 among them, which the ending it answers waits on, and each raise it still owes made - is rebuilt as its
 raise made it, from its source's record: the visit of each handler that record holds `raised` - the newest raised for
 that ending, so a visit made again in a failed one's place is the one waited on - in the order the
 workflow declares them (`FlowCoordinator.EndingOf`) - never a triage of an issue the source reported nor a visit of the
-recovery, which name the source as what raised them too - so what depends on the source waits for its handlers alone,
-as it does within a session, and the source's record names only them as the ending settles. A session is never said done over a
+recovery, which name the source as what raised them too - so what depends on a source that failed waits for its
+handlers alone, as it does within a session, and the source's record names only them as the ending settles. A session is never said done over a
 step that never ended, nor one its scope never drew, and a run is never said done - by a session, or by the engine that
 takes it up before its session - over a step a pause or a stop stopped, which runs again at the resume, nor over a
 failure or a handler's raise owed to the next session. What the session's start writes is held, in the
