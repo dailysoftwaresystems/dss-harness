@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Numerics;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Json;
 using DssHarness.Core.Orchestration.Flow;
@@ -26,7 +29,7 @@ public static class ClassClosureExit
 /// <param name="HomePath">The file its one home is declared in, from the tree's root, read as the plan check reads it: either separator, made forward (<see cref="ClassClosureReading.PathOf"/>).</param>
 /// <param name="HomeSymbol">The symbol its one home is declared as.</param>
 /// <param name="Sites">Each path it is decided at today, read as <paramref name="HomePath"/> is: the file, the symbol, and what the plan says of it after.</param>
-/// <param name="Axes">The names of its universe's axes.</param>
+/// <param name="Axes">The names of the axes its universe says apply (<see cref="ClassClosureReading.PlannedAxes"/>): those it ranges over.</param>
 public sealed record PlannedClass(
     string Id,
     string Invariant,
@@ -66,16 +69,97 @@ public sealed record PlannedClass(
         return read;
     }
 
-    private static IReadOnlyList<string> ReadAxes(JsonObject? universe) => ClassClosureReading.Axes(universe);
+    private static IReadOnlyList<string> ReadAxes(JsonObject? universe)
+        => [.. ClassClosureReading.PlannedAxes(universe).Where(axis => axis.Applies).Select(axis => axis.Name)];
 
     private static string? Text(JsonNode? node) => ClassClosureReading.Text(node);
+}
+
+/// <summary>
+/// One axis of a class's universe as a plan answers it (<see cref="ClassClosureReading.PlannedAxes"/>), in the one shape
+/// <c>plan.schema.json</c>'s <c>axis</c> answers every axis in: its name, the values the repository declares for it, where
+/// it declares them, and why the decision does not range over it.
+/// </summary>
+/// <param name="Name">The axis: the member of the universe that answers it, or a further axis's own name.</param>
+/// <param name="Values">The values it ranges over; empty where the plan says it does not apply.</param>
+/// <param name="DeclaredIn">Where the repository declares the values, as the plan says it; empty where it says nothing.</param>
+/// <param name="Why">Why the decision does not range over it, as the plan says it; empty where it says nothing.</param>
+public sealed record UniverseAxis(string Name, IReadOnlyList<string> Values, string DeclaredIn, string Why)
+{
+    /// <summary>Whether the decision ranges over it: exactly where the plan names its values.</summary>
+    public bool Applies => Values.Count > 0;
 }
 
 /// <summary>What the closing models read of the JSON they are handed, written once.</summary>
 internal static class ClassClosureReading
 {
-    /// <summary>The names of a universe's axes, or none where it holds no object.</summary>
-    public static IReadOnlyList<string> Axes(JsonObject? universe)
+    /// <summary>The member of a plan's universe that holds the further axes its closure text names, each by its name.</summary>
+    public const string Further = "further";
+
+    /// <summary>The member of a plan's universe that counts its cells.</summary>
+    public const string Cells = "cells";
+
+    /// <summary>
+    /// The axes of a class's universe as a plan answers them - <c>plan.schema.json</c>'s <c>universe</c>, whose schema has
+    /// it answer every axis the closure text lists, each by a member of its own in the one shape of an axis
+    /// (<c>axis</c>: values, declaredIn, why): each member that holds an axis's answer - an object - by its name, in the
+    /// order the plan writes them, then each further axis by its own name. An axis applies exactly where its answer names
+    /// values (<see cref="UniverseAxis.Applies"/>); none where the universe holds no object.
+    /// </summary>
+    /// <param name="universe">The class's <c>universe</c>, as the plan holds it.</param>
+    public static IReadOnlyList<UniverseAxis> PlannedAxes(JsonObject? universe)
+    {
+        var read = new List<UniverseAxis>();
+
+        if (universe is null)
+        {
+            return read;
+        }
+
+        foreach (var (name, answer) in universe)
+        {
+            if (answer is JsonObject answered)
+            {
+                read.Add(AxisOf(name, answered));
+            }
+        }
+
+        foreach (var node in universe[Further] as JsonArray ?? [])
+        {
+            if (node is JsonObject further && Text(further["name"]) is { } name && further["answer"] is JsonObject answered)
+            {
+                read.Add(AxisOf(name, answered));
+            }
+        }
+
+        return read;
+
+        static UniverseAxis AxisOf(string name, JsonObject answer)
+            => new(
+                name,
+                answer["values"] is JsonArray values ? [.. values.Select(Text).OfType<string>()] : [],
+                Text(answer["declaredIn"]) ?? string.Empty,
+                Text(answer["why"]) ?? string.Empty);
+    }
+
+    /// <summary>
+    /// The count of a plan's universe's cells, read whole however large it is and however JSON writes a whole number
+    /// (<c>6</c>, <c>6.0</c>, <c>6e0</c>); null where the universe counts none - no number there, or one with a fraction.
+    /// </summary>
+    /// <param name="universe">The class's <c>universe</c>, as the plan holds it.</param>
+    public static BigInteger? CellsOf(JsonObject? universe)
+        => universe?[Cells] is JsonValue value
+            && value.GetValueKind() == JsonValueKind.Number
+            && BigInteger.TryParse(value.ToJsonString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var cells)
+                ? cells
+                : null;
+
+    /// <summary>
+    /// The names of the axes a closing record says the work covered - <c>implement.schema.json</c>'s <c>universe.axes</c>,
+    /// each by the name the class's universe gives it - or none where it holds no object.
+    /// </summary>
+    /// <param name="universe">The record's <c>universe</c>.</param>
+    public static IReadOnlyList<string> RecordedAxes(JsonObject? universe)
     {
         var read = new List<string>();
 
@@ -115,7 +199,7 @@ internal static class ClassClosureReading
 /// <param name="HomeMoved">Why the work moved the home off the one the plan named, where it says so; null where it says nothing.</param>
 /// <param name="Sites">Each path it was decided at, read as <paramref name="HomePath"/> is: the file, the symbol, what decided there before, and what decides there after.</param>
 /// <param name="Searches">Each search the data was searched by: what was searched, how, the query, and the call that made it.</param>
-/// <param name="Axes">The names of the universe the record pins.</param>
+/// <param name="Axes">The names of the axes of the universe the record pins, as the class's universe names them (<see cref="ClassClosureReading.RecordedAxes"/>).</param>
 /// <param name="CellsPinned">How many cells of the universe the pin covers, as the record says it.</param>
 /// <param name="PinTests">Each test the pin names.</param>
 /// <param name="ArmId">The arm that proves the class closed, where one is named.</param>
@@ -176,7 +260,7 @@ public sealed record ClassClosureRecord(
                 Text(entry["homeMoved"]?["why"]),
                 ReadSites(entry["sites"] as JsonArray),
                 ReadSearches(entry["searches"] as JsonArray),
-                ClassClosureReading.Axes(entry["universe"] as JsonObject),
+                ClassClosureReading.RecordedAxes(entry["universe"] as JsonObject),
                 entry["universe"]?["cellsPinned"] is JsonValue pinned && pinned.TryGetValue<int>(out var cells) ? cells : 0,
                 ReadTests((entry["pin"] as JsonObject)?["tests"] as JsonArray),
                 Text(entry["arm"]?["id"]),
@@ -481,7 +565,7 @@ public sealed record ClassClosureJudged(
 /// it was not;
 /// every test of the pin is declared in the worktree; where the worktree's configuration declares an arms registry, the
 /// arm is one of its arms and mutates the home's own file, or the record says why the class has none; the universe holds
-/// every axis the plan names, and the claim names every axis of it; and where the home was touched by other work, or the
+/// every axis the plan's universe says applies, and the claim names every axis of it, each by its whole word; and where the home was touched by other work, or the
 /// item's ledger says the run's reviews reopened the class a second time, the record carries a home audit. A class's
 /// paths - in the plan and in the record, the paths changed, an arm's site and the
 /// touches - are read as the plan check reads them, either separator, and compared as this machine compares paths
@@ -757,7 +841,8 @@ public static class ClassClosureRules
             }
         }
 
-        // The universe the plan names is the least the record covers: an axis it leaves out is one the claim never ranges over.
+        // The axes the plan's universe says apply are the least the record covers: an axis it leaves out is one the claim
+        // never ranges over. One the plan says does not apply has no cell to cover.
         List<string> axes = [.. entry.Axes];
 
         foreach (var axis in (planned?.Axes ?? []).Where(axis => !entry.Axes.Contains(axis, StringComparer.Ordinal)))
@@ -766,13 +851,15 @@ public static class ClassClosureRules
             axes.Add(axis);
         }
 
+        // The claim names an axis by its whole word, as the graph's searches hold one (GraphWord.Whole): forms is no word of
+        // "platforms", nor region of "regions", so a claim never names an axis by a longer word that holds it.
         if (entry.Claim.Length == 0)
         {
             problems.Add($"class '{entry.Class}': the claim is empty");
         }
         else
         {
-            foreach (var axis in axes.Where(axis => !entry.Claim.Contains(axis, StringComparison.Ordinal)))
+            foreach (var axis in axes.Where(axis => axis.Length > 0 && !Codebase.GraphWord.Whole(axis).In(entry.Claim)))
             {
                 problems.Add($"class '{entry.Class}': the claim does not name the axis '{axis}'");
             }

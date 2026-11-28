@@ -121,7 +121,7 @@ public static partial class HelpTopics
             + Client + ".cacheTtl "
             + $"({string.Join(" or ", Agents.ClaudeApi.ClaudeApiRequest.CacheTtls)}, {Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes} "
             + "where nothing is said) - on the system text, covering the tools and it, the same for every step of that "
-            + "agent with the same tools; on the run's repository map, the first block of the conversation's first user "
+            + "agent with the same tools; on the run's repository map, where a step is pushed one (graph: map), the first block of the conversation's first user "
             + "message, covering the tools, the system text and the map, the same for every such step of the run that reads alike; and the "
             + "top-level mark, which moves with the conversation's last block - so a step's second request on reads the "
             + "map from the cache, and so does the first request of the run's next step of the same agent - and a budget "
@@ -132,8 +132,9 @@ public static partial class HelpTopics
             + $"the credit the API gave sent back as its fallback_credit_token, a failure naming it answered by the same "
             + $"request without it - {nameof(Agents.AgentRunStatus.Refused)} with its category only where none is left; "
             + $"no request carries fallbacks or a {Agents.ClaudeApi.ClaudeApiRequest.ServerSideFallbackPrefix}* beta, for the "
-            + $"engine's fallback is the only one a step has. Two keys are {Client}'s alone: betas, sent beside the tool's own, "
-            + "each one word and never the API's fallback's, and cacheTtl; three are both API clients': requestExtras, an "
+            + $"engine's fallback is the only one a step has. One key is {Client}'s alone: betas, sent beside the tool's own, "
+            + $"each one word and never the API's fallback's; cacheTtl is both Claude clients' ({Agents.ClaudeCode.ClaudeCodeClient.ClientName} "
+            + "sets its launches' cache from it); three are both API clients': requestExtras, an "
             + "object merged into every request's body - a member it adds sent as given, an object's members merged into the "
             + "tool's own - refused where it sets what the tool sends itself or, here, fallbacks or a sampling parameter "
             + $"(temperature, top_p, top_k), which anthropic-version {Agents.ClaudeApi.ClaudeApiRequest.Version} refuses on every "
@@ -149,8 +150,11 @@ public static partial class HelpTopics
             + $"of is the context exhausted ({nameof(Agents.AgentRunStatus.ContextExhausted)}); a 403, a 404, or a 400 "
             + "answering a conversation's first request - a model the key's organization is not given, such as one that "
             + "needs a data retention the organization does not keep - is a model the provider does not serve the key, "
-            + "naming it; an overload, a server's error, a request timed out, a conflict, a network that failed and a "
-            + "stream cut or ended before its message are asked again; and any other 400 fails the step, said in the "
+            + "naming it; a 400 that refuses the format as more than structured outputs compile - its grammar too large, "
+            + "more optional or union-typed properties than they take, or a schema too complex - is the format refused, a "
+            + "first request's too, and the step goes on with its envelope in words, as below; an overload, a server's "
+            + "error, a request timed out, a conflict, a network that failed and a stream cut or ended before its message are "
+            + "asked again; and any other 400 fails the step, said in the "
             + "API's own words with the request it names.";
     }
 
@@ -227,13 +231,19 @@ public static partial class HelpTopics
             + $"{Agents.ClaudeApi.ClaudeApiClient.ClientName} client sends it as output_config.format on every request, the "
             + $"handoff's too, each array's minItems above {Agents.ClaudeApi.ClaudeApiRequest.MostLeastItems} and every maxItems moved "
             + "into the array's description in words, for structured outputs take no other - and where the API refuses it as "
-            + "more than it compiles, the run's later requests carry no format, and a message of the conversation says it in "
-            + "words, the system prompt untouched; the "
+            + "more than it compiles - its grammar too large, more optional or union-typed properties than it takes - the run's "
+            + "later requests carry no format, and a message of the conversation says it in words, the system prompt "
+            + "untouched, and every later run of that envelope on that model, in the same session, says it in words from its "
+            + "first request; the "
             + $"{Agents.ZaiApi.ZaiApiClient.ClientName} client, whose wire holds no answer to a schema, says it in words in a "
             + "message of its own after the step's first, in every conversation the step begins, and asks an answer that read "
             + "as no JSON again in JSON alone - no tool offered, "
             + "response_format a JSON object. An answer that does not read is sent back in the same conversation, "
-            + $"{output.MaxRepairs} times at most, and the step is then {nameof(Agents.AgentRunStatus.InvalidOutput)}.";
+            + $"{output.MaxRepairs} times at most, and the step is then {nameof(Agents.AgentRunStatus.InvalidOutput)}. "
+            + "An answer that reads, but that a check the engine runs on it next finds wrong - a plan check over the items it "
+            + "gives, a class closure over its record, each by that check's own rules - is sent back in the same conversation "
+            + "with what the check found, no repair counted, for as long as each answer is new; one that gives again an output "
+            + "it was sent back with is taken as given, for the check to record what is still wrong.";
     }
 
     /// <summary>What a failure of <paramref name="kind"/> is to a step, as the loop acts on it.</summary>

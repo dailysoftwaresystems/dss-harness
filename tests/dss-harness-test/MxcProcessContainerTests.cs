@@ -201,6 +201,9 @@ public sealed class MxcProcessContainerTests
             runner.Asked.Take(6).Select(asked => Path.GetRelativePath(asked.WorkingDirectory!, asked.Arguments[^1])));
         Assert.All(runner.Asked.Skip(6), asked => Assert.Same(IsolationProfile.Nothing, asked.Isolation!.Profile));
         Assert.Equal([node, git, sh], runner.Asked.Skip(6).Select(asked => asked.FileName));
+
+        // git starts untranslated, as every git of the tool's that runs no hook does; the others are left the locale they have.
+        Assert.Equal(new string?[] { null, DssHarness.Core.Git.GitOwnSettings.Locale, null }, runner.Asked.Skip(6).Select(asked => asked.Environment.GetValueOrDefault(DssHarness.Core.Git.GitOwnSettings.LocaleVariable)));
         Assert.Empty(Directory.GetFileSystemEntries(Path.Combine(tree.Path, HarnessLayout.DirectoryName, HarnessLayout.RunsDirectoryName)));
     }
 

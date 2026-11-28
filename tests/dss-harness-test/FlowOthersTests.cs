@@ -45,7 +45,7 @@ public sealed class FlowOthersTests
     public async Task EachTargetHasItsTurnAlone_InTheOrderOfTheirNames_TheOneOthersNamesLeftOut()
     {
         var runner = new Runner().On("refresh", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(Others, runner, new Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(Others, runner, new Facts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(Token);
         var refresh = coordinator.Instances["refresh"];
@@ -68,7 +68,7 @@ public sealed class FlowOthersTests
         var runner = new Runner().On("refresh", run => run.Target == "a2"
             ? FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, "a key was filled wrong")
             : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(Others, runner, new Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(Others, runner, new Facts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(Token);
         var refresh = coordinator.Instances["refresh"];
@@ -93,7 +93,7 @@ public sealed class FlowOthersTests
             : ++a3 < 3 ? FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "stopped part way")
             : FlowStepResult.Standing(new FlowDryRun(RequestStanding.Refused, [], [], [RefusalKind.Other], "refused for itself")));
         var clock = new JumpingClock();
-        var coordinator = new FlowCoordinator(Others, runner, new Facts(), clock);
+        var coordinator = TestAdvice.Coordinator(Others, runner, new Facts(), clock);
 
         _ = await coordinator.RunAsync(Token);
         var refresh = coordinator.Instances["refresh"];
@@ -136,7 +136,7 @@ public sealed class FlowOthersTests
         var runner = new Runner().On("refresh", run => run.Target == "a2"
             ? FlowStepResult.Standing(new FlowDryRun(RequestStanding.Refused, [], [], [RefusalKind.Conflict], "1 path conflicts") { Conflicting = ["src/a.cs"], Target = run.Target, Agent = run.Target })
             : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new Facts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(Token);
         var refresh = coordinator.Instances["refresh"];
@@ -177,7 +177,7 @@ public sealed class FlowOthersTests
         var runner = new Runner().On("refresh", run => run.Answers.Count == 0
             ? FlowStepResult.Standing(new FlowDryRun(RequestStanding.NeedsConsent, [ConsentKind.FoldTwoChanges], [new FlowNamed(ConsentKind.FoldTwoChanges, ["src/a.cs"])], [], "lacks a merge") { Agent = run.Target, Target = run.Target })
             : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new Facts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(Token);
 
@@ -219,7 +219,7 @@ public sealed class FlowOthersTests
         var runner = new Runner().On("refresh", run => run.Target == "a2" && held
             ? FlowStepResult.Ended(passed: false, HarnessExit.Refused, "a run holds its tree") with { Cause = OutcomeCause.LockHeld }
             : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new Facts(), new JumpingClock());
 
         var paused = await coordinator.RunAsync(Token);
         var refresh = coordinator.Instances["refresh"];
@@ -273,7 +273,7 @@ public sealed class FlowOthersTests
         var runner = new Runner().On("refresh", run => run.Target == "a2" && conflicted
             ? FlowStepResult.Standing(new FlowDryRun(RequestStanding.Refused, [], [], [RefusalKind.Conflict], "1 path conflicts") { Conflicting = ["src/a.cs"], Target = run.Target, Agent = run.Target })
             : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new Facts(), new JumpingClock());
 
         var paused = await coordinator.RunAsync(Token);
         var refresh = coordinator.Instances["refresh"];
@@ -313,7 +313,7 @@ public sealed class FlowOthersTests
             started.TrySetResult();
             return a2.Task;
         });
-        var coordinator = new FlowCoordinator(Others, runner, new Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(Others, runner, new Facts(), new JumpingClock());
 
         var session = coordinator.RunAsync(Token);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
@@ -346,7 +346,7 @@ public sealed class FlowOthersTests
         var runner = new Runner().On("refresh", run => run.Target == "a2"
             ? FlowStepResult.Ended(passed: false, HarnessExit.Success, "it could not")
             : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(Others, runner, new Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(Others, runner, new Facts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(Token);
         var refresh = coordinator.Instances["refresh"];
@@ -398,10 +398,12 @@ public sealed class FlowOthersTests
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success))
             .Async("hold", _ => gate.Task);
         var records = new Watched();
-        var coordinator = new FlowCoordinator(definition, runner, new Facts(), new JumpingClock(), records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new Facts(), new JumpingClock(), records: records);
 
+        // The failure is answered once it is recommended - the test's advisor obtaining nothing - so the answer ends no
+        // advice under way, and what the retry waits on is the tree's claim alone.
         var session = coordinator.RunAsync(Token);
-        var asked = await records.Asked.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
+        var asked = await records.Recommended.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
         var retried = records.SeenAsync(snapshot => snapshot.Steps.Any(step => step.Instance == "rebase" && step.Attempt == 3
             && (step.State == FlowInstanceState.Running || step.WaitsOn.Count > 0)));
         _ = coordinator.OfferAnswerAsync(asked, "retry");
@@ -468,7 +470,7 @@ public sealed class FlowOthersTests
                 return held.Task;
             });
         var records = new Watched();
-        var coordinator = new FlowCoordinator(definition, runner, new Facts(), new JumpingClock(), records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new Facts(), new JumpingClock(), records: records);
 
         var session = coordinator.RunAsync(Token);
         await holding.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
@@ -525,7 +527,7 @@ public sealed class FlowOthersTests
             """);
         var gate = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var runner = new Runner().Async("hold", _ => gate.Task);
-        var coordinator = new FlowCoordinator(definition, runner, new Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new Facts(), new JumpingClock());
 
         var session = coordinator.RunAsync(Token);
 
@@ -595,7 +597,7 @@ public sealed class FlowOthersTests
             .On("rebase", run => run.Target == "a2" ? null : FlowStepResult.Ended(passed: true, HarnessExit.Success))
             .Async("rebase", run => run.Target == "a2" ? gate.Task : null)
             .On("gone", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new Facts(), new JumpingClock());
 
         var session = coordinator.RunAsync(Token);
 
@@ -706,13 +708,16 @@ public sealed class FlowOthersTests
         public bool WritesTree(string runner) => false;
     }
 
-    /// <summary>The run's records, watched and kept nowhere: a test waits on the first question asked, or on a change it times.</summary>
+    /// <summary>The run's records, watched and kept nowhere: a test waits on the first question recommended, or on a change it times.</summary>
     private sealed class Watched : IFlowRecords
     {
         private readonly List<(Func<FlowSnapshot, bool> Holds, TaskCompletionSource<FlowSnapshotStep> Seen)> _waits = [];
 
-        /// <summary>The id of the first question the run asked.</summary>
-        public TaskCompletionSource<string> Asked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        /// <summary>
+        /// The id of the first question the run asked, once the advisor has recommended on it: an answer given from then on
+        /// ends no advice under way, so nothing the answer starts waits on one.
+        /// </summary>
+        public TaskCompletionSource<string> Recommended { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>The step of rebase as the first change written after this call whose snapshot <paramref name="holds"/> says left it.</summary>
         public Task<FlowSnapshotStep> SeenAsync(Func<FlowSnapshot, bool> holds)
@@ -740,9 +745,9 @@ public sealed class FlowOthersTests
 
         public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
         {
-            if (questions.Count > 0)
+            if (questions is [{ Recommendation.State: "given" or "notObtained" } first, ..])
             {
-                Asked.TrySetResult(questions[0].Id);
+                Recommended.TrySetResult(first.Id);
             }
         }
 

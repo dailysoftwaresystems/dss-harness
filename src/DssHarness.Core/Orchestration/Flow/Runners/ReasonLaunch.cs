@@ -24,12 +24,16 @@ namespace DssHarness.Core.Orchestration.Flow;
 public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform, AgentKeyStore keys, ClaudeCodeUpdateService? updates, IAgentIsolation isolation)
 {
     /// <summary>
-    /// Where an agent's run works: its agent's worktree where it has one - at the path its record resolves under the
-    /// worktrees root it was made under, never the record's address - which is also where it starts; else, for an agent
-    /// that reads the main tree or none at all, the main checkout, which it only reads, starting in its own work
-    /// directory. Its work directory and the run's directory either way. The work directory is made here, before any
-    /// client is handed the workspace: a run that starts in it - the advisor's and the reporter's, whose directories no
-    /// agent of the run's made - starts nowhere else, and a program is never started in a directory that is not there.
+    /// Where an agent's run works: its agent's worktree - at the path its record resolves under the worktrees root it was
+    /// made under, never the record's address - which is also where it starts, so every path relative to where it starts,
+    /// its tools' and its commands' and those its prompts write from the repository's root, names what the repository
+    /// holds. An agent that only reads has a tree of its own as every agent has, brought to the main checkout's HEAD - or to
+    /// the commit its step names - as each of its steps starts, and starts there too; the workspace says it only reads
+    /// (<see cref="AgentWorkspace.OnlyReads"/>),
+    /// for it reads the main checkout as well. Else, for a run of no agent's - the reporter, which reads the run's records
+    /// alone - or an agent whose record an older tool wrote with no tree, its own work directory. Its work directory and the
+    /// run's directory either way. The work directory is made here, before any client is handed the workspace: a run that
+    /// starts in it starts nowhere else, and a program is never started in a directory that is not there.
     /// </summary>
     /// <param name="record">The agent's record; null where the run works as no agent of the run's.</param>
     /// <param name="repository">The repository's layout, the main checkout's.</param>
@@ -44,7 +48,10 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
         var worktree = record?.WorktreePath(repository);
         fileSystem.CreateDirectory(workDirectory);
 
-        return new AgentWorkspace(worktree, workDirectory, repository.MainCheckoutRoot, [], worktree ?? workDirectory, runDirectory);
+        return new AgentWorkspace(worktree, workDirectory, repository.MainCheckoutRoot, [], worktree ?? workDirectory, runDirectory)
+        {
+            OnlyReads = record is { Reads: true },
+        };
     }
 
     private readonly ClaudeCodeDirectories _claudeCode = new(fileSystem, platform, keys);
@@ -90,7 +97,9 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
     /// <summary>
     /// The mask the run's records and its answer are held to: the value of every secret the configuration appoints that
     /// the slot answers - each provider's keys, each client's token, each web-search source's key - whatever of them the
-    /// run itself is given, and <paramref name="with"/>'s beside them. Null where nothing is masked.
+    /// run itself is given, and <paramref name="with"/>'s beside them. Null where nothing is masked. Built inside an engine
+    /// session, it is held by the session's masks (<see cref="Execution.SessionMasks"/>), which the command's output logs
+    /// are masked by: no record the session kept through it is left in them unmasked.
     /// </summary>
     /// <param name="layout">The repository, whose slot holds the secrets.</param>
     /// <param name="providers">The configuration's providers, clients and sources, resolved: what they appoint.</param>
@@ -113,12 +122,15 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
 
         var slot = secrets.Count > 0 ? new ActionValues(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), secrets) : null;
 
-        return (slot, with) switch
+        var mask = (slot, with) switch
         {
             ({ } held, { } more) => held.With(more),
             ({ } held, null) => held,
             (null, var more) => more,
         };
+
+        Execution.SessionMasks.OfSession()?.Hold(mask);
+        return mask;
     }
 
     /// <summary>

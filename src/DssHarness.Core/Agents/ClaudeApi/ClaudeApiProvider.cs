@@ -149,10 +149,11 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
 
     /// <inheritdoc/>
     /// <remarks>
-    /// A format the API refuses as more than it compiles is failed as the schema refused
-    /// (<see cref="ChatFailureKind.SchemaRefused"/>), never sent again here: the loop, which owns the conversation, sends the
-    /// run's requests none from then on and says the envelope in words in a message of it, so every request's system prompt
-    /// stays the one its conversation's thinking was made under.
+    /// A format the API refuses as more than it compiles (<see cref="ClaudeApiFailures.MoreThanItCompiles"/>) is failed as the
+    /// schema refused (<see cref="ChatFailureKind.SchemaRefused"/>), never sent again here: the loop, which owns the
+    /// conversation, sends the run's requests none from then on - and every later run's of that envelope on that model none
+    /// from its first - and says the envelope in words in a message of it, so every request's system prompt stays the one
+    /// its conversation's thinking was made under.
     /// </remarks>
     public IAsyncEnumerable<ChatPart> SendAsync(ChatRequest request, CancellationToken cancellationToken)
     {

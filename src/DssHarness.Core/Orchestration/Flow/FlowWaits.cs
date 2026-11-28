@@ -32,6 +32,12 @@ public static class FlowWaits
     /// <summary>A stop under way to end: a stopping run starts its always steps alone.</summary>
     public const string Stop = "the stop to end";
 
+    /// <summary>
+    /// An issue's triage or fix at work beside the always phase, which an always step starts after, so what it is told of
+    /// the run's issues is true when it is told.
+    /// </summary>
+    public const string IssueWork = "an issue's triage or fix to end";
+
     /// <summary>An advice of the step's own question that was ended, and whose runner has not ended yet.</summary>
     public const string Advice = "an advice to end";
 
@@ -56,6 +62,31 @@ public static class FlowWaits
     /// </summary>
     /// <param name="question">The question's id.</param>
     public static string Answer(string question) => $"{AnswerTo}{question}";
+
+    /// <summary>
+    /// The fix of an issue the recovery is making, which the step's work item needs or which holds files it owns: the item
+    /// has not begun, and starts once the fix's visit has ended, so it builds on the tree the fix leaves
+    /// (<see cref="FlowIssueHold"/>).
+    /// </summary>
+    /// <param name="title">The issue's title.</param>
+    /// <param name="fixer">The id of what fixes it: the recovery's visit, or the triage that sent it while that visit waits to be made.</param>
+    /// <param name="paths">The paths the issue holds that the item owns; none where it holds none of them.</param>
+    /// <param name="needed">Whether the item names the issue among those whose fix it needs.</param>
+    public static string Fix(string title, string fixer, IReadOnlyList<string> paths, bool needed = false)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var holds = paths.Count > 0 ? $"which holds {string.Join(", ", paths)}" : null;
+        var why = (needed, holds) switch
+        {
+            (true, null) => "which it needs",
+            (true, { } held) => $"which it needs and {held}",
+            (false, { } held) => held,
+            (false, null) => throw new ArgumentException("a fix holds the item for a need or for the paths it holds, and neither is given", nameof(paths)),
+        };
+
+        return $"the fix of '{title}' ({fixer}), {why}";
+    }
 
     /// <summary>The machine a step's legs run on, its dispatch queue: every leg of the step still to run waits its turn there.</summary>
     public const string MachineQueue = "the machine's queue";

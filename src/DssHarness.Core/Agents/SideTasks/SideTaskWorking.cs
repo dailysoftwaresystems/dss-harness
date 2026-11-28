@@ -277,7 +277,7 @@ internal sealed class Working
                 }
                 else
                 {
-                    if (!open.Post(line, Later(line)))
+                    if (!Post(open, line))
                     {
                         // The launch's messages were ended under it: the line is never dropped, but sent with a new one.
                         open = await GoneOnAsync(open, front, chat, cancellationToken, [line]).ConfigureAwait(false);
@@ -503,7 +503,7 @@ internal sealed class Working
 
         foreach (var line in lines.Skip(1))
         {
-            launch.Post(line, Later(line));
+            Post(launch, line);
         }
 
         return launch;
@@ -662,7 +662,7 @@ internal sealed class Working
                 launch.Entry.Effort,
                 turn.Served,
                 turn.Usage,
-                turn.Served.Count,
+                turn.Answers,
                 Status: null,
                 SideTaskPolicy.Said)
             {
@@ -684,12 +684,9 @@ internal sealed class Working
 
         var (conversation, compacted, continuation) = GoingOn();
 
-        // The graph's front, where the side-task was given one: the repository map with the first message alone, the
-        // context pack made from each - a launch held open's later lines are given theirs as they are posted (Later).
-        if (_graph is not null)
-        {
-            message = _graph.Front(message, first: _attempts == 1);
-        }
+        // The message goes as typed: the side-task's graph, where it was given one, pushes nothing, and makes the message's
+        // context pack for its tool - a launch held open's later lines make theirs as they are posted (Post).
+        _graph?.MakePack(message);
 
         return new AgentStepRequest(
             _layout.Name,
@@ -747,11 +744,18 @@ internal sealed class Working
     }
 
     /// <summary>
-    /// A later line of a launch held open, as its agent is given it: the context pack made from it at its head, where the
-    /// side-task has a graph - the one front every message of the person's is given, whichever shape its client takes it in.
+    /// Posts a later line of the person's to a launch held open, as typed - its context pack made first, where the
+    /// side-task has a graph, so the tool follows it from the moment the agent can read it, as every message of the
+    /// person's makes one whichever shape its client takes it in; false where the launch's messages were ended, and the
+    /// line was not posted.
     /// </summary>
+    /// <param name="launch">The launch held open.</param>
     /// <param name="line">The person's line, as typed.</param>
-    private string Later(string line) => _graph?.Front(line, first: false) ?? line;
+    private bool Post(Launch launch, string line)
+    {
+        _graph?.MakePack(line);
+        return launch.Post(line);
+    }
 
     /// <summary>The turn's record, from the run's result: when it began, what it ran on and how it ended.</summary>
     private SideTaskTurn TurnOf(AgentRunResult result, DateTimeOffset began)
@@ -1140,12 +1144,11 @@ internal sealed class Working
         /// <summary>Whether it was begun to send again the lines an ended launch never took.</summary>
         public bool Retried { get; set; }
 
-        /// <summary>Posts one more line to it; false where its messages were ended, and the line was not posted.</summary>
-        /// <param name="line">The person's line, as typed, which it is recorded as given.</param>
-        /// <param name="posted">The line as its agent is given it, its front at its head.</param>
-        public bool Post(string line, string posted)
+        /// <summary>Posts one more line to it, as typed; false where its messages were ended, and the line was not posted.</summary>
+        /// <param name="line">The person's line, as typed: what its agent is given, and what it is recorded as given.</param>
+        public bool Post(string line)
         {
-            if (!Messages.Post(posted))
+            if (!Messages.Post(line))
             {
                 return false;
             }
@@ -1264,7 +1267,7 @@ internal sealed class Working
                     break;
 
                 case TurnFinished finished:
-                    Seen.OneServed(finished.Model, finished.Usage);
+                    Seen.OneServed(finished.Model, finished.Usage, finished.AnswersHeld);
                     break;
             }
 
@@ -1475,14 +1478,17 @@ internal sealed class Working
         }
 
         /// <summary>One model served one turn, and used what it used.</summary>
-        public void OneServed(string model, AgentUsage usage)
+        /// <param name="model">The model that served it.</param>
+        /// <param name="usage">What it used.</param>
+        /// <param name="answers">How many answers of the model's it held, one response each (<see cref="TurnFinished.AnswersHeld"/>).</param>
+        public void OneServed(string model, AgentUsage usage, int answers)
         {
             lock (_gate)
             {
                 _served.Add(new AgentServedModel(model, _served.Count + 1));
                 _used.Add(new AgentModelUsage(model, usage));
 
-                _ended.Add(new EndedTurn(_began ?? clock.GetUtcNow(), [new AgentServedModel(model, 1)], new AgentUsageReport(usage, [new AgentModelUsage(model, usage)])));
+                _ended.Add(new EndedTurn(_began ?? clock.GetUtcNow(), [new AgentServedModel(model, 1)], new AgentUsageReport(usage, [new AgentModelUsage(model, usage)]), answers));
                 _began = null;
                 _turnEnded.TrySetResult();
             }
@@ -1508,7 +1514,8 @@ internal sealed class Working
     /// <param name="Began">When it began: when the agent took the message it answers.</param>
     /// <param name="Served">The model that served it.</param>
     /// <param name="Usage">What it used, with no cost: a launch's cost is the launch's.</param>
-    internal sealed record EndedTurn(DateTimeOffset Began, IReadOnlyList<AgentServedModel> Served, AgentUsageReport Usage);
+    /// <param name="Answers">How many answers of the model's it held, one response each: the agent's turns it took.</param>
+    internal sealed record EndedTurn(DateTimeOffset Began, IReadOnlyList<AgentServedModel> Served, AgentUsageReport Usage, int Answers);
 
     /// <summary>What one turn was seen to do, as a copy the chat holds.</summary>
     /// <param name="Denials">Its denials, as they were said.</param>

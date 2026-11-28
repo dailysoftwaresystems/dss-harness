@@ -110,7 +110,10 @@ public sealed class ZaiApiProbeTests
     /// The glm client's map smoke (slice 27f): a step whose first message begins with the run's repository map and
     /// whose turn calls a tool, so a second request follows, and the first request of the run's second step of the same
     /// agent. Z.AI caches a stable prefix itself - the engine sets no mark of its own - and says what the cache served
-    /// of each request: from the step's second request on, and on the second step's first, the cache reads cover the map.
+    /// of each request: from the step's second request on, and on the second step's first, the cache serves the map. What
+    /// it served is no measure of the map alone - the tools and the system text before it are the same for every run, and
+    /// a run within the cache's lifetime of another is served them, the map too, from its first request - so each request
+    /// after the first is held to what it was not served: less than the map, so none paid for the map again.
     /// </summary>
     [Fact]
     public async Task ARepositoryMap_IsServedByTheCache_FromAStepsSecondRequestOn()
@@ -123,35 +126,36 @@ public sealed class ZaiApiProbeTests
         var map = string.Join('\n', Enumerable.Range(0, 60).Select(index => $"at{index:D3} member void Member{index}() | src/File{index:D2}.cs:{index + 1}-{index + 9} #a1b2c{index:D3} | it does what member {index} does, and nothing else"));
         var tokens = DssHarness.Core.Codebase.EstimatedTokens.Of(map);
 
-        var first = await run.StepAsync("s1", "glm-5.3", "low", ReadIt, null, null, Token, map: map);
-        var second = await run.StepAsync("s2", "glm-5.3", "low", "Give as your answer the one word the file a.txt holds.", null, null, Token, map: map);
+        var first = await run.StepAsync("s1", "glm-5.4", "low", ReadIt, null, null, Token, map: map);
+        var second = await run.StepAsync("s2", "glm-5.4", "low", "Give as your answer the one word the file a.txt holds.", null, null, Token, map: map);
 
         run.Keep();
         var served = ServedByTheCache(run).ToList();
-        TestContext.Current.SendDiagnosticMessage($"glm map of {tokens} tokens: {served.Count} requests over two steps, the cache served {string.Join(", ", served)}");
+        TestContext.Current.SendDiagnosticMessage($"glm map of {tokens} tokens: {served.Count} requests over two steps, (sent, served) {string.Join(", ", served)}");
 
         Assert.True(first.Status == AgentRunStatus.Completed, $"{first.Status}: {first.Error}");
         Assert.True(first.ToolCalls >= 1, "the step made no call: the smoke needs a second request for the cache to serve");
         Assert.True(second.Status == AgentRunStatus.Completed, $"{second.Status}: {second.Error}");
 
         Assert.True(served.Count >= 3, $"the smoke made only {served.Count} requests");
-        Assert.All(served[1..], servedOf => Assert.True(servedOf >= tokens, $"a request after the first had {servedOf} of the map's {tokens} tokens served by the cache"));
+        Assert.All(served[1..], servedOf => Assert.True(servedOf.Sent - servedOf.Served < tokens, $"a request after the first was served {servedOf.Served} of its {servedOf.Sent} tokens by the cache, paying as much as the map's {tokens} again"));
     }
 
-    /// <summary>What the cache served of each request, as the last chunk of each answer on the wire says it, in the order sent.</summary>
-    private static IEnumerable<long> ServedByTheCache(LiveApiRun run)
-        => run.Requests().Select(request => ServedOf(Path.Combine(run.Wire, $"{Path.GetFileNameWithoutExtension(request)}-answer.sse")));
+    /// <summary>What each request sent and what the cache served of it, as the last chunk of each answer on the wire says it, in the order sent.</summary>
+    private static IEnumerable<(long Sent, long Served)> ServedByTheCache(LiveApiRun run)
+        => run.Requests().Select(request => ServedOf(WireRecording.AnswerOf(request)));
 
-    /// <summary>What the cache served of the request whose answer is <paramref name="answer"/>, where there is one; 0 where there is not.</summary>
-    private static long ServedOf(string answer)
+    /// <summary>What the request whose answer is <paramref name="answer"/> sent and what the cache served of it, where there is one; naught for each where there is not.</summary>
+    private static (long Sent, long Served) ServedOf(string answer)
         => File.Exists(answer)
             ? File.ReadLines(answer)
                 .Where(line => line.StartsWith("data:", StringComparison.Ordinal) && line.Trim() != "data: [DONE]")
                 .Select(line => JsonNode.Parse(line["data:".Length..]))
                 .Where(data => data?["usage"] is not null)
-                .Select(data => data!["usage"]!["prompt_tokens_details"] is { } details && details["cached_tokens"] is { } cached ? cached.GetValue<long>() : 0L)
+                .Select(data => data!["usage"]!)
+                .Select(usage => (usage["prompt_tokens"] is { } sent ? sent.GetValue<long>() : 0L, usage["prompt_tokens_details"] is { } details && details["cached_tokens"] is { } cached ? cached.GetValue<long>() : 0L))
                 .FirstOrDefault()
-            : 0L;
+            : default;
 
     private static JsonObject System() => new() { ["role"] = "system", ["content"] = "You are a careful agent. Do exactly what you are asked, and nothing more." };
 

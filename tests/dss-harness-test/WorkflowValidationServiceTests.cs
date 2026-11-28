@@ -88,7 +88,7 @@ public sealed class WorkflowValidationServiceTests
     /// <summary>
     /// The implementation workflow, initialized into a repository and declared in its config, passes its check: the one
     /// line says what it is, and under it each reason step's models and the level each runs at - the plan's own among
-    /// them, xhigh on Fable 5.1 and on GLM 5.3 - and the outcome says every one checked.
+    /// them, xhigh on Fable 5.2 and on GLM 5.4 - and the outcome says every one checked.
     /// </summary>
     [Fact]
     public async Task TheImplementationWorkflow_InitializedIntoARepository_PassesItsCheck()
@@ -99,16 +99,16 @@ public sealed class WorkflowValidationServiceTests
         var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
 
         Assert.True(report.Passed);
-        Assert.Equal($"ok {Shown(Default)} (99 steps, 67 recovering, 62 reasoning)", report.Lines[0]);
-        Assert.Contains("step 'planning.plan' (best): claude-fable-5-1 at xhigh, glm-5.3 at xhigh", report.Lines);
-        Assert.Contains("step 'intake.triage' (high): claude-opus-5-5 at high, glm-5.3 at high", report.Lines);
+        Assert.Equal($"ok {Shown(Default)} (99 steps, 65 recovering, 61 reasoning)", report.Lines[0]);
+        Assert.Contains("step 'planning.plan' (best): claude-fable-5-2 at xhigh, glm-5.4 at xhigh", report.Lines);
+        Assert.Contains("step 'intake.triage' (high): claude-opus-5-5 at high, glm-5.4 at high", report.Lines);
 
         // Whether each model a step may run on has a price, and when its provider's numbers were read: every model of
         // the configuration init writes is priced, each provider's line naming its date.
         Assert.Equal(
             [
-                "prices of 'anthropic' (USD, read 2026-10-12): all 4 models priced",
-                "prices of 'zai' (USD, read 2026-10-12): glm-5.3 priced",
+                "prices of 'anthropic' (USD, read 2026-11-27): all 4 models priced",
+                "prices of 'zai' (USD, read 2026-11-27): all 2 models priced",
             ],
             report.Lines.Where(line => line.StartsWith("prices of", StringComparison.Ordinal)));
 
@@ -146,7 +146,7 @@ public sealed class WorkflowValidationServiceTests
         Directory.CreateDirectory(Path.Combine(directory, "prompts"));
         Directory.CreateDirectory(Path.Combine(directory, "agents"));
         Directory.CreateDirectory(Path.Combine(directory, "schemas"));
-        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: implement\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n");
+        TestAdvice.WriteWorkflowFile(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: implement\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n");
         File.WriteAllText(Path.Combine(directory, "prompts", "implement.md"), "Use {skill.release-notes}.\n");
         File.WriteAllText(Path.Combine(directory, "agents", "worker.md"), "---\nname: worker\ndescription: does the work\n---\nYou do the work.\n");
         File.WriteAllText(Path.Combine(directory, "schemas", "implement.json"), """{ "type": "object", "additionalProperties": false, "properties": { } }""");
@@ -223,9 +223,12 @@ public sealed class WorkflowValidationServiceTests
                 $"ok {Shown("small")} (2 steps, 2 reasoning)",
                 "step 'think': claude-opus-5-5 at its own default",
                 "step 'write': claude-sonnet-5-5 at its own default",
-                "prices of 'anthropic' (USD, read 2026-10-12): claude-opus-5-5, claude-sonnet-5-5 priced",
+                AdvisorsLevels,
+                "prices of 'anthropic' (USD, read 2026-11-27): claude-opus-5-5, claude-sonnet-5-5 priced",
+                "prices of 'zai' (USD, read 2026-11-27): glm-5.4 priced",
                 $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares 'ANTHROPIC_API_KEY', the name provider 'anthropic' appoints for its key (its apiKeyNames); "
                     + "add ANTHROPIC_API_KEY= to a file there, holding the Anthropic API key (it is read from this slot and nowhere else). The steps that would read it: step 'think'",
+                AdvisorsKey,
             ],
             report.Lines);
     }
@@ -322,7 +325,7 @@ public sealed class WorkflowValidationServiceTests
         Assert.Equal(
             [
                 $"{prefix} 'ZAI_API_KEY_TWO', the name provider 'zai' appoints for its key (its apiKeyNames); add ZAI_API_KEY_TWO= to a file there, "
-                    + "holding the Z.AI API key (it is read from this slot and nowhere else). The steps that would read it: step 'write'. "
+                    + "holding the Z.AI API key (it is read from this slot and nowhere else). The steps that would read it: step 'write', advisor. "
                     + "Declared there and appointed by nothing: ZAI_APIKEY",
             ],
             one.Lines.Where(line => line.StartsWith("no file under", StringComparison.Ordinal)));
@@ -337,7 +340,7 @@ public sealed class WorkflowValidationServiceTests
         Assert.Equal(
             [
                 $"{prefix} 'ZAI_API_KEY' or 'ZAI_API_KEY_TWO', the names provider 'zai' appoints for its keys (its apiKeyNames); add ZAI_API_KEY= or ZAI_API_KEY_TWO= "
-                    + "to a file there, holding the Z.AI API key (it is read from this slot and nowhere else). The steps that would read one of them: step 'write'",
+                    + "to a file there, holding the Z.AI API key (it is read from this slot and nowhere else). The steps that would read one of them: step 'write', advisor",
             ],
             none.Lines.Where(line => line.StartsWith("no file under", StringComparison.Ordinal)));
     }
@@ -424,7 +427,7 @@ public sealed class WorkflowValidationServiceTests
 
         var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
 
-        Assert.Equal($"ok {Shown(Default)} (99 steps, 67 recovering, 62 reasoning)", report.Lines[0]);
+        Assert.Equal($"ok {Shown(Default)} (99 steps, 65 recovering, 61 reasoning)", report.Lines[0]);
         Assert.All(
             report.Lines.Skip(1).TakeWhile(line => !line.StartsWith(Shown("small"), StringComparison.Ordinal)),
             line => Assert.True(
@@ -834,7 +837,7 @@ public sealed class WorkflowValidationServiceTests
         var report = await Service(repository, held).CheckAsync(repository.Path, named: null, cancellationToken);
 
         Assert.Equal($"{Shown("small")} could not be read: {Held.Why}", report.Lines[0]);
-        Assert.Equal($"ok {Shown(Default)} (99 steps, 67 recovering, 62 reasoning)", report.Lines[1]);
+        Assert.Equal($"ok {Shown(Default)} (99 steps, 65 recovering, 61 reasoning)", report.Lines[1]);
         Assert.All(
             report.Lines.Skip(2),
             line => Assert.True(
@@ -908,7 +911,7 @@ public sealed class WorkflowValidationServiceTests
         await WriteAsync(plain, "small", Definition, cancellationToken, "agents/worker.md");
 
         Assert.Equal(
-            [$"ok {Shown("small")} (2 steps, 0 reasoning)"],
+            [$"ok {Shown("small")} (2 steps, 0 reasoning)", .. AdvisorsOwn],
             (await Service(templated).CheckAsync(templated.Path, "small", cancellationToken)).Lines);
         Assert.Equal(
             [$"{Shown("small")}: step 'save' names no message and the configuration declares no commit.template; one of the two writes the commit's message"],
@@ -1055,13 +1058,13 @@ public sealed class WorkflowValidationServiceTests
         await WriteAsync(repository, "small", Makes.Replace("name: small\n", "name: small\nmaxInstances: 999\n", StringComparison.Ordinal), cancellationToken, "agents/worker.md");
 
         Assert.Equal(
-            [$"ok {Shown("small")} (1 step, 0 reasoning)"],
+            [$"ok {Shown("small")} (1 step, 0 reasoning)", .. AdvisorsOwn],
             (await Service(repository).CheckAsync(repository.Path, "small", cancellationToken)).Lines);
 
         await WriteAsync(repository, "small", "name: small\nsteps:\n  - name: orient\n    type: orient\n", cancellationToken);
 
         Assert.Equal(
-            [$"ok {Shown("small")} (1 step, 0 reasoning)"],
+            [$"ok {Shown("small")} (1 step, 0 reasoning)", .. AdvisorsOwn],
             (await Service(repository).CheckAsync(repository.Path, "small", cancellationToken)).Lines);
     }
 
@@ -1477,8 +1480,7 @@ public sealed class WorkflowValidationServiceTests
     {
         var directory = Path.Combine(repository.Path, ".harness-config", "workflows", name);
 
-        Directory.CreateDirectory(directory);
-        await File.WriteAllTextAsync(Path.Combine(directory, $"{name}.yml"), definition, cancellationToken);
+        TestAdvice.WriteWorkflowFile(Path.Combine(directory, $"{name}.yml"), definition);
 
         foreach (var file in files)
         {
@@ -1495,6 +1497,27 @@ public sealed class WorkflowValidationServiceTests
                 cancellationToken);
         }
     }
+
+    /// <summary>
+    /// What the check says of the test's advisor (<see cref="TestAdvice"/>) on the models init's configuration gives it, a
+    /// workflow naming no other agent: its levels on the default tier, the prices of their providers, and the key its later
+    /// model reads, which the slot does not hold.
+    /// </summary>
+    private static readonly string[] AdvisorsOwn =
+    [
+        AdvisorsLevels,
+        "prices of 'anthropic' (USD, read 2026-11-27): claude-sonnet-5-5 priced",
+        "prices of 'zai' (USD, read 2026-11-27): glm-5.4 priced",
+        AdvisorsKey,
+    ];
+
+    /// <summary>The test's advisor's levels: the default tier's models, each at its own default effort.</summary>
+    private const string AdvisorsLevels = "advisor (balanced): claude-sonnet-5-5 at its own default, glm-5.4 at its own default";
+
+    /// <summary>The key the test's advisor's later model reads, which no slot of these tests holds.</summary>
+    private static string AdvisorsKey =>
+        $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares 'ZAI_API_KEY', the name provider 'zai' appoints for its key (its apiKeyNames); "
+            + "add ZAI_API_KEY= to a file there, holding the Z.AI API key (it is read from this slot and nowhere else). The steps that would read it: advisor (a later model of its tier)";
 
     /// <summary>A workflow of one reasoning step, whose agent, prompt and schema are files of its own.</summary>
     private const string Work = """
@@ -1529,7 +1552,7 @@ public sealed class WorkflowValidationServiceTests
 
         Directory.CreateDirectory(pipeline);
         Directory.CreateDirectory(Path.Combine(pipeline, "prompts"));
-        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n");
+        TestAdvice.WriteWorkflowFile(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n");
         File.WriteAllText(Path.Combine(pipeline, "pipeline.yml"), "name: pipeline\ninputs:\n  - name: item\n    kind: value\n    required: true\nsteps:\n  - name: implement\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n");
         File.WriteAllText(Path.Combine(pipeline, "prompts", "implement.md"), "Do the work.\n");
 
@@ -1556,7 +1579,7 @@ public sealed class WorkflowValidationServiceTests
         Directory.CreateDirectory(Path.Combine(pipeline, "prompts"));
         Directory.CreateDirectory(Path.Combine(pipeline, "agents"));
         Directory.CreateDirectory(Path.Combine(pipeline, "schemas"));
-        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n    with:\n      item: '\"the work\"'\n");
+        TestAdvice.WriteWorkflowFile(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n    with:\n      item: '\"the work\"'\n");
         File.WriteAllText(Path.Combine(pipeline, "pipeline.yml"), "name: pipeline\nbudget:\n  usd: 5\ninputs:\n  - name: item\n    kind: value\nsteps:\n  - name: implement\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n");
         File.WriteAllText(Path.Combine(pipeline, "prompts", "implement.md"), "Do {input.item}.\n");
         File.WriteAllText(Path.Combine(pipeline, "agents", "worker.md"), "---\nname: worker\ndescription: does the work\n---\nYou do the work.\n");
@@ -1584,7 +1607,7 @@ public sealed class WorkflowValidationServiceTests
         var pipeline = Path.Combine(directory, "pipeline");
 
         Directory.CreateDirectory(pipeline);
-        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n    useParentLimits: false\n");
+        TestAdvice.WriteWorkflowFile(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n    useParentLimits: false\n");
         File.WriteAllText(Path.Combine(pipeline, "pipeline.yml"), "name: pipeline\nbudget:\n  usd: 5\nmaxRetries: 2\npushCheckpoints: false\nsteps:\n  - name: look\n    type: orient\n");
 
         var report = await Service(repository).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);
@@ -1610,7 +1633,7 @@ public sealed class WorkflowValidationServiceTests
         var pipeline = Path.Combine(directory, "pipeline");
 
         Directory.CreateDirectory(pipeline);
-        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n    useParentLimits: false\n    with:\n      brief: notes/brief.md\n");
+        TestAdvice.WriteWorkflowFile(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n    useParentLimits: false\n    with:\n      brief: notes/brief.md\n");
         File.WriteAllText(
             Path.Combine(pipeline, "pipeline.yml"),
             """
@@ -1677,7 +1700,7 @@ public sealed class WorkflowValidationServiceTests
         var pipeline = Path.Combine(directory, "pipeline");
 
         Directory.CreateDirectory(pipeline);
-        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n");
+        TestAdvice.WriteWorkflowFile(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n");
         File.WriteAllText(
             Path.Combine(pipeline, "pipeline.yml"),
             """
@@ -1749,7 +1772,7 @@ public sealed class WorkflowValidationServiceTests
         var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "flow");
 
         Directory.CreateDirectory(Path.Combine(directory, "pipeline"));
-        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n");
+        TestAdvice.WriteWorkflowFile(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n");
         File.WriteAllText(Path.Combine(directory, "pipeline", "pipeline.yml"), "name: pipeline\nsteps:\n  - name: look\n    type: orient\n");
 
         var report = await Service(repository, new Unlooked(repository.Harness.FileSystem, "pipeline.yml")).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);

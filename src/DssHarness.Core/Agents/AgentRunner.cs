@@ -172,7 +172,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                         ? worked
                         : worked.FailedFor(mask.Redact($"The step's stored stream '{stream.FilePath}' could not be written, so the run was stopped: {lost.Message}"));
 
-                    return new RunFinished(result.Status, result.Error) { MessagesAnswered = result.MessagesAnswered };
+                    return new RunFinished(result.Status, result.Error) { MessagesAnswered = result.MessagesAnswered, Turns = result.Turns > 0 ? result.Turns : null };
                 }).ConfigureAwait(false);
 
                 // A stop the record's loss raised is the runner's own doing and not the client's failure; anything else
@@ -1244,7 +1244,10 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         private int _retries;
         private TimeSpan _ran;
 
-        /// <summary>How many turns the step took over every entry that served it.</summary>
+        /// <summary>
+        /// How many turns the step took over every entry that served it - the model's answers, one response each, on every
+        /// client - the unit each later entry's <see cref="AgentServedModel.FromTurn"/> is offset by and a move is said at.
+        /// </summary>
         public int Turns => _turnsSoFar;
 
         /// <summary>Whether any entry's run has ended yet: the walk has launched one.</summary>

@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.ClaudeApi;
@@ -74,7 +73,7 @@ public sealed class ClaudeApiClientLiveTests
         Assert.Equal(before, after.Take(before.Count));
 
         // The first step's answer goes on as the API gave it: its text, and its thinking, where it thought, whole with its signature.
-        var answered = File.ReadLines(Path.Combine(run.Wire, $"{sentFirst.ToString("D2", CultureInfo.InvariantCulture)}-answer.sse"))
+        var answered = File.ReadLines(WireRecording.AnswerOf(run.Requests()[sentFirst - 1]))
             .Where(line => line.StartsWith("data:", StringComparison.Ordinal))
             .Select(line => JsonNode.Parse(line["data:".Length..])!)
             .Where(data => data["type"]!.GetValue<string>() == "content_block_delta")
@@ -95,7 +94,10 @@ public sealed class ClaudeApiClientLiveTests
     /// The run's repository map is read from the cache (slice 27f): a step whose first message carries the map pays for
     /// it once - the first request writes it under the client's mark on its block - and every request of the step after
     /// the first reads it there; and the first request of the run's second step of the same agent reads it too, for the
-    /// mark on the map's block covers the tools and the system text with it, the same for every step of the run.
+    /// mark on the map's block covers the tools and the system text with it, the same for every step of the run. What a
+    /// request read from the cache is no measure of the map alone - the tools and the system text before it are the same
+    /// for every run, so a run within the cache's lifetime of another reads them from its first request - so each request
+    /// is held to what it paid in full: the first wrote the map, and none after it paid for the map again, written or sent.
     /// </summary>
     [Fact]
     public async Task ARepositoryMap_IsReadFromTheCache_FromAStepsSecondRequestOn()
@@ -114,33 +116,36 @@ public sealed class ClaudeApiClientLiveTests
         var second = await run.StepAsync("s2", First, "low", "Give as your answer the one word the file a.txt holds.", null, null, Token, map: map);
 
         run.Keep();
-        var reads = CacheReads(run).ToList();
-        TestContext.Current.SendDiagnosticMessage($"claude-api map of {tokens} tokens: {reads.Count} requests over two steps, cache reads {string.Join(", ", reads)}");
+        var used = CacheUses(run).ToList();
+        TestContext.Current.SendDiagnosticMessage($"claude-api map of {tokens} tokens: {used.Count} requests over two steps, (sent, read, written) {string.Join(", ", used)}");
 
         Assert.True(first.Status == AgentRunStatus.Completed, $"{first.Status}: {first.Error}");
         Assert.True(first.ToolCalls >= 1, "the step made no call: the smoke needs a second request to read the cache from");
         Assert.True(second.Status == AgentRunStatus.Completed, $"{second.Status}: {second.Error}");
 
-        Assert.True(reads.Count >= 3, $"the smoke made only {reads.Count} requests");
-        Assert.True(reads[0] < tokens, $"the first request read the map from the cache before any request wrote it: {reads[0]} of {tokens}");
-        Assert.All(reads[1..], read => Assert.True(read >= tokens, $"a request after the first read {read} of the map's {tokens} tokens from the cache"));
+        Assert.True(used.Count >= 3, $"the smoke made only {used.Count} requests");
+        Assert.True(used[0].Written >= tokens, $"the first request wrote {used[0].Written} tokens to the cache, less than the map's {tokens}");
+        Assert.All(used[1..], use => Assert.True(use.Sent + use.Written < tokens, $"a request after the first paid {use.Sent} sent and {use.Written} written, as much as the map's {tokens} tokens again"));
     }
 
-    /// <summary>What each answer recorded as read from the cache, read of the wire's answer files beside the requests, in the order sent.</summary>
-    private static IEnumerable<long> CacheReads(LiveApiRun run)
-        => run.Requests().Select(request => CacheReadOf(Path.Combine(run.Wire, $"{Path.GetFileNameWithoutExtension(request)}-answer.sse")));
+    /// <summary>What each answer recorded it took in - sent in full, read from the cache, written to it - read of the wire's answer files beside the requests, in the order sent.</summary>
+    private static IEnumerable<(long Sent, long Read, long Written)> CacheUses(LiveApiRun run)
+        => run.Requests().Select(request => CacheUseOf(WireRecording.AnswerOf(request)));
 
-    /// <summary>What the answer file says it read from the cache, where there is one; 0 where there is not.</summary>
-    private static long CacheReadOf(string answer)
+    /// <summary>What the answer file says its request took in, as its start names it; naught for each where there is no answer.</summary>
+    private static (long Sent, long Read, long Written) CacheUseOf(string answer)
         => File.Exists(answer)
             ? File.ReadLines(answer)
                 .Where(line => line.StartsWith("data:", StringComparison.Ordinal))
                 .Select(line => JsonNode.Parse(line["data:".Length..])!)
                 .Where(data => data["type"]?.GetValue<string>() == "message_start")
                 .Select(data => data["message"]!["usage"]!)
-                .Select(usage => usage["cache_read_input_tokens"] is { } hit ? hit.GetValue<long>() : 0L)
+                .Select(usage => (Tokens(usage, "input_tokens"), Tokens(usage, "cache_read_input_tokens"), Tokens(usage, "cache_creation_input_tokens")))
                 .FirstOrDefault()
-            : 0L;
+            : default;
+
+    /// <summary>The count <paramref name="usage"/> gives under <paramref name="name"/>; naught where it gives none.</summary>
+    private static long Tokens(JsonNode usage, string name) => usage[name] is { } count ? count.GetValue<long>() : 0L;
 
     /// <summary>The messages a request sent, each as its body holds it: byte for byte.</summary>
     private static List<string> Messages(string body) => ClaudeApiClientTests.Messages(body);

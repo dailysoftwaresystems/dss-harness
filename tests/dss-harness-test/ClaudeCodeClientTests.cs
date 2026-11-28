@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
@@ -132,6 +133,81 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
+    /// How long a launch's requests are cached is its client's entry's <c>cacheTtl</c>, in the launch's settings' env and
+    /// in its environment alike, and five minutes where the entry says none or the configuration declares no entry; a
+    /// person's <c>ENABLE_PROMPT_CACHING_1H</c>, which the lifetimes outrank, changes nothing.
+    /// </summary>
+    [Fact]
+    public async Task TheCacheTtl_IsTheClientsEntrys_InTheSettingsAndTheEnvironment_FiveMinutesWhereItSaysNone()
+    {
+        foreach (var (entry, expected) in new (AgentClientConfig? Entry, string Expected)[] { (new AgentClientConfig { CacheTtl = "1h" }, "1h"), (new AgentClientConfig(), "5m"), (null, "5m") })
+        {
+            using var kit = new Kit();
+            kit.Script([new JsonObject()]);
+            kit.Own["ENABLE_PROMPT_CACHING_1H"] = "1";
+            var run = kit.Run() with
+            {
+                Entries = new AgentEntries(
+                    new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Api = "https://api.anthropic.com", Currency = "USD" },
+                    new AgentModelConfig { Code = "claude-sonnet-5-5" },
+                    entry),
+            };
+
+            Assert.Equal(AgentRunStatus.Completed, (await kit.Client().RunAsync(run, new Sink(), Token)).Status);
+
+            var given = Assert.Single(kit.Runner.Requests).Environment;
+            var env = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!["env"]!.AsObject();
+
+            foreach (var name in ClaudeSettings.CacheTtlVariables)
+            {
+                Assert.Equal(expected, given[name]);
+                Assert.Equal(expected, (string?)env[name]);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A launch's <c>cacheTtl</c> is the one say on how it caches: every other name Claude Code caches by is set off in
+    /// the launch's settings' env and in its environment, so a person's <c>FORCE_PROMPT_CACHING_5M</c> - which outranks the
+    /// lifetimes, and would cut the configured hour to five minutes - or a <c>DISABLE_PROMPT_CACHING</c> name - which would
+    /// turn caching off for every model, or for one family's - never reaches Claude Code, and the hour reaches it as
+    /// configured.
+    /// </summary>
+    [Fact]
+    public async Task ThePersonsOwnCachingNames_NeverReachALaunch_ForItsCacheTtlIsTheOneSay()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+        kit.Own["FORCE_PROMPT_CACHING_5M"] = "1";
+        kit.Own["DISABLE_PROMPT_CACHING"] = "1";
+        kit.Own["DISABLE_PROMPT_CACHING_SONNET"] = "true";
+        var run = kit.Run() with
+        {
+            Entries = new AgentEntries(
+                new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Api = "https://api.anthropic.com", Currency = "USD" },
+                new AgentModelConfig { Code = "claude-sonnet-5-5" },
+                new AgentClientConfig { CacheTtl = "1h" }),
+        };
+
+        Assert.Equal(AgentRunStatus.Completed, (await kit.Client().RunAsync(run, new Sink(), Token)).Status);
+
+        // What the launch was given, what its settings say, and what the program it started saw.
+        var given = Assert.Single(kit.Runner.Requests).Environment;
+        var env = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!["env"]!.AsObject();
+        var seen = Assert.Single(kit.Launches()).Environment;
+
+        foreach (var name in new[] { "FORCE_PROMPT_CACHING_5M", "DISABLE_PROMPT_CACHING", "DISABLE_PROMPT_CACHING_SONNET" })
+        {
+            Assert.Equal(("0", "0", "0"), (given[name], (string?)env[name], seen[name]));
+        }
+
+        foreach (var name in ClaudeSettings.CacheTtlVariables)
+        {
+            Assert.Equal(("1h", "1h", "1h"), (given[name], (string?)env[name], seen[name]));
+        }
+    }
+
+    /// <summary>
     /// What a launch is given of the environment: nothing of a Claude Code session the engine was started in - the fake
     /// started as an engine started from the desktop app would hand it on, under <c>CLAUDE_CODE_ENTRYPOINT=claude-desktop</c>,
     /// sees none of it - no name that says who it is but what its way of signing in gives, no name the configuration
@@ -191,14 +267,14 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Null(given["CLAUDE_CODE_OAUTH_TOKEN"]);
         Assert.Equal(config, given["CLAUDE_CONFIG_DIR"]);
 
-        foreach (var (name, value) in ClaudeSettings.Launched)
+        foreach (var (name, value) in ClaudeSettings.LaunchedWith("5m"))
         {
             Assert.Equal(value, given[name]);
         }
 
         // The names the engine sets are its settings' env too, and none bounds a shell of Claude Code's own: it is given none.
         var env = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!["env"]!.AsObject();
-        Assert.Equal(ClaudeSettings.Launched.Select(name => name.Key), env.Select(name => name.Key));
+        Assert.Equal(ClaudeSettings.LaunchedWith("5m").Select(name => name.Key), env.Select(name => name.Key));
         Assert.DoesNotContain(given.Keys.Concat(env.Select(name => name.Key)), name => name.StartsWith("BASH_", StringComparison.Ordinal) || name.StartsWith("CLAUDE_BASH_", StringComparison.Ordinal));
 
         var seen = Assert.Single(kit.Launches()).Environment;
@@ -211,7 +287,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal("sk-work", seen["ANTHROPIC_API_KEY"]);
         Assert.Equal(config, seen[ClaudeTranscripts.ConfigDirectoryVariable]);
 
-        foreach (var (name, value) in ClaudeSettings.Launched)
+        foreach (var (name, value) in ClaudeSettings.LaunchedWith("5m"))
         {
             Assert.Equal(value, seen[name]);
         }
@@ -596,7 +672,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
             .Single(toolNamed => toolNamed["name"]?.GetValue<string>() == AgentGraphSupport.ToolName);
 
         Assert.Equal(
-            ["find", "node", "related", "outline", "body", "sites", "edit", "wholeFile"],
+            ["find", "node", "related", "outline", "around", "impact", "body", "sites", "edit", "wholeFile"],
             [.. schema["inputSchema"]!.AsObject()["properties"]!.AsObject()["op"]!.AsObject()["enum"]!.AsArray().Select(one => one!.GetValue<string>())]);
     }
 
@@ -667,25 +743,23 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// A whole <c>view_file</c> of a file the graph holds parsed over the narrowing bound is denied on Claude Code as it is
-    /// on the APIs (<c>graphReads: narrow</c>) - the tool runtime serving it narrows it, with the same words, recorded as
-    /// every denial is and as a line of the step's graph; a ranged read of the same file passes, and a file the graph is
-    /// not sure of passes whole, an escape <c>lowConfidence</c> recorded.
+    /// A whole <c>view_file</c> of a file the graph holds parsed over the narrowing bound is answered with the file's
+    /// outline on Claude Code as it is on the APIs (<c>graphReads: narrow</c>) - the tool runtime serving it narrows it,
+    /// with the same words, recorded as a line of the step's graph and denied nothing; a ranged read of the same file
+    /// passes, and a file the graph is not sure of passes whole, an escape <c>lowConfidence</c> recorded.
     /// </summary>
     [Fact]
-    public async Task AWholeReadOfAParsedFileOverNarrowLines_IsDeniedOnClaudeCode_AsViewFileIsOnTheAPIs()
+    public async Task AWholeReadOfAParsedFileOverNarrowLines_IsAnsweredWithItsOutlineOnClaudeCode_AsViewFileIsOnTheAPIs()
     {
         using var kit = new Kit();
         var big = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the big file")]) + "\n";
         var generated = "// <auto-generated/>\n" + string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the generated file")]) + "\n";
-        Directory.CreateDirectory(Path.Combine(kit.Worktree, "src"));
-        File.WriteAllText(Path.Combine(kit.Worktree, "src", "Big.cs"), big);
-        File.WriteAllText(Path.Combine(kit.Worktree, "src", "Generated.g.cs"), generated);
+        // The agent works in the tree its graph's view is of, as every step with a tree of its own is served that tree's view.
         using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Big.cs", big), ("src/Generated.g.cs", generated));
         var tool = CodebaseGraphToolTests.Tool(tree, await CodebaseGraphToolTests.QueriesAsync(tree));
         var lines = new List<DssHarness.Core.Agents.Runtime.GraphStepLine>();
-        var bigPath = Path.Combine(kit.Worktree, "src", "Big.cs");
-        var generatedPath = Path.Combine(kit.Worktree, "src", "Generated.g.cs");
+        var bigPath = Path.Combine(tree.Tree, "src", "Big.cs");
+        var generatedPath = Path.Combine(tree.Tree, "src", "Generated.g.cs");
         kit.Script([new JsonObject { ["calls"] = new JsonArray(
             new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = bigPath } },
             new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = bigPath, ["start_line"] = 3, ["end_line"] = 6 } },
@@ -694,6 +768,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         var result = await kit.Client().RunAsync(kit.Run() with
         {
+            Workspace = kit.Workspace() with { Worktree = tree.Tree, WorkingDirectory = tree.Tree },
+            Ground = PolicyGrounds.Of(tree.Tree, [tree.Tree, kit.WorkDirectory], [tree.Tree, kit.WorkDirectory], [], [], []),
             Graph = new AgentGraphSupport(tool, line => lines.Add(line), Narrow: true)
             {
                 Operations = DssHarness.Core.Agents.Runtime.CodebaseGraphTool.Operations(write: true, narrow: true),
@@ -702,21 +778,25 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
 
-        // The whole read was denied with the way to the graph, the same words as on the APIs, and recorded as every
-        // denial is; the ranged read of the same file and the whole read of a file the graph is not sure of passed.
-        var denied = sink.Of<PermissionDenied>().ToList();
-        var narrow = Assert.Single(denied, denial => denial.Rule == "graphReads: narrow");
-        Assert.Equal(
-            "'src/Big.cs' is 222 lines and in the codebase graph: ask graph for its outline and the bodies you need, read a range of it, or, if you need it whole, say why with graph's wholeFile",
-            narrow.Reason);
+        // The whole read was answered with the file's outline, the same words as on the APIs, and recorded so - nothing
+        // denied; the ranged read of the same file and the whole read of a file the graph is not sure of passed.
+        Assert.Empty(sink.Of<PermissionDenied>());
 
-        var deniedLine = Assert.IsType<DssHarness.Core.Agents.Runtime.GraphDeniedLine>(Assert.Single(lines.OfType<DssHarness.Core.Agents.Runtime.GraphDeniedLine>()));
-        Assert.Equal(("src/Big.cs", 222), (deniedLine.Path, deniedLine.Lines));
+        var outline = tool.Queries.OutlineFile("src/Big.cs")!;
+        Assert.Equal(
+            string.Join('\n', [
+                "'src/Big.cs' is 222 lines and in the codebase graph, so its outline is given in place of the whole file: read the lines you need with start_line and end_line, or the file a page at a time with page, ask graph's body for a declaration by its handle, or, if you need the file whole, say why with graph's wholeFile",
+                $"outline of src/Big.cs ({DssHarness.Core.Output.ReportText.Counted(outline.Count, "declaration")}):",
+                .. outline.Select(DssHarness.Core.Codebase.GraphLines.Of)]),
+            sink.Of<ToolCallFinished>().First().Result);
+
+        var outlinedLine = Assert.IsType<DssHarness.Core.Agents.Runtime.GraphOutlinedLine>(Assert.Single(lines.OfType<DssHarness.Core.Agents.Runtime.GraphOutlinedLine>()));
+        Assert.Equal(("src/Big.cs", 222), (outlinedLine.Path, outlinedLine.Lines));
 
         var escaped = Assert.IsType<DssHarness.Core.Agents.Runtime.GraphEscapeLine>(Assert.Single(lines.OfType<DssHarness.Core.Agents.Runtime.GraphEscapeLine>()));
         Assert.Equal(("src/Generated.g.cs", DssHarness.Core.Agents.Runtime.GraphEscapeLine.LowConfidence), (escaped.Path, escaped.Escape));
 
-        Assert.Equal([false, true, true], sink.Of<ToolCallFinished>().Select(call => call.Ok));
+        Assert.Equal([true, true, true], sink.Of<ToolCallFinished>().Select(call => call.Ok));
         Assert.Equal(3, result.ToolCalls);
     }
 
@@ -748,7 +828,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
                 + "- $.output.answers: is said by no property of the schema\n"
                 + "Answer again, whole, as the schema says.",
             sent[1].Text);
-        Assert.Equal(2, result.Turns);
+
+        // Each of the two exchanges is two of the model's answers - its text, then its answer's own block.
+        Assert.Equal((4, 2), (result.Turns, sink.Of<TurnStarted>().Count));
     }
 
     /// <summary>An answer still wrong after its repairs ends the step <see cref="AgentRunStatus.InvalidOutput"/>.</summary>
@@ -2235,11 +2317,14 @@ public sealed class ClaudeCodeClientTests : IDisposable
         using var kit = new Kit();
         kit.Script([new JsonObject { ["slowMs"] = 4000, ["answer"] = Envelopes.Of(new JsonObject { ["answers"] = "a" }) }, new JsonObject { ["takeAfterMs"] = 5000 }]);
         var run = kit.Run(new AgentOutput("o", Schema)) with { Limits = new AgentLimits(30, 2.5m, null, StallSeconds: 7) };
+        var sink = new Sink();
 
-        var result = await kit.Client().RunAsync(run, new Sink(), Token);
+        var result = await kit.Client().RunAsync(run, sink, Token);
 
         Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
-        Assert.Equal(2, result.Turns);
+
+        // Both exchanges ran - the repair's taken late - each two of the model's answers: its text and its answer's block.
+        Assert.Equal((4, 2), (result.Turns, sink.Of<TurnStarted>().Count));
     }
 
     /// <summary>
@@ -2263,7 +2348,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var result = await kit.Client().RunAsync(run, sink, Token);
 
         Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
-        Assert.Equal(("Read it, and second.", 1), (result.FinalText, result.Turns));
+
+        // One exchange of the engine's answered both messages, in two of the model's answers: the call, then the text.
+        Assert.Equal(("Read it, and second.", 2), (result.FinalText, result.Turns));
+        Assert.Equal([1], sink.Of<TurnStarted>().Select(started => started.Turn));
     }
 
     /// <summary>
@@ -2535,12 +2623,15 @@ public sealed class ClaudeCodeClientTests : IDisposable
         kit.Script([new JsonObject { ["takenLate"] = true }, new JsonObject { ["text"] = "Nothing done yet." }]);
         var run = kit.Run();
         run.Handoff.Ask();
+        var sink = new Sink();
 
-        var result = await kit.Client().RunAsync(run, new Sink(), Token);
+        var result = await kit.Client().RunAsync(run, sink, Token);
 
         Assert.True(result.Status == AgentRunStatus.HandedOff, $"{result.Status}: {result.Error}");
         Assert.Equal("Nothing done yet.", result.Handoff?.Answer);
-        Assert.Equal(2, result.Turns);
+
+        // The late exchange ran, cut as it began with nothing answered: the one answer of the model's is the question's.
+        Assert.Equal((1, 2), (result.Turns, sink.Of<TurnStarted>().Count));
     }
 
     /// <summary>
@@ -2579,7 +2670,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         Assert.True(result.Status == AgentRunStatus.HandedOff, $"{result.Status}: {result.Error}");
         Assert.Equal("Nothing done yet.", result.Handoff?.Answer);
-        Assert.Equal(3, result.Turns);
+
+        // Three exchanges ran - the cut one, the late one, the question - and the model answered the question alone.
+        Assert.Equal((1, 3), (result.Turns, sink.Of<TurnStarted>().Count));
     }
 
     /// <summary>
@@ -3209,7 +3302,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
 
         const string Why = "the agent gave no handoff in 2 answers";
-        Assert.Equal((AgentRunStatus.HandedOff, new AgentHandoff(WhyNone: Why), 3), (result.Status, result.Handoff, result.Turns));
+
+        // The cut exchange answered nothing; each of the two questions' was one empty answer of the model's.
+        Assert.Equal((AgentRunStatus.HandedOff, new AgentHandoff(WhyNone: Why), 2, 3), (result.Status, result.Handoff, result.Turns, sink.Of<TurnStarted>().Count));
         Assert.Equal(2, sink.Of<MessageSent>().Count(message => message.Which == AgentMessageKind.HandoffQuestion));
         Assert.Equal(new HandoffAnswered(false, Why), Assert.Single(sink.Of<HandoffAnswered>()));
     }
@@ -3255,6 +3350,70 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         Assert.Equal((AgentRunStatus.Completed, 2), (result.Status, result.Turns));
         Assert.Equal(new AgentCost(Reported: 0.02m), result.Usage?.Cost);
+    }
+
+    /// <summary>
+    /// A run's turns are the model's answers, one response each, as on the API clients - never the engine's messages to
+    /// the launch: one exchange whose model wrote a response in two lines that share its id, another response, two lines
+    /// that name no id - each an answer of its own - and its text, with a message Claude Code wrote itself among them, took
+    /// five turns, while the exchange's events still number one turn, whose end says the five it held.
+    /// </summary>
+    [Fact]
+    public async Task ARunsTurns_AreTheModelsAnswers_EachResponseOnce_NeverTheEnginesMessages()
+    {
+        using var kit = new Kit();
+        kit.Script(
+        [
+            new JsonObject
+            {
+                ["answers"] = new JsonArray(
+                    new JsonArray("Reading the task,", " then the plan."),
+                    new JsonArray("A second response."),
+                    "A line that names no response.",
+                    new JsonObject { ["synthetic"] = "Claude Code's own line." },
+                    "Another that names none."),
+                ["text"] = "Done.",
+            },
+        ]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run(), sink, Token);
+
+        Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
+        Assert.Equal(("Done.", 5), (result.FinalText, result.Turns));
+        Assert.Equal([1], sink.Of<TurnStarted>().Select(started => started.Turn));
+        Assert.Equal([(1, (int?)5)], sink.Of<TurnFinished>().Select(finished => (finished.Turn, finished.Answers)));
+
+        // Every line was told as the message it is, Claude Code's own among them: what is counted is not what is said.
+        Assert.Equal(
+            ["Reading the task,", " then the plan.", "A second response.", "A line that names no response.", "Claude Code's own line.", "Another that names none.", "Done."],
+            sink.Of<AssistantMessage>().Select(message => message.Text));
+    }
+
+    /// <summary>
+    /// A launch cut before its turn's result still counts what its model answered, as each answer came - in the run's
+    /// result, in the run's end the stored stream says, and so in the step's measure, which reads the run's own count
+    /// where no turn's end says those answers.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchCutBeforeItsTurnsResult_StillCountsWhatItAnswered_InItsResultAndItsStepsMeasure()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["answers"] = new JsonArray(new JsonArray("Reading,", " then writing."), "A line that names no response."), ["text"] = "Written.", ["exitAfter"] = 3 }]);
+        var (providers, problems) = AgentProviders.Resolve(new DssHarness.Core.Configuration.HarnessConfig());
+        Assert.Empty(problems);
+        var measure = new DssHarness.Core.Orchestration.Flow.AgentRunSpend(providers!, Model);
+
+        var result = await kit.StepRunner().RunAsync(kit.Step(), measure, Token);
+
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.StartsWith("Claude Code ended before its turn's result, exit 3", result.Error, StringComparison.Ordinal);
+        Assert.Equal((3, (int?)3), (result.Turns, measure.Account().Turns));
+
+        // No turn's end said them: the run's end alone does.
+        var stream = File.ReadAllLines(Path.Combine(kit.StepDirectory, StoredStream.FileName)).Select(line => JsonNode.Parse(line)!).ToList();
+        Assert.DoesNotContain(stream, line => line["kind"]!.GetValue<string>() == "turnFinished");
+        Assert.Equal(("runFinished", 3), (stream[^1]["kind"]!.GetValue<string>(), stream[^1]["turns"]!.GetValue<int>()));
     }
 
     /// <summary>
@@ -3474,12 +3633,100 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
 
+        // Two exchanges, the second cut before the model answered anything: one answer of the model's in all.
         Assert.Equal(
-            (AgentRunStatus.Completed, 2, (int?)2, true, (decimal?)0.02m),
+            (AgentRunStatus.Completed, 1, (int?)2, true, (decimal?)0.02m),
             (result.Status, result.Turns, result.MessagesAnswered, result.EndedWithItsLastTurn, result.Usage?.Cost?.Usd));
         Assert.Equal([1, 2], sink.Of<TurnFinished>().Select(finished => finished.Turn));
         Assert.Equal(
             [interrupt],
+            Control(kit)
+                .Where(line => line["type"]?.GetValue<string>() == "control_request" && line["request"]?["subtype"]?.GetValue<string>() == "interrupt")
+                .Select(line => line["request_id"]!.GetValue<string>()));
+    }
+
+    /// <summary>
+    /// The person leaving once their own interrupt was answered - the cut turn's result still to come - asks no second
+    /// interrupt: the turn is cut already, and the launch reads on to its result and ends at it. Told the message waiting
+    /// behind the turn was dropped, which the interrupt's answer says, the person leaves inside that very window.
+    /// </summary>
+    [Fact]
+    public async Task ThePersonLeavingOnceTheirInterruptWasAnswered_AsksNoSecondInterrupt()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["text"] = "first said" }, new JsonObject { ["hang"] = true, ["slowInterrupt"] = 1000 }]);
+        var run = kit.Run() with { Chat = true, Interrupt = new AgentTurnInterrupt() };
+        var sink = new Sink(@event =>
+        {
+            if (@event is AssistantMessage { Text: "first said" })
+            {
+                run.Messages.Post("and now?");
+            }
+            else if (@event is TurnStarted { Turn: 2 })
+            {
+                // A message waits behind the turn under way, and the person presses Ctrl+C.
+                run.Messages.Post("and then?");
+                run.Interrupt!.Interrupt();
+            }
+            else if (@event is MessagesDropped)
+            {
+                run.Messages.Complete();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        Assert.Equal((AgentRunStatus.Completed, true), (result.Status, result.EndedWithItsLastTurn));
+        Assert.Single(sink.Of<MessagesDropped>());
+        Assert.Equal(
+            ["chat-interrupt"],
+            Control(kit)
+                .Where(line => line["type"]?.GetValue<string>() == "control_request" && line["request"]?["subtype"]?.GetValue<string>() == "interrupt")
+                .Select(line => line["request_id"]!.GetValue<string>()));
+    }
+
+    /// <summary>
+    /// A turn begun once the person had left settles nothing. A line they typed once their interrupt was answered is
+    /// written after it, so it dropped nothing, and waits behind the cut turn; leaving then - by <c>/model</c> or
+    /// <c>/effort</c> as by <c>/exit</c> - asks no interrupt of its own, for the turn is cut already; Claude Code takes the
+    /// line once the cut turn's result is in, and the launch cuts that turn at once. No turn answered the line, so the run
+    /// never counts it among the messages it settled, and a chat that goes on gives it to its next launch.
+    /// </summary>
+    [Fact]
+    public async Task ATurnBegunOnceThePersonLeft_SettlesNothing()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["text"] = "first said" }, new JsonObject { ["hang"] = true, ["slowInterrupt"] = 1000 }, new JsonObject { ["hang"] = true }]);
+        var run = kit.Run() with { Chat = true, Interrupt = new AgentTurnInterrupt() };
+        var sink = new Sink(@event =>
+        {
+            if (@event is AssistantMessage { Text: "first said" })
+            {
+                run.Messages.Post("and now?");
+            }
+            else if (@event is TurnStarted { Turn: 2 })
+            {
+                // A message waits behind the turn under way, and the person presses Ctrl+C.
+                run.Messages.Post("and then?");
+                run.Interrupt!.Interrupt();
+            }
+            else if (@event is MessagesDropped)
+            {
+                // Their interrupt answered, the cut turn's result still to come, the person types a line and leaves.
+                run.Messages.Post("typed once the interrupt was answered");
+                run.Messages.Complete();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        // Settled, in order: the prompt, the line the cut turn took, and the one the interrupt dropped - never the line
+        // the turn begun once the person left took.
+        Assert.Equal((AgentRunStatus.Completed, (int?)3, true), (result.Status, result.MessagesAnswered, result.EndedWithItsLastTurn));
+        Assert.Equal([1, 2, 3], sink.Of<TurnStarted>().Select(started => started.Turn));
+        Assert.Single(sink.Of<MessagesDropped>());
+        Assert.Equal(
+            ["chat-interrupt", "chat-leave"],
             Control(kit)
                 .Where(line => line["type"]?.GetValue<string>() == "control_request" && line["request"]?["subtype"]?.GetValue<string>() == "interrupt")
                 .Select(line => line["request_id"]!.GetValue<string>()));
@@ -3529,10 +3776,11 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
 
+        // The exchange was cut before the model answered anything: no turn of the model's, and the exchange's end says so.
         Assert.Equal(
-            (AgentRunStatus.Cancelled, ClaudeCodeClient.TurnCut, 1, true, (decimal?)0.01m),
+            (AgentRunStatus.Cancelled, ClaudeCodeClient.TurnCut, 0, true, (decimal?)0.01m),
             (result.Status, result.Error, result.Turns, result.EndedWithItsLastTurn, result.Usage?.Cost?.Usd));
-        Assert.Single(sink.Of<TurnFinished>());
+        Assert.Equal((int?)0, Assert.Single(sink.Of<TurnFinished>()).Answers);
     }
 
     /// <summary>

@@ -2,6 +2,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Waiting;
 
@@ -158,7 +159,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         CancellationToken cancellationToken)
     {
         var main = await MainGitDirectoryAsync(mainCheckoutRoot, cancellationToken).ConfigureAwait(false);
-        var here = await _gitClient.GetLocationAsync(path, cancellationToken).ConfigureAwait(false);
+        var here = await SessionTrees.LocationAsync(path, _platform.PathComparison, _fileSystem, () => _gitClient.GetLocationAsync(path, cancellationToken)).ConfigureAwait(false);
 
         // A directory that is not the root of a work tree, such as a worktree whose .git file is
         // gone, is answered for by whatever repository encloses it, and that answer says nothing
@@ -474,10 +475,11 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
                 // A worktree git records elsewhere is one, whatever directory it is in: never a person's to delete.
                 moved.Add((child, recorded));
             }
-            else if (orchestrators)
+            else if (orchestrators && HoldsOwnGit(_fileSystem, child))
             {
                 // Each git does not record is told apart, whatever its name: nothing here can say what it holds, so it is a
                 // person's to look in and delete - what a removal left, or a copy an earlier version of this tool kept there.
+                // One a deletion took away while it was asked about holds no .git of its own any more, and is none.
                 unrecorded.Add(child);
             }
         }
@@ -585,9 +587,10 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         }
     }
 
+    /// <summary>The main checkout's git directory, as git names it: asked once in an engine's session, which keeps it (<see cref="SessionTrees.LocationAsync"/>).</summary>
     private async Task<string> MainGitDirectoryAsync(string mainCheckoutRoot, CancellationToken cancellationToken)
     {
-        var main = await _gitClient.GetLocationAsync(mainCheckoutRoot, cancellationToken).ConfigureAwait(false);
+        var main = await SessionTrees.LocationAsync(mainCheckoutRoot, _platform.PathComparison, _fileSystem, () => _gitClient.GetLocationAsync(mainCheckoutRoot, cancellationToken)).ConfigureAwait(false);
 
         return main?.GitDirectory ?? throw new HarnessException(
             HarnessExit.CommandFailed,

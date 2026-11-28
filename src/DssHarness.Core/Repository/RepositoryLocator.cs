@@ -7,8 +7,13 @@ using DssHarness.Core.Results;
 namespace DssHarness.Core.Repository;
 
 /// <inheritdoc cref="IRepositoryLocator"/>
+/// <remarks>
+/// Inside an engine session, a tree located from its root is located once: the session keeps where it is
+/// (<see cref="SessionTrees"/>), for nothing it holds can move while the engine holds the run - served while the tree
+/// holds its <c>.git</c>.
+/// </remarks>
 /// <param name="gitClient">Asks git where the tree and its main checkout are.</param>
-/// <param name="fileSystem">Looks for an agent's repository's own configuration.</param>
+/// <param name="fileSystem">Looks for an agent's repository's own configuration, and for a kept tree's <c>.git</c>.</param>
 /// <param name="platform">How paths compare.</param>
 public sealed class RepositoryLocator(IGitClient gitClient, IFileSystem fileSystem, IHostPlatform platform) : IRepositoryLocator
 {
@@ -22,6 +27,26 @@ public sealed class RepositoryLocator(IGitClient gitClient, IFileSystem fileSyst
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(startDirectory);
 
+        var known = SessionTrees.OfSession(_platform.PathComparison);
+
+        if (known?.Find(startDirectory, _fileSystem) is { } found)
+        {
+            return found;
+        }
+
+        var layout = await LocatedAsync(startDirectory, cancellationToken).ConfigureAwait(false);
+
+        if (layout is not null)
+        {
+            known?.Keep(startDirectory, layout);
+        }
+
+        return layout;
+    }
+
+    /// <summary>Where git places <paramref name="startDirectory"/>, asked of it now.</summary>
+    private async Task<HarnessLayout?> LocatedAsync(string startDirectory, CancellationToken cancellationToken)
+    {
         var repositoryRoot = await _gitClient
             .GetRepositoryRootAsync(startDirectory, cancellationToken)
             .ConfigureAwait(false);
@@ -64,8 +89,21 @@ public sealed class RepositoryLocator(IGitClient gitClient, IFileSystem fileSyst
         // An agent's tree is a repository of its own, which git names its own main checkout: its mark names the main
         // checkout it was made from, taken as the tree's only where that checkout still lends it its objects. One whose
         // checkout does not is refused, never taken for a main checkout: every path derived from it would be the agent's.
-        if (PathContainment.AreSame(main.Path, repositoryRoot, _platform.PathComparison)
-            && await AgentRepositoryMark.ReadAsync(_gitClient, _fileSystem, repositoryRoot, cancellationToken).ConfigureAwait(false) is { } mark)
+        if (!PathContainment.AreSame(main.Path, repositoryRoot, _platform.PathComparison))
+        {
+            return new HarnessLayout(repositoryRoot, main.Path);
+        }
+
+        // A mark an engine's session found lent - here, or where an agent's tree was told (AgentRepositories.IsAtAsync) - by
+        // a main checkout the session located is the tree's still: what NotLentAsync asks, answered by the session.
+        var known = SessionTrees.OfSession(_platform.PathComparison);
+
+        if (known?.LentMarkOf(repositoryRoot, _fileSystem) is { } lent && known.IsMainCheckout(lent.MainCheckout, _fileSystem))
+        {
+            return new HarnessLayout(repositoryRoot, lent.MainCheckout);
+        }
+
+        if (await AgentRepositoryMark.ReadAsync(_gitClient, _fileSystem, repositoryRoot, cancellationToken).ConfigureAwait(false) is { } mark)
         {
             if (await mark.NotLentAsync(_gitClient, _fileSystem, _platform, repositoryRoot, cancellationToken).ConfigureAwait(false) is { } why)
             {
@@ -76,6 +114,7 @@ public sealed class RepositoryLocator(IGitClient gitClient, IFileSystem fileSyst
                     + $"and delete '{ReportText.Printable(repositoryRoot)}' once nothing in it is needed.");
             }
 
+            known?.KeepLentMark(repositoryRoot, mark);
             return new HarnessLayout(repositoryRoot, mark.MainCheckout);
         }
 

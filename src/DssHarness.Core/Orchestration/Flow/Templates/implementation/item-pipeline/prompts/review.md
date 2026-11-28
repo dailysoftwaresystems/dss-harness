@@ -76,3 +76,7 @@ introduced, a defect the diff made, or reopened, another instance of a class the
 item's definition of done that the change does not hold is a `correctness` finding; other aspects leave it.
 
 Report what you confirmed in the code. An empty list is the answer for a change with nothing wrong in your aspect.
+
+## Issues that were there before
+
+{text.issuesBefore}

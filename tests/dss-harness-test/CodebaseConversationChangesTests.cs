@@ -18,6 +18,28 @@ public sealed class CodebaseConversationChangesTests
     private const string C = "public class C\n{\n    public void Stays()\n    {\n    }\n}\n";
 
     /// <summary>
+    /// A conversation holds a declaration it can be told of only where one of its codebase parts names one it was not
+    /// later told removed: no part, a part that names none, and a part whose one declaration a later part removed hold
+    /// none. Red with any part counted as holding one.
+    /// </summary>
+    [Fact]
+    public async Task AConversationHoldsADeclaration_OnlyWhereAPartNamesOneStillTold()
+    {
+        using var tree = await TreeAsync(("src/A.cs", A));
+        var view = await QueriesAsync(tree);
+        var one = GraphLines.Of(Assert.IsType<GraphResolve.Found>(view.Resolve("One")).Card);
+
+        Assert.Equal(
+            [false, false, true, false],
+            [
+                CodebaseConversationChanges.HoldsAny([]),
+                CodebaseConversationChanges.HoldsAny(["the run's graph was never built"]),
+                CodebaseConversationChanges.HoldsAny([one]),
+                CodebaseConversationChanges.HoldsAny([one, CodebaseConversationChanges.RemovedPrefix + one]),
+            ]);
+    }
+
+    /// <summary>
     /// A declaration that moved is told where it stands now - its line as the view holds it, the new range and hash in
     /// it - and is not named removed and added besides; one that was taken out is named removed with the line the
     /// conversation holds; a node of the step's own pack the conversation was not given is added; and one that stands
@@ -79,6 +101,26 @@ public sealed class CodebaseConversationChangesTests
         Assert.Equal(
             ["1 declaration the conversation held: 1 moved or changed, 0 removed; 0 nodes of this step's pack added", GraphLines.Of(changed)],
             CodebaseConversationChanges.Make(after, NoPack, [GraphLines.Of(one)], CodebaseContextPack.DefaultTokens).Split('\n'));
+    }
+
+    /// <summary>
+    /// A step that pushes no pack - it asks the graph tool's pack for its pages - is told what moved of what its
+    /// conversation holds and nothing of its own pack: no node of it added, and no word of it in the first line. Red with
+    /// the first line counting the nodes of a pack the step pushes none of.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatPushesNoPack_IsToldWhatMoved_AndNothingOfItsOwnPack()
+    {
+        using var tree = await TreeAsync(("src/A.cs", Bodied("1")), ("src/C.cs", C));
+        var before = await QueriesAsync(tree);
+        var one = Card(before, "One");
+
+        tree.Write("src/A.cs", Bodied("2"));
+        var after = new CodebaseGraphQueries((await tree.CheckAsync(null, null, "src/A.cs")).Read);
+
+        Assert.Equal(
+            ["1 declaration the conversation held: 1 moved or changed, 0 removed", GraphLines.Of(Card(after, "One"))],
+            CodebaseConversationChanges.Make(after, pack: null, [GraphLines.Of(one)], CodebaseContextPack.DefaultTokens).Split('\n'));
     }
 
     /// <summary>

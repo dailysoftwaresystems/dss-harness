@@ -318,6 +318,23 @@ public sealed class CodebaseGraphQueries
     private readonly IReadOnlySet<string> _unheld;
 
     /// <summary>
+    /// The file at <paramref name="full"/> by the path the view names its files by - relative to the tree the view is of,
+    /// with forward separators - where it is beneath that tree; null where it is not, a file of another tree, which the view
+    /// says nothing of whatever path it has there. The one rule a file a step read, searched or wrote is matched to the view
+    /// by: the graph tool's, through which the runtime's reads are given their declarations and narrowed
+    /// (<c>CodebaseGraphTool.PathOf</c>), and a step's working set's, which places its reads and writes on the view of the
+    /// tree it read - so a file of the main checkout is never matched to the view of a reader's own tree, nor the reverse.
+    /// </summary>
+    /// <param name="full">The file, absolute.</param>
+    /// <param name="comparison">How the tree's file system compares names.</param>
+    public string? PathOf(string full, StringComparison comparison)
+    {
+        ArgumentNullException.ThrowIfNull(full);
+
+        return Agents.Policy.AgentPolicy.Beneath(Tree, full, comparison);
+    }
+
+    /// <summary>
     /// The path the view holds <paramref name="path"/> at - as given, or with its backslashes read as separators, as a path
     /// typed on Windows is - or null where it holds neither.
     /// </summary>
@@ -917,29 +934,23 @@ public sealed class CodebaseGraphQueries
         return new GraphEdges(
             Group(GraphRelations.Edges(GraphRelations.Callers)),
             Group(GraphRelations.Edges(GraphRelations.Callees)),
-            Group([(GraphSide.Out, CodeEdgeKinds.Inherits), (GraphSide.Out, CodeEdgeKinds.Implements), (GraphSide.Out, CodeEdgeKinds.MixesIn)]),
+            Group(GraphRelations.Edges(GraphRelations.Bases)),
             Group(GraphRelations.Edges(GraphRelations.Derived)),
             Group(GraphRelations.Edges(GraphRelations.Implementations)),
             Group(Overriding),
             Group([(GraphSide.Out, CodeEdgeKinds.References), (GraphSide.Out, CodeEdgeKinds.Instantiates), (GraphSide.In, CodeEdgeKinds.References), (GraphSide.In, CodeEdgeKinds.Instantiates)]),
-            Group(Users),
-            Group(Using),
+            Group(GraphRelations.Edges(GraphRelations.Users)),
+            Group(GraphRelations.Edges(GraphRelations.Uses)),
             Group(GraphRelations.Edges(GraphRelations.Tests)),
             Group([(GraphSide.Out, CodeEdgeKinds.Imports), (GraphSide.Out, CodeEdgeKinds.ProjectReference), (GraphSide.In, CodeEdgeKinds.Imports), (GraphSide.In, CodeEdgeKinds.ProjectReference)]),
             [.. of.Where(part => part != id).Select(part => new GraphEdge(Card(part), CodeConfidences.Exact))]);
     }
 
-    /// <summary>What a node's users are: the nodes that read or write it without calling it.</summary>
-    private static readonly IReadOnlyList<(GraphSide Side, string Kind)> Users = [(GraphSide.In, CodeEdgeKinds.Uses)];
-
-    /// <summary>What a node uses: the nodes it reads or writes without calling them.</summary>
-    private static readonly IReadOnlyList<(GraphSide Side, string Kind)> Using = [(GraphSide.Out, CodeEdgeKinds.Uses)];
-
     /// <summary>What makes a node: a call of a type, an element of a component.</summary>
     private static readonly IReadOnlyList<(GraphSide Side, string Kind)> Makers = [(GraphSide.In, CodeEdgeKinds.Instantiates)];
 
     /// <summary>A node's overrides both ways: what it overrides, and what overrides it.</summary>
-    private static readonly IReadOnlyList<(GraphSide Side, string Kind)> Overriding = [(GraphSide.Out, CodeEdgeKinds.Overrides), (GraphSide.In, CodeEdgeKinds.Overrides)];
+    private static readonly IReadOnlyList<(GraphSide Side, string Kind)> Overriding = [.. GraphRelations.Edges(GraphRelations.Overrides), .. GraphRelations.Edges(GraphRelations.OverriddenBy)];
 
     /// <summary>What names a node by its kind without making it: a type mention, a test of a value's kind.</summary>
     private static readonly IReadOnlyList<(GraphSide Side, string Kind)> Referrers = [(GraphSide.In, CodeEdgeKinds.References)];
@@ -951,7 +962,7 @@ public sealed class CodebaseGraphQueries
     private static readonly IReadOnlyList<(string How, IReadOnlyList<(GraphSide Side, string Kind)> Edges)> Deciding =
     [
         (GraphSiteHows.Calls, GraphRelations.Edges(GraphRelations.Callers)),
-        (GraphSiteHows.Uses, Users),
+        (GraphSiteHows.Uses, GraphRelations.Edges(GraphRelations.Users)),
         (GraphSiteHows.Instantiates, Makers),
         (GraphSiteHows.References, Referrers),
         (GraphSiteHows.Inherits, GraphRelations.Edges(GraphRelations.Derived)),
@@ -989,10 +1000,11 @@ public sealed class CodebaseGraphQueries
 
     /// <summary>
     /// The nodes reached from <paramref name="id"/> - and every other part of its declaration, a part walked as the node
-    /// itself - over <paramref name="relation"/> to <paramref name="depth"/>, by distance, each edge into the kind of node
-    /// the relation enters alone (<see cref="GraphRelations.Into"/>). Every node reached is gone through, whatever edges it
-    /// has: the walk knows each node it reached and never reaches it again, so it is linear in the edges it follows, its
-    /// cycles among them, and ends where a hop reaches nothing new, however deep it was asked to go.
+    /// itself, but where the relation walks to the parts (<see cref="GraphRelations.WalksPartsAsOne"/>) - over
+    /// <paramref name="relation"/> to <paramref name="depth"/>, by distance, each edge into the kind of node the relation
+    /// enters alone (<see cref="GraphRelations.Into"/>). Every node reached is gone through, whatever edges it has: the walk
+    /// knows each node it reached and never reaches it again, so it is linear in the edges it follows, its cycles among
+    /// them, and ends where a hop reaches nothing new, however deep it was asked to go.
     /// </summary>
     /// <param name="id">A node's id, the view's.</param>
     /// <param name="relation">What to follow: one of <see cref="GraphRelations.All"/>.</param>
@@ -1003,7 +1015,7 @@ public sealed class CodebaseGraphQueries
 
         var edges = GraphRelations.Edges(relation);
         var into = GraphRelations.Into(relation);
-        var of = OneDeclaration(id);
+        var of = GraphRelations.WalksPartsAsOne(relation) ? OneDeclaration(id) : [id];
         var seen = new HashSet<string>(StringComparer.Ordinal) { id };
         seen.UnionWith(of);
         var reached = new List<GraphReached>();
@@ -1117,6 +1129,215 @@ public sealed class CodebaseGraphQueries
 
         return new GraphOverview(projects, directories, namespaces);
     }
+
+    /// <summary>
+    /// The files the view holds under the directory <paramref name="directory"/> names - its subdirectories' among them - by
+    /// path, or null where it holds none there (<see cref="DirectoryNamed"/>: the tree's root names every file). Where the
+    /// tree's file system finds a name in any case (<paramref name="comparison"/> ignores case), a directory written in
+    /// another case names the files it holds.
+    /// </summary>
+    /// <param name="directory">A directory an agent or a person wrote, relative to the tree.</param>
+    /// <param name="comparison">How the tree's file system compares names, as it answers for itself.</param>
+    public IReadOnlyList<string>? FilesUnder(string directory, StringComparison comparison)
+    {
+        ArgumentNullException.ThrowIfNull(directory);
+
+        var named = DirectoryNamed(directory);
+        var under = named.Length == 0 ? _read.Files.Keys : _read.Files.Keys.Where(path => path.StartsWith(named + "/", comparison));
+        List<string> files = [.. under.Order(StringComparer.Ordinal)];
+
+        return files.Count == 0 ? null : files;
+    }
+
+    /// <summary>
+    /// The directory <paramref name="directory"/> names, as the view's paths spell it: its separators forward, a leading
+    /// <c>./</c> and a trailing separator read as none, and the tree's root - <c>.</c> - empty.
+    /// </summary>
+    /// <param name="directory">A directory an agent or a person wrote, relative to the tree.</param>
+    public static string DirectoryNamed(string directory)
+    {
+        ArgumentNullException.ThrowIfNull(directory);
+
+        var named = directory.Replace('\\', '/');
+
+        while (named.StartsWith("./", StringComparison.Ordinal))
+        {
+            named = named[2..];
+        }
+
+        named = named.TrimEnd('/');
+        return named == "." ? string.Empty : named;
+    }
+
+    /// <summary>
+    /// Whether the file the view holds at <paramref name="path"/> is test code: it declares a test - one its implementation
+    /// marks, or one the link finds a test by the type it is built on (<see cref="CodeGraphLinker.TestsByType"/>) - so its
+    /// classes, fixtures and helpers beside the tests are test code too.
+    /// </summary>
+    /// <param name="path">A file's path, relative to the tree, as an agent or the tool spells it.</param>
+    public bool TestFile(string path) => HeldPath(path) is { } held && _testFiles.Contains(held);
+
+    /// <summary>
+    /// The declarations at the top of the file at <paramref name="path"/> - each type and member no type or member of the file
+    /// is declared around, a namespace's among them - by line, each with what it and every declaration inside it exercise as
+    /// tests (<see cref="GraphRelations.Tested"/>), each once, by qualified name. Each declaration of the file is read once -
+    /// the outermost type or member it is, or is inside, found from its parent's - so a file's top costs its own declarations
+    /// and their edges. None where the view holds no such file.
+    /// </summary>
+    /// <param name="path">A file's path, relative to the tree with forward separators.</param>
+    public IReadOnlyList<GraphTopDeclaration> TopDeclarations(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        if (OutlineFile(path) is not { } declared)
+        {
+            return [];
+        }
+
+        // The outermost type or member each declaration is, or is declared inside; null for one inside none.
+        var outermost = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        string? OutermostOf(string id)
+        {
+            // Up from the declaration to the first one already read, the file's top or one passed already; then down again
+            // from the outermost, each one read once.
+            var chain = new List<string>();
+            var passed = new HashSet<string>(StringComparer.Ordinal);
+            var at = (string?)id;
+
+            while (at is not null && !outermost.ContainsKey(at) && passed.Add(at))
+            {
+                chain.Add(at);
+                at = ParentIn(at, path);
+            }
+
+            var above = at is not null ? outermost.GetValueOrDefault(at) : null;
+
+            for (var index = chain.Count - 1; index >= 0; index--)
+            {
+                above ??= DeclaredIn(chain[index], path)?.Node.Kind is CodeNodeKinds.Type or CodeNodeKinds.Member ? chain[index] : null;
+                outermost[chain[index]] = above;
+            }
+
+            return outermost[id];
+        }
+
+        var tested = new Dictionary<string, Dictionary<string, GraphCard>>(StringComparer.Ordinal);
+
+        foreach (var card in declared)
+        {
+            if (OutermostOf(card.Id) is not { } top)
+            {
+                continue;
+            }
+
+            foreach (var step in Steps(card.Id, GraphRelations.Edges(GraphRelations.Tested)))
+            {
+                (tested.TryGetValue(top, out var targets) ? targets : tested[top] = new(StringComparer.Ordinal)).TryAdd(step.To, Card(step.To));
+            }
+        }
+
+        return [.. declared
+            .Where(card => OutermostOf(card.Id) == card.Id)
+            .Select(card => new GraphTopDeclaration(
+                card,
+                tested.TryGetValue(card.Id, out var targets) ? [.. targets.Values.OrderBy(target => target.Qualified, StringComparer.Ordinal).ThenBy(target => target.Id, StringComparer.Ordinal)] : []))];
+    }
+
+    /// <summary>
+    /// What the node <paramref name="id"/> names is declared inside in the file at <paramref name="path"/>, outermost first:
+    /// the file's own node, then each declaration around it there - a namespace's part in that file, a type, a member - as
+    /// the file's extract nests them (<see cref="ExtractNode.Parent"/>), each by its part in that file. None for the file's
+    /// own node. The walk up knows what it passed, so a parent named twice ends it.
+    /// </summary>
+    /// <param name="id">A node's id, the view's.</param>
+    /// <param name="path">A file that declares it, relative to the tree with forward separators.</param>
+    public IReadOnlyList<GraphCard> Containers(string id, string path)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ArgumentNullException.ThrowIfNull(path);
+
+        var file = CodeGraphIds.FileId(path);
+
+        if (id == file)
+        {
+            return [];
+        }
+
+        var chain = new List<GraphCard>();
+        var passed = new HashSet<string>(StringComparer.Ordinal) { id, file };
+
+        for (var at = ParentIn(id, path); at is not null && passed.Add(at) && Part(at, path) is { } part; at = ParentIn(at, path))
+        {
+            chain.Add(part);
+        }
+
+        if (Part(file, path) is { } whole)
+        {
+            chain.Add(whole);
+        }
+
+        chain.Reverse();
+        return chain;
+    }
+
+    /// <summary>
+    /// The declarations directly inside the node <paramref name="id"/> names: of a file's own node, those at the top of the
+    /// file at <paramref name="path"/> - declared inside no other of it - by line; of any other node, those it contains, with
+    /// every other part of its declaration (<see cref="OutlineType"/>).
+    /// </summary>
+    /// <param name="id">A node's id, the view's.</param>
+    /// <param name="path">A file that declares it, relative to the tree with forward separators.</param>
+    public IReadOnlyList<GraphCard> Inside(string id, string path)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ArgumentNullException.ThrowIfNull(path);
+
+        return id == CodeGraphIds.FileId(path)
+            ? [.. (OutlineFile(path) ?? []).Where(card => ParentIn(card.Id, path) is null)]
+            : OutlineType(id);
+    }
+
+    /// <summary>
+    /// The declarations beside the node <paramref name="id"/> names in the nearest of what it is declared inside in the file
+    /// at <paramref name="path"/> (<see cref="Containers"/>): every other declaration directly inside that one
+    /// (<see cref="Inside"/>), the parts of the node's own declaration left out. None for a file's own node.
+    /// </summary>
+    /// <param name="id">A node's id, the view's.</param>
+    /// <param name="path">A file that declares it, relative to the tree with forward separators.</param>
+    public IReadOnlyList<GraphCard> Siblings(string id, string path)
+    {
+        if (Containers(id, path) is not [.., var nearest])
+        {
+            return [];
+        }
+
+        var own = OneDeclaration(id).ToHashSet(StringComparer.Ordinal);
+        return [.. Inside(nearest.Id, path).Where(card => !own.Contains(card.Id))];
+    }
+
+    /// <summary>
+    /// The declarations just before and just after the node <paramref name="id"/> names in the file at <paramref name="path"/>:
+    /// of those that end before it begins, the one that ends last - of those ending there, the outermost - and of those that
+    /// begin after it ends, the one that begins first - of those beginning there, the outermost; none on a side no declaration
+    /// stands on. What it is declared inside and what it holds stand on neither, for their lines meet its own.
+    /// </summary>
+    /// <param name="id">A node's id, the view's.</param>
+    /// <param name="path">A file that declares it, relative to the tree with forward separators.</param>
+    public (GraphCard? Before, GraphCard? After) Beside(string id, string path)
+    {
+        if (Part(id, path) is not { } card || OutlineFile(path) is not { } declared)
+        {
+            return (null, null);
+        }
+
+        return (
+            declared.Where(other => other.End < card.Start).OrderByDescending(other => other.End).ThenBy(other => other.Start).ThenBy(other => other.Id, StringComparer.Ordinal).FirstOrDefault(),
+            declared.Where(other => other.Start > card.End).OrderBy(other => other.Start).ThenByDescending(other => other.End).ThenBy(other => other.Id, StringComparer.Ordinal).FirstOrDefault());
+    }
+
+    /// <summary>The node <paramref name="id"/>'s declaration in the file at <paramref name="path"/> is declared inside, by id; null at the file's top, or where the file declares none of it.</summary>
+    private string? ParentIn(string id, string path) => DeclaredIn(id, path)?.Node.Parent?.Whole();
 
     /// <summary>The file's lines <paramref name="card"/> spans, read fresh from <paramref name="lines"/>; the caller has checked the hash.</summary>
     /// <param name="card">The node whose span to read.</param>
@@ -1307,7 +1528,13 @@ public sealed class CodebaseGraphQueries
     private readonly Lazy<IReadOnlyDictionary<string, IReadOnlyList<string>>> _projects;
 
     /// <summary>The directory <paramref name="path"/> stands in, relative to the tree - empty for the tree's root.</summary>
-    private static string DirectoryOf(string path) => path.LastIndexOf('/') is var slash and > 0 ? path[..slash] : string.Empty;
+    /// <param name="path">A file's or a directory's path, relative to the tree with forward separators.</param>
+    public static string DirectoryOf(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        return path.LastIndexOf('/') is var slash and > 0 ? path[..slash] : string.Empty;
+    }
 
     /// <summary>The top directory a file is in, as the outline lists the repository's: its first directory with a slash, or <c>.</c> for a file at the tree's root.</summary>
     private static string TopDirectory(string path) => path.IndexOf('/') is var slash and > 0 ? path[..slash] + "/" : ".";

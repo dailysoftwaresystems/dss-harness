@@ -1,6 +1,7 @@
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Repository;
 
 namespace DssHarness.Tests;
 
@@ -10,6 +11,9 @@ namespace DssHarness.Tests;
 /// </summary>
 internal static class PolicyGrounds
 {
+    /// <summary>The start tree a ground's writes are read against where a test names none: one that holds no directory.</summary>
+    public static TreeDirectories NoDirectories { get; } = TreeDirectories.Of("start", []);
+
     public static AgentPolicyGround Of(
         string workingDirectory,
         IReadOnlyList<string> readRoots,
@@ -24,7 +28,8 @@ internal static class PolicyGrounds
         bool worktreeRules = true,
         bool protectedPaths = true,
         IReadOnlyList<string>? stateDirectories = null,
-        IReadOnlyList<HiddenPlace>? credentialPlaces = null)
+        IReadOnlyList<HiddenPlace>? credentialPlaces = null,
+        TreeDirectories? writesTree = null)
         => new(
             workingDirectory,
             readRoots,
@@ -39,5 +44,8 @@ internal static class PolicyGrounds
             reporterRoot,
             worktreeRules,
             protectedPaths,
-            stateDirectories ?? []);
+            stateDirectories ?? [])
+        {
+            WritesTree = writes is null ? null : writesTree ?? NoDirectories,
+        };
 }

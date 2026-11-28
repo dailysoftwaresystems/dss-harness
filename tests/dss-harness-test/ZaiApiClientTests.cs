@@ -164,9 +164,9 @@ public sealed class ZaiApiClientTests : IDisposable
     {
         var output = new AgentOutput("o", """{"type":"object","additionalProperties":false,"required":["word"],"properties":{"word":{"type":"string"}}}""");
         _endpoint
-            .Then(ZaiApiFixtures.Answer("The word is alpha."))
-            .Then(ZaiApiFixtures.Answer(Envelopes.Of(JsonNode.Parse("""{"wrd":"alpha"}""")).ToJsonString()))
-            .Then(ZaiApiFixtures.Answer(Envelopes.Of(JsonNode.Parse("""{"word":"alpha"}""")).ToJsonString()));
+            .Then(ZaiApiFixtures.Answer(Model, "The word is alpha."))
+            .Then(ZaiApiFixtures.Answer(Model, Envelopes.Of(JsonNode.Parse("""{"wrd":"alpha"}""")).ToJsonString()))
+            .Then(ZaiApiFixtures.Answer(Model, Envelopes.Of(JsonNode.Parse("""{"word":"alpha"}""")).ToJsonString()));
         var run = Run() with { Output = output, RunContext = "run facts" };
 
         var result = await Ran(run);

@@ -20,7 +20,7 @@ namespace DssHarness.Tests;
 /// <summary>
 /// The machine step runners of slice 20a, each over a real repository: orient's facts, the plan check and the machine's
 /// check of a plan's work items, and create-agent's making of the agent the engine named - none, whole, part made with
-/// and without its worktree's commit, deleted, and with no worktree - and the dispatcher that serves each type it has a
+/// and without its worktree's commit, deleted, and one that only reads - and the dispatcher that serves each type it has a
 /// runner for and refuses the rest.
 /// </summary>
 public sealed class FlowStepRunnerTests : IDisposable
@@ -141,6 +141,7 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.Null(output["baseBranch"]);
         Assert.Equal("0123abcd", (string?)output["startCommit"]);
         Assert.False((bool)output["hasRemote"]!);
+        Assert.False((bool)output["onForge"]!);
         Assert.True((bool)output["hasLegs"]!);
         Assert.Equal(2, (int)output["legCount"]!);
         Assert.False((bool)output["anchors"]!);
@@ -154,12 +155,13 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.Equal("""["loose.txt"]""", output["dirtyPaths"]!.ToJsonString());
         Assert.Equal("[]", output["openAgents"]!.ToJsonString());
         Assert.Equal("[]", output["inFlight"]!.ToJsonString());
-        Assert.Equal(output.Select(member => member.Key).Order(StringComparer.Ordinal), new[] { "anchors", "baseBranch", "branch", "ciConfigured", "dirtyPaths", "hasLegs", "hasMutations", "hasRemote", "inFlight", "legCount", "openAgents", "startCommit", "tests" });
+        Assert.Equal(output.Select(member => member.Key).Order(StringComparer.Ordinal), new[] { "anchors", "baseBranch", "branch", "ciConfigured", "dirtyPaths", "hasLegs", "hasMutations", "hasRemote", "inFlight", "legCount", "onForge", "openAgents", "startCommit", "tests" });
     }
 
     /// <summary>
     /// With a remote, the base branch is the pull request's base where the engine filled one, else the remote's default;
-    /// CI declared is then configured; anchors, mutation arms, the open agents of every run and who holds the main tree
+    /// CI declared is configured only where that remote names a repository on a forge, which a repository on this machine
+    /// does not, and CI is read through the forge; anchors, mutation arms, the open agents of every run and who holds the main tree
     /// are each said; the run's records naming no start commit, HEAD is the one.
     /// </summary>
     [Fact]
@@ -183,7 +185,7 @@ public sealed class FlowStepRunnerTests : IDisposable
         harness.FileSystem.CreateDirectory(other.Directory);
         harness.OrchestrationStore.WriteOrchestrator(other, new OrchestratorRecord { Kind = OrchestratorRecord.KindName, Name = "r9", Model = "flow-engine", Parallel = 2, CreatedAt = DateTimeOffset.UnixEpoch });
         harness.OrchestrationStore.WriteAgent(other, new AgentRecord { Kind = AgentRecord.KindName, Name = "a4", Orchestrator = "r9", Model = "m", CreatedAt = DateTimeOffset.UnixEpoch, Worktree = WorktreeAddress.Nested("r9", "a4").Name, WorktreesRoot = context.Config.Worktrees.Root, State = AgentStates.Live });
-        harness.OrchestrationStore.WriteAgent(other, new AgentRecord { Kind = AgentRecord.KindName, Name = "a5", Orchestrator = "r9", Model = "m", CreatedAt = DateTimeOffset.UnixEpoch, Access = AgentRecord.AccessRead, State = AgentStates.Live });
+        harness.OrchestrationStore.WriteAgent(other, new AgentRecord { Kind = AgentRecord.KindName, Name = "a5", Orchestrator = "r9", Model = "m", CreatedAt = DateTimeOffset.UnixEpoch, Access = AgentRecord.AccessRead, Worktree = WorktreeAddress.Nested("r9", "a5").Name, Tree = AgentRecord.TreeRepository, WorktreesRoot = context.Config.Worktrees.Root, State = AgentStates.Live });
 
         var held = await harness.RunLock.TryAcquireAsync(
             context.Layout,
@@ -194,13 +196,19 @@ public sealed class FlowStepRunnerTests : IDisposable
         var head = (await harness.RunGitAsync(repository.Path, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
         var fromRemote = await Orient(harness).RunAsync(Run(OrientStep, repository.Path), Token);
         var fromPullRequest = await Orient(harness).RunAsync(Run(OrientStep, repository.Path, new Dictionary<string, FlowValue> { ["base"] = FlowValue.Of("release") }), Token);
+        await harness.RunGitAsync(repository.Path, ["remote", "set-url", "origin", "https://github.com/acme/widgets.git"], Token);
+        var onForge = await Orient(harness).RunAsync(Run(OrientStep, repository.Path), Token);
 
         Assert.True(fromRemote.Passed, fromRemote.Error);
         var output = fromRemote.Output!.AsObject();
         Assert.Equal("trunk", (string?)output["baseBranch"]);
         Assert.Equal(head, (string?)output["startCommit"]);
         Assert.True((bool)output["hasRemote"]!);
-        Assert.True((bool)output["ciConfigured"]!);
+        Assert.False((bool)output["onForge"]!);
+        Assert.False((bool)output["ciConfigured"]!);
+        Assert.True((bool)onForge.Output!["onForge"]!);
+        Assert.True((bool)onForge.Output!["ciConfigured"]!);
+        Assert.Equal("trunk", (string?)onForge.Output!["baseBranch"]);
         Assert.True((bool)output["anchors"]!);
         Assert.True((bool)output["hasMutations"]!);
         Assert.Equal("""[{"run":"r9","agent":"a4"}]""", output["openAgents"]!.ToJsonString());
@@ -333,9 +341,10 @@ public sealed class FlowStepRunnerTests : IDisposable
     }
 
     /// <summary>
-    /// A reason step's start syncs its view through the dispatcher before its runner is asked - its agent's, the base for
-    /// one that reads, none for an agent the run has no record of - where the run has a graph, each a line of the sync log
-    /// naming the step's start; a run with no graph has none made.
+    /// A reason step's start syncs its view through the dispatcher before its runner is asked - its agent's worktree's, none
+    /// for an agent that only reads, whose own tree's view is synced once its runner readied the tree, and none for an agent
+    /// the run has no record of - where the run has a graph, each a line of the sync log naming the step's start; a run with
+    /// no graph has none made.
     /// </summary>
     [Fact]
     public async Task AReasonStepsStart_SyncsItsView_WhereTheRunHasAGraph()
@@ -364,11 +373,60 @@ public sealed class FlowStepRunnerTests : IDisposable
 
         var lines = File.ReadAllLines(kit.Layout.GraphSyncFile).Select(line => JsonNode.Parse(line)!).Select(line => ((string?)line["view"], (string?)line["why"]));
 
-        Assert.Equal([("base", "test"), ("ag", "think:start"), ("base", "think:start")], lines);
+        Assert.Equal([("base", "test"), ("ag", "think:start")], lines);
         Assert.Contains("b.txt", kit.Harness.OrchestrationStore.ReadGraphView(kit.Layout, "ag")!.Files.Keys);
+
+        // The reader's start synced nothing - the base among it, which is not the tree it reads: the person's edit of the
+        // main checkout is in no record yet.
         Assert.Equal(
-            (await kit.Harness.RunGitAsync(kit.Main, ["hash-object", "a.txt"], Token)).StandardOutput.Trim(),
+            (await kit.Harness.RunGitAsync(kit.Main, ["rev-parse", "HEAD:a.txt"], Token)).StandardOutput.Trim(),
             kit.Harness.OrchestrationStore.ReadGraphManifest(kit.Layout)!.Files["a.txt"].Blob);
+        Assert.False(File.Exists(kit.Layout.GraphViewFile("reader")));
+    }
+
+    /// <summary>
+    /// A reason step whose agent only reads is synced nothing at its start - its tree stands as the agent's last step left
+    /// it until the step's runner brings it to the main checkout's HEAD, or to the commit the step names - and its own
+    /// tree's view once the tree is readied there, a line of the sync log naming the agent, whether its step names a commit
+    /// or not; never the base, which its tree is not. A step of another type that works as the reader is synced the base
+    /// at its start, for no runner of its readies the tree. Red with a reader whose step names no commit served the base.
+    /// </summary>
+    [Fact]
+    public async Task AReadersOwnTreesView_IsSyncedOnlyOnceItsTreeIsReadied_WhetherItsStepNamesACommitOrNot()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        await kit.Harness.CodebaseGraph.SyncAsync(GraphRequest(kit), Token);
+        var start = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+        var plain = Reason(kit, "reader");
+        var atCommit = plain with { Step = plain.Step with { Commit = start } };
+        var syncs = kit.Harness.GraphSyncs;
+
+        IReadOnlyList<(string?, string?)> Lines()
+            => [.. File.ReadAllLines(kit.Layout.GraphSyncFile).Select(line => JsonNode.Parse(line)!).Select(line => ((string?)line["view"], (string?)line["why"]))];
+
+        await syncs.AtStartAsync(plain, Token);
+        await syncs.AtStartAsync(atCommit, Token);
+
+        Assert.Equal([("base", "test")], Lines());
+        Assert.False(File.Exists(kit.Layout.GraphViewFile("reader")));
+
+        await syncs.ReadiedAsync(plain, "reader", Token);
+
+        Assert.Equal([("base", "test"), ("reader", "think:start")], Lines());
+        Assert.True(File.Exists(kit.Layout.GraphViewFile("reader")));
+        PathAssert.Same(kit.Record("reader").WorktreePath(new DssHarness.Core.Repository.HarnessLayout(kit.Main, kit.Main))!, kit.Harness.OrchestrationStore.ReadGraphView(kit.Layout, "reader")!.Tree);
+
+        await syncs.ReadiedAsync(atCommit, "reader", Token);
+
+        Assert.Equal([("base", "test"), ("reader", "think:start"), ("reader", "think:start")], Lines());
+
+        // A closure check working as the reader readies no tree: its start syncs the base.
+        await syncs.AtStartAsync(plain with { Step = new WorkflowStep { Name = "close", Type = "class-closure" }, Instance = "close" }, Token);
+
+        Assert.Equal([("base", "test"), ("reader", "think:start"), ("reader", "think:start"), ("base", "close:start")], Lines());
     }
 
     /// <summary>
@@ -477,7 +535,7 @@ public sealed class FlowStepRunnerTests : IDisposable
         };
 
     private static async Task<IReadOnlyList<string>> CheckAsync(HarnessFactory harness, TempDirectory repository, params JsonNode?[] items)
-        => Validator(harness).Check(items, await harness.ContextLoader.LoadAsync(repository.Path, Token), "r1", Flow);
+        => Validator(harness).Check(items, await harness.ContextLoader.LoadAsync(repository.Path, Token), "r1", Flow, await harness.StartTreeAsync(repository.Path, Token));
 
     /// <summary>A plan whose items each own their own paths, reuse what is there and name what they create passes.</summary>
     [Fact]
@@ -602,10 +660,11 @@ public sealed class FlowStepRunnerTests : IDisposable
         var limited = context with { Config = new HarnessConfig { BuildConfigs = context.Config.BuildConfigs, Legs = context.Config.Legs, Worktrees = new WorktreeSettings { PathLimit = inCopy, PathBudgetReserve = 100 } } };
 
         Assert.True(FlowRunPaths.AtStart(harness.PathBudget, limited, "r1", built, platform.PlatformKey).Result.IsWithinBudget, "the copy and its build alone fit");
-        Assert.Empty(Validator(harness).Check([Item("deep", $"src/{deep}/**")], limited, "r1", Flow));
-        Assert.Empty(Validator(harness).Check([Item("shallow", "src/a/**")], limited, "r1", built));
+        var tree = await harness.StartTreeAsync(repository.Path, Token);
+        Assert.Empty(Validator(harness).Check([Item("deep", $"src/{deep}/**")], limited, "r1", Flow, tree));
+        Assert.Empty(Validator(harness).Check([Item("shallow", "src/a/**")], limited, "r1", built, tree));
 
-        var problem = Assert.Single(Validator(harness).Check([Item("deep", $"src/{deep}/**")], limited, "r1", built));
+        var problem = Assert.Single(Validator(harness).Check([Item("deep", $"src/{deep}/**")], limited, "r1", built, tree));
         Assert.StartsWith("work item 'deep' would work in paths too long for this machine - ", problem, StringComparison.Ordinal);
     }
 
@@ -655,9 +714,533 @@ public sealed class FlowStepRunnerTests : IDisposable
     }
 
     /// <summary>
-    /// The plan check holds a round's items to the issues the run owes its next round: each named in an item's
-    /// <c>settles</c>, none left unsettled, an item may name only an issue the run owes, and the items that settle them
-    /// come first in its output - what the run took from its own rounds is built before the work planned around it.
+    /// What the plan check finds of a reason step's answer at the answer itself is what its own run finds of the same read,
+    /// by the one check both make: two items of one name, an item that must not touch what it owns, an issue owed the next
+    /// round that no item settles, a piece that is no item of the plan - each problem word for word. An answer that gives no
+    /// item, and one whose items are no list, hold nothing at the answer: whether no item is a problem, and what a list that
+    /// is none is, are the check's own moment's to say.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerReadAhead_IsHeldToTheOneCheckThePlanCheckMakes()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items" };
+        var forbidding = Item("two", "src/two/**");
+        forbidding["forbiddenPaths"] = new JsonArray("src/two/*.cs");
+
+        foreach (var read in new[]
+        {
+            new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(new JsonArray(Item("one"), Item("one"))) },
+            new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(new JsonArray(Item("one"), forbidding)) },
+            new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("one"))),
+                ["settleable"] = FlowValue.Of(new JsonArray("nx-1")),
+                ["next"] = FlowValue.Of(new JsonArray(new JsonObject { ["id"] = "nx-1", ["title"] = "the parser drops a field" })),
+            },
+            new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("one"))),
+                ["scope"] = FlowValue.Of(new JsonArray(Piece("added", Item("two", "src/two/**")))),
+                ["known"] = FlowValue.Of(new JsonArray("one")),
+            },
+        })
+        {
+            var ran = await runner.RunAsync(Run(step, repository.Path, read), Token);
+            List<string> found = [.. ran.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+
+            Assert.NotEmpty(found);
+            Assert.Equal(found, await runner.AnswerProblemsAsync(Run(step, repository.Path, read), Token));
+        }
+
+        var none = new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(new JsonArray()) };
+
+        Assert.Equal([PlanValidator.NoItems], (await runner.RunAsync(Run(step, repository.Path, none), Token)).Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>()));
+        Assert.Empty(await runner.AnswerProblemsAsync(Run(step, repository.Path, none), Token));
+        Assert.Empty(await runner.AnswerProblemsAsync(Run(step, repository.Path, new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of("one") }), Token));
+
+        // The architecture names the owners of the judgement at the answer: the types that judge one, what the engine
+        // builds of each, and the one judgement each check's run makes.
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        foreach (var owner in new[]
+        {
+            "FlowCoordinator.AnswerChecksOf",
+            "FlowStepRunners.CorrectionsOf",
+            $"{nameof(WorkflowStepTypes)}.{nameof(WorkflowStepTypes.StepType)}.{nameof(WorkflowStepTypes.StepType.JudgesAnswer)}",
+            $"{nameof(FlowAnswerCheck)}.{nameof(FlowAnswerCheck.ReadOf)}",
+            $"{nameof(PlanCheckRunner)}.{nameof(PlanCheckRunner.AnswerProblemsAsync)}",
+            $"{nameof(ClassClosureStepRunner)}.{nameof(ClassClosureStepRunner.AnswerProblemsAsync)}",
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// A later round's plan update, self-audit or diagnosis is written beside a main tree that holds what earlier rounds
+    /// folded, and read against the run's start tree: an item owning a directory the first round made, written with no
+    /// trailing separator, names that one path there - its builder's every write beneath it would be refused. The check
+    /// refuses it at the answer itself, within the step that gives it (<see cref="PlanCheckRunner.AnswerProblemsAsync"/>,
+    /// which the engine hands that step), as at its own moment, saying to write it ending in a separator - never left to
+    /// the builder; so written, it passes.
+    /// </summary>
+    [Fact]
+    public async Task ALaterRoundsItemOwningADirectoryAnEarlierRoundMade_IsRefusedByTheCheck_WithinTheStepThatGivesIt()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var start = await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token);
+        var startTree = await harness.StartTreeAsync(repository.Path, Token);
+
+        // The first round's fold made src/feature in the main tree.
+        repository.WriteFile("src/feature/made.cs", "made by the first round\n");
+        await harness.CommitAllAsync(repository.Path, "the first round", Token);
+
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items" };
+        var owning = Item("two", "src/feature");
+        var read = new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(new JsonArray(owning.DeepClone())) };
+        var check = Run(step, repository.Path, read) with { Place = new FlowRunPlace(repository.Path, "r1", start, Flow) { StartTree = startTree } };
+        string[] refused =
+        [
+            "work item 'two' owns 'src/feature', which names nothing beneath it: 'src/feature' names a file of the run's start tree, which the run's lists of paths are read against, and a directory of the main tree: write it 'src/feature/'",
+        ];
+
+        Assert.Equal(refused, await runner.AnswerProblemsAsync(check, Token));
+        Assert.Equal(refused, (await runner.RunAsync(check, Token)).Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>()));
+
+        owning["ownedPaths"] = new JsonArray("src/feature/");
+        var written = check with { Read = new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(new JsonArray(owning.DeepClone())) } };
+
+        Assert.Empty(await runner.AnswerProblemsAsync(written, Token));
+        Assert.True((bool)(await runner.RunAsync(written, Token)).Output!["ok"]!);
+    }
+
+    /// <summary>
+    /// A plan update's check passes over, where it reads the main tree as it now is, every item an opened round of the run
+    /// holds that no added or changed piece places: it was checked as its round opened, and what a fold has made of the
+    /// tree since - a directory under an entry another item keeps off, a path it reuses, a class's site, taken away by the
+    /// item that replaced it - is no breach of it, in the round the update joins or, carried from an earlier round, in the
+    /// plan's own list, so the update passes, as one that answers no piece does; a changed piece's item is held to the tree
+    /// as it is, and refused for the path it reuses that is gone, and for nothing else - its forbidden entry naming the new
+    /// directory is no problem. A plan's first check, before any round, holds every item to the tree as it is.
+    /// </summary>
+    [Fact]
+    public async Task AnUpdatesCheck_HoldsToTheMainTreeAsItNowIs_OnlyTheItemsItsPiecesAddOrChange()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        repository.WriteFile("src/old.cs", "replaced by the first round\n");
+        await harness.CommitAllAsync(repository.Path, "the start", Token);
+        var start = await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token);
+        var startTree = await harness.StartTreeAsync(repository.Path, Token);
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items", Scope = "plan.scope" };
+
+        // The round's items: one replaces src/old.cs - the one site of a class whose home it makes under src/feature - and
+        // makes src/feature; the other reuses that file and keeps off that directory.
+        var replacing = Item("a", "src/feature/");
+        replacing["ownedPaths"] = new JsonArray("src/feature/", "src/old.cs");
+        replacing["replaces"] = new JsonArray(new JsonObject { ["path"] = "src/old.cs", ["what"] = "the old parser" });
+        replacing["noClass"] = "";
+        replacing["classes"] = new JsonArray(new JsonObject
+        {
+            ["id"] = "C1",
+            ["invariant"] = "The parser decides each field once",
+            ["home"] = new JsonObject { ["path"] = "src/feature/parser.cs", ["symbol"] = "Parse", ["exists"] = false },
+            ["sites"] = new JsonArray(new JsonObject { ["path"] = "src/old.cs", ["symbol"] = "Parse", ["decides"] = "it parses", ["then"] = "deleted" }),
+            ["searches"] = new JsonArray(new JsonObject { ["data"] = "Parse", ["via"] = "text", ["query"] = "Parse(", ["hits"] = 1 }),
+            ["universe"] = Universes.Of(("kinds", ["one", "two"])),
+            ["action"] = "consolidate",
+            ["notCovered"] = "",
+        });
+        var keeping = Item("b", "src/two/**", reuses: "src/old.cs");
+        keeping["forbiddenPaths"] = new JsonArray("src/feature");
+        var round = new JsonArray(replacing.DeepClone(), keeping.DeepClone());
+
+        // The check is handed the round the update joins and the names the work-item group's instances carry - each an
+        // item of an opened round, none owed to be built again - where the run has them; a plan's first check is handed
+        // neither.
+        async Task<IReadOnlyList<string>> ProblemsAsync(JsonArray items, JsonArray pieces, JsonArray? joins, params string[] opened)
+        {
+            var read = new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(items.DeepClone()),
+                ["scope"] = FlowValue.Of(pieces.DeepClone()),
+                ["known"] = FlowValue.Of(new JsonArray("a", "b")),
+                ["carried"] = FlowValue.Of(new JsonArray([.. opened.Select(name => (JsonNode?)name)])),
+                ["opened"] = FlowValue.Of(new JsonArray([.. opened.Select(name => (JsonNode?)name)])),
+            };
+
+            if (joins is not null)
+            {
+                read["round"] = FlowValue.Of(joins.DeepClone());
+            }
+
+            var result = await runner.RunAsync(Run(step, repository.Path, read) with { Place = new FlowRunPlace(repository.Path, "r1", start, Flow) { StartTree = startTree } }, Token);
+            Assert.True(result.Passed, result.Error);
+            return [.. result.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+        }
+
+        // As the round opened, both were sound.
+        Assert.Empty(await ProblemsAsync(round, [], joins: null));
+
+        // The first item's fold made src/feature and took src/old.cs away.
+        repository.WriteFile("src/feature/made.cs", "made by the first round\n");
+        File.Delete(repository.Combine("src/old.cs"));
+        await harness.CommitAllAsync(repository.Path, "the first round", Token);
+
+        var added = Item("c", "src/three/**");
+        var withAdded = new JsonArray(replacing.DeepClone(), keeping.DeepClone(), added.DeepClone());
+        Assert.Empty(await ProblemsAsync(withAdded, [Piece("added", (JsonObject)added.DeepClone())], round, "a", "b"));
+        Assert.Empty(await ProblemsAsync(round, [], round, "a", "b"));
+
+        // An earlier round's item the plan's list keeps, carried by an instance of the group and in no round the update
+        // joins, is passed over too.
+        Assert.Empty(await ProblemsAsync(withAdded, [Piece("added", (JsonObject)added.DeepClone())], [keeping.DeepClone()], "a", "b"));
+
+        // Changed, the item is checked against the tree as it now is: the path it reuses is gone.
+        Assert.Equal(
+            ["work item 'b' reuses 'src/old.cs', which is not in the main tree: a plan builds on what is there"],
+            await ProblemsAsync(round, [Piece("changed", (JsonObject)keeping.DeepClone())], round, "a", "b"));
+
+        // A plan's first check, before any round, holds every item to the tree as it is.
+        Assert.Equal(
+            [
+                "work item 'a' replaces 'src/old.cs', which is not in the main tree: a plan builds on what is there",
+                "work item 'a''s C1 has its site at 'src/old.cs', which is not in the main tree: the sites are the places that decide today",
+                "work item 'b' reuses 'src/old.cs', which is not in the main tree: a plan builds on what is there",
+            ],
+            await ProblemsAsync(round, [], joins: null));
+    }
+
+    /// <summary>
+    /// The round a plan update raised by the check that opens it joins has not opened: its list is the one that check was
+    /// opening it with, which no instance carries and which that check has just found wanting against the main tree as it
+    /// now is - an item the self-audit wrote, owning a directory the round before made with no trailing separator and
+    /// reusing a file it took away, and the work an update owes the round, changed under a name an earlier round
+    /// carries. The update's check holds every one of them to the tree, so pieces that leave them alone are refused at
+    /// once - never passed, to be found wanting again by the check they were to satisfy - while it passes over the items an
+    /// opened round holds, which the engine hands it by name apart from the names the group carries: what a fold has
+    /// made of the tree since is no breach of them, in the plan's own list and in the live round a later update joins.
+    /// </summary>
+    [Fact]
+    public async Task AnUpdateRaisedByTheCheckThatOpensARound_HoldsThatRoundsItemsToTheMainTree_AndPassesOverAnOpenedRoundsItems()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        repository.WriteFile("src/old.cs", "replaced by the first round\n");
+        await harness.CommitAllAsync(repository.Path, "the start", Token);
+        var start = await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token);
+        var startTree = await harness.StartTreeAsync(repository.Path, Token);
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items", Scope = "plan.scope" };
+
+        // The first round's items: one replaces src/old.cs and makes src/feature; the other reuses that file.
+        var replacing = Item("a", "src/feature/");
+        replacing["ownedPaths"] = new JsonArray("src/feature/", "src/old.cs");
+        replacing["replaces"] = new JsonArray(new JsonObject { ["path"] = "src/old.cs", ["what"] = "the old parser" });
+        var keeping = Item("b", "src/two/**", reuses: "src/old.cs");
+
+        // The first item's fold made src/feature and took src/old.cs away.
+        repository.WriteFile("src/feature/made.cs", "made by the first round\n");
+        File.Delete(repository.Combine("src/old.cs"));
+        await harness.CommitAllAsync(repository.Path, "the first round", Token);
+
+        // The second round's own item, as the self-audit wrote it, and the first round's 'b' as an update owes it again.
+        var audited = Item("x", "src/feature", reuses: "src/old.cs");
+        var owedAgain = Item("b", "src/two/**", reuses: "src/old.cs");
+        owedAgain["title"] = "b, done again";
+        var added = Item("y", "src/y/**");
+
+        async Task<IReadOnlyList<string>> ProblemsAsync(JsonArray items, JsonArray joins, string[] carried, string[] opened)
+        {
+            var read = new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(items.DeepClone()),
+                ["scope"] = FlowValue.Of(new JsonArray(Piece("added", (JsonObject)added.DeepClone()))),
+                ["round"] = FlowValue.Of(joins.DeepClone()),
+                ["known"] = FlowValue.Of(new JsonArray("a", "b", "x")),
+                ["carried"] = FlowValue.Of(new JsonArray([.. carried.Select(name => (JsonNode?)name)])),
+                ["opened"] = FlowValue.Of(new JsonArray([.. opened.Select(name => (JsonNode?)name)])),
+            };
+
+            var result = await runner.RunAsync(Run(step, repository.Path, read) with { Place = new FlowRunPlace(repository.Path, "r1", start, Flow) { StartTree = startTree } }, Token);
+            Assert.True(result.Passed, result.Error);
+            return [.. result.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+        }
+
+        // Raised by the second round's opening check: the round it joins is that check's list, the audited item and the owed
+        // one, carried by no instance - 'b' is a name the group carries, and no opened round holds it as it is owed now.
+        Assert.Equal(
+            [
+                "work item 'x' owns 'src/feature', which names nothing beneath it: 'src/feature' names a file of the run's start tree, which the run's lists of paths are read against, and a directory of the main tree: write it 'src/feature/'",
+                "work item 'x' reuses 'src/old.cs', which is not in the main tree: a plan builds on what is there",
+                "work item 'b' reuses 'src/old.cs', which is not in the main tree: a plan builds on what is there",
+            ],
+            await ProblemsAsync(
+                new JsonArray(replacing.DeepClone(), added.DeepClone()),
+                new JsonArray(audited.DeepClone(), owedAgain.DeepClone()),
+                carried: ["a", "b"],
+                opened: ["a"]));
+
+        // Raised by a later check, while the first round is the one the run reached: its items are an opened round's, and
+        // the plan's list keeps them as they were - each passed over, the piece alone held to the tree.
+        Assert.Empty(await ProblemsAsync(
+            new JsonArray(replacing.DeepClone(), keeping.DeepClone(), added.DeepClone()),
+            new JsonArray(replacing.DeepClone(), keeping.DeepClone()),
+            carried: ["a", "b"],
+            opened: ["a", "b"]));
+    }
+
+    /// <summary>
+    /// A removed piece's item builds nothing - the step that takes it back undoes what was built, and nothing at all where
+    /// nothing was - so the rules that read the main tree as it now is pass it over whatever round holds it, or none: an
+    /// item an update owed the next round, known to the check from its visit before and carried by no instance, is
+    /// withdrawn though the fold of an item of the round before took away the file it reused. Changed instead, the same
+    /// item is held to the tree, and refused for it.
+    /// </summary>
+    [Fact]
+    public async Task RemovingAnOwedItemWhoseReuseAFoldTookAway_IsTaken()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        repository.WriteFile("src/x.cs", "replaced by the first round\n");
+        await harness.CommitAllAsync(repository.Path, "the start", Token);
+        var start = await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token);
+        var startTree = await harness.StartTreeAsync(repository.Path, Token);
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items", Scope = "plan.scope" };
+
+        // The first round runs 'a', which replaces src/x.cs, and 'b'; an update owed 'c', which reuses that file, to the next.
+        var replacing = Item("a", "src/a/**");
+        replacing["ownedPaths"] = new JsonArray("src/a/**", "src/x.cs");
+        replacing["replaces"] = new JsonArray(new JsonObject { ["path"] = "src/x.cs", ["what"] = "the old parser" });
+        var round = new JsonArray(replacing.DeepClone(), Item("b", "src/b/**"));
+        var owed = Item("c", "src/c/**", reuses: "src/x.cs");
+
+        // The fold of 'a' took src/x.cs away.
+        File.Delete(repository.Combine("src/x.cs"));
+        await harness.CommitAllAsync(repository.Path, "the fold of a", Token);
+
+        async Task<IReadOnlyList<string>> ProblemsAsync(JsonArray items, string kind)
+        {
+            var read = new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(items),
+                ["scope"] = FlowValue.Of(new JsonArray(Piece(kind, (JsonObject)owed.DeepClone()))),
+                ["round"] = FlowValue.Of(round.DeepClone()),
+                ["known"] = FlowValue.Of(new JsonArray("a", "b", "c")),
+                ["carried"] = FlowValue.Of(new JsonArray("a", "b")),
+                ["opened"] = FlowValue.Of(new JsonArray("a", "b")),
+            };
+
+            var result = await runner.RunAsync(Run(step, repository.Path, read) with { Place = new FlowRunPlace(repository.Path, "r1", start, Flow) { StartTree = startTree } }, Token);
+            Assert.True(result.Passed, result.Error);
+            return [.. result.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+        }
+
+        Assert.Empty(await ProblemsAsync(new JsonArray(replacing.DeepClone(), Item("b", "src/b/**")), FlowUpdatePieceKinds.Removed));
+        Assert.Equal(
+            ["work item 'c' reuses 'src/x.cs', which is not in the main tree: a plan builds on what is there"],
+            await ProblemsAsync(new JsonArray(replacing.DeepClone(), Item("b", "src/b/**"), owed.DeepClone()), FlowUpdatePieceKinds.Changed));
+
+        // The help and the architecture say the rule where they state which items the main tree is asked of.
+        Assert.Contains(
+            "and every removed piece's item, whatever round holds it or none, for an item taken back builds nothing; an item of a "
+                + "round that has not opened - of the list the check that opens it was opening it with, where that check raised the "
+                + "update - is held to the tree as it is",
+            Prose.Words(DssHarness.Core.Help.HelpTopics.Render("workflows")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"and every removed piece's item, whatever round holds it or none, for an item taken back builds nothing (`{nameof(PlanValidator)}.{nameof(PlanValidator.CheckedBefore)}`, "
+                + $"handed to `{nameof(PlanValidator)}.{nameof(PlanValidator.Check)}` as `checkedBefore`). The engine hands every `validate-plan` step of a run with an `amend` "
+                + "block the names of those items (`opened`, read where the check starts, `FlowCoordinator.CheckReads`)",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An update raised by the check that opens a round joins a round that has not opened, and its check holds that
+    /// round's list whether or not the update answers a piece - the engine hands it the names an earlier round carries
+    /// that the list may not take (<c>opening</c>): an update of none that leaves an item reusing a file a fold took away,
+    /// and one under a name an earlier round carries, is told both, at its own moment and within the planner's own step
+    /// alike, as the check that opens the round would find them again - never passed, to spend the one update an
+    /// opening raises. A work item the round owes an update under a carried name is no breach: the engine leaves it out
+    /// of the names. Where the round has opened - no such names handed - an update of no piece is no update, and nothing
+    /// more is checked.
+    /// </summary>
+    [Fact]
+    public async Task AnUpdateOfNoPieceForARoundNotOpened_IsHeldToThatRoundsList()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        repository.WriteFile("src/old.cs", "taken away by a fold\n");
+        await harness.CommitAllAsync(repository.Path, "the start", Token);
+        var start = await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token);
+        var startTree = await harness.StartTreeAsync(repository.Path, Token);
+        File.Delete(repository.Combine("src/old.cs"));
+        await harness.CommitAllAsync(repository.Path, "a fold", Token);
+
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items", Scope = "plan.scope" };
+
+        // The round the update joins, as the check that opens it was opening it: the self-audit's 'x' reuses the file the
+        // fold took away, its 'one' bears the name of an item the first round built, and 'two' is owed again under its
+        // name by an update.
+        var round = new JsonArray(Item("x", "src/x/**", reuses: "src/old.cs"), Item("one", "src/again/**"), Item("two", "src/two/**"));
+
+        FlowStepRun CheckOf(string[]? opening)
+        {
+            var read = new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("a", "src/a/**"))),
+                ["scope"] = FlowValue.Of(new JsonArray()),
+                ["round"] = FlowValue.Of(round.DeepClone()),
+                ["known"] = FlowValue.Of(new JsonArray("a", "one", "two", "x")),
+                ["carried"] = FlowValue.Of(new JsonArray("a", "one", "two")),
+                ["opened"] = FlowValue.Of(new JsonArray("a", "one", "two")),
+            };
+
+            if (opening is not null)
+            {
+                read["opening"] = FlowValue.Of(new JsonArray([.. opening.Select(name => (JsonNode?)name)]));
+            }
+
+            return Run(step, repository.Path, read) with { Place = new FlowRunPlace(repository.Path, "r1", start, Flow) { StartTree = startTree } };
+        }
+
+        string[] found =
+        [
+            "work item 'one' is named as a work item an earlier round of the run carries, and a work item is known by its name across the run - its tests and its updates are kept under it: a further item is named for what it settles, and one that does that item again is a changed piece of it",
+            "work item 'x' reuses 'src/old.cs', which is not in the main tree: a plan builds on what is there",
+        ];
+
+        var held = await runner.RunAsync(CheckOf(["a", "one"]), Token);
+        Assert.True(held.Passed, held.Error);
+        Assert.Equal(found, held.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>()));
+        Assert.Equal(found, await runner.AnswerProblemsAsync(CheckOf(["a", "one"]), Token));
+
+        // A round that has opened: an update of no piece is no update.
+        Assert.Empty(await runner.AnswerProblemsAsync(CheckOf(null), Token));
+
+        // The architecture says the rule where it says what the check of a round not opened holds.
+        Assert.Contains(
+            "is checked with that round's list whether or not the update answers a piece",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A removed piece naming an item of the list a round is opening with, which no instance carries, takes it out of that
+    /// list: the check that opens the round drops the item the engine hands it as withdrawn from its own items - what was
+    /// wrong with it is no problem of the round, for nothing of it is built - and the check of the update that withdraws
+    /// it keeps the item out of the list the round opens with, so it meets no other item's paths there.
+    /// </summary>
+    [Fact]
+    public async Task AWithdrawnItem_IsDroppedByTheCheckThatOpensItsRound_AndKeptOutOfTheListAnUpdateJoins()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var start = await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token);
+        var startTree = await harness.StartTreeAsync(repository.Path, Token);
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+
+        async Task<JsonObject> OutputAsync(WorkflowStep step, Dictionary<string, FlowValue> read)
+        {
+            var result = await runner.RunAsync(Run(step, repository.Path, read) with { Place = new FlowRunPlace(repository.Path, "r1", start, Flow) { StartTree = startTree } }, Token);
+            Assert.True(result.Passed, result.Error);
+            return result.Output!.AsObject();
+        }
+
+        // 'q' reuses a file the tree does not hold, and owns what 'r' owns.
+        var withdrawn = Item("q", "src/r/**", reuses: "src/gone.cs");
+        var kept = Item("r", "src/r/**");
+
+        var opened = await OutputAsync(
+            new WorkflowStep { Name = "item-check", Type = "validate-plan", Items = "plan.items" },
+            new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(withdrawn.DeepClone(), kept.DeepClone())),
+                ["owed"] = FlowValue.Of(new JsonArray()),
+                ["withdrawn"] = FlowValue.Of(new JsonArray("q")),
+                ["carried"] = FlowValue.Of(new JsonArray()),
+                ["opened"] = FlowValue.Of(new JsonArray()),
+            });
+
+        Assert.Equal((true, "[]"), ((bool)opened["ok"]!, opened["problems"]!.ToJsonString()));
+        Assert.Equal(["r"], opened["items"]!.AsArray().Select(FlowWorkItems.NameOf));
+
+        var updating = await OutputAsync(
+            new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items", Scope = "plan.scope" },
+            new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("a", "src/a/**"))),
+                ["scope"] = FlowValue.Of(new JsonArray(Piece("removed", (JsonObject)withdrawn.DeepClone()))),
+                ["round"] = FlowValue.Of(new JsonArray(withdrawn.DeepClone(), kept.DeepClone())),
+                ["known"] = FlowValue.Of(new JsonArray("a", "q", "r")),
+                ["carried"] = FlowValue.Of(new JsonArray("a")),
+                ["opened"] = FlowValue.Of(new JsonArray("a")),
+                ["opening"] = FlowValue.Of(new JsonArray("a")),
+            });
+
+        Assert.Equal((true, "[]"), ((bool)updating["ok"]!, updating["problems"]!.ToJsonString()));
+    }
+
+    /// <summary>
+    /// The check that opens a round holds to the main tree as it now is every item the round builds - its own new items,
+    /// and the work updates owe it that adds or changes an item - and passes over the items an opened round holds that it
+    /// builds not again: an owed removed piece's, whose step takes back what was built, and, in a round that carries the
+    /// owed work alone, its own items, which the round before built under those names. A fold since that took away a file
+    /// one of those reused is no breach of it, and the round opens.
+    /// </summary>
+    [Fact]
+    public async Task TheCheckThatOpensARound_PassesOverTheItemsAnOpenedRoundHolds_ThatItBuildsNotAgain()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        repository.WriteFile("src/old.cs", "taken away by a fold\n");
+        await harness.CommitAllAsync(repository.Path, "the start", Token);
+        var start = await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token);
+        var startTree = await harness.StartTreeAsync(repository.Path, Token);
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "item-check", Type = "validate-plan", Items = "plan.items" };
+
+        File.Delete(repository.Combine("src/old.cs"));
+        await harness.CommitAllAsync(repository.Path, "a fold", Token);
+
+        async Task<IReadOnlyList<string>> ProblemsAsync(Dictionary<string, FlowValue> read)
+        {
+            var result = await runner.RunAsync(Run(step, repository.Path, read) with { Place = new FlowRunPlace(repository.Path, "r1", start, Flow) { StartTree = startTree } }, Token);
+            Assert.True(result.Passed, result.Error);
+            return [.. result.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+        }
+
+        // A loop's later round: its own new item, an owed changed one and an owed removed one each reuse the file a fold
+        // took away; the engine hands as opened the names the group carries but the one an owed piece does again.
+        Assert.Equal(
+            [
+                "work item 'w' reuses 'src/old.cs', which is not in the main tree: a plan builds on what is there",
+                "work item 'y' reuses 'src/old.cs', which is not in the main tree: a plan builds on what is there",
+            ],
+            await ProblemsAsync(new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("w", "src/w/**", reuses: "src/old.cs"))),
+                ["owed"] = FlowValue.Of(new JsonArray(Item("y", "src/y/**", reuses: "src/old.cs"), Item("z", "src/z/**", reuses: "src/old.cs"))),
+                ["carried"] = FlowValue.Of(new JsonArray("y", "z")),
+                ["opened"] = FlowValue.Of(new JsonArray("z")),
+            }));
+
+        // A round that carries the owed work alone: its own items, which the round before built, are passed over.
+        Assert.Empty(await ProblemsAsync(new Dictionary<string, FlowValue>
+        {
+            ["items"] = FlowValue.Of(new JsonArray(Item("p", "src/p/**", reuses: "src/old.cs"))),
+            ["owed"] = FlowValue.Of(new JsonArray(Item("n", "src/n/**"))),
+            ["owedAlone"] = FlowValue.Of(true),
+            ["carried"] = FlowValue.Of(new JsonArray("p")),
+            ["opened"] = FlowValue.Of(new JsonArray("p")),
+        }));
+    }
+
+    /// <summary>
+    /// The plan check that opens a round holds its items to the issues the run owes its next round: each named in an
+    /// item's <c>settles</c>, none left unsettled, an item may name only an issue the run owes, and the items that settle
+    /// them come first in its output - what the run took from its own rounds is built before the work planned around it.
     /// </summary>
     [Fact]
     public async Task ThePlanCheck_HoldsItsItemsToTheRunsNextRound_AndOrdersTheSettlingOnesFirst()
@@ -665,16 +1248,6 @@ public sealed class FlowStepRunnerTests : IDisposable
         var (harness, repository) = await RepositoryAsync();
         var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
         var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items" };
-        JsonObject Issue(string id) => new()
-        {
-            ["id"] = id,
-            ["title"] = "a defect in the parser",
-            ["description"] = "what it is",
-            ["where"] = new JsonArray("src/Parser.cs"),
-            ["files"] = new JsonArray("src/Parser.cs"),
-            ["build"] = "the leg the parser tests build",
-            ["measureFirst"] = new JsonArray(),
-        };
 
         // The round settles the issue with its own item, planned after the work around it: the check answers ok, and
         // its items carry the settling one first.
@@ -686,7 +1259,8 @@ public sealed class FlowStepRunnerTests : IDisposable
             Run(step, repository.Path, new Dictionary<string, FlowValue>
             {
                 ["items"] = items,
-                ["next"] = FlowValue.Of(new JsonArray(Issue("nx-1"))),
+                ["settleable"] = FlowValue.Of(new JsonArray("nx-1")),
+                ["next"] = FlowValue.Of(new JsonArray(NextIssue("nx-1"))),
             }),
             Token);
 
@@ -702,7 +1276,8 @@ public sealed class FlowStepRunnerTests : IDisposable
             Run(step, repository.Path, new Dictionary<string, FlowValue>
             {
                 ["items"] = FlowValue.Of(new JsonArray(Item("around"), stranger)),
-                ["next"] = FlowValue.Of(new JsonArray(Issue("nx-1"))),
+                ["settleable"] = FlowValue.Of(new JsonArray("nx-1")),
+                ["next"] = FlowValue.Of(new JsonArray(NextIssue("nx-1"))),
             }),
             Token);
 
@@ -715,6 +1290,183 @@ public sealed class FlowStepRunnerTests : IDisposable
             ],
             [.. unsettled.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
     }
+
+    /// <summary>
+    /// The plan check holds an item's <c>needs</c> to the issues the recovery takes whose ids the engine hands it
+    /// (<c>fixes</c>): an item that needs one of them passes, its items kept as they were; one that names an issue the
+    /// recovery takes no fix of is refused, for the engine would hold it for no fix - where the engine hands no issue as
+    /// well; and a check handed none at all - a recovery's - refuses every need with the true reason, that its items are
+    /// never held for a fix, never that the issue is not one the run is fixing.
+    /// </summary>
+    [Fact]
+    public async Task ThePlanCheck_HoldsAnItemsNeedsToTheIssuesTheRecoveryFixes()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items" };
+        var needing = Item("build-on-the-fix", "src/Parser.cs");
+        needing["needs"] = new JsonArray("triage+2");
+        var stranger = Item("build-on-what-is-not-fixed", "src/Lexer.cs");
+        stranger["needs"] = new JsonArray("triage+2", "pe-1");
+
+        async Task<IReadOnlyList<string>> ProblemsAsync(JsonArray items, JsonArray? fixes)
+        {
+            var read = new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(items) };
+
+            if (fixes is not null)
+            {
+                read["fixes"] = FlowValue.Of(fixes);
+            }
+
+            var result = await runner.RunAsync(Run(step, repository.Path, read), Token);
+
+            Assert.True(result.Passed, result.Error);
+            Assert.Equal(items.Select(FlowWorkItems.NameOf), result.Output!["items"]!.AsArray().Select(FlowWorkItems.NameOf));
+            return [.. result.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+        }
+
+        Assert.Empty(await ProblemsAsync(new JsonArray(Item("around"), needing.DeepClone()), new JsonArray("triage", "triage+2")));
+        Assert.Equal(
+            ["the item 'build-on-what-is-not-fixed' needs the fix of 'pe-1', which is not an issue the run is fixing or has fixed, nor one joined to an issue it is still triaging"],
+            await ProblemsAsync(new JsonArray(needing.DeepClone(), stranger.DeepClone()), new JsonArray("triage+2")));
+        Assert.Equal(
+            ["the item 'build-on-the-fix' needs the fix of 'triage+2', which is not an issue the run is fixing or has fixed, nor one joined to an issue it is still triaging"],
+            await ProblemsAsync(new JsonArray(needing.DeepClone()), []));
+        Assert.Equal(
+            ["the item 'build-on-the-fix' needs the fix of 'triage+2', and the items this check reads need no fix: only an item a round opens with is held for one, and a recovery's remedy never is"],
+            await ProblemsAsync(new JsonArray(needing.DeepClone()), null));
+    }
+
+    /// <summary>
+    /// A check handed the issues the run owes its next round and the round a plan update's pieces join holds the list that
+    /// round opens with to them - the round's own items, less the one a changed piece names, with the pieces' items, or
+    /// the round's own items alone where the update answers no piece - and not the plan's own list: an issue an item of
+    /// the round settles is settled though no item of the plan names it, and one only the plan's list settles is not, for
+    /// the round would open without it, whether the update gives a piece or none.
+    /// </summary>
+    [Fact]
+    public async Task ACheckHandedTheRoundAnUpdateJoins_HoldsThatRoundsListToTheOwedIssues()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items", Scope = "plan.scope" };
+        var settling = Item("settle-the-parser", "src/Parser.cs");
+        settling["settles"] = "nx-1";
+        var moved = Item("two", "src/moved/**");
+
+        async Task<IReadOnlyList<string>> ProblemsAsync(JsonArray items, JsonArray round, bool pieces = true)
+        {
+            var result = await runner.RunAsync(
+                Run(step, repository.Path, new Dictionary<string, FlowValue>
+                {
+                    ["items"] = FlowValue.Of(items),
+                    ["scope"] = FlowValue.Of(pieces ? new JsonArray(Piece("changed", (JsonObject)moved.DeepClone())) : new JsonArray()),
+                    ["round"] = FlowValue.Of(round),
+                    ["known"] = FlowValue.Of(new JsonArray("one", "two", "settle-the-parser")),
+                    ["settleable"] = FlowValue.Of(new JsonArray("nx-1")),
+                    ["next"] = FlowValue.Of(new JsonArray(NextIssue("nx-1"))),
+                }),
+                Token);
+
+            Assert.True(result.Passed, result.Error);
+            return [.. result.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+        }
+
+        // The round's own item settles the issue: the list it opens with settles it, though the plan's names none.
+        Assert.Empty(await ProblemsAsync(new JsonArray(Item("one"), moved.DeepClone()), new JsonArray(settling.DeepClone(), Item("two", "src/two/**"))));
+
+        // Only the plan's list settles it: the round would open without it.
+        Assert.Equal(
+            ["the issue 'nx-1' (a defect in the parser) is owed the next round, and no work item settles it"],
+            await ProblemsAsync(new JsonArray(settling.DeepClone(), moved.DeepClone()), new JsonArray(Item("two", "src/two/**"))));
+
+        // An update that answers no piece leaves the round's own list as it opens: the round's item settles the issue, and
+        // an item of the plan alone does not.
+        Assert.Empty(await ProblemsAsync(new JsonArray(Item("one")), new JsonArray(settling.DeepClone(), Item("two", "src/two/**")), pieces: false));
+        Assert.Equal(
+            ["the issue 'nx-1' (a defect in the parser) is owed the next round, and no work item settles it"],
+            await ProblemsAsync(new JsonArray(settling.DeepClone(), Item("one")), new JsonArray(Item("two", "src/two/**")), pieces: false));
+    }
+
+    /// <summary>
+    /// A plan check handed the ids of the issues the run owes and not the issues to hold its items to - the plan's, once
+    /// the round its plan opens is no longer the next - takes an item that settles one, refuses one that names an issue
+    /// the run does not owe, and demands nothing: an owed issue no item of it settles is no problem of its, and its items
+    /// keep their order, for the round's own check holds the round to them. A check handed an empty list refuses every
+    /// settles as naming no owed issue; one handed neither - a recovery's - refuses every settles with the true reason,
+    /// that its items settle no issue.
+    /// </summary>
+    [Fact]
+    public async Task APlanCheckHandedTheOwedIds_TakesAnItemThatSettlesOne_AndDemandsNothing()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items" };
+        var settling = Item("settle-the-parser", "src/Parser.cs");
+        settling["settles"] = "nx-1";
+
+        var taken = await runner.RunAsync(
+            Run(step, repository.Path, new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("around"), settling)),
+                ["settleable"] = FlowValue.Of(new JsonArray("nx-1", "nx-2")),
+            }),
+            Token);
+
+        Assert.True(taken.Passed, taken.Error);
+        Assert.True((bool)taken.Output!["ok"]!, string.Join("; ", taken.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())));
+        Assert.Equal(["around", "settle-the-parser"], [.. taken.Output["items"]!.AsArray().Select(item => item!["name"]!.GetValue<string>())]);
+
+        var stranger = Item("settle-what-it-owes-not", "src/Parser.cs");
+        stranger["settles"] = "nx-9";
+
+        var refused = await runner.RunAsync(
+            Run(step, repository.Path, new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("around"), stranger)),
+                ["settleable"] = FlowValue.Of(new JsonArray("nx-1")),
+            }),
+            Token);
+
+        Assert.True(refused.Passed, refused.Error);
+        Assert.False((bool)refused.Output!["ok"]!);
+        Assert.Equal(
+            ["the item 'settle-what-it-owes-not' settles 'nx-9', which is not an issue the run owes its next round"],
+            [.. refused.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+
+        var owingNone = await runner.RunAsync(
+            Run(step, repository.Path, new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(new JsonArray(Item("around"), settling.DeepClone())), ["settleable"] = FlowValue.Of(new JsonArray()) }),
+            Token);
+
+        Assert.True(owingNone.Passed, owingNone.Error);
+        Assert.False((bool)owingNone.Output!["ok"]!);
+        Assert.Equal(
+            ["the item 'settle-the-parser' settles 'nx-1', which is not an issue the run owes its next round"],
+            [.. owingNone.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+
+        // A check handed no ids at all - a recovery's - says the true reason: its items settle no issue.
+        var unowed = await runner.RunAsync(
+            Run(step, repository.Path, new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(new JsonArray(Item("around"), settling.DeepClone())) }),
+            Token);
+
+        Assert.True(unowed.Passed, unowed.Error);
+        Assert.False((bool)unowed.Output!["ok"]!);
+        Assert.Equal(
+            ["the item 'settle-the-parser' settles 'nx-1', and the items this check reads settle no issue: only an item a round opens with settles one the run owes its next round, and a recovery's remedy never does"],
+            [.. unowed.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+    }
+
+    /// <summary>One issue the run owes its next round, as the engine hands it to the check that opens a round.</summary>
+    private static JsonObject NextIssue(string id) => new()
+    {
+        ["id"] = id,
+        ["title"] = "a defect in the parser",
+        ["description"] = "what it is",
+        ["where"] = new JsonArray("src/Parser.cs"),
+        ["files"] = new JsonArray("src/Parser.cs"),
+        ["build"] = "the leg the parser tests build",
+        ["measureFirst"] = new JsonArray(),
+    };
 
     /// <summary>One piece of a plan update, as the plan's scope concluded it.</summary>
     private static JsonObject Piece(string kind, JsonObject? item = null, string? forId = null, string changed = "what the update changes")
@@ -733,7 +1485,8 @@ public sealed class FlowStepRunnerTests : IDisposable
     /// Each breach of the pieces, worded once - by the one rule of a piece's shape the engine reads a planning step's
     /// conclusion by, so a piece the check passes is one the engine takes: the wrong shape, the wrong kind, no change
     /// said (the first breach of a piece is its problem), an item the plan does not hold, a piece that names what the
-    /// plan never had, a piece named twice, a told piece that names nothing.
+    /// plan never had, a piece named twice, a told piece that names nothing. A removed piece whose work item no instance
+    /// carries builds nothing, so its item is held to no other in the list the round opens with.
     /// </summary>
     [Fact]
     public async Task EachBreachOfThePieces_IsAProblem()
@@ -781,8 +1534,6 @@ public sealed class FlowStepRunnerTests : IDisposable
                 "the pieces of the plan's scope name the work item 'two' twice, and a work item is named by one piece of an update",
                 "the piece for 'two' is 'removed', and no work item the plan had is named so: one an instance of the work-item group carries, or an item of the list this check checked on its visit before",
                 "the piece for 'one' is 'removed', and no work item the plan had is named so: one an instance of the work-item group carries, or an item of the list this check checked on its visit before",
-                "2 work items are named 'two', and a work item is known by its name: name each once",
-                "work items 'two' and 'two' both own what 'src/two/**' and 'src/two/**' match: no file is written by two items, so give it to one",
             ],
             await ProblemsAsync(new Dictionary<string, FlowValue>
             {
@@ -1220,16 +1971,26 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.Equal(HarnessExit.InternalError, unnamed.Exit);
     }
 
-    /// <summary>The agent of a read-only reason step is made with no worktree, by the same making.</summary>
+    /// <summary>
+    /// The agent of a read-only reason step is made by the same making, as one that only reads: its tree a repository of
+    /// its own at the main checkout's HEAD, as every agent's is.
+    /// </summary>
     [Fact]
-    public async Task TheMaking_MakesAnAgentWithNoWorktree()
+    public async Task TheMaking_MakesAnAgentThatOnlyReads_ItsTreeAtTheMainCheckoutsHead()
     {
         var (harness, repository) = await RepositoryAsync();
         var layout = await RunAsync(harness, repository);
+        var head = (await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token))!;
 
-        var made = await Create(harness).MakeAsync(Run(new WorkflowStep { Name = "think", Type = "reason" }, repository.Path, made: new FlowMadeAgent("a2", "model-one")), noWorktree: true, Token);
+        var made = await Create(harness).MakeAsync(Run(new WorkflowStep { Name = "think", Type = "reason" }, repository.Path, made: new FlowMadeAgent("a2", "model-one")), readsOnly: true, Token);
 
         Assert.True(made.Passed, made.Error);
-        Assert.True(harness.OrchestrationStore.ReadAgent(layout, "a2")!.Reads);
+
+        var record = harness.OrchestrationStore.ReadAgent(layout, "a2")!;
+        var tree = record.WorktreePath(new HarnessLayout(repository.Path, repository.Path))!;
+
+        Assert.True(record.Reads);
+        Assert.Equal((AgentRecord.TreeRepository, head), (record.Tree, record.Base));
+        Assert.Equal(head, await harness.GitClient.ResolveCommitAsync(tree, "HEAD", Token));
     }
 }

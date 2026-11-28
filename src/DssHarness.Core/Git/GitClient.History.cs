@@ -70,7 +70,6 @@ public sealed partial class GitClient
                 // names, and a piece of each is no pack the copy can take.
                 ["-c", "pack.packSizeLimit=0", "pack-objects", "--revs", "--quiet", Path.Combine(into, PackBase)],
                 echoOutput: false,
-                untranslated: false,
                 indexFile: null,
                 revisions.ToString(),
                 cancellationToken)
@@ -602,7 +601,6 @@ public sealed partial class GitClient
                 directory,
                 ["rev-list", "--stdin"],
                 echoOutput: false,
-                untranslated: false,
                 indexFile: null,
                 string.Concat(commits.Select(commit => commit + "\n")) + "^" + from + "\n",
                 cancellationToken)
@@ -629,7 +627,6 @@ public sealed partial class GitClient
                 directory,
                 ["cat-file", "--batch-check"],
                 echoOutput: false,
-                untranslated: false,
                 indexFile: null,
                 string.Concat(ids.Select(id => id + "\n")),
                 cancellationToken)

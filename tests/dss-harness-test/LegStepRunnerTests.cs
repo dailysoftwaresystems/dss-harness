@@ -84,6 +84,11 @@ public sealed class LegStepRunnerTests : IDisposable
             Workflows = workflow is null ? null : [workflow],
             Worktrees = new WorktreeSettings { PathLimit = 100_000 },
             AgentPolicy = isolation is null ? null : new AgentPolicyConfig { Isolation = isolation },
+
+            // The models the advisor a workflow names runs on, as init writes them, where a run of one is started.
+            Defaults = new HarnessDefaults { AgentTier = workflow is null ? null : TestAdvice.AgentTier },
+            Providers = workflow is null ? [] : TestAdvice.Providers,
+            TierConfig = workflow is null ? new(StringComparer.OrdinalIgnoreCase) : TestAdvice.TierConfig,
         };
     }
 
@@ -735,7 +740,7 @@ public sealed class LegStepRunnerTests : IDisposable
     public async Task ARunOfAWorkflow_RunsItsLegStep_AndRecordsTheTreeLetGo()
     {
         var (harness, repository) = await RepositoryAsync(Config(localCopy: true, workflow: "flow", isolation: "preferred"));
-        repository.WriteFile(".harness-config/workflows/flow/flow.yml", """
+        TestAdvice.WriteWorkflow(repository, "flow", """
             name: flow
             steps:
               - name: probe
@@ -811,8 +816,8 @@ public sealed class LegStepRunnerTests : IDisposable
     }
 
     /// <summary>
-    /// A step whose in names an agent the run made none for is the engine's fault (70), and one whose agent has no
-    /// worktree - read-only, or deleted - is refused (13): neither runs a leg.
+    /// A step whose in names an agent the run made none for is the engine's fault (70), and one whose agent has no live
+    /// record naming a worktree - none, or deleted - is refused (13): neither runs a leg.
     /// </summary>
     [Fact]
     public async Task AStepWorkingInNoWorktree_RunsNothing()

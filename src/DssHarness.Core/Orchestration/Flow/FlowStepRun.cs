@@ -59,6 +59,42 @@ public sealed record FlowPreExistingReport(string Title, string Description, str
                     issue["blocks"] is JsonValue blocks && blocks.TryGetValue<bool>(out var stops) && stops)),
         ];
     }
+
+    /// <summary>The tag the part of a reporting step's prompt that names the issues the run holds already is wrapped in, as the first user message wraps its own parts.</summary>
+    public const string KnownTag = "pre-existing";
+
+    /// <summary>
+    /// The part a reason step that reports issues - its <c>onPreExisting</c> names a triage - is given at the end of
+    /// its prompt: the issues that were there before the run which its steps reported already, each line one's id, what
+    /// became of it, its title and where it is, so the step reports again only one that stops its own work, and a
+    /// repeat worded differently raises no triage of its own. A triage is given those it may name - each taken before its
+    /// own - with the ids of those it may join - being triaged, being fixed or fixed already - so it names the issue its
+    /// own repeats in <c>duplicates</c>, or the one whose root cause its own shares in <c>joins</c>, by its id, and never
+    /// one its answer would be refused for: told, as the engine settles it, that what becomes of the issue it repeats
+    /// settles its own - its reporter running again once that issue's fix ends - and which of them were fixed before its
+    /// issue was met, a fix that did not hold, whose repeat is fixed again rather than a duplicate. Null where the run
+    /// holds none it may be told, and the prompt is as its template fills.
+    /// </summary>
+    /// <param name="held">Each issue the step may be told, as <c>{run.preExisting}</c> words it: its id, what became of it, then its title and where it is.</param>
+    /// <param name="joinable">For a triage, the ids of the issues it may join; null for a step that reports issues.</param>
+    /// <param name="fixedBefore">For a triage, the ids of the issues among those it is told whose fix was done before its issue was met; none for a step that reports issues.</param>
+    public static string? Known(IReadOnlyList<string> held, IReadOnlyList<string>? joinable = null, IReadOnlyList<string>? fixedBefore = null)
+        => held.Count == 0
+            ? null
+            : joinable is null
+                ? $"\n\n<{KnownTag}>\nThe issues that were there before this run which its steps have reported already, each with its id, what became of it, its title and where it is:\n\n"
+                    + string.Concat(held.Select(line => $"- {line}\n"))
+                    + $"\nReport none of these again under preExisting, however you would word it, unless it stops your own work: a step of the run holds each one already.\n</{KnownTag}>\n"
+                : $"\n\n<{KnownTag}>\nThe issues that were there before this run which it took before yours, each with its id, what became of it, its title and where it is - one taken after yours is triaged after it, and names yours where it repeats it:\n\n"
+                    + string.Concat(held.Select(line => $"- {line}\n"))
+                    + "\nWhere yours is one of these, the course is duplicate, and duplicates names its id: what that one's triage decides settles yours, and where it fixes it, a step yours stops runs again once that fix has ended. "
+                    + (fixedBefore is not { Count: > 0 }
+                        ? string.Empty
+                        : $"The fix of {string.Join(", ", fixedBefore)} was done before yours was met: where yours is one of those, that fix did not hold, and the course is fix, never duplicate - the run fixes it again. ")
+                    + (joinable.Count == 0
+                        ? "No issue taken before yours is being triaged, being fixed or fixed, so yours joins none."
+                        : $"Where yours is another issue whose root cause is that of one taken before it that is being triaged, being fixed or fixed - {string.Join(", ", joinable)} - the course is join, and joins names that one's id: its fix is that issue's, which settles both; where that fix is done already, yours is given a fix of its own, told what that one did.")
+                    + $"\n</{KnownTag}>\n";
 }
 
 /// <summary>
@@ -75,6 +111,25 @@ public sealed record FlowPreExistingReport(string Title, string Description, str
 /// </param>
 public sealed record FlowRunPlace(string Repository, string Run, string? StartCommit, WorkflowDefinition Definition, string? Branch = null)
 {
+    /// <summary>
+    /// The directories of the tree of <see cref="StartCommit"/>, read once as the session began: the one tree every reader
+    /// of the run's lists of a tree's own paths asks whether an entry names a directory - the plan's check, the holds of the
+    /// issues being fixed, a step's <c>writes</c> and a fold's <c>within</c> - so the four agree for the whole run, whatever
+    /// its folds make of the trees (<see cref="DssHarness.Core.Repository.TreeDirectories"/>). Null where no session read it: a place made
+    /// for what reads none of those lists.
+    /// </summary>
+    public DssHarness.Core.Repository.TreeDirectories? StartTree { get; init; }
+
+    /// <summary>
+    /// The directories every reader of the run's lists of paths asks (<see cref="StartTree"/>): those the session read, or,
+    /// for a run that names no commit it started from, a tree that could not be read (<see cref="DssHarness.Core.Repository.TreeDirectories.NoCommit"/>).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The run names a start commit and no session read its tree for this place.</exception>
+    public DssHarness.Core.Repository.TreeDirectories Directories
+        => StartTree ?? (StartCommit is null
+            ? DssHarness.Core.Repository.TreeDirectories.NoCommit
+            : throw new InvalidOperationException($"the place of run '{Run}' was made without the directories of its start commit '{StartCommit}', which every reader of its lists of paths asks"));
+
     /// <summary>
     /// Why a step that publishes the run's work - a commit, a push, a pull request - is refused with the main checkout on
     /// <paramref name="branch"/>: it is not the branch the run started on - a person checked another out while the run was
@@ -163,6 +218,13 @@ public sealed record FlowMadeAgent(string Name, string? Model);
 /// runner hands each skill over and never reads filled text as a template again. Null for every other step, and for a
 /// run held in memory alone, which reads no files.
 /// </param>
+/// <param name="PromptValues">
+/// For each of a reason step's <see cref="Prompts"/>, by its key, the values its placeholders were filled with, in order
+/// (<see cref="FlowTemplate.FillAroundSkills(string, Func{FlowExpression.Path, FlowExpression.PathRead}, Func{string, string?}, ICollection{string}, out string?)"/>):
+/// what the run handed the prompt - the request, the work item, the upstream outputs it reads - apart from the template's
+/// own words, which every run of the workflow is given alike. What its context pack is seeded from. Null where
+/// <see cref="Prompts"/> is.
+/// </param>
 /// <param name="BudgetLeftUsd">
 /// What is left of the run's budget in dollars before its reserve, as the attempt starts: a reason step's agent is held to
 /// it where it is less than its own bound, or where it names none (<see cref="FlowRunBudget.Bound"/>), so one long attempt
@@ -196,7 +258,8 @@ public sealed record FlowStepRun(
     string? PlanTold = null,
     IReadOnlyDictionary<string, IReadOnlyList<FlowTemplate.Piece>>? Prompts = null,
     double? BudgetLeftUsd = null,
-    string? Path = null)
+    string? Path = null,
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? PromptValues = null)
 {
     /// <summary>
     /// Where the step is declared among the flow, which every reading of its declaration - the work it goes on with, the
@@ -207,8 +270,8 @@ public sealed record FlowStepRun(
 
     /// <summary>
     /// A reason step's: the earlier work its conversation goes on with, in the order that work went, oldest first - the
-    /// step its resume names, then its own earlier visits of the same work item, the newest last - each that began once
-    /// and no other. The one owner of what a step goes on with: its continuation record is the record of this work, the
+    /// step its resume names, then its own earlier visits of the same work item (within the recovery, of visits for the
+    /// same failure or issue), the newest last - each that began once and no other. The one owner of what a step goes on with: its continuation record is the record of this work, the
     /// last iterations of the newest of it word for word; its resume prompt is asked only where there is earlier work, this
     /// or an attempt of its own; and its graph tool reads the pages this work kept, the newest first, where its own keep
     /// none. Empty where the step resumes nothing - its conversation begins its own work, whatever it depends on - and for
@@ -223,6 +286,75 @@ public sealed record FlowStepRun(
     /// other step.
     /// </summary>
     public Func<JsonNode, IReadOnlyList<string>>? AnswerHolds { get; init; }
+
+    /// <summary>
+    /// A reason step's: the checks of the flow that will judge its answer - each step declared beside it of a type that
+    /// judges one (<see cref="WorkflowStepTypes.StepType.JudgesAnswer"/>), a plan check whose <c>items</c> or a class closure
+    /// whose <c>record</c> read its output - each run as the engine would run it, the run as it stands where this step
+    /// starts, save what it reads of the answer. What a check alone can know at its own moment - an issue owed meanwhile,
+    /// whether its <c>when</c> reads this answer at all, the run's history a home audit is asked for - stays with that check.
+    /// Empty for every other step.
+    /// </summary>
+    public IReadOnlyList<FlowAnswerCheck> AnswerChecks { get; init; } = [];
+
+    /// <summary>
+    /// A reason step's: what <see cref="AnswerChecks"/> find wrong with an output that reads, each asked of its own type's
+    /// runner at the answer (<see cref="IFlowAnswerCheckRunner"/>) - handed back to the agent in its own conversation until
+    /// it answers clean or gives an output it gave before, saying it cannot put right what is left, and never a failure of
+    /// the step (<see cref="Agents.AgentOutput.Corrections"/>). Null where no check judges the answer.
+    /// </summary>
+    public Func<JsonNode, Task<IReadOnlyList<string>>>? AnswerCorrections { get; init; }
+}
+
+/// <summary>
+/// A step of the flow that judges a reason step's answer - a plan check whose <c>items</c> read it, a class closure whose
+/// <c>record</c> does - as the engine would run it at its own moment, as far as the run knows that moment where the reason
+/// step starts: the check's run, its read holding everything the engine hands the check but what it reads of the answer,
+/// and the members of the answer's output each key it reads of the answer names.
+/// </summary>
+/// <param name="Run">The check's run, its read without the keys the answer fills.</param>
+/// <param name="Answered">
+/// Each key of the check's read that reads the answer, with the names that lead to what it reads in the answer's output,
+/// outermost first: a plan check's <c>items</c> under the plan's <c>items</c> and its <c>scope</c> under the plan's
+/// <c>scope</c>; a class closure's <c>record</c> under the builder's <c>closure</c> and its <c>arms</c> under its
+/// <c>arms</c>.
+/// </param>
+public sealed record FlowAnswerCheck(FlowStepRun Run, IReadOnlyDictionary<string, IReadOnlyList<string>> Answered)
+{
+    /// <summary>
+    /// What the check reads where the answer's output is <paramref name="output"/>: its run's read, and each key the answer
+    /// fills read from the output - Missing where the output holds nothing there.
+    /// </summary>
+    /// <param name="output">The answer's output, as its schema held it.</param>
+    public IReadOnlyDictionary<string, FlowValue> ReadOf(JsonNode output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        var read = new Dictionary<string, FlowValue>(Run.Read ?? new Dictionary<string, FlowValue>(), StringComparer.Ordinal);
+
+        foreach (var (key, names) in Answered)
+        {
+            JsonNode? at = output;
+            var there = true;
+
+            foreach (var name in names)
+            {
+                if (at is JsonObject members && members.TryGetPropertyValue(name, out var member))
+                {
+                    at = member;
+                }
+                else
+                {
+                    there = false;
+                    break;
+                }
+            }
+
+            read[key] = there ? FlowValue.Of(at) : FlowValue.Missing;
+        }
+
+        return read;
+    }
 }
 
 /// <summary>
@@ -448,6 +580,12 @@ public sealed record FlowDryRun(
 
     /// <summary>The paths it would write that the step's <c>within</c> leaves out; empty where the step names none, or it writes none.</summary>
     public IReadOnlyList<string> Outside { get; init; } = [];
+
+    /// <summary>
+    /// What the entries of the step's <c>within</c> say of how to write what they once meant, where a path it leaves out lies
+    /// where an entry reached before the reading from the root (<see cref="FoldWithin.Said"/>); null where they say nothing.
+    /// </summary>
+    public string? OutsideSaid { get; init; }
 
     /// <summary>The lines its dry run said under its summary.</summary>
     public IReadOnlyList<string> Lines { get; init; } = [];
@@ -677,7 +815,11 @@ public sealed record FlowStepResult
         => new() { Asked = null, Passed = false, Exit = HarnessExit.CommandFailed, Checks = checks, ChecksDetail = detail };
 }
 
-/// <summary>One asking of the run's advisor: the question it recommends on, with every text its prompt reads.</summary>
+/// <summary>
+/// One asking of the run's advisor: the question it recommends on, with every text its prompt reads - and nothing of the
+/// run's budget, for an advice is held to its own definition's bounds alone, whatever the run has spent: a question raised
+/// once the run is past its reserve, the budget's own among them, is recommended as any other is.
+/// </summary>
 /// <param name="Advisor">The orchestrator's advisor block, as the definition declares it.</param>
 /// <param name="Run">The orchestrator run's name.</param>
 /// <param name="Workflow">The workflow's name, whose folder holds the advisor's agent and prompt.</param>
@@ -687,16 +829,18 @@ public sealed record FlowStepResult
 /// <param name="Tried">What the run tried before it asked.</param>
 /// <param name="Means">What the answer changes; null where the run has not said.</param>
 /// <param name="Answers">The answers it takes, each with what it does and whether it takes a text.</param>
-/// <param name="Agent">The agent the asking step works as, whose directory and workspace the advice shares; null where it names none.</param>
+/// <param name="Agent">The agent the asking step works as, whose directory and workspace the advice shares; null where it names none, and for the run's own question.</param>
 /// <param name="Instance">
 /// The asking step's instance id, as its records name it: the step the prompt's <c>{question.step}</c> reads, and the one
 /// under whose own directory each advice keeps its records in <c>advice/&lt;n&gt;/</c>, numbered after those already there.
+/// <see cref="FlowQuestions.RunsOwn"/> for the run's own question, its budget's, which no step asked - a name no step may
+/// have, so its advices sit beside the steps' and never among one's.
 /// </param>
 /// <param name="Inputs">
 /// The inputs of the workflow whose advisor is asked, as its prompt reads them by <c>{input.&lt;name&gt;}</c>: what the use
 /// filled where a use that governs itself declares the advisor, and else the run's own, as its person gave them.
 /// </param>
-/// <param name="Record">What the run stored of the asking step, rendered as a continuation record renders a step.</param>
+/// <param name="Record">What the run stored of the asking step, rendered as a continuation record renders a step - for the run's own question, the run's facts; null where the advisor's runner renders it.</param>
 /// <param name="Bar">The repository's bar for a recommendation, read where the question was raised.</param>
 /// <param name="Texts">
 /// The texts the advisor's prompt reads by <c>{text.&lt;name&gt;}</c>, each by its name with the workflow whose directory
@@ -705,7 +849,6 @@ public sealed record FlowStepResult
 /// it holds none of is refused, naming the workflow.
 /// </param>
 /// <param name="Place">Where the run works; null for a run held in memory alone.</param>
-/// <param name="BudgetLeftUsd">What is left of the run's budget in dollars before its reserve, which the advice's agent is held to where it is less than its own bound, or where it names none; null where the run budgets no dollars.</param>
 /// <param name="RunValues">The run as its own <c>run</c> root reads it, as the asking left it: its name, what it has checked and what it knows to be red among it; null where the asking was made from no run.</param>
 public sealed record FlowAdvisorCall(
     FlowAdvisor Advisor,
@@ -724,7 +867,6 @@ public sealed record FlowAdvisorCall(
     string Bar,
     IReadOnlyDictionary<string, FlowAdvisorText>? Texts = null,
     FlowRunPlace? Place = null,
-    double? BudgetLeftUsd = null,
     System.Text.Json.Nodes.JsonObject? RunValues = null);
 
 /// <summary>One text an advisor's prompt reads by its name: the workflow whose directory holds it, and its file there.</summary>
@@ -761,8 +903,8 @@ public sealed record FlowAdvice(
 }
 
 /// <summary>
-/// The engine's advisor: one reason step that only reads, run for a question the engine raises before a person is left
-/// with it. Never between a person and an answer - the caller raises the question at once, and an answer ends the
+/// The engine's advisor: one reason step that only reads, run for every question the engine raises before a person is
+/// asked it. Never between a person and an answer - the caller raises the question at once, and an answer ends the
 /// asking, its record kept.
 /// </summary>
 public interface IFlowAdvisorRunner

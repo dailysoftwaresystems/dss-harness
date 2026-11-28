@@ -225,8 +225,9 @@ public static class JsonSchemaSubset
         }
 
         var root = (JsonObject)schema;
+        var check = new DocumentCheck(root, at);
 
-        return Check(root, document, JsonPlace.Root, new DocumentCheck(root, at)).Run();
+        return InWords(Check(root, document, JsonPlace.Root, check).Run(), check).Run();
     }
 
     /// <summary>
@@ -1131,7 +1132,7 @@ public static class JsonSchemaSubset
         public JsonObject Root { get; } = root;
 
         /// <summary>The problems a definition, by name, found at a place in the document.</summary>
-        public Dictionary<(string Definition, JsonPlace At), IReadOnlyList<string>> Read { get; } = [];
+        public Dictionary<(string Definition, JsonPlace At), IReadOnlyList<Objection>> Read { get; } = [];
 
         /// <summary>The place of the member <paramref name="name"/> of the object at <paramref name="holder"/>: one object, however often it is asked.</summary>
         public JsonPlace Member(JsonPlace holder, string name)
@@ -1267,13 +1268,14 @@ public static class JsonSchemaSubset
     /// A path names one place in the document, since a name no identifier spells is written in brackets. Each schema
     /// a member or an item is held to is checked as a frame of its own, so a document nests as deep as it is written.
     /// </summary>
-    private static Frame<IReadOnlyList<string>> Check(JsonObject said, JsonNode? document, JsonPlace at, DocumentCheck check)
+    private static Frame<IReadOnlyList<Objection>> Check(JsonObject said, JsonNode? document, JsonPlace at, DocumentCheck check)
         => new(self => Checking(self, said, document, at, check));
 
     /// <summary>The body of <see cref="Check"/>.</summary>
-    private static IEnumerable<Frame> Checking(Frame<IReadOnlyList<string>> self, JsonObject said, JsonNode? document, JsonPlace at, DocumentCheck check)
+    private static IEnumerable<Frame> Checking(Frame<IReadOnlyList<Objection>> self, JsonObject said, JsonNode? document, JsonPlace at, DocumentCheck check)
     {
-        // A reference stands alone, so what it names is the whole of what is said here.
+        // A reference stands alone, so what it names is the whole of what is said here - kept as what that definition
+        // found at this place, so a place two shapes read by one definition is said once (InWords).
         if (said["$ref"] is JsonValue reference)
         {
             var name = reference.GetValue<string>()[Definitions.Length..];
@@ -1283,7 +1285,7 @@ public static class JsonSchemaSubset
                 var defined = Check((JsonObject)check.Root["$defs"]![name]!, document, at, check);
                 yield return defined;
 
-                read = defined.Result;
+                read = defined.Result.Count == 0 ? [] : [new Defined(name, at, defined.Result)];
                 check.Read[(name, at)] = read;
             }
 
@@ -1291,13 +1293,14 @@ public static class JsonSchemaSubset
             yield break;
         }
 
-        var problems = new List<string>();
+        var problems = new List<Objection>();
 
         // Every key holds at once: anyOf asks one of its shapes to answer, and what is said beside it is checked
-        // all the same.
+        // all the same. Where none answers, what each objected to is kept with it, so the one answering can tell
+        // which shape it meant and what that shape still asks.
         if (said["anyOf"] is JsonArray shapes)
         {
-            var answered = false;
+            List<IReadOnlyList<Objection>>? objections = [];
 
             foreach (var shape in shapes)
             {
@@ -1306,30 +1309,32 @@ public static class JsonSchemaSubset
 
                 if (tried.Result.Count == 0)
                 {
-                    answered = true;
+                    objections = null;
                     break;
                 }
+
+                objections.Add(tried.Result);
             }
 
-            if (!answered)
+            if (objections is not null)
             {
-                problems.Add($"{check.Spelt(at)}: answers none of the {shapes.Count} shape{(shapes.Count == 1 ? string.Empty : "s")} its schema offers");
+                problems.Add(new Unanswered(at, objections));
             }
         }
 
         if (said.ContainsKey("const") && !JsonWalk.Same(said["const"], document))
         {
-            problems.Add($"{check.Spelt(at)}: {Said(document)} is not {Said(said["const"])}");
+            problems.Add(new Worded($"{check.Spelt(at)}: {Said(document)} is not {Said(said["const"])}"));
         }
 
         if (said["enum"] is JsonArray options && !options.Any(option => JsonWalk.Same(option, document)))
         {
-            problems.Add($"{check.Spelt(at)}: {Said(document)} is not one of {string.Join(", ", options.Select(option => Said(option)))}");
+            problems.Add(new Worded($"{check.Spelt(at)}: {Said(document)} is not one of {string.Join(", ", options.Select(option => Said(option)))}"));
         }
 
         if (TypeOf(said) is { } type && !Answers(type, document))
         {
-            problems.Add($"{check.Spelt(at)}: {Said(document)} is not {Kind(type)}");
+            problems.Add(new Worded($"{check.Spelt(at)}: {Said(document)} is not {Kind(type)}"));
             self.Give(problems);
             yield break;
         }
@@ -1340,7 +1345,7 @@ public static class JsonSchemaSubset
             {
                 if (!map.ContainsKey(name!.GetValue<string>()))
                 {
-                    problems.Add($"{check.Spelt(at)}: '{name.GetValue<string>()}' is required and missing");
+                    problems.Add(new Worded($"{check.Spelt(at)}: '{name.GetValue<string>()}' is required and missing"));
                 }
             }
 
@@ -1362,7 +1367,7 @@ public static class JsonSchemaSubset
                 }
                 else if (closed)
                 {
-                    problems.Add($"{check.Spelt(check.Member(at, name))}: is said by no property of the schema");
+                    problems.Add(new Worded($"{check.Spelt(check.Member(at, name))}: is said by no property of the schema"));
                 }
             }
 
@@ -1374,12 +1379,12 @@ public static class JsonSchemaSubset
         {
             if (Count(said["minItems"]) is { } least && list.Count < least)
             {
-                problems.Add($"{check.Spelt(at)}: holds {list.Count} item{(list.Count == 1 ? string.Empty : "s")} and at least {least} {(least == 1 ? "is" : "are")} asked");
+                problems.Add(new Worded($"{check.Spelt(at)}: holds {list.Count} item{(list.Count == 1 ? string.Empty : "s")} and at least {least} {(least == 1 ? "is" : "are")} asked"));
             }
 
             if (Count(said["maxItems"]) is { } cap && list.Count > cap)
             {
-                problems.Add($"{check.Spelt(at)}: holds {list.Count} item{(list.Count == 1 ? string.Empty : "s")} and at most {cap} {(cap == 1 ? "is" : "are")} taken");
+                problems.Add(new Worded($"{check.Spelt(at)}: holds {list.Count} item{(list.Count == 1 ? string.Empty : "s")} and at most {cap} {(cap == 1 ? "is" : "are")} taken"));
             }
 
             if (said["items"] is JsonObject items)
@@ -1403,13 +1408,13 @@ public static class JsonSchemaSubset
 
             if (said["format"] is JsonValue format && !FormatHolds(format.GetValue<string>(), text))
             {
-                problems.Add($"{check.Spelt(at)}: {Said(document)} is not a {format.GetValue<string>()}");
+                problems.Add(new Worded($"{check.Spelt(at)}: {Said(document)} is not a {format.GetValue<string>()}"));
             }
 
             // Matched in time linear in the text, so a pattern never holds the check, and none is cut short.
             if (said["pattern"] is JsonValue pattern && !check.Pattern(pattern.GetValue<string>()).IsMatch(text))
             {
-                problems.Add($"{check.Spelt(at)}: {Said(document)} does not match its pattern");
+                problems.Add(new Worded($"{check.Spelt(at)}: {Said(document)} does not match its pattern"));
             }
         }
 
@@ -1454,6 +1459,88 @@ public static class JsonSchemaSubset
         }
 
         return false;
+    }
+
+    /// <summary>One thing the document check found, kept until the check is over and then worded (<see cref="InWords"/>).</summary>
+    private abstract record Objection;
+
+    /// <summary>A problem, in its words.</summary>
+    /// <param name="Text">The problem, its path first.</param>
+    private sealed record Worded(string Text) : Objection;
+
+    /// <summary>
+    /// What the definition <paramref name="Definition"/> found at the place <paramref name="At"/>: one object, kept once for
+    /// the place however many shapes read it by that definition (<see cref="DocumentCheck.Read"/>).
+    /// </summary>
+    /// <param name="Definition">The definition's name.</param>
+    /// <param name="At">The place it read.</param>
+    /// <param name="Found">What it found there.</param>
+    private sealed record Defined(string Definition, JsonPlace At, IReadOnlyList<Objection> Found) : Objection;
+
+    /// <summary>A place no shape of an <c>anyOf</c> answers, with what each shape found there, in the schema's order.</summary>
+    /// <param name="At">The place.</param>
+    /// <param name="Shapes">What each shape found.</param>
+    private sealed record Unanswered(JsonPlace At, IReadOnlyList<IReadOnlyList<Objection>> Shapes) : Objection;
+
+    /// <summary>
+    /// What the check found, in words, in the order it found them: each problem as it was worded; a place no shape of an
+    /// <c>anyOf</c> answers as one problem - the count of its shapes, then what each objected to, each shape's problems in
+    /// parentheses, so the one answering can tell which shape it meant and what that shape still asks, however deep the
+    /// shapes nest. What a definition found at a place is worded where it is first met, and every later shape that read the
+    /// place by that definition says so in a line of its own rather than again - so the words grow with what the check
+    /// read, never with the number of ways a schema's definitions reach one place. Worded on a stack of its own, as deep as
+    /// the shapes nest.
+    /// </summary>
+    /// <param name="found">What the check found.</param>
+    /// <param name="check">The check, which spells each place.</param>
+    private static Frame<IReadOnlyList<string>> InWords(IReadOnlyList<Objection> found, DocumentCheck check)
+        => Wording(found, check, new HashSet<(string, JsonPlace)>());
+
+    /// <summary>The words of <paramref name="found"/>, each definition at a place worded once over the whole check (<paramref name="worded"/>).</summary>
+    private static Frame<IReadOnlyList<string>> Wording(IReadOnlyList<Objection> found, DocumentCheck check, HashSet<(string, JsonPlace)> worded)
+        => new(self => WordingOf(self, found, check, worded));
+
+    /// <summary>The body of <see cref="Wording"/>.</summary>
+    private static IEnumerable<Frame> WordingOf(Frame<IReadOnlyList<string>> self, IReadOnlyList<Objection> found, DocumentCheck check, HashSet<(string, JsonPlace)> worded)
+    {
+        var words = new List<string>();
+
+        foreach (var objection in found)
+        {
+            switch (objection)
+            {
+                case Worded text:
+                    words.Add(text.Text);
+                    break;
+
+                case Defined defined when !worded.Add((defined.Definition, defined.At)):
+                    words.Add($"{check.Spelt(defined.At)}: does not answer '{Definitions}{defined.Definition}', as said above");
+                    break;
+
+                case Defined defined:
+                    var inner = Wording(defined.Found, check, worded);
+                    yield return inner;
+
+                    words.AddRange(inner.Result);
+                    break;
+
+                case Unanswered unanswered:
+                    var shapes = new List<string>();
+
+                    foreach (var (shape, index) in unanswered.Shapes.Select((shape, index) => (shape, index)))
+                    {
+                        var shapeWords = Wording(shape, check, worded);
+                        yield return shapeWords;
+
+                        shapes.Add($"shape {(index + 1).ToString(CultureInfo.InvariantCulture)} ({string.Join("; ", shapeWords.Result)})");
+                    }
+
+                    words.Add($"{check.Spelt(unanswered.At)}: answers none of the {unanswered.Shapes.Count.ToString(CultureInfo.InvariantCulture)} shape{(unanswered.Shapes.Count == 1 ? string.Empty : "s")} its schema offers - {string.Join(", ", shapes)}");
+                    break;
+            }
+        }
+
+        self.Give(words);
     }
 
     /// <summary>A type as a refusal says it: <c>an integer</c>, <c>a string or null</c>, <c>null</c>.</summary>

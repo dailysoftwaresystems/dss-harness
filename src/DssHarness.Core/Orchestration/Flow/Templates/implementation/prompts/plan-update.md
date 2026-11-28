@@ -9,8 +9,23 @@ the scope.
 Where the lines above name a plan check and no change a person made, nobody changed the request: the items of a
 round do not pass the check that opens it, and they are in the list of work below. Fix only what the check found.
 Each fix is a piece: an item you change is `changed`, and joins `items` under the name it has; one you withdraw is
-`removed`; to make two items one, change one and remove the other. Leave the rest of the plan word for word. This
-is asked once for a round: where the items still do not pass, a person is asked whether they are built as they are.
+`removed`; to make two items one, change one and remove the other; an issue the check says is owed the next round
+and settled by no work item is an `added` item that settles it, as below. Leave the rest of the plan word for word.
+This is asked once for a round: where the items still do not pass, a person is asked whether they are built as they
+are.
+
+## What this run owes its next round
+
+The issues this run owes its next round, each with its id and its size - the files its fix touches, what must be
+built, and what must be measured first:
+
+{run.nextRound}
+
+An empty list means none is owed. Each issue listed becomes a work item of the round, listed and started first, built
+beside the rest - no other item may need its result - naming the issue it settles in `settles` by its id exactly:
+where no item of the round's list settles it yet - the list the round opens with, in the work below, and the plan's
+items while no round has opened - add one as an `added` piece, built to the issue's size, with its class or, where its
+fix decides nothing, why in noClass. The round's check refuses a round whose items leave one unsettled.
 
 ## The request as it now reads
 
@@ -23,6 +38,15 @@ is asked once for a round: where the items still do not pass, a person is asked 
 ## The work of this run, and what to call each piece by
 
 {update.work}
+
+## What the recovery is fixing
+
+Every issue that was there before the run that the run has taken, each with its id, what became of it, its title and
+where; empty where none is:
+
+{run.preExisting}
+
+{text.fixes}
 
 ## What to do
 
@@ -74,7 +98,17 @@ is asked once for a round: where the items still do not pass, a person is asked 
 
 The whole plan, in the form of every plan of this run: its summary, which now also says in a sentence what the change
 was and what it did to the plan; its definition of done, changed where the change reaches it; its source and its
-departures as before; the items as they now are, each with its definition of done; and `scope`.
+departures as before; the items as they now are, each with its definition of done; and `scope`. Every statement of a
+definition of done you add or change - the plan's, an item's, a piece's - is written by the rule for a definition of
+done below, the run's base commit being `{orient.startCommit}`.
 
 The plan is checked, audited and put to approval again before anything of it is carried out or anyone is told.
 Until then the work under way goes on with the plan as it was.
+
+## A definition of done
+
+{text.done}
+
+## Issues that were there before
+
+{text.issuesBefore}

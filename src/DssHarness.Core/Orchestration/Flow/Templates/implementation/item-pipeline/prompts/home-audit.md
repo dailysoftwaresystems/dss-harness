@@ -40,3 +40,7 @@ The same report as before, brought up to date, every list in full; each audited 
 When you report, the engine tests your work again - the audit changed the home and its callers - then runs the check
 again, and folds your work only where its tests pass, every class it touched is closed and every audited home carries its
 audit.
+
+## Issues that were there before
+
+{text.issuesBefore}

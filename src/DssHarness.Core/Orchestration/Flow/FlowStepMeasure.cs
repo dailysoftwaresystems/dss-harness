@@ -11,13 +11,15 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// how long it waited and for what, how long it ran, and what each of its attempts used - the model that served it, the
 /// tokens of every kind, the dollars at the price of that moment, and the tools it called. Held on the instance's record
 /// (<see cref="FlowStepRecord.Measure"/>), one owner, kept across a resume, and null until the engine draws the instance:
-/// an instance the walk never found ready holds none. Every change of it is one of this record's own: an attempt's entry
+/// an instance no pass of the engine's found free holds none. Every change of it is one of this record's own: an attempt's entry
 /// opened as the attempt starts (<see cref="Running"/>), each turn charged into it (<see cref="Charged"/>), its ending
 /// (<see cref="Ended"/>), and every wait settled where its causes change (<see cref="Waiting"/>) - the totals and the
 /// run time summed from the entries at each.
 /// </summary>
 /// <param name="ReadyAt">
-/// When everything the instance depends on ended and it was free to be drawn; null where the engine never drew it.
+/// When everything the instance depends on ended and nothing of the run's held it, so it was free to be drawn: the
+/// moment the engine's pass that freed it began, every step one pass frees ready at the same moment; null where the
+/// engine never drew it.
 /// </param>
 /// <param name="Waited">
 /// How long it waited after it was ready, split by the engine's own causes (<see cref="FlowWaits"/> and the words a
@@ -432,7 +434,10 @@ public sealed record FlowStepSpan(
 /// <param name="Tokens">The tokens the attempt's turns used, by kind, summed; null where none was reported.</param>
 /// <param name="Usd">What the attempt cost at the prices of the models serving it, as far as each turn could be counted.</param>
 /// <param name="Uncounted">Why a part of its cost could not be counted - a model with no price, a launch billed to usage credits, a stream a crash left that does not read; null where every part was.</param>
-/// <param name="Turns">The agent's turns; null for a machine step.</param>
+/// <param name="Turns">
+/// The agent's turns - the model's answers, one response each, on every client (<see cref="Agents.AgentRunResult.Turns"/>),
+/// as its runner's count reads them from the stream (<see cref="AgentRunSpend.TurnsTaken"/>); null for a machine step.
+/// </param>
 /// <param name="Tools">The tool calls the attempt made, by tool name, with how many failed and how many were denied; null for a machine step or where the agent called none.</param>
 /// <param name="Compactions">How many times the agent's conversation was compacted; null where none.</param>
 /// <param name="RetryAfter">The backoff the engine waited before the attempt ran again; null for the last or the only attempt.</param>
@@ -825,7 +830,7 @@ public sealed record FlowStepToolUse(string Tool, int Calls, int Failed, int Den
 /// <param name="Tokens">The tokens every attempt used, by kind; null where none was reported.</param>
 /// <param name="Usd">What they cost, as far as each part could be counted; null where nothing was counted.</param>
 /// <param name="Uncounted">Why the rest could not be counted; null where every part was.</param>
-/// <param name="Turns">The turns every agent attempt made; null where the instance ran no agent.</param>
+/// <param name="Turns">The turns every agent attempt made - the model's answers, one response each (<see cref="FlowStepAttempt.Turns"/>); null where the instance ran no agent.</param>
 public sealed record FlowStepTotals(
     AgentUsage? Tokens = null,
     double? Usd = null,

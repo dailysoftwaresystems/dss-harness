@@ -761,6 +761,58 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The help, the README and the architecture say what a step whose writes narrow it may still take back - what it
+    /// made itself, a path of its worktree git does not track that was not there when its run began - where the record of
+    /// that start is kept, by which tools, and what stays narrowed: a person reading why a build check's outputs were
+    /// deleted, or why a tracked file was not, finds the rule the policy holds.
+    /// </summary>
+    [Fact]
+    public void TheDocumentsSay_AStepTakesBackWhatItMadeItself()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains(
+            "A step's writes is the one source that narrows: where a step has them, a write under its worktree that matches none of their patterns "
+                + "is denied, and so is a delete - but of what the step made itself, a path of its worktree git does not track that was not there when "
+                + $"the step's run began, as its first start records the worktree's untracked paths ({OrchestratorLayout.StepUntrackedFileName} in its "
+                + "directory, which every later attempt, answer and resume reads): what its own commands made anywhere in its worktree it may take "
+                + "back - by delete_file, by delete_directory where all a directory holds is that, and from a move's source - while a path git tracks "
+                + "or ignores, or one that was there, stays narrowed, and so does a write over the step's own making, which leaves a path standing "
+                + "outside them; and the reporter's reads are narrowed to the run's directory alone",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A step's `writes` is the one source that narrows: where a step has them, a write under its worktree that matches none of their "
+                + "patterns is denied, and so is a delete - but of what the step made itself, a path of its worktree git does not track that was "
+                + "not there when the step's run began, as its first start records the worktree's untracked paths "
+                + $"(`{OrchestratorLayout.StepUntrackedFileName}` in its directory, which every later attempt, answer and resume reads): what its own "
+                + "commands made anywhere in its worktree - a build's outputs - it may take back, by `delete_file`, by `delete_directory` where all a "
+                + "directory holds is that, and from a move's source, while a path git tracks or ignores, or one that was there, stays narrowed, and "
+                + "so does a write over the step's own making, which leaves a path standing outside them; a refusal of such a delete says so.",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            $"a step's `writes` is the one source that narrows - a write, and a delete but of what the step made itself (`{nameof(AgentPolicy)}.{nameof(AgentPolicy.Delete)}`): "
+                + $"a path of its worktree git does not track that the record of the step's start does not hold (`{nameof(AgentPolicyGround)}.{nameof(AgentPolicyGround.StepStart)}`, "
+                + $"`Agents\\Policy\\{nameof(AgentStepStart)}`).",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"taken by `{nameof(ReasonStepRunner)}` before the step's agent first starts and kept in the step's directory "
+                + $"(`{nameof(OrchestratorLayout)}.{nameof(OrchestratorLayout.StepUntrackedFileName)}`), so every later attempt, answer and resume reads the one its first start took",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a path git tracks or ignores, one the record holds, and a write over the step's own making stay narrowed, and the refusal says what "
+                + $"may be taken back (`{nameof(AgentPolicy)}.{nameof(AgentPolicy.OwnMakingSaid)}`).",
+            architecture,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The README and the architecture say the agents' policy as the help does: one policy, default allow except the
     /// root actions and the restrictions, the command read whole, and the fail-closed rule - and the architecture
     /// names its owners (<c>AgentPolicy</c>, <c>CommandAnalysis</c>, <c>GlobPattern</c>).

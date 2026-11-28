@@ -27,9 +27,14 @@ public sealed record FlowQuestionOption(string Answer, string Does, bool Text = 
 /// where there is none. Nothing is put in a person's place.
 /// </summary>
 /// <param name="State">
-/// <c>given</c>; <c>sought</c> while the advisor runs; <c>deferred</c> where a pause or a stop came first, sought again at
-/// the resume; <c>cancelled</c> where an answer came while the advisor ran; <c>notObtained</c> where it was sought and none
-/// was had; or <c>notSought</c>.
+/// <c>given</c>; <c>sought</c> while the advisor runs; <c>deferred</c> where the question was raised while the run was
+/// pausing - sought once the pause is complete - or a stop ended its advice or came first, sought again at the resume;
+/// <c>cancelled</c> where an answer came while the advisor ran; <c>notObtained</c> where it was sought and none
+/// was had; or <c>notSought</c> where none has been sought yet - a question its configuration or the run's input answered
+/// at once, which no person was asked. A <c>notSought</c> an earlier build wrote with why none was sought for a question
+/// still open - its orchestrator named no advisor, the advisor's kinds left the question's kind out, the budget's own -
+/// is read as it stands, and the recommendation is sought at the next session that can (every question is recommended
+/// before a person is asked it).
 /// </param>
 /// <param name="Answer">The answer recommended, where one was.</param>
 /// <param name="Text">The text recommended with it, where the answer takes one.</param>
@@ -48,8 +53,16 @@ public sealed record FlowRecommendation(
     string? Model = null,
     string? Advice = null)
 {
-    /// <summary>The recommendation a question carries where none was sought: said plainly, and nothing is put in a person's place.</summary>
+    /// <summary>The recommendation a question carries until one is sought - and for good where it was answered at once, by its configuration or the run's input, asking no person.</summary>
     public static FlowRecommendation NotSought { get; } = new("notSought", Why: "no recommendation was sought");
+
+    /// <summary>
+    /// The recommendation a question owing one carries where a pause or a stop withholds its advice - asked of the session,
+    /// its start among it, before the advice was begun: deferred to the pause's end, or to the resume where a stop came
+    /// first. The one wording of it, which the engine writes as it defers the advice and a start's standing writes at once
+    /// (<see cref="FlowStartsStanding.On(FlowQuestionsFile, IReadOnlyCollection{string})"/>).
+    /// </summary>
+    public static FlowRecommendation Withheld { get; } = new("deferred", Why: "the run is pausing, and no reason step is started before its pause is complete: the recommendation is sought then, or when the run is resumed where a stop came first");
 }
 
 /// <summary>Who gave an answer: a person (and through what), the configuration (and where), or the run's input.</summary>
@@ -228,6 +241,31 @@ public sealed record FlowQuestionsFile(
 }
 
 /// <summary>
+/// The next step an open question takes, as every document of the run names it and every refusal of an answer says it
+/// (<see cref="FlowAnswerRules.NextStepOf"/>, <see cref="FlowAnswerRules.NextStepSaid"/>).
+/// </summary>
+public enum FlowNextStep
+{
+    /// <summary>It owes nothing: <c>answer-orchestrator</c> answers it.</summary>
+    Answer,
+
+    /// <summary>
+    /// Its advisor seeks the recommendation now - or a live engine's start does, which seeks every one the run owes before
+    /// it weighs an answer to a question owing one: an answer is taken at once, or as the start seeks it, and ends the asking.
+    /// </summary>
+    AnswerWhileAdvised,
+
+    /// <summary>A live engine's pause defers its recommendation, which the pause seeks once complete: it is answered then, and <c>abort</c> is taken now.</summary>
+    AfterThePause,
+
+    /// <summary>No engine runs the run, or a gone one: <c>resume-orchestrator</c> seeks its recommendation first, and <c>abort</c> is taken now.</summary>
+    Resume,
+
+    /// <summary>The engine is stopping, and seeks none: <c>resume-orchestrator</c> seeks its recommendation once the engine has gone, and <c>abort</c> is taken now.</summary>
+    ResumeOnceGone,
+}
+
+/// <summary>
 /// The rules every path into an answer is held to - <c>answer-orchestrator</c> before anything of the run is touched,
 /// and the engine where it weighs an answer handed over, or a change of one - written once, so the command and the
 /// engine never disagree about what an answer may be.
@@ -285,6 +323,155 @@ public static class FlowAnswerRules
     /// <summary>The text an answer is given, as every record holds it: none where it is blank.</summary>
     /// <param name="text">The text as it was given.</param>
     public static string? TextOf(string? text) => string.IsNullOrWhiteSpace(text) ? null : text;
+
+    /// <summary>
+    /// Whether a question of <paramref name="kind"/> carries its recommendation within it and is never put to the advisor:
+    /// an agent's <c>ask</c>, and a <c>pause</c> step's that shows an upstream step's questions.
+    /// </summary>
+    /// <param name="kind">The question's kind.</param>
+    /// <param name="agentQuestions">How many questions an agent or a step's output wrote into it.</param>
+    public static bool CarriesItsOwn(string kind, int agentQuestions) => kind == "ask" || agentQuestions > 0;
+
+    /// <summary>
+    /// Whether a question still owes the recommendation it is to be answered with: none sought yet, one a session that
+    /// ended left sought, or one deferred by a pause under way or a stop - never one given, obtained or not, nor an
+    /// agent's own question, which carries its own (<see cref="CarriesItsOwn"/>). The one owner of the rule: the engine
+    /// seeks advice by it, and a person's answer is held to it (<see cref="Unrecommended"/>).
+    /// </summary>
+    /// <param name="kind">The question's kind.</param>
+    /// <param name="recommendation">The recommendation it carries; null, as an older questions file may hold it, reads as none sought.</param>
+    /// <param name="agentQuestions">How many questions an agent or a step's output wrote into it.</param>
+    public static bool OwesRecommendation(string kind, FlowRecommendation? recommendation, int agentQuestions)
+        => (recommendation ?? FlowRecommendation.NotSought).State is "notSought" or "sought" or "deferred"
+            && !CarriesItsOwn(kind, agentQuestions);
+
+    /// <summary>
+    /// The next step the open question <paramref name="question"/> takes, as a reader of the run's records names it with
+    /// what the run's engine is doing (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout)"/>,
+    /// the rule <c>answer-orchestrator</c>'s look at the run's owner applies): the one owner of the step every document of
+    /// the run names - <c>ask-orchestrator-status</c>'s waits, the report's what is left for a person, which the analyst
+    /// is handed too. A question that owes nothing is answered (<see cref="FlowNextStep.Answer"/>). One that still owes the
+    /// recommendation it is answered with (<see cref="OwesRecommendation"/>) is, with no engine running the run or a gone
+    /// one, the resume's, which seeks it first - no advisor seeks one between sessions (<see cref="FlowNextStep.Resume"/>);
+    /// with an engine that is stopping, the resume's once the engine has gone, for a stop starts no advice and ends every
+    /// one under way (<see cref="FlowNextStep.ResumeOnceGone"/>); with a live engine that is starting - whatever the session
+    /// before it left the question saying, sought, deferred or never sought - answered as its start seeks it, for the start
+    /// seeks every recommendation the run owes and weighs an answer to a question owing one only then, which takes it and
+    /// ends the asking: its state says starting only while its start takes such an answer, never once a stop or a pause is
+    /// asked of it, which would refuse it (<see cref="FlowFile.Starting"/>, decided by the rule the start weighs it by); with
+    /// a live engine whose advisor seeks it now (<c>sought</c>), answered at once, the answer ending the
+    /// asking - and so with a running engine whose record does not say it deferred, for a running engine seeks a
+    /// recommendation as it raises the question (<see cref="FlowNextStep.AnswerWhileAdvised"/>); and with a live engine that
+    /// is pausing or recording what its complete pause left running - or running, its recommendation deferred, which only a
+    /// pause asked does - answered once the pause's advice is given, which a complete pause seeks before its session ends
+    /// (<see cref="FlowNextStep.AfterThePause"/>).
+    /// <c>abort</c> is taken now wherever a recommendation is owed. The engine names the step it refuses an answer with from
+    /// its own state, which it knows (<see cref="Unrecommended"/>), and every step is said in one wording (<see cref="NextStepSaid"/>).
+    /// </summary>
+    /// <param name="question">The open question, as <c>questions.json</c> holds it.</param>
+    /// <param name="engine">What the run's engine is doing.</param>
+    public static FlowNextStep NextStepOf(FlowQuestionEntry question, FlowEngineState engine)
+    {
+        ArgumentNullException.ThrowIfNull(question);
+        ArgumentNullException.ThrowIfNull(engine);
+
+        var recommendation = question.Recommendation ?? FlowRecommendation.NotSought;
+
+        if (!OwesRecommendation(question.Kind, recommendation, (question.Questions ?? []).Count))
+        {
+            return FlowNextStep.Answer;
+        }
+
+        return engine.State switch
+        {
+            FlowEngineState.None or FlowEngineState.Gone => FlowNextStep.Resume,
+            FlowEngineState.Stopping => FlowNextStep.ResumeOnceGone,
+            FlowEngineState.Starting => FlowNextStep.AnswerWhileAdvised,
+            _ when recommendation.State == "sought" => FlowNextStep.AnswerWhileAdvised,
+            FlowEngineState.Pausing or FlowEngineState.Recording => FlowNextStep.AfterThePause,
+            _ when recommendation.State == "deferred" => FlowNextStep.AfterThePause,
+            _ => FlowNextStep.AnswerWhileAdvised,
+        };
+    }
+
+    /// <summary>
+    /// The next step <paramref name="step"/> of the open question <paramref name="question"/> in words: the one wording
+    /// every document of the run says it in, each showing a command line as it shows every other (<paramref name="command"/>).
+    /// The answer, with <c>answer-orchestrator</c>; while the advisor seeks the recommendation, the answer taken now and
+    /// ending the asking; and where the recommendation is still owed, who seeks it - the pause once complete, the resume,
+    /// or the resume once a stopping engine has gone - the answer to give then, and <c>abort</c>, taken now.
+    /// </summary>
+    /// <param name="step">The step (<see cref="NextStepOf"/>).</param>
+    /// <param name="run">The run's name; null where the run was given none, and the command lines name it as <c>&lt;run&gt;</c>.</param>
+    /// <param name="question">The question's id.</param>
+    /// <param name="command">Shows one command line from the command and its arguments; null for the plain words, as a refusal and the report say them.</param>
+    public static string NextStepSaid(FlowNextStep step, string? run, string question, Func<string, string[], string>? command = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(question);
+
+        var shown = command ?? Plain;
+        var answer = shown(FlowService.AnswerCommand, [RunOf(run), "<answer>", "--question", question]);
+
+        return step switch
+        {
+            FlowNextStep.Answer => $"answer with {answer}",
+            FlowNextStep.AnswerWhileAdvised => $"its recommendation is being sought: answer with {answer}, taken now and ending the asking",
+            _ => $"its recommendation is still owed - {Owed(step, run, question, shown)}",
+        };
+    }
+
+    /// <summary>
+    /// Why a person's answer to the open question <paramref name="question"/> is not taken while it owes its recommendation
+    /// and no advisor is seeking it now; null where it is taken. Every question is answered recommended: an answer given
+    /// while the advisor works is taken, and ends the asking - one handed over as a session starts waits for the advice the
+    /// start seeks, and is taken then - but one given while nothing seeks the recommendation is refused, nothing answered,
+    /// naming the step that seeks it first - the resume between sessions, the resume once the engine has gone where a stop
+    /// ends the session - a stop once the pause is complete among them, after which the pause seeks none, and one asked as
+    /// the session starts, which then seeks none - and the pause once it is complete while a pause under way defers it - in
+    /// the one wording every document says the step in (<see cref="NextStepSaid"/>). <c>abort</c> is taken whatever the
+    /// recommendation's state: it settles nothing of the question, which stays open with its recommendation owed. The
+    /// command, before anything of the run is touched, and the engine, as it weighs a person's answer, hold an answer to
+    /// this one rule, each naming the step from what it knows of the engine: the command with no engine running the run
+    /// (<see cref="NextStepOf"/>), the engine from its own state.
+    /// </summary>
+    /// <param name="run">The run's name, for the words; null where the run was given none.</param>
+    /// <param name="question">The question's id.</param>
+    /// <param name="answer">The answer given.</param>
+    /// <param name="step">The step the question takes next: <see cref="FlowNextStep.Answer"/> or <see cref="FlowNextStep.AnswerWhileAdvised"/> where it owes nothing or its advisor seeks it now, which takes the answer.</param>
+    public static string? Unrecommended(string? run, string question, string answer, FlowNextStep step)
+    {
+        if (step is FlowNextStep.Answer or FlowNextStep.AnswerWhileAdvised || answer == "abort")
+        {
+            return null;
+        }
+
+        var named = run is { Length: > 0 } ? $"question '{question}' of run '{run}'" : $"question '{question}'";
+        return $"{named} still owes the recommendation it is answered with, so nothing was answered - {Owed(step, run, question, Plain)}";
+    }
+
+    /// <summary>
+    /// The words of a step whose question still owes its recommendation: who seeks it, the answer to give then, and
+    /// <c>abort</c>, taken now.
+    /// </summary>
+    private static string Owed(FlowNextStep step, string? run, string question, Func<string, string[], string> shown)
+    {
+        var resume = shown(FlowService.ResumeCommand, [RunOf(run)]);
+        var seeker = step switch
+        {
+            FlowNextStep.AfterThePause => "the run seeks it once its pause is complete",
+            FlowNextStep.ResumeOnceGone => $"the stop under way seeks none, and {resume} seeks it first once the engine has gone",
+            _ => $"no advisor seeks one between sessions, and {resume} seeks it first",
+        };
+
+        return $"{seeker}; answer with {shown(FlowService.AnswerCommand, [RunOf(run), "<answer>", "--question", question])} then, "
+            + $"and {shown(FlowService.AnswerCommand, [RunOf(run), "abort", "--question", question])} is taken now";
+    }
+
+    /// <summary>A command line in plain words: the command and its arguments, as a refusal and the report say them.</summary>
+    private static string Plain(string command, string[] arguments) => string.Join(' ', [command, .. arguments]);
+
+    /// <summary>The run as a command line names it: its name, or <c>&lt;run&gt;</c> where it was given none.</summary>
+    private static string RunOf(string? run) => run is { Length: > 0 } ? run : "<run>";
 
     /// <summary>
     /// Why the set <paramref name="set"/> can have its answer changed no more; null where it can. A set is changed one

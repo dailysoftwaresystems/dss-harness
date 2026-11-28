@@ -57,13 +57,54 @@ public interface IFlowRecords
     /// </summary>
     /// <param name="recorded">Every name the run's steps hold, and every name the session gave.</param>
     string NameAgent(IReadOnlyCollection<string> recorded) => OrchestrationRules.NextAgentName(recorded);
+
+    /// <summary>
+    /// Puts every line of the run's events written since the last flush on the disk (<see cref="FlowEventLog.Flush"/>): the
+    /// engine asks it once per pass, as the pass ends - before it waits on anything - and as its session ends, however it
+    /// ends, so an end of the engine's process loses no line and a power loss what the last pass had not put on the disk,
+    /// never a line before it (<see cref="FlowEventLog"/> says where a file system can cost more). A run held in memory
+    /// alone has nothing to flush.
+    /// </summary>
+    void Flush()
+    {
+    }
+
+    /// <summary>
+    /// Writes what the engine stands on once a stop or a pause is asked of its start under way over the run's state, at once
+    /// and outside any hold (<see cref="FlowStartsStanding.On(FlowFile)"/>): from then on the start refuses an answer handed to
+    /// it to a question owing the recommendation it would have sought, so every reader is to name the step the engine takes
+    /// for it - never the answer taken as the start seeks it, nor what the session before left the state saying. Nothing
+    /// else of the state changes, and nothing is thrown at whoever asked: what cannot be written is said, and the session's
+    /// next write says the standing. A run held in memory alone has no state to write it over.
+    /// </summary>
+    /// <param name="standing">What the engine stands on.</param>
+    /// <param name="leftSought">
+    /// The open questions the session before left sought, which no advisor of this engine seeks: written deferred with the
+    /// state, as the start defers them (<see cref="FlowStartsStanding.On(FlowQuestionsFile, IReadOnlyCollection{string})"/>);
+    /// empty once the start's own writes say what became of them.
+    /// </param>
+    void Stand(FlowStartsStanding standing, IReadOnlyCollection<string> leftSought)
+    {
+    }
+
+    /// <summary>
+    /// Puts back what the run's state and its questions said before <see cref="Stand"/> wrote over them - the stop and the
+    /// pause the session before left, and each recommendation it left sought - where the start that took the standing never
+    /// went on, refused or ended before its hold was made: a start that never goes on writes nothing of itself. Nothing of a
+    /// file the session wrote since, which is then its own, nor where no standing was written. A run held in memory alone
+    /// has nothing to put back.
+    /// </summary>
+    void Unstand()
+    {
+    }
 }
 
 /// <summary>
 /// What a run is, as its records name it: its name, the definition it runs and the digest of the definition as it ran,
-/// the values it was started with, the commit and the branch it started from, and when. The digest freezes the
-/// definition: a resume runs <c>definition.json</c>, never the file the command read, keeps the digest the run began
-/// with, and is refused, with a pointer to a new run, where the repository's entry now differs.
+/// the values it was started with, the commit and the branch it started from, and when. A resume runs
+/// <c>definition.json</c>, never the file the command read, and keeps the digest the run began with as the record of
+/// it; it is refused, with a pointer to a new run, where what the repository's entry says now differs from what
+/// <c>definition.json</c> says, both as this build reads them (<see cref="FlowResume.RefuseAChangedDefinition"/>).
 /// </summary>
 /// <param name="Run">The run's name.</param>
 /// <param name="Definition">The definition, as it ran.</param>
@@ -72,6 +113,12 @@ public interface IFlowRecords
 /// <param name="StartCommit">The commit the run started from; null where it started beside the tree's history.</param>
 /// <param name="Branch">The branch the run started on.</param>
 /// <param name="StartedAt">When the run began.</param>
+/// <param name="InputCopies">
+/// Whether the run keeps a copy of each file its own inputs of the kind <c>file</c> named, made as it was created
+/// (<see cref="FlowSessions.CreateAsync"/>) - which every run this build makes does, and its records say - so its steps
+/// read each such input as its copy (<see cref="FlowInputs.AsRead"/>). False for a run an older build made, which kept
+/// none: its steps read each file input as it was given, as they did when it began.
+/// </param>
 public sealed record FlowRunContext(
     string Run,
     WorkflowDefinition Definition,
@@ -79,7 +126,8 @@ public sealed record FlowRunContext(
     IReadOnlyDictionary<string, string> Inputs,
     string? StartCommit,
     string? Branch,
-    DateTimeOffset StartedAt)
+    DateTimeOffset StartedAt,
+    bool InputCopies = false)
 {
     /// <summary>What a run is, from the definition it runs: its digest is of the definition as this build freezes it.</summary>
     /// <param name="run">The run's name.</param>
@@ -88,7 +136,8 @@ public sealed record FlowRunContext(
     /// <param name="startCommit">The commit the run started from; null where it started beside the tree's history.</param>
     /// <param name="branch">The branch the run started on.</param>
     /// <param name="startedAt">When the run began.</param>
-    public static FlowRunContext Of(string run, WorkflowDefinition definition, IReadOnlyDictionary<string, string>? inputs = null, string? startCommit = null, string? branch = null, DateTimeOffset? startedAt = null)
+    /// <param name="inputCopies">Whether the run keeps a copy of each file its own file inputs named (<see cref="InputCopies"/>).</param>
+    public static FlowRunContext Of(string run, WorkflowDefinition definition, IReadOnlyDictionary<string, string>? inputs = null, string? startCommit = null, string? branch = null, DateTimeOffset? startedAt = null, bool inputCopies = false)
         => new(
             run,
             definition ?? throw new ArgumentNullException(nameof(definition)),
@@ -96,11 +145,13 @@ public sealed record FlowRunContext(
             inputs ?? new Dictionary<string, string>(),
             startCommit,
             branch,
-            startedAt ?? DateTimeOffset.UtcNow);
+            startedAt ?? DateTimeOffset.UtcNow,
+            inputCopies);
 
     /// <summary>
     /// What a run is as a resume takes it up: everything its state in one file says of it - the digest it began with,
-    /// never one worked out again, its values, its commit and branch, and when it began - with the definition it froze.
+    /// kept as the record of it and never worked out again, its values, its commit and branch, when it began, and whether it keeps its file inputs'
+    /// copies, which a file an older build wrote does not say, for that build kept none - with the definition it froze.
     /// </summary>
     /// <param name="definition">The definition as it ran, read from <c>definition.json</c>.</param>
     /// <param name="file">The run's state in one file.</param>
@@ -109,13 +160,14 @@ public sealed record FlowRunContext(
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(file);
 
-        return new(file.Run, definition, file.DefinitionDigest, file.Inputs, file.StartCommit, file.Branch, file.StartedAt);
+        return new(file.Run, definition, file.DefinitionDigest, file.Inputs, file.StartCommit, file.Branch, file.StartedAt, file.InputCopies == true);
     }
 
     /// <summary>
-    /// The SHA-256 of <paramref name="definition"/> as this build freezes it: the digest a run begins with, and the one a
-    /// resume compares the repository's entry by. Where the file was read from is no part of what the definition says:
-    /// the same entry read at another path - the checkout moved - digests the same.
+    /// The SHA-256 of <paramref name="definition"/> as this build freezes it: the digest a run begins with, and the one
+    /// a resume compares what the repository's entry and the run's frozen definition say by, each digested by this build
+    /// (<see cref="FlowResume.RefuseAChangedDefinition"/>). Where the file was read from is no part of what the definition
+    /// says: the same entry read at another path - the checkout moved - digests the same.
     /// </summary>
     /// <param name="definition">The definition.</param>
     public static string DigestOf(WorkflowDefinition definition)
@@ -184,14 +236,16 @@ public sealed class WorkflowStatusWriter
         ArgumentNullException.ThrowIfNull(snapshot);
 
         // The recovery's visits, each the group the recovery declares raised by the instance whose failure it took: how
-        // many each instance was given, and the one at work on it now, which shows the instance Recovering.
+        // many each instance was given, and the one at work on it now, by the engine's own rule of a visit at work
+        // (FlowInstance.IsAtWork) - one a pause or a stop stopped, and one that asks a person what its failure does, among
+        // them - which shows the instance Recovering.
         var visits = snapshot.Steps
             .Where(step => step.Group && string.Equals(step.Step, FlowScope.Recovery, StringComparison.Ordinal) && step.RaisedBy is not null)
             .ToList();
         var maxVisits = context.Definition.Recover?.VisitsAllowed ?? FlowRecover.MostVisits;
         var recoveries = new RecoveryView(
             visits.GroupBy(visit => visit.RaisedBy!, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal),
-            visits.Where(visit => visit.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused)
+            visits.Where(visit => FlowInstance.IsAtWork(visit.State, visit.EndedFor, visit.Question))
                 .GroupBy(visit => visit.RaisedBy!, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => new WorkflowRecovery(group.Max(visit => visit.Visit), maxVisits, "fix"), StringComparer.Ordinal));
 
@@ -401,6 +455,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     private readonly OrchestratorLayout _layout;
     private readonly FlowRunContext _context;
     private readonly TimeProvider _clock;
+    private readonly Action<string>? _warn;
     private readonly WorkflowStatusWriter _status;
     private readonly PreExistingIssuesWriter _issues;
     private readonly FlowEventLog _events;
@@ -410,6 +465,20 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
 
     /// <summary>The next round's issues last written, as the issues are.</summary>
     private IReadOnlyList<FlowNextIssue>? _nextRoundWritten;
+
+    /// <summary>
+    /// What the run's state said of its engine - its stop and its pause - before a start's standing was first written over it
+    /// (<see cref="IFlowRecords.Stand"/>), for a start that never goes on to put back (<see cref="IFlowRecords.Unstand"/>); null
+    /// where none was written, and once the session writes the state, which is then its own.
+    /// </summary>
+    private (DateTimeOffset? StoppingSince, FlowPauseRecord? Pause)? _beforeTheStanding;
+
+    /// <summary>
+    /// Each recommendation the session before left sought, by question, as the run's questions held it before a start's
+    /// standing deferred it (<see cref="IFlowRecords.Stand"/>), for a start that never goes on to put back; emptied once the
+    /// session writes its questions, which are then its own.
+    /// </summary>
+    private readonly Dictionary<string, FlowRecommendation?> _soughtBeforeTheStanding = new(StringComparer.Ordinal);
 
     /// <summary>One writer of the run's status, and of nothing else.</summary>
     public WorkflowStatusWriter Status => _status;
@@ -429,13 +498,15 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     /// <param name="layout">The run's layout.</param>
     /// <param name="context">What the run is.</param>
     /// <param name="clock">When each record is written.</param>
-    public FlowRunRecords(IFileSystem fileSystem, OrchestrationStore store, OrchestratorLayout layout, FlowRunContext context, TimeProvider? clock = null)
+    /// <param name="warn">Says what the records' close could not do, as a warning; nothing says it where none is given.</param>
+    public FlowRunRecords(IFileSystem fileSystem, OrchestrationStore store, OrchestratorLayout layout, FlowRunContext context, TimeProvider? clock = null, Action<string>? warn = null)
     {
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _clock = clock ?? TimeProvider.System;
+        _warn = warn;
         _status = new WorkflowStatusWriter(store, layout, context);
         _issues = new PreExistingIssuesWriter(store, layout, context.Run);
 
@@ -447,6 +518,12 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         var starts = _fileSystem.KindOf(_layout.FlowFile) == PathKind.None;
         _events = FlowEventLog.Open(_fileSystem, _layout.EventsFile);
 
+        if (_events.SetAside is { } setAside)
+        {
+            // What the open took back is said, never cut silently: the events go on after the last whole one.
+            _warn?.Invoke($"'{_layout.EventsFile}' was not whole as the session opened it: {setAside}; the run's events go on after the last whole one");
+        }
+
         if (!starts)
         {
             // A resume's first change writes the run's issues only where its list differs from the file's.
@@ -456,7 +533,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         }
 
         // The definition is what runs: frozen at the run's start, and never the file the command read. A resume runs
-        // this one, and checks the repository's entry against the digest the run began with.
+        // this one, and holds the repository's entry to what it says.
         if (_store.ReadDefinition(_layout) is null)
         {
             _store.WriteDefinition(_layout, _context.Definition);
@@ -498,6 +575,87 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     }
 
     /// <inheritdoc/>
+    void IFlowRecords.Stand(FlowStartsStanding standing, IReadOnlyCollection<string> leftSought)
+    {
+        ArgumentNullException.ThrowIfNull(standing);
+        ArgumentNullException.ThrowIfNull(leftSought);
+
+        var asked = standing.Pause is null ? "stop" : "pause";
+
+        try
+        {
+            if (_store.Rewrite(_layout, standing.On) is { } found)
+            {
+                // What the state said before the first standing over it is what a start that never goes on puts back.
+                _beforeTheStanding ??= (found.StoppingSince, found.Pause);
+            }
+        }
+        catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+        {
+            _warn?.Invoke($"'{_layout.FlowFile}' could not be told the {asked} asked of the engine's start: {ex.Message.TrimEnd('.')}; the session's next write tells it");
+        }
+
+        if (leftSought.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_store.RewriteFlowQuestions(_layout, questions => standing.On(questions, leftSought)) is { } found)
+            {
+                // Each recommendation the session before left sought, as it left it, for a start that never goes on.
+                foreach (var question in found.Questions.Where(question => leftSought.Contains(question.Id) && !_soughtBeforeTheStanding.ContainsKey(question.Id)))
+                {
+                    _soughtBeforeTheStanding[question.Id] = question.Recommendation;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+        {
+            _warn?.Invoke($"'{_layout.QuestionsFile}' could not be told the {asked} asked of the engine's start defers what the session before left sought: {ex.Message.TrimEnd('.')}; the session's next write of it tells it");
+        }
+    }
+
+    /// <inheritdoc/>
+    void IFlowRecords.Unstand()
+    {
+        if (_beforeTheStanding is { } before)
+        {
+            _beforeTheStanding = null;
+
+            try
+            {
+                _ = _store.Rewrite(_layout, flow => flow with { StoppingSince = before.StoppingSince, Pause = before.Pause });
+            }
+            catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+            {
+                _warn?.Invoke($"'{_layout.FlowFile}' could not be given back what it said of the engine before its start, which never went on, took a stop or a pause: {ex.Message.TrimEnd('.')}; it says the stop or the pause asked");
+            }
+        }
+
+        if (_soughtBeforeTheStanding.Count == 0)
+        {
+            return;
+        }
+
+        var sought = new Dictionary<string, FlowRecommendation?>(_soughtBeforeTheStanding, StringComparer.Ordinal);
+        _soughtBeforeTheStanding.Clear();
+
+        try
+        {
+            _ = _store.RewriteFlowQuestions(_layout, questions => questions with
+            {
+                Questions = [.. questions.Questions.Select(question => sought.TryGetValue(question.Id, out var was) ? question with { Recommendation = was } : question)],
+            });
+        }
+        catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+        {
+            _warn?.Invoke($"'{_layout.QuestionsFile}' could not be given back what it said of the recommendations the session before left sought, which a start that never went on deferred: {ex.Message.TrimEnd('.')}; it says them deferred");
+        }
+    }
+
+    /// <inheritdoc/>
     void IFlowRecords.AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
     {
         ArgumentNullException.ThrowIfNull(entries);
@@ -509,6 +667,9 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     {
         ArgumentNullException.ThrowIfNull(questions);
         _store.WriteFlowQuestions(_layout, new FlowQuestionsFile(1, _context.Run, _clock.GetUtcNow(), questions, refused is { Count: > 0 } ? refused : null));
+
+        // The questions are the session's own from here on: nothing a standing deferred is put back after it.
+        _soughtBeforeTheStanding.Clear();
     }
 
     /// <inheritdoc/>
@@ -540,9 +701,10 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         var at = _clock.GetUtcNow();
         var step = instance is null ? null : snapshot.Steps.FirstOrDefault(held => string.Equals(held.Instance, instance, StringComparison.Ordinal));
 
-        if (kind is FlowChangeKind.Step && step is not null)
+        if (kind is FlowChangeKind.Step or FlowChangeKind.Advised && step is not null)
         {
-            // The step's own files first: its output, then its record, in the step's own directory.
+            // The step's own files first: its output, then its record, in the step's own directory - what its advice spent
+            // among it, which is its measure's and which a resume sums from its own record.
             WriteStepFiles(step);
         }
 
@@ -555,8 +717,10 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             WriteStepFiles(step);
         }
 
-        // Then the run's state in one file, then its status, then its issues where the change listed one.
+        // Then the run's state in one file, then its status, then its issues where the change listed one. The state is the
+        // session's own from here on: nothing a standing wrote over is put back after it.
         _store.WriteFlow(_layout, FlowOf(snapshot));
+        _beforeTheStanding = null;
         _status.Write(snapshot, at);
 
         if (snapshot.Issues is { } issues && (_issuesWritten is null || !issues.SequenceEqual(_issuesWritten)))
@@ -580,7 +744,9 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             from,
             kind is FlowChangeKind.SessionEnded ? snapshot.Status.ToString() : to,
             step?.Attempt ?? attempt,
-            detail);
+            detail,
+            // The run's session: its engine's own, counted on from the sessions the log told of as this engine opened it.
+            _events.Sessions + snapshot.Session);
     }
 
     /// <summary>The run's state in one file, from the coordinator's snapshot.</summary>
@@ -605,7 +771,10 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             _context.Branch,
             snapshot.Pause,
             snapshot.Redirects,
-            snapshot.Hold);
+            snapshot.Hold,
+            _context.InputCopies ? true : null,
+            snapshot.StoppingSince,
+            snapshot.Starting ? true : null);
     }
 
     /// <summary>One step's own record, from the coordinator's snapshot of it.</summary>
@@ -666,7 +835,13 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.ReportedIn,
             step.Inputs?.DeepClone().AsObject(),
             step.Decided,
-            step.Measure);
+            step.Measure,
+            step.DrawnIn,
+            step.Counted,
+            step.Thread,
+            step.RaisedByAttempt,
+            step.Reruns,
+            step.Retried);
     }
 
     /// <summary>
@@ -681,8 +856,31 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         return _layout.InstanceDirectory(step.Instance, step.Agent);
     }
 
-    /// <summary>Closes the run's records: its event log, its last line whole.</summary>
-    public void Dispose() => _events.Dispose();
+    /// <inheritdoc/>
+    public void Flush() => _events.Flush();
+
+    /// <summary>
+    /// Closes the run's records: its event log, every line put on the disk first and its last line whole. The close runs as
+    /// a session leaves by a failure too, so it never throws a flush's failure over the one leaving - its code and its trace
+    /// are the session's answer - and says it as a warning instead: the lines are the system's still, and only a power loss
+    /// before they reach the disk would lose them. A session that ends in order flushed its last pass already
+    /// (<see cref="Flush"/>), whose failure it heard.
+    /// </summary>
+    public void Dispose()
+    {
+        try
+        {
+            _events.Flush();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _warn?.Invoke($"the run's events written since its last pass could not be put on the disk as its records closed: {ex.Message.TrimEnd('.')}; they are written, and only a power loss before they reach the disk would lose them");
+        }
+        finally
+        {
+            _events.Dispose();
+        }
+    }
 
     /// <summary>Writes one step's own files: its output, validated, then its record, in the step's own directory.</summary>
     private void WriteStepFiles(FlowSnapshotStep step)

@@ -267,7 +267,7 @@ public sealed class RecordsAgentRunner(
         // stores under its own directory, which is inside the run's and which the engine never reads - never under an
         // agent's of the run - and its reads narrowed to the run's directory by the policy's one rule for it.
         var directory = agent.Directory(layout);
-        var workspace = _launch.Workspace(record: null, context.Layout, Path.Combine(directory, "work"), layout.Directory);
+        var workspace = _launch.Workspace(record: null, context.Layout, Path.Combine(directory, OrchestratorLayout.WorkDirectoryName), layout.Directory);
         var ground = AgentStepGround.Of(
             context.Config,
             definition,

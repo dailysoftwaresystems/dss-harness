@@ -57,6 +57,11 @@ public sealed record FlowRecordPath(string What, string Path);
 /// line says <c>all in --json named.&lt;list&gt;</c>: the staged paths a start is refused over among them; null where
 /// its line names none.
 /// </param>
+/// <param name="Session">
+/// The end of the session the command began, where the command's own end is not that session's: <c>answer-orchestrator</c>'s
+/// answer refused by the run as that session's start weighed it, the command's refusal, whatever the session went on to do
+/// - its line and its own code, kept beside the command's; null where the command's end is its session's, or it began none.
+/// </param>
 public sealed record FlowRunResult(
     string? Status,
     string? Run,
@@ -69,7 +74,8 @@ public sealed record FlowRunResult(
     FlowBudgetRecord? Spent,
     int ExitCode,
     IReadOnlyList<FlowRecordPath> Records,
-    IReadOnlyDictionary<string, IReadOnlyList<string>>? Named = null)
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? Named = null,
+    FlowSessionSaid? Session = null)
 {
     /// <summary>Where a line of a run's command says a list it names part of is whole: the member <paramref name="list"/> of the document's <c>named</c>.</summary>
     /// <param name="list">The list's name, as <see cref="Named"/> keys it.</param>
@@ -82,6 +88,15 @@ public sealed record FlowRunResult(
 
     /// <summary>The lines that name each record, as the command's text names them.</summary>
     public IEnumerable<string> RecordLines => Records.Select(record => $"{record.What}: {record.Path}");
+}
+
+/// <summary>A session's own end, where the command that began it ends otherwise (<see cref="FlowRunResult.Session"/>): its line and its code.</summary>
+/// <param name="Summary">The session's end in words, as it would have been the command's line.</param>
+/// <param name="ExitCode">The code the session ended with, as it would have been the command's.</param>
+public sealed record FlowSessionSaid(string Summary, int ExitCode)
+{
+    /// <summary>The session's end as the command's text says it: its line, then its code.</summary>
+    public string Said => $"{Summary} (exit {ExitCode.ToString(CultureInfo.InvariantCulture)})";
 }
 
 /// <summary>
@@ -97,6 +112,9 @@ public sealed record FlowRunResult(
 /// </summary>
 public static class FlowReports
 {
+    /// <summary>The member of a command's document that names every record it wrote or took, by what it is (<see cref="FlowRecordPath.What"/>).</summary>
+    public const string RecordsMember = "records";
+
     /// <summary>Writes the report of a session, markdown and one JSON document beside it.</summary>
     /// <param name="fileSystem">Writes the two files, atomically.</param>
     /// <param name="source">The run's records as the session left them, and the thresholds every report of the run is computed by - read by the one place that reads them for every report of a run.</param>
@@ -116,7 +134,7 @@ public static class FlowReports
         // reads - after the sections every form of the report holds.
         var (layout, flow, questions, updates) = (source.Layout, source.Flow, source.Questions, source.Updates);
         var report = FlowRunReport.Of(source);
-        var left = LeftForAPerson(layout, flow, questions, updates);
+        var left = LeftForAPerson(layout, flow, questions, source.EngineOrNone, updates);
         var handoffs = HandoffsOf(layout, flow);
 
         report["session"] = new JsonObject
@@ -135,8 +153,9 @@ public static class FlowReports
 
     /// <summary>
     /// The <c>--json</c> document of a command of a run - a session, a pause, a stop, an answer handed over, and the
-    /// same command stopped before it reached a run (<paramref name="result"/> empty): its code and its line, then the
-    /// run's own members, every one written whether or not it holds anything, so a script reads one shape whatever happened.
+    /// same command stopped before it reached a run (<paramref name="result"/> empty): its code and its line, the end of the
+    /// session it began where that is not the command's own (<see cref="FlowRunResult.Session"/>), then the run's own
+    /// members, every one written whether or not it holds anything, so a script reads one shape whatever happened.
     /// </summary>
     /// <param name="result">What the command ended with.</param>
     public static string Document(FlowRunResult result)
@@ -163,6 +182,9 @@ public static class FlowReports
             result.Summary,
             new JsonObject
             {
+                ["session"] = result.Session is { } session
+                    ? new JsonObject { ["summary"] = session.Summary, ["exitCode"] = session.ExitCode }
+                    : null,
                 ["run"] = result.Run,
                 ["status"] = result.Status,
                 ["questions"] = new JsonArray([.. result.Questions.Select(QuestionOf)]),
@@ -178,7 +200,7 @@ public static class FlowReports
                 ["handoffs"] = new JsonArray([.. result.Handoffs.Select(HandoffOf)]),
                 ["leftForAPerson"] = new JsonArray([.. result.LeftForAPerson.Select(line => JsonValue.Create(line))]),
                 ["spent"] = result.Spent is { } spent ? SpentOf(spent) : null,
-                ["records"] = records,
+                [RecordsMember] = records,
                 ["named"] = named,
             });
     }
@@ -366,17 +388,22 @@ public static class FlowReports
     /// What is left for a person, tied to no step's name: each pull request a <c>pull-request</c> step opened or found
     /// open, by its address, which the run did not merge and will not; the paths its folds changed that git ignores, as
     /// its <c>commit</c> steps answered them (<c>ignored</c>) and none of them took since, which the run never commits;
-    /// each question still open, with its recommendation and the way to answer it; each plan update that waits or was
+    /// each question still open, with its recommendation and the next step it takes by the one rule of it over what the
+    /// run's engine is doing (<see cref="FlowAnswerRules.NextStepOf"/>) - its answer, taken now while a live engine's
+    /// advisor seeks the recommendation, or, where the recommendation is still owed, the pause's advice, the resume, or the
+    /// resume once a stopping engine has gone, which seeks it first; each plan update that waits or was
     /// refused, so what became of a change a person asked for is never lost; and what each of the run's loops left.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
     /// <param name="flow">The run's state in one file.</param>
     /// <param name="questions">The run's questions and answers.</param>
+    /// <param name="engine">What the run's engine is doing: none for the report a session's end writes, for that session is leaving the run.</param>
     /// <param name="updates">The run's plan updates.</param>
-    public static IReadOnlyList<string> LeftForAPerson(OrchestratorLayout layout, FlowFile flow, FlowQuestionsFile? questions, FlowUpdatesFile? updates = null)
+    public static IReadOnlyList<string> LeftForAPerson(OrchestratorLayout layout, FlowFile flow, FlowQuestionsFile? questions, FlowEngineState engine, FlowUpdatesFile? updates = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(flow);
+        ArgumentNullException.ThrowIfNull(engine);
 
         var left = new List<string>();
 
@@ -406,7 +433,7 @@ public static class FlowReports
         {
             left.Add(
                 $"question {question.Id} ({question.Kind}) is open: {question.ProblemShown?.Happened ?? question.Kind}; {RecommendationOf(question)} - "
-                + $"answer with answer-orchestrator {layout.Name} <answer> --question {question.Id}");
+                + FlowAnswerRules.NextStepSaid(FlowAnswerRules.NextStepOf(question, engine), layout.Name, question.Id));
         }
 
         foreach (var update in updates?.Updates.Where(update => update.State is FlowUpdateStates.Refused or FlowUpdateStates.Queued or FlowUpdateStates.UnderWay) ?? [])
@@ -503,6 +530,8 @@ public static class FlowReports
         })]) : null,
         ["addedIteration"] = update.AddedIteration,
         ["askedAtBound"] = update.AskedAtBound,
+        ["addedWithdrawnBy"] = update.AddedWithdrawnBy,
+        ["checkedAgain"] = update.CheckedAgain,
     };
 
     /// <summary>One piece of a plan update as the report's JSON document holds it: its kind, its work item, and where it stands.</summary>
@@ -516,7 +545,27 @@ public static class FlowReports
         ["carriedBy"] = piece.CarriedBy,
         ["again"] = piece.Again,
         ["ended"] = piece.Ended,
+        ["withdrawal"] = piece.Withdrawal,
     };
+
+    /// <summary>
+    /// That an iteration or a round an update added was taken back before it opened, as the report and
+    /// <c>list-orchestrator</c> say it: a later update's withdrawal left the update owing nothing, so it is never made.
+    /// </summary>
+    /// <param name="iteration">The iteration's id, as the update's entry holds it.</param>
+    /// <param name="update">The update that added it.</param>
+    /// <param name="by">The update that took it back.</param>
+    internal static string TakenBackSaidOf(string iteration, string update, string by)
+        => $"{IterationSaidOf(iteration)} was added for update {update}, and taken back by update {by} before it opened: nothing was owed it any more";
+
+    /// <summary>
+    /// That a check that opens a round was drawn again for an update, as the report and <c>list-orchestrator</c> say it:
+    /// the work updates owe its round, which it had joined, changed before the round opened.
+    /// </summary>
+    /// <param name="check">The visit of the check, as the update's entry names it.</param>
+    /// <param name="update">The update that changed the work it joined.</param>
+    internal static string CheckedAgainSaidOf(string check, string update)
+        => $"'{check}' is drawn again for update {update}: the work updates owe its round, which it had joined, changed before the round opened";
 
     /// <summary>
     /// That a loop's bound was asked for the work an update owes it, as the report and <c>list-orchestrator</c> say it:
@@ -642,6 +691,7 @@ public static class FlowReports
                     var where = piece.CarriedBy is { } carried ? $"carried out by '{carried}'"
                         : piece.Again is { } again ? $"visited again in '{again}'"
                         : piece.Placed is { } placed ? $"placed in '{placed}'"
+                        : piece is { Withdrawal: true, OwedTo: { } from } ? $"taken out of the work items of {from}"
                         : piece.OwedTo is { } owed ? $"owed to {owed}"
                         : "carried by no instance";
                     text.Add($"  - {piece.Kind} '{piece.ItemName()}': {where}{(piece.Ended is { } ended ? $", {ended}" : ", still under way")}");
@@ -649,12 +699,17 @@ public static class FlowReports
 
                 if (update.AddedIteration is { } added)
                 {
-                    text.Add($"  - {IterationSaidOf(added)} was added for update {update.Id}");
+                    text.Add(update.AddedWithdrawnBy is { } by ? $"  - {TakenBackSaidOf(added, update.Id, by)}" : $"  - {IterationSaidOf(added)} was added for update {update.Id}");
                 }
 
                 if (update.AskedAtBound is { } asked)
                 {
                     text.Add($"  - {AskedAtBoundSaidOf(asked, update.Id)}");
+                }
+
+                if (update.CheckedAgain is { } drawnAgain)
+                {
+                    text.Add($"  - {CheckedAgainSaidOf(drawnAgain, update.Id)}");
                 }
 
                 foreach (var one in update.Told ?? [])

@@ -27,10 +27,11 @@ public interface IOrchestratorService : IUseCase
     Task<CommandOutcome> CreateAsync(string startDirectory, string name, string model, int? parallel, string? session, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Deletes an orchestrator, once none of its agents with a worktree is live or closed and no worktree is left below its
-    /// directory under the worktrees root; an agent with no worktree holds nothing but records, and goes with it whatever
-    /// its state. The evidence, transcripts, steps and sessions its agents kept - each agent's, of either kind, deleted or
-    /// not - go with it only with <paramref name="deleteEvidence"/>.
+    /// Deletes an orchestrator, once none of its agents whose work is folded is live or closed and no worktree of theirs is
+    /// left below its directory under the worktrees root; an agent that only reads holds nothing but records and its tree,
+    /// which is removed as deleting the agent removes it, nothing folded, and goes with it whatever its state. The evidence,
+    /// transcripts, steps and sessions its agents kept - each agent's, of either kind, deleted or not - go with it only with
+    /// <paramref name="deleteEvidence"/>.
     /// </summary>
     /// <param name="startDirectory">A directory in the repository.</param>
     /// <param name="name">The orchestrator's name.</param>
@@ -297,10 +298,10 @@ public sealed class OrchestratorService(
                     + "Nothing was changed.");
             }
 
-            // An agent that reads the main tree holds nothing but records: it does not stand in the way, and goes with
-            // the orchestrator. What it kept of the steps that ran as it and of its sessions is counted below with every
-            // agent's, under the guard --delete-evidence gives. What git lists below is refused on its own below, so the
-            // open agents are asked of the records alone.
+            // An agent that only reads holds nothing but records and its tree, scratch nothing folds: it does not stand in
+            // the way, and goes with the orchestrator, its tree removed below. What it kept of the steps that ran as it and
+            // of its sessions is counted below with every agent's, under the guard --delete-evidence gives. What git lists
+            // below is refused on its own below, so the open agents are asked of the records alone.
             var open = OrchestrationRules.OpenAgents(name, agents, []);
 
             if (open.Count > 0)
@@ -310,10 +311,18 @@ public sealed class OrchestratorService(
                     + $"Delete each with {OrchestrationReports.DeleteAgentLine(name, "<agent>")}. Nothing was changed.");
             }
 
-            if (below.Worktrees.Count > 0)
+            // The trees below that are those of its live agents that only read are theirs to lose; every other is refused.
+            var readers = agents
+                .Where(agent => agent.Record is { Reads: true, State: AgentStates.Live })
+                .Select(agent => agent.Record!)
+                .Where(record => below.Worktrees.Contains(WorktreeAddress.Nested(name, record.Name).Name, StringComparer.Ordinal))
+                .ToList();
+            var left = below.Worktrees.Where(worktree => !readers.Any(record => WorktreeAddress.Nested(name, record.Name).Name == worktree)).ToList();
+
+            if (left.Count > 0)
             {
                 return CommandOutcome.Refused(
-                    $"Orchestrator '{name}' was not deleted: worktrees are left below '{group}' - {Names.Line(below.Worktrees, "git worktree list")}. Delete each with "
+                    $"Orchestrator '{name}' was not deleted: worktrees are left below '{group}' - {Names.Line(left, "git worktree list")}. Delete each with "
                     + $"{OrchestrationReports.Line(WorktreeService.DeleteCommand, "<address>")} first. Nothing was changed.");
             }
 
@@ -374,26 +383,50 @@ public sealed class OrchestratorService(
                 return CommandOutcome.Refused(holding);
             }
 
+            // The trees of its agents that only read go first, each as deleting the agent removes it - the one owner of how
+            // such a tree goes - and the records stay until every one is gone, so one that stays finishes when run again.
+            var trees = new List<string>();
+
+            foreach (var reader in readers)
+            {
+                var removal = AgentService.RemoveReadingTreeAsync(_worktrees, layout.MainCheckoutRoot, reader).GetAwaiter().GetResult();
+                var address = WorktreeAddress.Nested(name, reader.Name);
+
+                trees.Add($"{WorktreeService.DeleteCommand} {address.Name}: {removal.Outcome.Message}");
+
+                if (_fileSystem.DirectoryExists(address.PathUnder(worktreesDirectory)))
+                {
+                    return CommandOutcome.Failed(
+                        HarnessExit.Incomplete,
+                        $"Orchestrator '{name}' is not deleted yet: the tree of its agent '{reader.Name}', which only reads, is still at "
+                        + $"'{address.PathUnder(worktreesDirectory)}' - {removal.Outcome.Message.TrimEnd('.')}. Its record is kept, so "
+                        + $"{OrchestrationReports.Line(DeleteCommand, name, deleteEvidence ? "--delete-evidence" : string.Empty)} run again once that is dealt with finishes it.",
+                        [.. trees, .. (removal.Outcome.Details ?? []).Select(detail => $"  {detail}")]);
+                }
+            }
+
             if (Remove(orchestrator) is { } stopped)
             {
                 return CommandOutcome.Failed(
                     HarnessExit.Incomplete,
                     $"Orchestrator '{name}' is not deleted yet: {stopped}. Its record is kept, so "
-                    + $"{OrchestrationReports.Line(DeleteCommand, name, deleteEvidence ? "--delete-evidence" : string.Empty)} run again finishes it.");
+                    + $"{OrchestrationReports.Line(DeleteCommand, name, deleteEvidence ? "--delete-evidence" : string.Empty)} run again finishes it.",
+                    trees);
             }
 
-            // Every agent left is deleted, or has no worktree and was not: each is counted as what it is.
+            // Every agent left is deleted, or only reads and was not: each is counted as what it is.
             var deleted = agents.Count(agent => agent.Record!.State == AgentStates.Deleted);
             var reading = agents.Count - deleted;
             string[] went =
             [
                 .. deleted == 0 ? [] : new[] { ReportText.Counted(deleted, "deleted agent") },
-                .. reading == 0 ? [] : new[] { $"{ReportText.Counted(reading, "agent")} with no worktree, not deleted" },
+                .. reading == 0 ? [] : new[] { $"{ReportText.Counted(reading, "agent")} that only read, not deleted" },
             ];
 
             return CommandOutcome.Ok(
                 $"deleted orchestrator '{name}'",
                 [
+                    .. trees,
                     $"removed {orchestrator.Directory}",
                     .. went.Length == 0 ? [] : new[] { $"with the history of {string.Join(" and ", went)}" },
                     .. kept.Count == 0 ? [] : new[] { $"and {KeptOf.Said(kept)}" },
@@ -568,8 +601,8 @@ public sealed class OrchestratorService(
                 inventories,
                 [.. listed.Where(worktree => WorktreeAddress.AgentOf(orchestrator.Name, worktree.Name) is { } agent && !agents.Any(entry => entry.Name == agent))],
                 OrchestrationRules.OpenAgents(orchestrator.Name, agents, listed.Select(worktree => worktree.Name)),
-                Run: _store.ReadFlow(orchestrator) is { } flow
-                    ? new FlowRunInventory(flow, _store.ReadFlowQuestions(orchestrator), EngineOf(orchestrator, flow), _store.ReadFlowUpdates(orchestrator))
+                Run: EngineOf(orchestrator) is { } read
+                    ? new FlowRunInventory(read.Flow, _store.ReadFlowQuestions(orchestrator), read.Engine, _store.ReadFlowUpdates(orchestrator))
                     : null));
         }
 
@@ -577,32 +610,62 @@ public sealed class OrchestratorService(
     }
 
     /// <summary>
-    /// What a run's engine is doing, as its records and its owner say it: none recorded; running; pausing, its handoffs
-    /// being written; recording the machine steps a completed pause left running; or gone - an owner recorded whose
-    /// process has ended.
+    /// The run's state and what its engine is doing, as its records and its owner say it (<see cref="EngineOf(OrchestrationStore, Flow.FlowRunOwner, OrchestratorLayout)"/>);
+    /// null where the run holds no state.
     /// </summary>
-    private FlowEngineState EngineOf(OrchestratorLayout orchestrator, Flow.FlowFile flow)
-        => EngineOf(_store, _owner, orchestrator, flow);
+    private (Flow.FlowFile Flow, FlowEngineState Engine)? EngineOf(OrchestratorLayout orchestrator)
+        => EngineOf(_store, _owner, orchestrator);
 
     /// <summary>
-    /// The one rule of what a run's engine is doing, as <c>list-orchestrator</c> and a run's own facts read it: no owner
-    /// recorded; a live one running the run; pausing, its handoffs being written; recording the machine steps a completed
-    /// pause left running; or gone - an owner recorded whose process has ended.
+    /// The one rule of what a run's engine is doing, as <c>list-orchestrator</c>, a run's own facts and its report read it,
+    /// with the run's state it judged: no owner recorded; a live one starting - from its claim until its start's own end is
+    /// written, while the start takes what is handed to it (<see cref="Flow.FlowFile.Starting"/>), so nothing the session
+    /// before it left the run's state saying, a stop it ended with or the pause it was left under, is read as this engine's;
+    /// running the run; pausing, its handoffs being written; recording the machine steps a completed pause left running;
+    /// stopping, a stop it applied - its hard stop, or a stop once its pause was complete - ending its session
+    /// (<see cref="Flow.FlowFile.StoppingSince"/>); or gone - an owner recorded whose process has ended. The one path every
+    /// reader of a run's engine takes, for the order of the reads is the rule's too: the owner is read first, then the run's
+    /// state, then the owner again, and the state is judged only beside the owner that stood across its read - read again
+    /// where the owner changed between. A session's claim marks the state starting before it writes the owner, and its
+    /// release removes the owner before it takes the mark back (<see cref="Flow.FlowRunOwner"/>), so a state read beside an owner
+    /// found live before it and still after is that owner's - never the past session's state with the next session's live
+    /// owner, nor a state its release took the mark back from with the owner it had just removed.
     /// </summary>
-    /// <param name="store">Reads the run's owner.</param>
+    /// <param name="store">Reads the run's owner and its state.</param>
     /// <param name="owner">Tells whether a recorded owner still stands.</param>
     /// <param name="orchestrator">The run.</param>
-    /// <param name="flow">The run's state in one file.</param>
-    internal static FlowEngineState EngineOf(OrchestrationStore store, Flow.FlowRunOwner owner, OrchestratorLayout orchestrator, Flow.FlowFile flow)
+    /// <returns>The run's state and what its engine is doing; null where the run holds no state.</returns>
+    /// <exception cref="HarnessException">The owner or the state cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    internal static (Flow.FlowFile Flow, FlowEngineState Engine)? EngineOf(OrchestrationStore store, Flow.FlowRunOwner owner, OrchestratorLayout orchestrator)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(orchestrator);
-        ArgumentNullException.ThrowIfNull(flow);
 
-        if (store.ReadOwner(orchestrator) is not { } held)
+        var held = store.ReadOwner(orchestrator);
+
+        while (true)
         {
-            return new FlowEngineState(FlowEngineState.None, null, []);
+            var flow = store.ReadFlow(orchestrator);
+            var after = store.ReadOwner(orchestrator);
+
+            if (Equals(held, after))
+            {
+                return flow is null ? null : (flow, Judged(owner, held, flow));
+            }
+
+            // The owner changed while the state was read - a claim, or a release - so the state may be the other's: it is
+            // read again beside the owner as it is now.
+            held = after;
+        }
+    }
+
+    /// <summary>What the run's engine is doing, from its owner and the state read beside it (<see cref="EngineOf(OrchestrationStore, Flow.FlowRunOwner, OrchestratorLayout)"/>).</summary>
+    private static FlowEngineState Judged(Flow.FlowRunOwner owner, Flow.RunOwner? held, Flow.FlowFile flow)
+    {
+        if (held is null)
+        {
+            return FlowEngineState.NoEngine;
         }
 
         if (!owner.Stands(held))
@@ -610,8 +673,21 @@ public sealed class OrchestratorService(
             return new FlowEngineState(FlowEngineState.Gone, owner.Named(held), []);
         }
 
-        // Once the pause is complete, what its record still holds as running is what the pause left to finish: the
-        // machine steps, the only ones a pause lets run on.
+        // A live owner whose start is under way has written none of what the run's state says of its engine: that is the
+        // session before it's - a stop it ended with, the pause it was left under - and this engine is taking the run up.
+        if (flow.Starting is true)
+        {
+            return new FlowEngineState(FlowEngineState.Starting, owner.Named(held), []);
+        }
+
+        // A stop the live engine applied is what it does from then on, whatever pause the run is under: it ends its
+        // session with it. Once a pause is complete, what its record still holds as running is what the pause left to
+        // finish: the machine steps, the only ones a pause lets run on.
+        if (flow.StoppingSince is not null)
+        {
+            return new FlowEngineState(FlowEngineState.Stopping, owner.Named(held), []);
+        }
+
         return flow.Pause switch
         {
             { CompletedAt: null } => new FlowEngineState(FlowEngineState.Pausing, owner.Named(held), []),
@@ -623,15 +699,16 @@ public sealed class OrchestratorService(
     /// <summary>
     /// One agent as the listing reports it: where its worktree is, from its own record - the worktrees root it was made
     /// under - and whether anything is there, asked of that path; for a record that does not read, the configured root.
-    /// An agent that reads the main tree has no worktree, so it names none. A live agent's worktree that is there is asked
-    /// of git as every agent command asks it (<see cref="AgentWorktrees.StandingAsync"/>), and why it cannot be worked on is
-    /// said where it cannot: a live agent is never said to stand at a worktree git cannot open.
+    /// An agent that only reads has a tree of its own too; one whose record an older tool wrote names none, so it names
+    /// none either. A live agent's worktree that is there is asked of git as every agent command asks it
+    /// (<see cref="AgentWorktrees.StandingAsync"/>), and why it cannot be worked on is said where it cannot: a live agent is
+    /// never said to stand at a worktree git cannot open.
     /// </summary>
     private async Task<AgentInventory> InventoryAsync(HarnessContext context, OrchestratorLayout orchestrator, AgentEntry agent, CancellationToken cancellationToken)
     {
         var layout = context.Layout;
-        var path = agent.Record is { Reads: true }
-            ? null
+        var path = agent.Record is { Reads: true } reading
+            ? reading.WorktreePath(layout)
             : agent.Record?.WorktreePath(layout) ?? WorktreeAddress.Nested(orchestrator.Name, agent.Name).PathUnder(layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root));
         var exists = path is not null && WorktreeExists(path);
         string? problem = null;
@@ -747,13 +824,23 @@ public sealed record FlowRunInventory(Flow.FlowFile Flow, Flow.FlowQuestionsFile
 }
 
 /// <summary>What a run's engine is doing, as <c>list-orchestrator</c> says it.</summary>
-/// <param name="State">One of <see cref="None"/>, <see cref="Running"/>, <see cref="Pausing"/>, <see cref="Recording"/> and <see cref="Gone"/>.</param>
+/// <param name="State">One of <see cref="None"/>, <see cref="Starting"/>, <see cref="Running"/>, <see cref="Pausing"/>, <see cref="Recording"/>, <see cref="Stopping"/> and <see cref="Gone"/>.</param>
 /// <param name="Process">The engine's process as a line names it; null where none is recorded.</param>
 /// <param name="LeftRunning">The machine steps a completed pause left running, which the engine stays to record; empty in every other state.</param>
 public sealed record FlowEngineState(string State, string? Process, IReadOnlyList<string> LeftRunning)
 {
     /// <summary>No engine is recorded: the run is between sessions.</summary>
     public const string None = "none";
+
+    /// <summary>No engine recorded, as a command that found none running the run names it.</summary>
+    public static FlowEngineState NoEngine { get; } = new(None, null, []);
+
+    /// <summary>
+    /// A live engine is taking the run up: from its session's claim until its start's own end is written, while no stop or
+    /// pause is asked of it, it seeks every recommendation the run owes and weighs an answer to a question owing one only
+    /// then, which takes it - and nothing the session before it left the run's state saying is this engine's.
+    /// </summary>
+    public const string Starting = "starting";
 
     /// <summary>A live engine drives the run.</summary>
     public const string Running = "running";
@@ -763,6 +850,13 @@ public sealed record FlowEngineState(string State, string? Process, IReadOnlyLis
 
     /// <summary>The pause is complete, and the live engine stays only to record the machine steps it left running.</summary>
     public const string Recording = "recording";
+
+    /// <summary>
+    /// The live engine applied a stop - the run's hard stop, or a stop once its pause was complete - and ends its session
+    /// with it: what is in flight stopped, every advice ended and none started, so the resume goes on with the run once
+    /// the engine has gone.
+    /// </summary>
+    public const string Stopping = "stopping";
 
     /// <summary>An engine is recorded whose process has ended: what a crash or <c>stop-orchestrator --now</c> leaves, reclaimed by the next session.</summary>
     public const string Gone = "gone";
@@ -780,7 +874,7 @@ public sealed record FlowEngineState(string State, string? Process, IReadOnlyLis
 /// <summary>One agent, as list-orchestrator reports it.</summary>
 /// <param name="Entry">Its directory's record, or why it has none that reads.</param>
 /// <param name="WorktreeExists">Whether anything is at its worktree's path.</param>
-/// <param name="WorktreePath">Where its worktree is, or was: under the worktrees root it was made under; null where it reads the main tree and has none.</param>
+/// <param name="WorktreePath">Where its worktree is, or was: under the worktrees root it was made under; null for an agent that only reads whose record an older tool wrote, naming no tree.</param>
 /// <param name="Evidence">The evidence directories kept for it, relative to its directory.</param>
 /// <param name="Transcripts">How many transcript files are kept for it.</param>
 public sealed record AgentInventory(

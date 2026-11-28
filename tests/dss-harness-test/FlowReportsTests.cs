@@ -43,7 +43,157 @@ public sealed class FlowReportsTests
                 "pull request https://github.com/acme/widgets/pull/42 is open: the run did not merge it and will not - merging it is a person's",
                 "loop loop left: one test",
             ],
-            FlowReports.LeftForAPerson(layout, file, questions: null));
+            FlowReports.LeftForAPerson(layout, file, questions: null, FlowEngineState.NoEngine));
+    }
+
+    /// <summary>
+    /// Each open question is left for a person with the next step it takes, where no engine runs the run: a question still
+    /// owing the recommendation it is answered with - one a stop deferred, and one a crash left sought, for no advisor seeks
+    /// one between sessions - names resume-orchestrator, which seeks it first, its answer then and abort taken now, while a
+    /// question recommended, and an agent's own, which carries its own, name the answer itself. A question answered already
+    /// is left for nobody.
+    /// </summary>
+    [Fact]
+    public void EveryOpenQuestion_IsLeftForAPerson_WithItsNextStep_TheResumeWhereItOwesItsRecommendationAndNoEngineRuns()
+    {
+        var (layout, file, questions) = OpenQuestions();
+
+        Assert.Equal(
+            [
+                "question q1 (failure) is open: 'q1' happened; the run was stopped while the advisor ran: the recommendation is sought when the run is resumed with this question still open - "
+                    + "its recommendation is still owed - no advisor seeks one between sessions, and resume-orchestrator r1 seeks it first; answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now",
+                "question q2 (turnLimit) is open: 'q2' happened; recommended: 'retry', the step was nearly done - answer with answer-orchestrator r1 <answer> --question q2",
+                "question q3 (ask) is open: 'q3' happened; no recommendation was sought - answer with answer-orchestrator r1 <answer> --question q3",
+                "question q4 (failure) is open: 'q4' happened; a recommendation is being sought from the advisor - "
+                    + "its recommendation is still owed - no advisor seeks one between sessions, and resume-orchestrator r1 seeks it first; answer with answer-orchestrator r1 <answer> --question q4 then, and answer-orchestrator r1 abort --question q4 is taken now",
+                "question q6 (failure) is open: 'q6' happened; no recommendation was sought - "
+                    + "its recommendation is still owed - no advisor seeks one between sessions, and resume-orchestrator r1 seeks it first; answer with answer-orchestrator r1 <answer> --question q6 then, and answer-orchestrator r1 abort --question q6 is taken now",
+            ],
+            FlowReports.LeftForAPerson(layout, file, questions, FlowEngineState.NoEngine));
+
+        // An engine recorded whose process has gone is no engine running the run: its next session, a resume, seeks it.
+        Assert.Equal(
+            FlowReports.LeftForAPerson(layout, file, questions, FlowEngineState.NoEngine),
+            FlowReports.LeftForAPerson(layout, file, questions, new FlowEngineState(FlowEngineState.Gone, "process 7", [])));
+    }
+
+    /// <summary>
+    /// Where a live engine runs the run, a question whose advisor seeks its recommendation now is left with its answer,
+    /// taken at once and ending the asking - never the resume, which a live owner refuses, nor a stop, which would end the
+    /// advice and leave the next resume to pay for it again - and one a pause defers is left to the pause's advice, the
+    /// answer given then, abort taken now; what owes nothing names the answer whatever the engine does.
+    /// </summary>
+    [Fact]
+    public void AnOpenQuestionOfALiveRun_IsLeftWithTheAnswerWhileAdvised_AndThePausesAdviceWhereAPauseDefersIt()
+    {
+        var (layout, file, questions) = OpenQuestions();
+        string[] Steps(string state) => [.. FlowReports.LeftForAPerson(layout, file, questions, new FlowEngineState(state, "process 7", [])).Select(line => line[(line.IndexOf(" - ", StringComparison.Ordinal) + 3)..])];
+
+        const string AnswerQ2 = "answer with answer-orchestrator r1 <answer> --question q2";
+        const string AnswerQ3 = "answer with answer-orchestrator r1 <answer> --question q3";
+        const string AdvisedQ4 = "its recommendation is being sought: answer with answer-orchestrator r1 <answer> --question q4, taken now and ending the asking";
+
+        const string PauseQ1 = "its recommendation is still owed - the run seeks it once its pause is complete; answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now";
+
+        // A running engine seeks a recommendation as it raises the question, and defers one only for a pause asked,
+        // which begins at its next pass.
+        Assert.Equal(
+            [
+                PauseQ1,
+                AnswerQ2,
+                AnswerQ3,
+                AdvisedQ4,
+                "its recommendation is being sought: answer with answer-orchestrator r1 <answer> --question q6, taken now and ending the asking",
+            ],
+            Steps(FlowEngineState.Running));
+
+        // A pausing engine, and one recording what its complete pause left running, defers what it raises to the pause's
+        // advice, which a complete pause gives before its session ends; the advice under way finishes, and is answered now.
+        foreach (var pausing in new[] { FlowEngineState.Pausing, FlowEngineState.Recording })
+        {
+            Assert.Equal(
+                [
+                    PauseQ1,
+                    AnswerQ2,
+                    AnswerQ3,
+                    AdvisedQ4,
+                    "its recommendation is still owed - the run seeks it once its pause is complete; answer with answer-orchestrator r1 <answer> --question q6 then, and answer-orchestrator r1 abort --question q6 is taken now",
+                ],
+                Steps(pausing));
+        }
+
+        // A starting engine seeks every recommendation the run owes - one a stop deferred, one a crash left sought, one no
+        // advisor was asked of yet - and takes an answer as it does: what the session before left says nothing of it.
+        Assert.Equal(
+            [
+                "its recommendation is being sought: answer with answer-orchestrator r1 <answer> --question q1, taken now and ending the asking",
+                AnswerQ2,
+                AnswerQ3,
+                AdvisedQ4,
+                "its recommendation is being sought: answer with answer-orchestrator r1 <answer> --question q6, taken now and ending the asking",
+            ],
+            Steps(FlowEngineState.Starting));
+    }
+
+    /// <summary>
+    /// Where the live engine is stopping - its hard stop, or a stop once its pause was complete - a question still owing
+    /// its recommendation is left to the resume once the engine has gone, for the stop ends every advice under way and
+    /// starts none - the one sought now among them - and once the engine has gone, the resume itself.
+    /// </summary>
+    [Fact]
+    public void AnOpenQuestionOfAStoppingRun_IsLeftToTheResumeOnceTheEngineHasGone()
+    {
+        var (layout, file, questions) = OpenQuestions();
+
+        Assert.Equal(
+            [
+                "question q1 (failure) is open: 'q1' happened; the run was stopped while the advisor ran: the recommendation is sought when the run is resumed with this question still open - "
+                    + "its recommendation is still owed - the stop under way seeks none, and resume-orchestrator r1 seeks it first once the engine has gone; answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now",
+                "question q2 (turnLimit) is open: 'q2' happened; recommended: 'retry', the step was nearly done - answer with answer-orchestrator r1 <answer> --question q2",
+                "question q3 (ask) is open: 'q3' happened; no recommendation was sought - answer with answer-orchestrator r1 <answer> --question q3",
+                "question q4 (failure) is open: 'q4' happened; a recommendation is being sought from the advisor - "
+                    + "its recommendation is still owed - the stop under way seeks none, and resume-orchestrator r1 seeks it first once the engine has gone; answer with answer-orchestrator r1 <answer> --question q4 then, and answer-orchestrator r1 abort --question q4 is taken now",
+                "question q6 (failure) is open: 'q6' happened; no recommendation was sought - "
+                    + "its recommendation is still owed - the stop under way seeks none, and resume-orchestrator r1 seeks it first once the engine has gone; answer with answer-orchestrator r1 <answer> --question q6 then, and answer-orchestrator r1 abort --question q6 is taken now",
+            ],
+            FlowReports.LeftForAPerson(layout, file, questions, new FlowEngineState(FlowEngineState.Stopping, "process 7", [])));
+    }
+
+    /// <summary>
+    /// A run left with five questions open - one a stop or a pause deferred, one recommended, an agent's own, one a crash
+    /// or a live advisor left sought, one no advisor has been asked of yet - and one answered already.
+    /// </summary>
+    private static (OrchestratorLayout Layout, FlowFile File, FlowQuestionsFile Questions) OpenQuestions()
+    {
+        var layout = OrchestratorLayout.Of(new HarnessLayout("/repo", "/repo"), "r1");
+        var file = new FlowFile(
+            1,
+            "r1",
+            "flow",
+            "digest",
+            new Dictionary<string, string>(),
+            "Stopped",
+            new FlowBudgetRecord(0, 0, 0),
+            0,
+            [],
+            [],
+            DateTimeOffset.UnixEpoch);
+        FlowQuestionEntry Open(string id, string kind, FlowRecommendation recommendation, string state = "open")
+            => new(id, state, kind, DateTimeOffset.UnixEpoch, [], [new FlowQuestionOption("retry", "the step runs again as a new attempt")], [], ProblemShown: new FlowQuestionProblem($"'{id}' happened"), Recommendation: recommendation);
+        var questions = new FlowQuestionsFile(
+            1,
+            "r1",
+            DateTimeOffset.UnixEpoch,
+            [
+                Open("q1", "failure", new FlowRecommendation("deferred", Why: "the run was stopped while the advisor ran: the recommendation is sought when the run is resumed with this question still open")),
+                Open("q2", "turnLimit", new FlowRecommendation("given", "retry", Why: "the step was nearly done", By: "advisor", Agent: "advisor")),
+                Open("q3", "ask", FlowRecommendation.NotSought),
+                Open("q4", "failure", new FlowRecommendation("sought", Why: "a recommendation is being sought from the advisor")),
+                Open("q5", "failure", new FlowRecommendation("deferred", Why: "never read"), state: "answered"),
+                Open("q6", "failure", FlowRecommendation.NotSought),
+            ]);
+
+        return (layout, file, questions);
     }
 
     /// <summary>
@@ -78,7 +228,7 @@ public sealed class FlowReportsTests
                 "1 path(s) folded, ignored by git, never committed: 'evidence/run.txt' - the run commits no path git ignores, and committing one, or leaving it out, is a person's",
                 "loop loop left: one test",
             ],
-            FlowReports.LeftForAPerson(layout, file, questions: null));
+            FlowReports.LeftForAPerson(layout, file, questions: null, FlowEngineState.NoEngine));
     }
 
     /// <summary>

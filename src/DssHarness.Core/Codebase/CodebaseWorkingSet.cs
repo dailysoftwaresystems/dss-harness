@@ -111,8 +111,24 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
     }
 
     /// <summary>
+    /// How many of <paramref name="listed"/> the step then used: its nodes the view still held at its end that are among
+    /// them, each once - the one rule a pack's use is counted by, the page 1 its first message was pushed
+    /// (<c>pack.used</c>) and the pages the graph tool's <c>pack</c> gave it (<c>pulled.pack.used</c>) alike. A node a page
+    /// listed is no use of it: only a touch the working set counts is.
+    /// </summary>
+    /// <param name="listed">The nodes a pack listed, by id, in any order and any number of times.</param>
+    public int Used(IEnumerable<string> listed)
+    {
+        ArgumentNullException.ThrowIfNull(listed);
+
+        var among = listed.ToHashSet(StringComparer.Ordinal);
+        return Nodes.Count(node => !node.Gone && among.Contains(node.Id));
+    }
+
+    /// <summary>
     /// The working set of a step that has ended: the nodes its <c>graph</c> calls asked about, served and edited, and those
-    /// whose own lines its reads and writes met, as <paramref name="view"/> - its view at the step's end - holds them.
+    /// whose own lines its reads and writes met, as <paramref name="view"/> - its view at the step's end - holds them; a
+    /// node a <c>pack</c> answer listed (<see cref="GraphCallLine.Listed"/>) is none of them, for listing it is no use.
     /// </summary>
     /// <param name="view">The step's view, synced at its end.</param>
     /// <param name="stream">The step's stored stream (<see cref="Orchestration.OrchestrationStore.ReadStepStream"/>), every attempt's.</param>
@@ -137,7 +153,9 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
     /// <summary>
     /// The whole-file reads <paramref name="stream"/> holds, on every client's form of them as the working set reads its
     /// calls - Claude Code's <c>Read</c> with neither an offset nor a limit, the runtime's <c>view_file</c> with neither a
-    /// start nor an end line - how many, and the estimated tokens of what they gave.
+    /// page nor a start nor an end line, whose answer gave the file's lines, numbered as a read gives them - how many, and
+    /// the estimated tokens of what they gave. A page of a file is no whole read, and a whole read the narrowing answered
+    /// with the file's outline gave none of its lines: the step's figures count that apart (<c>outlinedReads</c>).
     /// </summary>
     /// <param name="stream">The step's stored stream, every attempt's.</param>
     public static (int Count, int Tokens) WholeFileReads(IReadOnlyList<AgentEvent> stream)
@@ -150,7 +168,8 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
         foreach (var call in AgentStreamCalls.Of(stream))
         {
             if (call.Tool is ClaudeCodeTools.Read or AgentTools.ViewFile
-                && call.Input["offset"] is null && call.Input["limit"] is null && call.Input["start_line"] is null && call.Input["end_line"] is null)
+                && call.Input["offset"] is null && call.Input["limit"] is null && call.Input["page"] is null && call.Input["start_line"] is null && call.Input["end_line"] is null
+                && NumberedLine().IsMatch(call.Result))
             {
                 count++;
                 tokens += EstimatedTokens.Of(call.Result);
@@ -403,7 +422,12 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
             return new WorkingSetNode(touch.Id, uses, touch.Times, card.Handle, card.Path, card.Start, card.End, card.Hash);
         }
 
-        /// <summary>The file the view holds that a call's path names - Claude Code's <c>file_path</c>, the runtime's <c>path</c>, relative to the tree or under it - or null where it names none.</summary>
+        /// <summary>
+        /// The file the view holds that a call's path names - Claude Code's <c>file_path</c>, the runtime's <c>path</c>, relative
+        /// to the tree or under it - by the one rule a file is matched to a view (<see cref="CodebaseGraphQueries.PathOf"/>): the
+        /// view is of the tree the step read, so a path of another tree - the main checkout's, read by a reader beside its own -
+        /// names none.
+        /// </summary>
         private string? Held(JsonObject input, string tool)
         {
             if (Text(input, ClaudeCodeTools.Find(tool)?.Tool.Subject ?? "path") is not { } written
@@ -416,7 +440,7 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
 
             try
             {
-                relative = AgentPolicy.Beneath(view.Tree, Path.Combine(view.Tree, written), pathComparison);
+                relative = view.PathOf(Path.Combine(view.Tree, written), pathComparison);
             }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
             {

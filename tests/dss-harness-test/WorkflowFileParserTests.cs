@@ -811,7 +811,7 @@ public sealed class WorkflowFileParserTests
 
     /// <summary>
     /// An input's kind is one of the four it can take, an input of a kind other than text takes no options - a file
-    /// input is a path, checked when the run starts, a value is read as an expression and a step as a name - and
+    /// input is a path, its file copied as the run starts, a value is read as an expression and a step as a name - and
     /// options given empty are refused rather than read as any value, which is what leaving the key out says.
     /// </summary>
     [Fact]
@@ -888,14 +888,29 @@ public sealed class WorkflowFileParserTests
     }
 
     /// <summary>
-    /// V43: the kinds an advisor recommends for are given not empty - an advisor that names none recommends for every
-    /// kind, which kinds given empty would never be read as.
+    /// The advisor's retired <c>kinds</c> is refused, given empty or naming kinds, saying what replaced it: every kind of
+    /// question the engine raises is recommended before a person is asked it, so no advisor is asked about some alone.
     /// </summary>
     [Fact]
-    public void AnAdvisorsKindsGivenEmpty_AreRefusedRatherThanReadAsEveryKind()
+    public void AnAdvisorsKinds_AreRefusedSayingEveryKindIsRecommendedNow()
     {
+        const string Why = "'kinds' is not a key of advisor; every kind of question the engine raises is recommended by the advisor before a person is asked it, so an advisor names no kinds.";
+
         Assert.Equal(
-            ["line 5, column 10: 'advisor.kinds' is given empty, which is never read as every kind: name the kinds it recommends for, or leave the key out for every kind."],
+            [$"line 5, column 3: {Why}"],
+            Problems(
+                """
+                name: default
+                advisor:
+                  agent: advisor
+                  prompt: prompts/recommend.md
+                  kinds: [loopBound, failure]
+                steps:
+                  - name: orient
+                    type: orient
+                """));
+        Assert.Equal(
+            [$"line 5, column 3: {Why}"],
             Problems(
                 """
                 name: default
@@ -1301,8 +1316,8 @@ public sealed class WorkflowFileParserTests
     {
         Assert.Equal(
             [
-                "line 5, column 12: 'draft.agent' holds {input.agent}, and agent is no template: it is read as it is written, never filled; a reason step fills none of its keys.",
-                "line 8, column 18: 'draft.description' holds {plan.title}, and description is no template: it is read as it is written, never filled; a reason step fills none of its keys.",
+                "line 5, column 12: 'draft.agent' holds {input.agent}, and agent is no template: it is read as it is written, never filled; a reason step fills commit.",
+                "line 8, column 18: 'draft.description' holds {plan.title}, and description is no template: it is read as it is written, never filled; a reason step fills commit.",
                 "line 13, column 19: 'build.legs' holds {input.leg}, and legs is no template: it is read as it is written, never filled; a test step fills exclude, labels, affected and noTests.",
                 "line 16, column 13: 'build.on.step' holds {draft.next}, and on.step is no template: it is read as it is written, never filled; a test step fills exclude, labels, affected and noTests.",
                 "line 24, column 14: 'fold.within' holds {input.dir}, and within is no template: it is read as it is written, never filled; a fold step fills none of its keys.",

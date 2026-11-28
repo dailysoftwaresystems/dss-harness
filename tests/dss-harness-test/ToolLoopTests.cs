@@ -2287,6 +2287,88 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Equal([FakeChat.User(Asked), FakeChat.User(AgentEnvelope.InWords(AgentEnvelope.Schema(Schema))), FakeChat.User(AgentHandoffSignal.Prompt)], _chat.Requests[1].Messages);
     }
 
+    /// <summary>
+    /// An envelope the provider refused as a schema is remembered for the loop's life - its client's, every run of it - by
+    /// the provider's API address, the model and the envelope exactly as sent: a later run of that envelope on that model
+    /// sends no schema from its first request, told the envelope in words in a message of its own after its first, as a
+    /// provider whose wire holds no schema is, and a notice says why with what the provider said then, masked as it was.
+    /// The same envelope on another model or at another API address, and another envelope on that model, still send the
+    /// schema: the grammar the provider refused is of that envelope on that model alone.
+    /// </summary>
+    [Fact]
+    public async Task AnEnvelopeTheProviderRefused_IsSaidInWordsFromTheFirstRequestOfEveryLaterRunOfItOnThatModel()
+    {
+        const string Other = "claude-opus-4-8";
+        var loop = Loop();
+        var envelope = AgentEnvelope.Schema(Schema);
+        var inWords = AgentEnvelope.InWords(envelope);
+        var refusing = new FakeChat().Fail(new ChatFailure(ChatFailureKind.SchemaRefused, "too large sk-1")).Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
+        var later = new FakeChat().Answer(FakeChat.Said(Envelopes.Text("""{ "a": "y" }""")));
+        var told = new RecordedEvents();
+
+        var first = await Ran(Run(output: Schema) with { Mask = new Masking("sk-1") }, loop: loop, chat: refusing);
+        var second = await Ran(Run(output: Schema), loop: loop, chat: later, sink: told);
+
+        Assert.Equal((AgentRunStatus.Completed, """{"a":"x"}"""), (first.Status, first.StructuredOutput));
+        Assert.Equal([envelope, null], refusing.Requests.Select(request => request.Schema));
+        Assert.Equal((AgentRunStatus.Completed, """{"a":"y"}""", 1), (second.Status, second.StructuredOutput, second.Turns));
+        Assert.Equal([null], later.Requests.Select(request => request.Schema));
+        Assert.Equal([FakeChat.User(Asked), FakeChat.User(inWords)], later.Requests[0].Messages);
+
+        // Told before its first request as a provider that holds no schema is, the notice between the two messages; what
+        // the provider said is the refusing run's masked text, its secret never carried to another run.
+        Assert.Equal(["SessionStarted", "MessageSent", "Notice", "MessageSent"], told.All.TakeWhile(@event => @event is not TurnStarted).Select(@event => @event.GetType().Name));
+        Assert.Equal(ToolLoop.SchemaRefusedEarlier("too large ***"), Assert.Single(told.All.OfType<Notice>()).Text);
+        Assert.Equal(
+            [(AgentMessageKind.FirstPrompt, Asked), (AgentMessageKind.EnvelopeInWords, inWords)],
+            told.All.OfType<MessageSent>().Select(sent => (sent.Which, sent.Text)));
+
+        var onAnother = new FakeChat().Answer(FakeChat.Said(Envelopes.Text("""{ "a": "z" }"""), model: Other));
+        var anotherEnvelope = new FakeChat().Answer(FakeChat.Said(Envelopes.Text("""{ "a": "z" }""")));
+        var atAnother = new FakeChat().Answer(FakeChat.Said(Envelopes.Text("""{ "a": "z" }""")));
+        var asking = Schema with { AskRounds = 1 };
+        var others = new RecordedEvents();
+
+        await Ran(Run(output: Schema) with { Model = Other }, OfModel(Other), loop, onAnother, others);
+        await Ran(Run(output: asking), loop: loop, chat: anotherEnvelope, sink: others);
+        await Ran(Run(output: Schema), Terms() with { Provider = new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Api = "https://gateway.example", Currency = "USD" } }, loop, atAnother, others);
+
+        Assert.Equal([envelope], onAnother.Requests.Select(request => request.Schema));
+        Assert.Equal([AgentEnvelope.Schema(asking)], anotherEnvelope.Requests.Select(request => request.Schema));
+        Assert.Equal([envelope], atAnother.Requests.Select(request => request.Schema));
+        Assert.Empty(others.All.OfType<Notice>());
+        Assert.DoesNotContain(others.All.OfType<MessageSent>(), sent => sent.Which == AgentMessageKind.EnvelopeInWords);
+    }
+
+    /// <summary>
+    /// A run that moves to a model the provider refused the envelope on earlier in the loop's life sends that model no
+    /// schema: the first request to it, the same request sent again, carries the envelope in words in a message after what
+    /// it held, a notice saying why - and so does every later request of the run.
+    /// </summary>
+    [Fact]
+    public async Task ARunThatMovesToAModelThatRefusedTheEnvelope_SendsItNoSchema()
+    {
+        const string Other = "claude-opus-4-8";
+        var loop = Loop();
+        var envelope = AgentEnvelope.Schema(Schema);
+        var inWords = AgentEnvelope.InWords(envelope);
+        var refusing = new FakeChat().Fail(new ChatFailure(ChatFailureKind.SchemaRefused, "too large")).Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
+        var moving = new FakeChat()
+            .Fail(new ChatFailure(ChatFailureKind.Declined, "sensitive", Category: "cyber"))
+            .Answer(FakeChat.Said("not json"))
+            .Answer(FakeChat.Said(Envelopes.Text("""{ "a": "y" }""")));
+        var told = new RecordedEvents();
+
+        await Ran(Run(output: Schema), loop: loop, chat: refusing);
+        var result = await Ran(Run(output: Schema) with { Model = Other, Fallback = [Entry(FakeChat.Model)] }, OfModel(Other), loop, moving, told);
+
+        Assert.Equal((AgentRunStatus.Completed, """{"a":"y"}"""), (result.Status, result.StructuredOutput));
+        Assert.Equal([(Other, envelope), (FakeChat.Model, null), (FakeChat.Model, null)], moving.Requests.Select(request => (request.Model, request.Schema)));
+        Assert.Equal([FakeChat.User(Asked), FakeChat.User(inWords)], moving.Requests[1].Messages);
+        Assert.Equal(ToolLoop.SchemaRefusedEarlier("too large"), Assert.Single(told.All.OfType<Notice>()).Text);
+        Assert.Equal(inWords, Assert.Single(told.All.OfType<MessageSent>(), sent => sent.Which == AgentMessageKind.EnvelopeInWords).Text);
+    }
+
     /// <summary>A step past its time between requests asks nothing more: the answer that needed a repair is its last.</summary>
     [Fact]
     public async Task AStepPastItsTimeBetweenRequests_AsksNothingMore()
@@ -2452,6 +2534,10 @@ public sealed class ToolLoopTests : IDisposable
             new AgentModelConfig { Code = FakeChat.Model, MaxOutputTokens = maxOutput, ContextTokens = 200000, PriceInputMiss = 5, PriceInputHit = priceHit, PriceOutput = 25 },
             maxRetries,
             maxRetryWait);
+
+    /// <summary>The terms of a run on <paramref name="model"/>: the loop's provider and client, the model's entry of its own.</summary>
+    private static ToolLoopTerms OfModel(string model)
+        => Terms() with { Model = new AgentModelConfig { Code = model, MaxOutputTokens = 64000, ContextTokens = 200000, PriceInputMiss = 5, PriceInputHit = 1, PriceOutput = 25 } };
 
     /// <summary>One entry of the run's order, of the loop's provider and client, for a fallback a test names.</summary>
     private static AgentRunEntry Entry(string model, string provider = "anthropic", string client = "claude-api", string? key = "WORK_KEY", string? effort = null, bool usable = true)

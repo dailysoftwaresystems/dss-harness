@@ -24,7 +24,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// The test is one critical section for the whole repository, <see cref="AcrossRuns"/>: <see cref="OrchestrationStore.Exclusively"/>
 /// will not do, since it is a section for one orchestrator's record, and two runs - two orchestrators - would take two
 /// different ones and both pass. A session is refused (13) while any other run of the repository is unfinished and has
-/// work in the tree: a live owner, or - paused, stopped or failed - an agent with a worktree still open or a fold in
+/// work in the tree: a live owner, or - paused, stopped or failed - an agent with a worktree still open, whose work is
+/// folded (an agent that only reads folds nothing of its own tree, and holds no work of the tree's), or a fold in
 /// its ledger not yet committed - an intent nobody settled, or a path it changed that the main tree still holds
 /// otherwise than its HEAD (<see cref="FoldLedger.Uncommitted"/>), so a commit made by hand ends it as the run's own
 /// does. Two would fold into one main tree, and that is as true of a run waiting on an answer
@@ -42,13 +43,15 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="fileSystem">Reads the runs' directories.</param>
 /// <param name="identity">This process, and how another's liveness is told.</param>
 /// <param name="git">Reads what the main tree holds otherwise than its HEAD, which says whether a run's folds are committed.</param>
+/// <param name="platform">The platform, whose spellings of a path a run's own file input is refused as an agent's read is (<see cref="FlowInputs.OpenFiles"/>).</param>
 /// <param name="clock">When the run's record, its first status and its owner are written.</param>
-public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSystem, IProcessIdentity identity, IGitClient git, TimeProvider? clock = null)
+public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSystem, IProcessIdentity identity, IGitClient git, IHostPlatform platform, TimeProvider? clock = null)
 {
     private readonly OrchestrationStore _store = store ?? throw new ArgumentNullException(nameof(store));
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     private readonly IProcessIdentity _identity = identity ?? throw new ArgumentNullException(nameof(identity));
     private readonly IGitClient _git = git ?? throw new ArgumentNullException(nameof(git));
+    private readonly IHostPlatform _platform = platform ?? throw new ArgumentNullException(nameof(platform));
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
     /// <summary>
@@ -73,8 +76,12 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// record and the way on with that one), one whose directory is there holding no run's record refused as well, else
     /// one more than the highest <c>r&lt;N&gt;</c> there - the run's record (model <c>flow-engine</c>, parallel the
     /// workflow's open-agent bound), its first status, every step of the definition NotStarted, and its owner: this
-    /// process. Once the test for another unfinished run - the last look at a live owner - has passed, and before anything of
-    /// the run is written, every run of the repository is swept (<paramref name="sweep"/>), and a start where it keeps a
+    /// process. Before anything of the run is made, each of the run's own inputs of the kind <c>file</c> that is not empty
+    /// is held to a file inside the repository an agent may read, decided as an agent's read of it is on
+    /// <paramref name="inputGround"/>, and opened (<see cref="FlowInputs.OpenFiles"/>), and once its directory is
+    /// made each is copied into the run's inputs (<see cref="OrchestratorLayout.InputsDirectory"/>) before its record is
+    /// written; the context keeps the values as they were given. Once the test for another unfinished run - the last look
+    /// at a live owner - has passed, and before anything of the run is written, every run of the repository is swept (<paramref name="sweep"/>), and a start where it keeps a
     /// record because its session holds this very process is refused: the run's engine, this process, would be ended with it
     /// by the next command run from outside, which ends what the record names. Swept there, what it keeps is never older
     /// than the start: an owner seen standing before the section and gone since is swept with the rest.
@@ -83,6 +90,10 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <param name="definition">The workflow, as it was read.</param>
     /// <param name="sweep">Sweeps every run of the repository, as <c>list-orchestrator</c> does, inside the section.</param>
     /// <param name="command">The command starting the run, which a refusal says to run from outside.</param>
+    /// <param name="inputGround">
+    /// The ground every file input of the run is decided on: an agent's read of the main checkout, as the configuration the
+    /// run starts under makes it (<see cref="Agents.Policy.AgentStepGround.OfFileInputs"/>).
+    /// </param>
     /// <param name="wantedName">The name <c>--run</c> gave, or null for the next r&lt;N&gt;.</param>
     /// <param name="inputs">The values the run is started with, by input name.</param>
     /// <param name="startCommit">The commit the run starts from; null where it starts beside the tree's history.</param>
@@ -95,13 +106,16 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <returns>The run's layout and what the run is, as its records name it.</returns>
     /// <exception cref="HarnessException">
     /// Another run of the repository is unfinished, the sweep keeps a record whose session holds this very process, the name
-    /// is taken, or <paramref name="refusal"/> refuses it (<see cref="HarnessExit.Refused"/>).
+    /// is taken, <paramref name="refusal"/> refuses it, a file input names no file inside the repository an agent may read,
+    /// or the run's places or a file input's copy could not be made - what the start had made of the run then taken back,
+    /// and said (<see cref="HarnessExit.Refused"/>).
     /// </exception>
     public async Task<(OrchestratorLayout Run, FlowRunContext Context)> CreateAsync(
         HarnessLayout layout,
         WorkflowDefinition definition,
         Func<ChildSweep> sweep,
         string command,
+        Agents.Policy.AgentPolicyGround inputGround,
         string? wantedName = null,
         IReadOnlyDictionary<string, string>? inputs = null,
         string? startCommit = null,
@@ -113,6 +127,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(sweep);
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
+        ArgumentNullException.ThrowIfNull(inputGround);
 
         var differing = await DifferingAsync(layout, leavingOut: null, cancellationToken).ConfigureAwait(false);
 
@@ -134,11 +149,32 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 
             var run = OrchestratorLayout.Of(layout, name);
 
+            // The files the run's own file inputs name, opened before anything of the run is made, each decided as an agent's
+            // read of it is - every agent of the run reads the copy: one that names no file inside the repository an agent
+            // may read refuses the start, and the bytes the run keeps are those of the very file decided, read as opened.
+            using var files = FlowInputs.OpenFiles(_fileSystem, _platform, definition, FlowInputs.Resolve(definition, inputs), inputGround);
+
             // The run's places come with it: its temp, where every launch's temporary directory is kept for the run's
-            // life, and its artifacts, kept for the run's life and copied wherever asked - both taken away with the run.
-            _fileSystem.CreateDirectory(run.Directory);
-            _fileSystem.CreateDirectory(run.TempDirectory);
-            _fileSystem.CreateDirectory(run.ArtifactsDirectory);
+            // life, its artifacts, kept for the run's life and copied wherever asked, and its inputs, where each file a
+            // file input names is copied before the run's record is written, so a run that has a record has its copies -
+            // all taken away with the run. A place or a copy that cannot be made takes back what was made before it and
+            // refuses the start: no directory is left holding no run's record, which a later start of that name is
+            // refused over.
+            try
+            {
+                _fileSystem.CreateDirectory(run.Directory);
+                _fileSystem.CreateDirectory(run.TempDirectory);
+                _fileSystem.CreateDirectory(run.ArtifactsDirectory);
+                _fileSystem.CreateDirectory(run.InputsDirectory);
+                files.Keep(_fileSystem, run);
+            }
+            catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+            {
+                var why = ex is HarnessException ? ex.Message : $"the places of run '{name}' could not be made: {ex.Message.TrimEnd('.')}";
+
+                throw new HarnessException(HarnessExit.Refused, $"{why}; {Unmade(run)} No run was started.", ex);
+            }
+
             _store.WriteOrchestrator(
                 run,
                 new OrchestratorRecord
@@ -150,7 +186,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
                     CreatedAt = _clock.GetUtcNow(),
                 });
 
-            var context = FlowRunContext.Of(name, definition, inputs, startCommit, branch, _clock.GetUtcNow());
+            var context = FlowRunContext.Of(name, definition, inputs, startCommit, branch, _clock.GetUtcNow(), inputCopies: true);
             new WorkflowStatusWriter(_store, run, context).Write(
                 new FlowSnapshot(
                     FlowRunStatus.Running,
@@ -171,6 +207,25 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     }
 
     /// <summary>
+    /// Takes back what a start that did not get as far as its record made of <paramref name="run"/> - its directory, which
+    /// the start found not there, and everything in it - and says so, as a refusal's clause after its cause: removed, or
+    /// left where it could not be, naming it and what to do.
+    /// </summary>
+    /// <param name="run">The run the start was making.</param>
+    private string Unmade(OrchestratorLayout run)
+    {
+        try
+        {
+            _fileSystem.DeleteDirectory(run.Directory);
+            return $"what the start had made of run '{run.Name}' was removed.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"what the start had made of run '{run.Name}', '{run.Directory}', could not be removed ({ex.Message.TrimEnd('.')}): remove it, for a run of that name is refused while it stands.";
+        }
+    }
+
+    /// <summary>
     /// The start of every session of a run already made - a resume and an answer alike - inside the repository's one
     /// section, which a deletion decides in too: the run still there - one deleted since the session looked at it
     /// refused by name, with no owner written beside it - the test for another unfinished run, leaving out
@@ -183,7 +238,11 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// session of the run inside it would be ended with it by the next command run from outside, which ends what the
     /// record names. Swept there, what it keeps is never older than the claim - an owner seen gone inside the section
     /// cannot come back, and a live one is never claimed - so an owner the command saw standing - one an answer was handed
-    /// to and waited on - and gone since is swept with the rest.
+    /// to and waited on - and gone since is swept with the rest. The claim marks the run's state as this engine's start
+    /// before it writes the owner (<see cref="FlowRunOwner.Claim"/>), so no reader of the run, finding its owner live before
+    /// it reads the state - as every reader does (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout)"/>) -
+    /// takes what the session before left the state saying for this engine's; a claim let go before its session wrote
+    /// anything takes the mark back with it, once its owner is removed.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="run">The run the session is for.</param>
@@ -193,8 +252,9 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <returns>What is said of a dead owner reclaimed; null where none was recorded.</returns>
     /// <exception cref="HarnessException">
     /// The run is gone, another run of the repository is unfinished, a live engine owns the run, or the sweep keeps a record
-    /// whose session holds this very process (<see cref="HarnessExit.Refused"/>); or a request left for an engine that ended
-    /// cannot be taken, the claim this process made let go first. The sweep's refusal comes before the claim is made.
+    /// whose session holds this very process (<see cref="HarnessExit.Refused"/>); the run's state does not read, so its start
+    /// cannot be marked (<see cref="FlowRunOwner.Claim"/>); or a request left for an engine that ended cannot be taken, the
+    /// claim this process made let go first. The sweep's refusal and the state's come before the owner is written.
     /// </exception>
     public async Task<string?> ClaimAsync(HarnessLayout layout, OrchestratorLayout run, Func<ChildSweep> sweep, string command, CancellationToken cancellationToken = default)
     {
@@ -345,7 +405,8 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
             return $"{status}, and whether its agent '{unreadable.Name}' holds a worktree cannot be told: {unreadable.Problem!.TrimEnd('.')}";
         }
 
-        var open = agents.Count(entry => entry.Record is { State: AgentStates.Live } record && record.Worktree is not null);
+        // An agent that only reads holds a tree of its own, and nothing in it is ever folded: no work of the tree's is in it.
+        var open = agents.Count(entry => entry.Record is { State: AgentStates.Live, Reads: false } record && record.Worktree is not null);
         int uncommitted;
 
         try

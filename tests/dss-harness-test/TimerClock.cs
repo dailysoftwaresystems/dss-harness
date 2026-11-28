@@ -3,19 +3,26 @@ namespace DssHarness.Tests;
 /// <summary>
 /// A clock that moves only when told, whose timers fire when it is moved past their time and never on their own: so a
 /// test of something that waits - a retry's turn, a handoff's bound, a stop's drain, a budget's tick - decides when the
-/// wait ends, and a wait the test never moves past never ends.
+/// wait ends, and a wait the test never moves past never ends. Given the waits it <paramref name="holds"/>, it holds those
+/// alone - a bound the test passes - and every other wait runs on the system's own timer, as on the system's clock: so
+/// what polls goes on polling, and what looks again goes on looking, while the bound stands until the test passes it.
 /// </summary>
 /// <remarks>
 /// Moved under a lock, since the code under test creates its timers on other threads, and each timer's callback is
-/// posted to the thread pool rather than run where the clock was moved, as a real timer's is.
+/// posted to the thread pool rather than run where the clock was moved, as a real timer's is. A timer is held or the
+/// system's by the wait it is made with, whatever it is changed to after.
 /// </remarks>
-internal sealed class TimerClock : ManualClock
+/// <param name="holds">The waits the clock holds, by their length; null where it holds every one.</param>
+internal sealed class TimerClock(IReadOnlyCollection<TimeSpan>? holds = null) : ManualClock
 {
     private readonly Lock _gate = new();
     private readonly List<Pending> _timers = [];
     private readonly List<(int Count, TaskCompletionSource Armed)> _watchers = [];
 
-    /// <summary>How many timers wait on the clock now: armed, and not yet fired or disposed.</summary>
+    /// <summary>The waits the clock holds, by their length; null where it holds every one.</summary>
+    private readonly HashSet<TimeSpan>? _holds = holds is null ? null : [.. holds];
+
+    /// <summary>How many timers wait on the clock now: held by it, armed, and not yet fired or disposed.</summary>
     public int Waiting
     {
         get
@@ -103,6 +110,12 @@ internal sealed class TimerClock : ManualClock
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         ArgumentNullException.ThrowIfNull(callback);
+
+        // A wait the clock does not hold runs on the system's own timer, as it would on the system's clock.
+        if (_holds is not null && !_holds.Contains(dueTime))
+        {
+            return TimeProvider.System.CreateTimer(callback, state, dueTime, period);
+        }
 
         var timer = new Pending(this, callback, state);
 

@@ -205,6 +205,13 @@ public sealed partial class AgentToolRuntime : IDisposable
         // side-task's lock (Locks), and a wholeFile, which changes what the reads beside it are answered, stands alone (Alone).
         if (run.Graph is { } graph)
         {
+            // Where the graph was built, the reads that answer from it say how: a range headed by its declarations, a
+            // search's hits under theirs, a narrowed whole read answered with the file's outline.
+            if (graph.Tool is not null)
+            {
+                tools = [.. AgentTools.InAGraphStep(tools, graph.Narrow)];
+            }
+
             var operations = graph.Operations ?? CodebaseGraphTool.Operations(write: true, narrow: false);
             tools.Add(new AgentToolDefinition(
                 AgentGraphSupport.ToolName,
@@ -248,6 +255,7 @@ public sealed partial class AgentToolRuntime : IDisposable
                 new SearchRecords(this))
             {
                 Stall = run.Limits.StallSeconds is { } stall and > 0 ? TimeSpan.FromSeconds(stall) : null,
+                Renewal = search.Renewal,
 
                 // Told where the running operation says everything else, looked up as each wait tells.
                 Tell = static told => Waits.Told(told),
@@ -549,7 +557,7 @@ public sealed partial class AgentToolRuntime : IDisposable
 
         return tool.Name switch
         {
-            AgentTools.ViewFile => await ViewAsync(input, cancellationToken).ConfigureAwait(false),
+            AgentTools.ViewFile => await ViewAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.FindFiles => await FindAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.SearchFiles => await SearchAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.ReadResult => await ReadResultAsync(input, cancellationToken).ConfigureAwait(false),
@@ -557,9 +565,9 @@ public sealed partial class AgentToolRuntime : IDisposable
             AgentTools.ReplaceInFile => await ReplaceAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.InsertInFile => await InsertAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.CreateDirectory => CreateDirectory(input),
-            AgentTools.DeleteFile => await DeleteFile(input).ConfigureAwait(false),
-            AgentTools.DeleteDirectory => await DeleteDirectory(input).ConfigureAwait(false),
-            AgentTools.MovePath => await MovePath(input).ConfigureAwait(false),
+            AgentTools.DeleteFile => await DeleteFile(input, cancellationToken).ConfigureAwait(false),
+            AgentTools.DeleteDirectory => await DeleteDirectory(input, cancellationToken).ConfigureAwait(false),
+            AgentTools.MovePath => await MovePath(input, cancellationToken).ConfigureAwait(false),
             AgentTools.RunCommand => await RunCommandAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.WebFetch => await FetchAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.WebSearch => await WebSearchAsync(input, cancellationToken).ConfigureAwait(false),
@@ -594,12 +602,11 @@ public sealed partial class AgentToolRuntime : IDisposable
 
         support.Recorded?.Invoke(GraphCallLine.Of(input["op"]?.GetValue<string>(), answer));
 
-        var tree = _run.Workspace.Worktree ?? _run.Workspace.MainCheckout;
-
+        // The files an answer names are its view's, relative to the tree it is of: each is that tree's, by the tool's own rule.
         if (answer.Outcome == GraphToolOutcome.Wrote && answer.Path is { } wrote)
         {
             // The graph is synced after each of the run's writes, an edit of its own among them.
-            await WroteAsync(AgentGraphSupport.ToolName, Path.Combine(tree, wrote.Replace('/', Path.DirectorySeparatorChar))).ConfigureAwait(false);
+            await WroteAsync(AgentGraphSupport.ToolName, tool.FullOf(wrote)).ConfigureAwait(false);
         }
 
         // A file the answer's page served lines of is viewed as those lines were read - an edit's as it wrote it - never as
@@ -607,7 +614,7 @@ public sealed partial class AgentToolRuntime : IDisposable
         // lines after the file changed is refused as changed since viewed.
         foreach (var viewed in answer.Viewed)
         {
-            _viewed[Path.Combine(tree, viewed.Path.Replace('/', Path.DirectorySeparatorChar))] = viewed.Digest;
+            _viewed[tool.FullOf(viewed.Path)] = viewed.Digest;
         }
 
         if (answer.Escape is { } escape)
@@ -697,11 +704,75 @@ public sealed partial class AgentToolRuntime : IDisposable
     /// <summary>A place a read reaches, decided: held to the roots, then asked of the policy.</summary>
     private Decided ReadPlace(string path) => Decide(_paths.Read(path), full => _policy.Read(full));
 
-    /// <summary>A directory a search reaches, decided: held to the roots, then asked of the policy as a search.</summary>
-    private Decided SearchPlace(string path) => Decide(_paths.Read(path), full => _policy.Search(full));
+    /// <summary>
+    /// A directory a search reaches, decided: held to the roots, then asked of the policy as a read of it - never as a
+    /// search (<see cref="AgentPolicy.Search"/>), which refuses one that holds a place no action reaches: these tools
+    /// decide each file beneath it as its own read (<c>MayRead</c>), so such a place is left out and counted, never read,
+    /// and the main checkout, which holds the tool's own credential slots and which an agent that only reads reads beside
+    /// its own tree, is searched for the rest.
+    /// </summary>
+    private Decided SearchPlace(string path) => Decide(_paths.Read(path), full => _policy.Read(full));
 
     /// <summary>A place a write reaches, decided: held to the writable roots and through no link, then asked of the policy.</summary>
     private Decided WritePlace(string path) => Decide(_paths.Write(path), full => _policy.Write(full));
+
+    /// <summary>
+    /// A place a tool takes away - a file or a directory deleted, the source of a move - decided: held to the writable roots
+    /// and through no link, as a write's is, then asked of the policy as a delete (<see cref="AgentPolicy.Delete"/>) with
+    /// what git says of it now - a file with whether git lists it untracked, a directory as one each path of which its tool
+    /// decides on its own (<see cref="HeldAsync"/>).
+    /// </summary>
+    /// <param name="path">The path as the agent gave it.</param>
+    /// <param name="cancellationToken">Stops git.</param>
+    private async Task<Decided> TakenPlaceAsync(string path, CancellationToken cancellationToken)
+    {
+        var confined = _paths.Write(path);
+
+        if (confined.Full is not { } full)
+        {
+            return new Decided(null, confined.Denied);
+        }
+
+        // Asked only of a ground that holds the record of its step's start: no other's deletes are told apart, and git and the
+        // disk are not asked for one.
+        var untracked = _run.Ground?.StepStart is not null
+            && (_host.FileSystem.KindOf(full) == PathKind.Directory || (await UntrackedAsync([full], cancellationToken).ConfigureAwait(false)).Count > 0);
+
+        return Decide(confined, decided => _policy.Delete(decided, untracked));
+    }
+
+    /// <summary>
+    /// Which of <paramref name="paths"/> git lists untracked in the step's worktree now - neither tracked nor ignored, each
+    /// by its own name - asked only where the step's ground holds the record of its start (<see cref="AgentPolicyGround.StepStart"/>),
+    /// whose worktree it is, for the policy to tell what the step made itself apart by: none where the ground holds none,
+    /// and none of a path outside that worktree, which the step's writes narrow nothing of.
+    /// </summary>
+    /// <param name="paths">The paths, absolute.</param>
+    /// <param name="cancellationToken">Stops git.</param>
+    private async Task<IReadOnlySet<string>> UntrackedAsync(IReadOnlyCollection<string> paths, CancellationToken cancellationToken)
+    {
+        var comparer = StringComparer.FromComparison(_host.Platform.PathComparison);
+
+        if (_run.Ground?.StepStart is not { } start)
+        {
+            return new HashSet<string>(comparer);
+        }
+
+        var beneath = paths
+            .Select(path => (Full: path, Relative: AgentPolicy.Beneath(start.Worktree, path, _host.Platform.PathComparison)))
+            .Where(path => path.Relative is not null)
+            .ToList();
+
+        if (beneath.Count == 0)
+        {
+            return new HashSet<string>(comparer);
+        }
+
+        var listed = await _host.Git.ListWorkingFilesAsync(start.Worktree, [.. beneath.Select(path => path.Relative!)], cancellationToken).ConfigureAwait(false);
+        var untracked = listed.Where(file => file.Untracked && file.Name.IsUtf8).Select(file => file.Name.Text).ToHashSet(comparer);
+
+        return beneath.Where(path => untracked.Contains(path.Relative!)).Select(path => path.Full).ToHashSet(comparer);
+    }
 
     /// <summary>
     /// The place an open file stands at, decided: held to the roots by their own names as the system gives an open file's
@@ -709,11 +780,13 @@ public sealed partial class AgentToolRuntime : IDisposable
     /// </summary>
     private Decided OpenedPlace(string final, bool write) => Decide(_paths.Opened(final, write), full => write ? _policy.Write(full) : _policy.Read(full));
 
-    /// <summary>A place decided: refused where it is not confined to the roots, else as <paramref name="policy"/> answers it - reached only where it allows.</summary>
+    /// <summary>A place decided: refused where it is not confined to the roots, else as <paramref name="policy"/> answers it - reached only where it allows (<see cref="ConfinedPath.Allowed"/>).</summary>
     private static Decided Decide(ConfinedPath confined, Func<string, AgentPolicyAnswer> policy)
-        => confined.Full is not { } full ? new Decided(null, confined.Denied)
-            : policy(full).Refusal() is { } denied ? new Decided(null, denied)
-            : new Decided(full, null);
+    {
+        var allowed = confined.Allowed(policy);
+
+        return new Decided(allowed.Full, allowed.Denied);
+    }
 
     /// <summary>A member's text, or null where the input leaves it out.</summary>
     private static string? Text(JsonObject input, string name) => input[name]?.GetValue<string>();
@@ -774,7 +847,7 @@ public sealed partial class AgentToolRuntime : IDisposable
 /// </summary>
 /// <param name="fileSystem">Reads and writes the agent's files.</param>
 /// <param name="platform">The platform, whose paths and names compare its way.</param>
-/// <param name="git">Lists a work tree's files.</param>
+/// <param name="git">Lists a work tree's files, and says which of a step's worktree's files it does not track.</param>
 /// <param name="phases">Runs a command an agent runs as a phase, contained.</param>
 /// <param name="sessions">Where a contained command's session is recorded while it runs.</param>
 /// <param name="fetch">The harness's own fetch.</param>
@@ -799,6 +872,9 @@ public sealed class AgentToolHost(
 
     /// <summary>The platform, whose paths and names compare its way.</summary>
     internal IHostPlatform Platform { get; } = platform ?? throw new ArgumentNullException(nameof(platform));
+
+    /// <summary>Says which of a step's worktree's files git does not track, for a delete of what the step made itself.</summary>
+    internal IGitClient Git { get; } = git ?? throw new ArgumentNullException(nameof(git));
 
     /// <summary>Lists and searches a directory's files.</summary>
     internal AgentFiles Files { get; } = new(git ?? throw new ArgumentNullException(nameof(git)), fileSystem);

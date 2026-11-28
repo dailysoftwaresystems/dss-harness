@@ -60,8 +60,10 @@ public sealed class AgentClientConfig
     public int? MaxRetryWaitSeconds { get; init; }
 
     /// <summary>
-    /// How long what a request caches is kept (claude-api's key): <c>5m</c>, where nothing is said, or <c>1h</c>, for both
-    /// of its cache marks - and a model whose requests are cached an hour is priced by its <c>priceCacheWrite1h</c>.
+    /// How long what a request caches is kept (a key of the two Claude clients): <c>5m</c>, where nothing is said, or
+    /// <c>1h</c> - for both of the Claude API client's cache marks, and for every request a claude-code launch makes
+    /// (<see cref="Agents.Policy.ClaudeSettings.CacheTtlVariables"/>) - and a model whose requests are cached an hour is
+    /// priced by its <c>priceCacheWrite1h</c>.
     /// </summary>
     public string? CacheTtl { get; init; }
 

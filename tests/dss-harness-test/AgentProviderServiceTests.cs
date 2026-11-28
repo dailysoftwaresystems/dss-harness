@@ -21,16 +21,16 @@ public sealed class AgentProviderServiceTests
         Assert.Equal(
             [
                 "provider   type       api                           client       keys, in order              models",
-                "anthropic  anthropic  https://api.anthropic.com     claude-code  ANTHROPIC_API_KEY  missing  claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5",
-                "zai        zai        https://api.z.ai/api/paas/v4  glm          ZAI_API_KEY        present  glm-5.3",
+                "anthropic  anthropic  https://api.anthropic.com     claude-code  ANTHROPIC_API_KEY  missing  claude-fable-5-2, claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5",
+                "zai        zai        https://api.z.ai/api/paas/v4  glm          ZAI_API_KEY        present  glm-5.4, glm-5.3-flash",
                 "balanceKeyUsage is off: a run's steps take each provider's keys in order",
-                "prices of 'anthropic' (USD, read 2026-10-12): all 4 models priced",
-                "prices of 'zai' (USD, read 2026-10-12): glm-5.3 priced",
-                "tier best:      Claude Fable 5.1 (claude-fable-5-1), GLM 5.3 (glm-5.3)",
-                "tier high:      Claude Opus 5.5 (claude-opus-5-5), GLM 5.3 (glm-5.3)",
-                "tier balanced:  Claude Sonnet 5.5 (claude-sonnet-5-5), GLM 5.3 (glm-5.3)",
-                "tier fast:      Claude Haiku 5.5 (claude-haiku-5-5), GLM 5.3 (glm-5.3)",
-                "tier reporting: Claude Sonnet 5.5 (claude-sonnet-5-5), GLM 5.3 (glm-5.3)",
+                "prices of 'anthropic' (USD, read 2026-11-27): all 4 models priced",
+                "prices of 'zai' (USD, read 2026-11-27): all 2 models priced",
+                "tier best:      Claude Fable 5.2 (claude-fable-5-2), GLM 5.4 (glm-5.4)",
+                "tier high:      Claude Opus 5.5 (claude-opus-5-5), GLM 5.4 (glm-5.4)",
+                "tier balanced:  Claude Sonnet 5.5 (claude-sonnet-5-5), GLM 5.4 (glm-5.4)",
+                "tier fast:      Claude Haiku 5.5 (claude-haiku-5-5), GLM 5.3 Flash (glm-5.3-flash)",
+                "tier reporting: Claude Sonnet 5.5 (claude-sonnet-5-5), GLM 5.3 Flash (glm-5.3-flash)",
                 "client 'claude-code' signs in with the machine's login and reads no key",
                 "client 'claude-code' reads its settings where the slot holds them, none needed: CLAUDE_EXECUTABLE (executable), absent, CLAUDE_CONFIG_DIR (configDir), absent",
                 "keys are read from .harness-config/workflows/.env/ (1 file) and from nowhere else",
@@ -137,7 +137,7 @@ public sealed class AgentProviderServiceTests
         Assert.Equal(0, outcome.ExitCode);
         Assert.Equal(
             [
-                "zai        zai        https://api.z.ai/api/paas/v4  glm          ZAI_API_KEY        missing, ZAI_API_KEY_TWO    present  glm-5.3",
+                "zai        zai        https://api.z.ai/api/paas/v4  glm          ZAI_API_KEY        missing, ZAI_API_KEY_TWO    present  glm-5.4, glm-5.3-flash",
                 "balanceKeyUsage is on: a run's steps take the key that spent least",
             ],
             outcome.Details!.Where(line => line.StartsWith("zai ", StringComparison.Ordinal) || line.StartsWith("balanceKeyUsage", StringComparison.Ordinal)));
@@ -213,7 +213,7 @@ public sealed class AgentProviderServiceTests
         Assert.Equal(["anthropic", "zai"], document["providers"]!.AsArray().Select(provider => (string?)provider!["name"]));
         Assert.Equal("https://api.anthropic.com", (string?)document["providers"]![0]!["api"]);
         Assert.Equal([false, true], document["providers"]!.AsArray().Select(provider => (bool?)provider!["keys"]![0]!["held"]));
-        Assert.Equal(["glm-5.3"], document["providers"]![1]!["models"]!.AsArray().Select(model => (string?)model!["code"]));
+        Assert.Equal(["glm-5.4", "glm-5.3-flash"], document["providers"]![1]!["models"]!.AsArray().Select(model => (string?)model!["code"]));
         Assert.Equal(1000000, (int?)document["providers"]![1]!["models"]![0]!["contextTokens"]);
         Assert.Equal(["best", "high", "balanced", "fast", "reporting"], document["tiers"]!.AsArray().Select(tier => (string?)tier!["name"]));
         Assert.Equal("claude-code", (string?)document["clients"]![0]!["name"]);
@@ -268,7 +268,7 @@ public sealed class AgentProviderServiceTests
         // Anthropic's price of a thousand searches.
         Assert.Equal(["ANTHROPIC_API_KEY"], printed["providers"]![0]!["apiKeyNames"]!.AsArray().Select(name => (string?)name));
         Assert.Equal(["ZAI_API_KEY"], printed["providers"]![1]!["apiKeyNames"]!.AsArray().Select(name => (string?)name));
-        Assert.Equal(["2026-10-12", "2026-10-12"], printed["providers"]!.AsArray().Select(provider => (string?)provider!["readOn"]));
+        Assert.Equal(["2026-11-27", "2026-11-27"], printed["providers"]!.AsArray().Select(provider => (string?)provider!["readOn"]));
         Assert.Equal(10, (int?)printed["providers"]![0]!["pricePerThousandSearches"]);
     }
 

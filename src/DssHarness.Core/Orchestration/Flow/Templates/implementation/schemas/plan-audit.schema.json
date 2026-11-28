@@ -29,7 +29,7 @@
     },
     "closure": {
       "type": "array",
-      "description": "What the closure part of the audit found, one entry for each class it checked: the sites it searched out itself that the plan's site list lacks, and the cells of the universe, per the repository's closure text, that the plan's universe leaves out without a reason. Empty where it found none - and a site the plan missed, an axis left out without a reason, an item that patches one site of several, and an item that changes a decision and declares no class are findings, which hold go back.",
+      "description": "What the closure part of the audit found, one entry for each class it checked: the sites it searched out itself that the plan's site list lacks, and the cells of the universe, per the repository's closure text, that the plan's universe leaves out. Empty where it found none - and a site the plan missed, an axis said not to apply that the decision ranges over, an axis whose values leave out a cell, an item that patches one site of several, and an item that changes a decision and declares no class are findings, which hold go back.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -52,7 +52,7 @@
           },
           "missingCells": {
             "type": "array",
-            "description": "Each axis or cell of the universe, per the repository's closure text, that the plan's universe leaves out without a reason.",
+            "description": "Each cell of the universe, per the repository's closure text, that the plan's universe leaves out: a value an axis that applies lacks, by the axis and the value, or an axis said not to apply that the decision ranges over, by the axis and what in the code shows it.",
             "items": {
               "type": "string"
             }

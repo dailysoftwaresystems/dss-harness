@@ -115,6 +115,41 @@ public sealed class FlowCheckoutTests : IDisposable
         Assert.Equal("main", checkout.RemoteDefault);
         Assert.Equal("main", checkout.BaseBranch(null));
         Assert.Equal("release", checkout.BaseBranch("release"));
+
+        // origin is a repository on this machine: it takes a push, and names no repository on a forge.
+        Assert.Null(checkout.Forge);
+        Assert.False(checkout.OnForge);
+        Assert.Equal(
+            "remote 'origin' names no repository on a forge - its address is a path on this machine, a file:// address or a path on an ssh server, which takes a push and has no pull requests",
+            checkout.NotOnForge);
+    }
+
+    /// <summary>
+    /// The remote the run's branch goes to names its repository on a forge by its fetch address - the one the forge's tool
+    /// reads - over https as over ssh, whatever its push address is; a remote that is not the one, or none at all, names
+    /// none.
+    /// </summary>
+    [Fact]
+    public async Task TheRemotesForge_IsWhatItsAddressNames()
+    {
+        var (harness, repository, remote) = await WithOriginAsync();
+        await harness.RunGitAsync(repository.Path, ["remote", "set-url", "origin", "https://github.com/acme/widgets.git"], Token);
+        await harness.RunGitAsync(repository.Path, ["remote", "set-url", "--push", "origin", remote.Path], Token);
+
+        var overHttps = await FlowCheckout.ReadAsync(harness.GitClient, repository.Path, Bare, Token);
+        await harness.RunGitAsync(repository.Path, ["remote", "set-url", "origin", "git@github.com:acme/widgets.git"], Token);
+        var overSsh = await FlowCheckout.ReadAsync(harness.GitClient, repository.Path, Bare, Token);
+        await harness.RunGitAsync(repository.Path, ["remote", "rename", "origin", "first"], Token);
+        await harness.RunGitAsync(repository.Path, ["remote", "add", "second", "https://github.com/acme/other.git"], Token);
+        var unchosen = await FlowCheckout.ReadAsync(harness.GitClient, repository.Path, Bare, Token);
+
+        Assert.Equal(new GitForgeAddress("github.com", "acme", "widgets", OverSsh: false), overHttps.Forge);
+        Assert.True(overHttps.OnForge);
+        Assert.Null(overHttps.NotOnForge);
+        Assert.Equal(new GitForgeAddress("github.com", "acme", "widgets", OverSsh: true), overSsh.Forge);
+        Assert.Null(unchosen.Remote);
+        Assert.Null(unchosen.Forge);
+        Assert.Equal("none is that one (the push step names none, the branch tracks none, and none is origin)", unchosen.NotOnForge);
     }
 
     /// <summary>
@@ -167,6 +202,8 @@ public sealed class FlowCheckoutTests : IDisposable
         Assert.False(checkout.HasRemote);
         Assert.Null(checkout.Remote);
         Assert.Null(checkout.RemoteDefault);
+        Assert.False(checkout.OnForge);
+        Assert.Equal("the repository has no remote", checkout.NotOnForge);
         Assert.Null(checkout.BaseBranch(null));
         Assert.Equal("develop", checkout.BaseBranch("develop"));
     }

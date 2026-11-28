@@ -52,6 +52,13 @@ public sealed class ActionValues : ILineMask
     private readonly IReadOnlyList<string> _secretTexts;
 
     /// <summary>
+    /// What a secret's text is replaced with where it is not <see cref="Mask"/>: a secret's bytes in UTF-16, read byte for
+    /// byte, are replaced with the mask's own bytes in that encoding (<see cref="ReadByteForByte"/>), so the text around
+    /// them still reads in it.
+    /// </summary>
+    private readonly IReadOnlyDictionary<string, string> _maskedAs;
+
+    /// <summary>
     /// Builds the values an action reads.
     /// </summary>
     /// <param name="values">Plain values, by name.</param>
@@ -59,12 +66,21 @@ public sealed class ActionValues : ILineMask
     public ActionValues(
         IReadOnlyDictionary<string, string> values,
         IReadOnlyDictionary<string, string> secrets)
+        : this(values, secrets, new Dictionary<string, string>(StringComparer.Ordinal))
+    {
+    }
+
+    private ActionValues(
+        IReadOnlyDictionary<string, string> values,
+        IReadOnlyDictionary<string, string> secrets,
+        IReadOnlyDictionary<string, string> maskedAs)
     {
         ArgumentNullException.ThrowIfNull(values);
         ArgumentNullException.ThrowIfNull(secrets);
 
         _values = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);
         _secrets = new Dictionary<string, string>(secrets, StringComparer.OrdinalIgnoreCase);
+        _maskedAs = maskedAs;
 
         // Longest first, so a secret that contains a shorter one does not leave its tail behind
         // after the shorter one has been masked. An empty value is not redactable: replacing it
@@ -109,7 +125,58 @@ public sealed class ActionValues : ILineMask
             secrets[key] = value;
         }
 
-        return new ActionValues(values, secrets);
+        var maskedAs = new Dictionary<string, string>(_maskedAs, StringComparer.Ordinal);
+
+        foreach (var (text, mask) in other._maskedAs)
+        {
+            maskedAs.TryAdd(text, mask);
+        }
+
+        return new ActionValues(values, secrets, maskedAs);
+    }
+
+    /// <summary>
+    /// These values as the mask of a text read byte for byte - one character a byte, as Latin-1 reads it, which keeps every
+    /// byte of a file of any encoding, or of none, as it was: each secret masked as itself, and as its bytes in each
+    /// encoding a file holds text in read so - UTF-8, and UTF-16 in either byte order, a byte order mark ahead of it or not -
+    /// where they differ, so a secret written in a file in any of them is masked there whatever its characters: one
+    /// Windows PowerShell's redirection wrote, in UTF-16 little-endian, as well as one in UTF-8, whose text is ASCII reads
+    /// the same as itself. Each form is replaced with <see cref="Mask"/> in its own encoding, so a UTF-16 file still reads
+    /// as UTF-16 past it - and a form of one byte order found a byte off inside text of the other is replaced with the very
+    /// bytes the other's would have been. No secret leaves this type to be made so.
+    /// </summary>
+    public ActionValues ReadByteForByte()
+    {
+        var secrets = new Dictionary<string, string>(_secrets, StringComparer.OrdinalIgnoreCase);
+        var maskedAs = new Dictionary<string, string>(_maskedAs, StringComparer.Ordinal);
+        System.Text.Encoding[] encodings = [System.Text.Encoding.UTF8, System.Text.Encoding.Unicode, System.Text.Encoding.BigEndianUnicode];
+
+        foreach (var (name, value) in _secrets)
+        {
+            var held = new HashSet<string>(StringComparer.Ordinal) { value };
+
+            foreach (var encoding in encodings)
+            {
+                var read = System.Text.Encoding.Latin1.GetString(encoding.GetBytes(value));
+
+                if (!held.Add(read))
+                {
+                    continue;
+                }
+
+                var key = $"{name}#bytes";
+
+                for (var another = 2; secrets.ContainsKey(key); another++)
+                {
+                    key = $"{name}#bytes{another.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+                }
+
+                secrets[key] = read;
+                maskedAs.TryAdd(read, System.Text.Encoding.Latin1.GetString(encoding.GetBytes(Mask)));
+            }
+        }
+
+        return new ActionValues(_values, secrets, maskedAs);
     }
 
     /// <summary>No values at all, for a repository that declares none.</summary>
@@ -146,7 +213,7 @@ public sealed class ActionValues : ILineMask
 
         foreach (var secret in _secretTexts)
         {
-            redacted = redacted.Replace(secret, Mask, StringComparison.Ordinal);
+            redacted = redacted.Replace(secret, _maskedAs.GetValueOrDefault(secret, Mask), StringComparison.Ordinal);
         }
 
         return redacted;

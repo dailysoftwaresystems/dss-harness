@@ -193,7 +193,7 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
         }
 
         var results = KeptResults.Of(_fileSystem, stepDirectory);
-        var (kept, _) = await results.LaidAsync(file, PageKey.OfCall(KeptResults.ContinuationId), $"{AgentTools.ReadResult} {KeptResults.ContinuationId}", numbered: false, _fileSystem.OpenRead, cancellationToken).ConfigureAwait(false);
+        var (kept, _) = await results.ResultLaidAsync(KeptResults.ContinuationId, cancellationToken).ConfigureAwait(false);
 
         if (kept.Marks.Count == 1)
         {
@@ -568,7 +568,7 @@ public static class AgentPromptParts
     /// <summary>
     /// One part as a message holds it, the one writer of a part's form: its tags around its text, the text's trailing
     /// blanks gone, and a blank line after - so the part a provider is asked to carry as its own (the map, a cache mark
-    /// set on it alone), the parts of a side-task's message and the message the engine records read the same.
+    /// set on it alone) and the message the engine records read the same.
     /// </summary>
     /// <param name="tag">The part's tag.</param>
     /// <param name="text">The part's text.</param>

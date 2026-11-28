@@ -461,7 +461,8 @@ public sealed class CheckStepRunnerTests : IDisposable
     /// neighbour measured by no measure call, a deleted site that still declares its symbol, a site that reads its home
     /// where the agent changed nothing, a pin that names a test the worktree does not declare, a claim that names no
     /// axis, and a class with no entry at all - each a problem the fold waits behind, exit 1. A record that holds all of
-    /// it passes, its touches stated.
+    /// it passes, its touches stated. The builder's answer judged at the answer itself, before the check runs, meets the
+    /// very same problems, by the one judgement both make.
     /// </summary>
     [Fact]
     public async Task TheClassClosureCheck_JudgesTheRecordAgainstTheClassesTheStreamsAndTheTree()
@@ -498,8 +499,7 @@ public sealed class CheckStepRunnerTests : IDisposable
             .Returns(DssHarness.Core.Application.UseCaseResult<DssHarness.Core.Orchestration.AgentVerbFacts>.From(
                 new CommandOutcome(HarnessExit.Success, "dry run") { Facts = new DssHarness.Core.Orchestration.AgentVerbFacts(0, "dry run", false, null, null, [], [], []) { Planned = new DssHarness.Core.Orchestration.AgentPlanned([], [], [], [], null) { Written = ["src/Home.cs"] } } }));
         var graphs = Substitute.For<DssHarness.Core.Codebase.ICodebaseGraphService>();
-
-        var result = await new ClassClosureStepRunner(
+        var judging = new ClassClosureStepRunner(
             kit.Harness.ContextLoader,
             kit.Harness.Platform,
             kit.Harness.OrchestrationStore,
@@ -507,40 +507,44 @@ public sealed class CheckStepRunnerTests : IDisposable
             agents,
             graphs,
             kit.Harness.GitClient,
-            new DssHarness.Core.Mutations.ArmListingReader(sync, kit.Harness.FileSystem, kit.Harness.Platform)).RunAsync(
-            Run(
-                new WorkflowStep { Name = "class-closure", Type = "class-closure", In = "item-agent", Base = "HEAD" },
-                kit.Main,
-                read: new Dictionary<string, FlowValue>
-                {
-                    ["classes"] = FlowValue.Of(new JsonArray(Class("c-rate", home: "src/Home.cs", symbol: "Home", site: "src/Old.cs"))),
-                    ["record"] = FlowValue.Of(new JsonArray(
-                        Entry(
-                            "c-rate",
-                            home: "src/Home.cs",
-                            sites: [("src/Old.cs", "Old", "deleted"), ("src/MadeUp.cs", "Made", "reads-home")],
-                            searches: [("the turnover", "turnover:", "call-1"), ("the references", "Home", "call-9")],
-                            neighbours: [("turnover:x", "call-2", "passed", "")],
-                            tests: ["PlanTest", "NopeTest"],
-                            axes: ["format"],
-                            claim: "The rate holds over every form"))),
-                },
-                worksIn: "builder",
-                instance: "rounds#1.items[0].class-closure",
-                run: OrchestrationKit.Orchestrator),
-            Token);
+            new DssHarness.Core.Mutations.ArmListingReader(sync, kit.Harness.FileSystem, kit.Harness.Platform));
+        var wrong = Run(
+            new WorkflowStep { Name = "class-closure", Type = "class-closure", In = "item-agent", Base = "HEAD" },
+            kit.Main,
+            read: new Dictionary<string, FlowValue>
+            {
+                ["classes"] = FlowValue.Of(new JsonArray(Class("c-rate", home: "src/Home.cs", symbol: "Home", site: "src/Old.cs"))),
+                ["record"] = FlowValue.Of(new JsonArray(
+                    Entry(
+                        "c-rate",
+                        home: "src/Home.cs",
+                        sites: [("src/Old.cs", "Old", "deleted"), ("src/MadeUp.cs", "Made", "reads-home")],
+                        searches: [("the turnover", "turnover:", "call-1"), ("the references", "Home", "call-9")],
+                        neighbours: [("turnover:x", "call-2", "passed", "")],
+                        tests: ["PlanTest", "NopeTest"],
+                        axes: ["formats"],
+                        claim: "The rate holds over every form"))),
+            },
+            worksIn: "builder",
+            instance: "rounds#1.items[0].class-closure",
+            run: OrchestrationKit.Orchestrator);
+
+        var result = await judging.RunAsync(wrong, Token);
+        IReadOnlyList<string> expected =
+        [
+            "class 'c-rate': the site 'src/Old.cs' is deleted, but it still declares 'Old'",
+            "class 'c-rate': the site 'src/MadeUp.cs' reads its home, but the agent changed nothing at it",
+            "class 'c-rate': the search for 'the references' cites the call 'call-9', which is not a tool call of this item's stored streams",
+            "class 'c-rate': the test 'NopeTest' of the pin is not declared in the worktree",
+            "class 'c-rate': the claim does not name the axis 'formats'",
+        ];
 
         Assert.False(result.Output!["passed"]!.GetValue<bool>());
         Assert.Equal(ClassClosureExit.Findings, result.Exit);
-        Assert.Equal(
-            [
-                "class 'c-rate': the site 'src/Old.cs' is deleted, but it still declares 'Old'",
-                "class 'c-rate': the site 'src/MadeUp.cs' reads its home, but the agent changed nothing at it",
-                "class 'c-rate': the search for 'the references' cites the call 'call-9', which is not a tool call of this item's stored streams",
-                "class 'c-rate': the test 'NopeTest' of the pin is not declared in the worktree",
-                "class 'c-rate': the claim does not name the axis 'format'",
-            ],
-            [.. result.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+        Assert.Equal(expected, [.. result.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+
+        // The builder's answer, judged at the answer itself, meets the very problems the check would.
+        Assert.Equal(expected, await judging.AnswerProblemsAsync(wrong, Token));
         Assert.Empty(result.Output["hotspots"]!.AsArray());
         Assert.Equal("src/Home.cs", result.Output["touches"]!.AsArray()[0]!["path"]!.GetValue<string>());
 
@@ -569,8 +573,8 @@ public sealed class CheckStepRunnerTests : IDisposable
                             searches: [("the turnover", "turnover:", "call-1")],
                             neighbours: [("turnover:x", "call-2", "passed", "")],
                             tests: ["PlanTest"],
-                            axes: ["format"],
-                            claim: "The rate holds over every format"))),
+                            axes: ["formats"],
+                            claim: "The rate holds over all formats"))),
                 },
                 worksIn: "builder",
                 instance: "rounds#1.items[0].class-closure",
@@ -610,8 +614,8 @@ public sealed class CheckStepRunnerTests : IDisposable
                             searches: [("the turnover", "turnover:", "call-1")],
                             neighbours: [("turnover:x", "call-2", "passed", "")],
                             tests: ["PlanTest"],
-                            axes: ["format"],
-                            claim: "The rate holds over every format"))),
+                            axes: ["formats"],
+                            claim: "The rate holds over all formats"))),
                 },
                 worksIn: "builder",
                 instance: "rounds#1.items[0].class-closure",
@@ -627,7 +631,9 @@ public sealed class CheckStepRunnerTests : IDisposable
     /// The home's touches are counted since the base, the item's own commits left out - the fold ledger attributes them
     /// to instances of one item - so a rework of the item's own class after its first send-back is never a second hand,
     /// and another item's commit is. Where the record carries no home audit and the home was touched by other work, the
-    /// check fails as a home audit (exit 2), its repair <c>home-audit</c> and not a closing of the record.
+    /// check fails as a home audit (exit 2), its repair <c>home-audit</c> and not a closing of the record - which the
+    /// builder's answer, judged at the answer itself, is not held to: the audit is asked for the run's history of the home,
+    /// the check's own moment's.
     /// </summary>
     [Fact]
     public async Task TheClassClosureCheck_CountsAHomeSTouches_LeavingOutTheItemsOwnCommits()
@@ -668,6 +674,7 @@ public sealed class CheckStepRunnerTests : IDisposable
         Assert.Equal(
             ["class 'c-rate': home touched 1 times in this run by other work"],
             [.. result.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+        Assert.Empty(await AnsweredAsync(kit, agents, graphs, baseCommit));
         var touch = result.Output["touches"]!.AsArray().Single();
         Assert.Equal(("src/Home.cs", 1, 2), (touch!["path"]!.GetValue<string>(), touch["byOthers"]!.GetValue<int>(), touch["all"]!.GetValue<int>()));
 
@@ -689,16 +696,19 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         async Task<FlowStepResult> ClosureAsync(OrchestrationKit kit, DssHarness.Core.Orchestration.IAgentService agents, DssHarness.Core.Codebase.ICodebaseGraphService graphs, string from, bool homeAudit = false, string instance = "rounds#1.items[0].class-closure")
         {
-            var entry = Entry("c-rate", home: "src/Home.cs", sites: [("src/Home.cs", "Home", "home")], searches: [("the data", "query", "call-1")], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
-            var record = new JsonArray(entry);
-
-            if (homeAudit)
-            {
-                entry["homeAudit"] = new JsonObject { ["consolidated"] = new JsonArray("the rate"), ["invariants"] = new JsonArray("one place"), ["structural"] = new JsonArray("Home holds it") };
-            }
-
             await WriteStreamAsync();
-            return await new ClassClosureStepRunner(
+            return await Judging(kit, agents, graphs).RunAsync(ClosureRun(kit, from, homeAudit, instance), Token);
+        }
+
+        // The same record, judged at the builder's answer rather than by the check's own run.
+        async Task<IReadOnlyList<string>> AnsweredAsync(OrchestrationKit kit, DssHarness.Core.Orchestration.IAgentService agents, DssHarness.Core.Codebase.ICodebaseGraphService graphs, string from)
+        {
+            await WriteStreamAsync();
+            return await Judging(kit, agents, graphs).AnswerProblemsAsync(ClosureRun(kit, from, homeAudit: false, "rounds#1.items[0].class-closure"), Token);
+        }
+
+        ClassClosureStepRunner Judging(OrchestrationKit kit, DssHarness.Core.Orchestration.IAgentService agents, DssHarness.Core.Codebase.ICodebaseGraphService graphs)
+            => new(
                 kit.Harness.ContextLoader,
                 kit.Harness.Platform,
                 kit.Harness.OrchestrationStore,
@@ -706,29 +716,39 @@ public sealed class CheckStepRunnerTests : IDisposable
                 agents,
                 graphs,
                 kit.Harness.GitClient,
-                new DssHarness.Core.Mutations.ArmListingReader(sync, kit.Harness.FileSystem, kit.Harness.Platform)).RunAsync(
-                Run(
-                    new WorkflowStep { Name = "class-closure", Type = "class-closure", In = "item-agent", Base = from },
-                    kit.Main,
-                    read: new Dictionary<string, FlowValue>
-                    {
-                        ["classes"] = FlowValue.Of(new JsonArray(Class("c-rate", home: "src/Home.cs", symbol: "Home"))),
-                        ["record"] = FlowValue.Of(record),
-                    },
-                    worksIn: "builder",
-                    instance: instance,
-                    run: OrchestrationKit.Orchestrator),
-                Token);
+                new DssHarness.Core.Mutations.ArmListingReader(sync, kit.Harness.FileSystem, kit.Harness.Platform));
 
-            async Task WriteStreamAsync()
+        FlowStepRun ClosureRun(OrchestrationKit kit, string from, bool homeAudit, string instance)
+        {
+            var entry = Entry("c-rate", home: "src/Home.cs", sites: [("src/Home.cs", "Home", "home")], searches: [("the data", "query", "call-1")], neighbours: [], tests: [], axes: ["formats"], claim: "The rate holds over all formats");
+            var record = new JsonArray(entry);
+
+            if (homeAudit)
             {
-                Directory.CreateDirectory(layout.AgentStepDirectory("builder", "impl-1"));
-                await File.WriteAllTextAsync(
-                    Path.Combine(layout.AgentStepDirectory("builder", "impl-1"), DssHarness.Core.Agents.StoredStream.FileName),
-                    string.Join("\n",
-                        System.Text.Json.JsonSerializer.SerializeToNode(new DssHarness.Core.Agents.ToolCallStarted("call-1", "graph", DssHarness.Core.Agents.AgentToolRunner.Harness), typeof(DssHarness.Core.Agents.AgentEvent), DssHarness.Core.FileSystem.JsonStateFile.LineOptions)!.ToJsonString(DssHarness.Core.FileSystem.JsonStateFile.LineOptions),
-                        System.Text.Json.JsonSerializer.SerializeToNode(new DssHarness.Core.Agents.ToolCallFinished("call-1", Ok: true, TimeSpan.Zero, """{"query":"query"}""", "found"), typeof(DssHarness.Core.Agents.AgentEvent), DssHarness.Core.FileSystem.JsonStateFile.LineOptions)!.ToJsonString(DssHarness.Core.FileSystem.JsonStateFile.LineOptions)) + "\n");
+                entry["homeAudit"] = new JsonObject { ["consolidated"] = new JsonArray("the rate"), ["invariants"] = new JsonArray("one place"), ["structural"] = new JsonArray("Home holds it") };
             }
+
+            return Run(
+                new WorkflowStep { Name = "class-closure", Type = "class-closure", In = "item-agent", Base = from },
+                kit.Main,
+                read: new Dictionary<string, FlowValue>
+                {
+                    ["classes"] = FlowValue.Of(new JsonArray(Class("c-rate", home: "src/Home.cs", symbol: "Home"))),
+                    ["record"] = FlowValue.Of(record),
+                },
+                worksIn: "builder",
+                instance: instance,
+                run: OrchestrationKit.Orchestrator);
+        }
+
+        async Task WriteStreamAsync()
+        {
+            Directory.CreateDirectory(layout.AgentStepDirectory("builder", "impl-1"));
+            await File.WriteAllTextAsync(
+                Path.Combine(layout.AgentStepDirectory("builder", "impl-1"), DssHarness.Core.Agents.StoredStream.FileName),
+                string.Join("\n",
+                    System.Text.Json.JsonSerializer.SerializeToNode(new DssHarness.Core.Agents.ToolCallStarted("call-1", "graph", DssHarness.Core.Agents.AgentToolRunner.Harness), typeof(DssHarness.Core.Agents.AgentEvent), DssHarness.Core.FileSystem.JsonStateFile.LineOptions)!.ToJsonString(DssHarness.Core.FileSystem.JsonStateFile.LineOptions),
+                    System.Text.Json.JsonSerializer.SerializeToNode(new DssHarness.Core.Agents.ToolCallFinished("call-1", Ok: true, TimeSpan.Zero, """{"query":"query"}""", "found"), typeof(DssHarness.Core.Agents.AgentEvent), DssHarness.Core.FileSystem.JsonStateFile.LineOptions)!.ToJsonString(DssHarness.Core.FileSystem.JsonStateFile.LineOptions)) + "\n");
         }
     }
 
@@ -776,8 +796,8 @@ public sealed class CheckStepRunnerTests : IDisposable
                     searches: [("the rate's declarations", "class\\s+Rate", "toolu_1"), ("the rate's readers", "IReadOnlyList<string> && more", "toolu_1")],
                     neighbours: [("rate:x", "toolu_2", "passed", "")],
                     tests: [],
-                    axes: ["format"],
-                    claim: "The rate holds over every format")),
+                    axes: ["formats"],
+                    claim: "The rate holds over all formats")),
             Token);
 
         Assert.Empty(result.Output!["problems"]!.AsArray());
@@ -797,8 +817,8 @@ public sealed class CheckStepRunnerTests : IDisposable
                     searches: [("the rate's writers", "class Rate", "toolu_1")],
                     neighbours: [("rate:x", "toolu_1", "passed", "")],
                     tests: [],
-                    axes: ["format"],
-                    claim: "The rate holds over every format")),
+                    axes: ["formats"],
+                    claim: "The rate holds over all formats")),
             Token);
 
         Assert.Equal(
@@ -843,8 +863,8 @@ public sealed class CheckStepRunnerTests : IDisposable
                     searches: [],
                     neighbours: [],
                     tests: [],
-                    axes: ["format"],
-                    claim: "The rate holds over every format")),
+                    axes: ["formats"],
+                    claim: "The rate holds over all formats")),
             Token);
 
         Assert.Equal(
@@ -867,7 +887,7 @@ public sealed class CheckStepRunnerTests : IDisposable
         var run = ClosureRun(
             kit,
             Class("c-rate", home: "src/Home.cs", symbol: "Home"),
-            Entry("c-rate", home: "src/Home.cs", sites: [("src/A.cs", "Read", "reads-home")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format"));
+            Entry("c-rate", home: "src/Home.cs", sites: [("src/A.cs", "Read", "reads-home")], searches: [], neighbours: [], tests: [], axes: ["formats"], claim: "The rate holds over all formats"));
 
         var throwing = Substitute.For<DssHarness.Core.Orchestration.IAgentService>();
         throwing.FoldAsync(Arg.Any<DssHarness.Core.Orchestration.FoldAgentRequest>(), Arg.Any<CancellationToken>())
@@ -915,7 +935,7 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         JsonObject Armed(string id, JsonObject arm)
         {
-            var entry = Entry(id, home: "src/rate.cpp", sites: [("src/rate.cpp", "Rate", "home")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
+            var entry = Entry(id, home: "src/rate.cpp", sites: [("src/rate.cpp", "Rate", "home")], searches: [], neighbours: [], tests: [], axes: ["formats"], claim: "The rate holds over all formats");
             entry["arm"] = arm;
             return entry;
         }
@@ -969,7 +989,7 @@ public sealed class CheckStepRunnerTests : IDisposable
         var run = ClosureRun(
             kit,
             Class("c-rate", home: "src/Home.cs", symbol: "Home"),
-            Entry("c-rate", home: "src/Home.cs", sites: [("src/Old.cs", "Old", "deleted")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format"));
+            Entry("c-rate", home: "src/Home.cs", sites: [("src/Old.cs", "Old", "deleted")], searches: [], neighbours: [], tests: [], axes: ["formats"], claim: "The rate holds over all formats"));
 
         // An earlier step synced the agent's view, which holds the class the work has not taken out yet.
         await kit.Harness.GraphSyncs.AtStartAsync(run, Token);
@@ -1024,7 +1044,7 @@ public sealed class CheckStepRunnerTests : IDisposable
             var run = ClosureRun(
                 kit,
                 Class("c-rate", home: "src/Home.cs", symbol: "Home"),
-                Entry("c-rate", home: "src/Home.cs", sites: [(path, symbol, "deleted")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format"));
+                Entry("c-rate", home: "src/Home.cs", sites: [(path, symbol, "deleted")], searches: [], neighbours: [], tests: [], axes: ["formats"], claim: "The rate holds over all formats"));
 
             await kit.Harness.GraphSyncs.AtStartAsync(run, Token);
             var result = await runners.RunAsync(run, Token);
@@ -1036,16 +1056,17 @@ public sealed class CheckStepRunnerTests : IDisposable
     }
 
     /// <summary>
-    /// A planned class holds the record to the plan: the record's universe holds every axis the plan names, and the claim
-    /// names each; a home other than the planned one is refused unless the record says why it moved; and a deleted site
-    /// that names no symbol of its own is judged, and named, by its home's.
+    /// A planned class holds the record to the plan: the record's universe holds every axis the plan's universe says
+    /// applies - a further one by its own name - and the claim names each, while an axis the plan says does not apply is
+    /// asked of neither; a home other than the planned one is refused unless the record says why it moved; and a deleted
+    /// site that names no symbol of its own is judged, and named, by its home's.
     /// </summary>
     [Fact]
     public void APlannedClass_HoldsTheRecordToItsAxesAndItsHome()
     {
         var planned = Class("c-rate", home: "src/Home.cs", symbol: "Home");
-        ((JsonArray)planned["universe"]!["axes"]!).Add(new JsonObject { ["name"] = "direction", ["values"] = new JsonArray("in", "out"), ["declaredIn"] = "src/Home.cs" });
-        var moved = Entry("c-rate", home: "src/Rate.cs", sites: [("src/Old.cs", "", "deleted")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
+        planned["universe"] = Universes.Of(("formats", ["a", "b"]), ("directions", ["in", "out"]), ("region", ["eu", "us"]));
+        var moved = Entry("c-rate", home: "src/Rate.cs", sites: [("src/Old.cs", "", "deleted")], searches: [], neighbours: [], tests: [], axes: ["formats"], claim: "The rate holds over all formats");
         var proof = RunProof(changed: [], calls: [], declares: (path, symbol) => path == "src/Old.cs" && symbol == "Home");
 
         var judged = ClassClosureRules.Judge([PlannedClass.In(planned)!], [ClassClosureRecord.In(moved)!], proof);
@@ -1054,18 +1075,44 @@ public sealed class CheckStepRunnerTests : IDisposable
             [
                 "class 'c-rate': the home is 'Home' in 'src/Rate.cs', not the planned 'Home' in 'src/Home.cs', and the record says not why it moved (homeMoved)",
                 "class 'c-rate': the site 'src/Old.cs' is deleted, but it still declares 'Home'",
-                "class 'c-rate': the universe leaves out the planned axis 'direction'",
-                "class 'c-rate': the claim does not name the axis 'direction'",
+                "class 'c-rate': the universe leaves out the planned axis 'directions'",
+                "class 'c-rate': the universe leaves out the planned axis 'region'",
+                "class 'c-rate': the claim does not name the axis 'directions'",
+                "class 'c-rate': the claim does not name the axis 'region'",
             ],
             judged.Problems);
 
         moved["homeMoved"] = new JsonObject { ["why"] = "the rate is decided where the rates are read" };
-        moved["universe"]!["axes"]!.AsArray().Add(new JsonObject { ["name"] = "direction", ["values"] = new JsonArray("in", "out") });
-        moved["claim"] = "The rate holds over every format and direction";
+        moved["universe"]!["axes"]!.AsArray().Add(new JsonObject { ["name"] = "directions", ["values"] = new JsonArray("in", "out") });
+        moved["universe"]!["axes"]!.AsArray().Add(new JsonObject { ["name"] = "region", ["values"] = new JsonArray("eu", "us") });
+        moved["claim"] = "The rate holds over all formats, both directions and every region";
 
         Assert.Equal(
             ["class 'c-rate': the site 'src/Old.cs' is deleted, but it still declares 'Home'"],
             ClassClosureRules.Judge([PlannedClass.In(planned)!], [ClassClosureRecord.In(moved)!], proof).Problems);
+    }
+
+    /// <summary>
+    /// The claim names an axis by its whole word, never by a longer word that holds it: <c>forms</c> is no word of
+    /// "platforms", so a claim over every target "on both platforms" leaves the planned axis of forms unnamed, and a claim
+    /// that names forms - beside a word of punctuation, as a sentence writes it - names it. The plan's further axes are
+    /// held so too: <c>region</c> is no word of "regions".
+    /// </summary>
+    [Fact]
+    public void TheClaim_NamesAnAxisByItsWholeWord_NeverByALongerWordThatHoldsIt()
+    {
+        var planned = Class("c-rate", home: "src/Home.cs", symbol: "Home");
+        planned["universe"] = Universes.Of(("targets", ["linux", "windows"]), ("forms", ["declare", "define"]), ("region", ["eu", "us"]));
+        var record = Entry("c-rate", home: "src/Home.cs", sites: [], searches: [], neighbours: [], tests: [], axes: ["targets", "forms", "region"], claim: "The rate holds over all targets and their regions, on both platforms");
+        var proof = RunProof(changed: [], calls: []);
+
+        Assert.Equal(
+            ["class 'c-rate': the claim does not name the axis 'forms'", "class 'c-rate': the claim does not name the axis 'region'"],
+            ClassClosureRules.Judge([PlannedClass.In(planned)!], [ClassClosureRecord.In(record)!], proof).Problems);
+
+        record["claim"] = "The rate holds over all targets, both forms (declare, define) and every region: on both platforms";
+
+        Assert.Empty(ClassClosureRules.Judge([PlannedClass.In(planned)!], [ClassClosureRecord.In(record)!], proof).Problems);
     }
 
     /// <summary>
@@ -1120,7 +1167,7 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         static ClassClosureRecord Record(string home, string site)
         {
-            var entry = Entry("c-rate", home, sites: [(site, "Old", "reads-home")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
+            var entry = Entry("c-rate", home, sites: [(site, "Old", "reads-home")], searches: [], neighbours: [], tests: [], axes: ["formats"], claim: "The rate holds over all formats");
             entry["arm"] = new JsonObject { ["id"] = "rate" };
 
             return ClassClosureRecord.In(entry)!;
@@ -1160,8 +1207,8 @@ public sealed class CheckStepRunnerTests : IDisposable
             searches: [("the rate", "rate", "made-up"), ("the readers", "readers", "")],
             neighbours: [("rate:x", "made-up", "passed", ""), ("rate:y", "", "passed", "")],
             tests: [],
-            axes: ["format"],
-            claim: "The rate holds over every format"))!;
+            axes: ["formats"],
+            claim: "The rate holds over all formats"))!;
 
         Assert.Equal(
             [
@@ -1201,7 +1248,7 @@ public sealed class CheckStepRunnerTests : IDisposable
     {
         ClassClosureRecord Armed(string id, string? arm)
         {
-            var entry = Entry(id, home: "src/Home.cs", sites: [("src/Home.cs", "Home", "home")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
+            var entry = Entry(id, home: "src/Home.cs", sites: [("src/Home.cs", "Home", "home")], searches: [], neighbours: [], tests: [], axes: ["formats"], claim: "The rate holds over all formats");
 
             if (arm is not null)
             {
@@ -1260,8 +1307,8 @@ public sealed class CheckStepRunnerTests : IDisposable
                 ("rate:g", "m-failed-g", "failed-fixed", ""),
             ],
             tests: [],
-            axes: ["format"],
-            claim: "The rate holds over every format"))!;
+            axes: ["formats"],
+            claim: "The rate holds over all formats"))!;
         var unread = Path.Combine("steps", "impl-1", "measures", "m-unread", "measure.json");
         var measures = new Dictionary<string, ClassClosureMeasure>(StringComparer.Ordinal)
         {
@@ -1575,8 +1622,8 @@ public sealed class CheckStepRunnerTests : IDisposable
                 searches: searches,
                 neighbours: [],
                 tests: [],
-                axes: ["format"],
-                claim: "The rate holds over every format");
+                axes: ["formats"],
+                claim: "The rate holds over all formats");
     }
 
     /// <summary>
@@ -1599,8 +1646,8 @@ public sealed class CheckStepRunnerTests : IDisposable
             searches: [],
             neighbours: [.. neighbours.Select(neighbour => (neighbour.Cell, neighbour.MeasuredBy, neighbour.Result, string.Empty))],
             tests: [],
-            axes: ["format"],
-            claim: "The rate holds over every format");
+            axes: ["formats"],
+            claim: "The rate holds over all formats");
 
     /// <summary>
     /// A run's proof: the paths the agent changed, the calls its streams hold and what each measure call of them measured
@@ -1786,7 +1833,7 @@ public sealed class CheckStepRunnerTests : IDisposable
         await kit.CreateAgentAsync("builder");
         kit.Harness.OrchestrationStore.WriteClosureLedger(kit.Layout, "builder", new FlowClosureLedgerFile(1, "builder", [new FlowClosureReopens("c-rate", ["rounds#1.items[0].fix#1.route", "rounds#1.items[0].fix#2.route"])]));
 
-        var entry = Entry("c-rate", home: "src/Home.cs", sites: [], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
+        var entry = Entry("c-rate", home: "src/Home.cs", sites: [], searches: [], neighbours: [], tests: [], axes: ["formats"], claim: "The rate holds over all formats");
 
         var refused = await Closure(kit, Weighing()).RunAsync(ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), entry), Token);
 
@@ -1816,7 +1863,7 @@ public sealed class CheckStepRunnerTests : IDisposable
         await kit.CreateAgentAsync("builder");
         kit.Harness.OrchestrationStore.WriteClosureLedger(kit.Layout, "builder", new FlowClosureLedgerFile(1, "builder", [new FlowClosureReopens("C-RATE", ["rounds#1.items[0].fix#1.route", "rounds#1.items[0].fix#2.route"])]));
 
-        var entry = Entry("c-rate", home: "src/Home.cs", sites: [], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
+        var entry = Entry("c-rate", home: "src/Home.cs", sites: [], searches: [], neighbours: [], tests: [], axes: ["formats"], claim: "The rate holds over all formats");
 
         var judged = await Closure(kit, Weighing()).RunAsync(ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), entry), Token);
 
@@ -1870,7 +1917,7 @@ public sealed class CheckStepRunnerTests : IDisposable
             {
                 ["findings"] = FlowValue.Of(new JsonArray([.. findings, .. extra is null ? Array.Empty<JsonNode>() : [extra]])),
                 ["classes"] = FlowValue.Of(new JsonArray(Class("c-rate", home: "src/Home.cs", symbol: "Home"))),
-                ["record"] = FlowValue.Of(new JsonArray(Entry("N1", home: "src/Other.cs", sites: [], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "it holds"))),
+                ["record"] = FlowValue.Of(new JsonArray(Entry("N1", home: "src/Other.cs", sites: [], searches: [], neighbours: [], tests: [], axes: ["formats"], claim: "it holds"))),
             },
             worksIn: "builder",
             instance: instance,
@@ -1906,7 +1953,7 @@ public sealed class CheckStepRunnerTests : IDisposable
             ["home"] = new JsonObject { ["path"] = home, ["symbol"] = symbol, ["exists"] = true },
             ["sites"] = sites,
             ["searches"] = new JsonArray(new JsonObject { ["data"] = "the turnover", ["via"] = "graph", ["query"] = "turnover:", ["hits"] = 3 }),
-            ["universe"] = new JsonObject { ["axes"] = new JsonArray(new JsonObject { ["name"] = "format", ["values"] = new JsonArray("a", "b"), ["declaredIn"] = "src/Home.cs" }), ["cells"] = 2 },
+            ["universe"] = Universes.Of(("formats", ["a", "b"])),
             ["action"] = "fix-at-home",
             ["notCovered"] = "none",
         };

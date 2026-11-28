@@ -48,7 +48,8 @@ public sealed class FlowStatusTests
         string? handledBy = null,
         string? failure = null,
         string? raisedBy = null,
-        string? declared = null)
+        string? declared = null,
+        IReadOnlyList<FlowHandlerState>? handlers = null)
         => new(
             instance,
             declared ?? FlowInstanceId.PathOf(instance),
@@ -64,6 +65,7 @@ public sealed class FlowStatusTests
             Agent: agent,
             Model: model,
             Iteration: iteration,
+            Handlers: handlers,
             HandledBy: handledBy,
             Failure: failure,
             RaisedBy: raisedBy);
@@ -211,7 +213,7 @@ public sealed class FlowStatusTests
             """
             run 'r1' (workflow 'flow'), as of 10:10:00Z: paused, for 10m00s; no engine
             running   nothing is running
-            waits     question q1 (ask) since 10:02:00Z: 'dssharness answer-orchestrator r1 <answer> --question q1'
+            waits     question q1 (ask) since 10:02:00Z: answer with 'dssharness answer-orchestrator r1 <answer> --question q1'
                       plan update u1 under way: the run is held while 'plan+2' plans it
                       plan update u2 is recorded and waits for the run to be gone on with
                       hold waits for a claim
@@ -220,6 +222,73 @@ public sealed class FlowStatusTests
             estimate  between 1m00s and 1m00s more, from the 2 step instances that ended Done in this run; what no numeric bound holds is not in the estimate; 1 step of what is left has not run to an end in this run and is not in the estimate: hold; not counting the time a person takes to answer q1; not counting a wait for a claim, for the run to be quiet or for room under its limits
             """,
             string.Join("\n", facts));
+    }
+
+    /// <summary>
+    /// What an open question waits on is its next step, by the one rule of it over what the engine is doing: a question
+    /// still owing the recommendation it is answered with waits on the resume, which seeks it first, where no engine runs
+    /// the run or a gone one - the answer command refuses any answer but abort until then; on its answer, taken now and
+    /// ending the asking, where a live engine's advisor seeks it now - and wherever a live engine is starting, whatever the
+    /// session before it left the question saying, for the start seeks every recommendation the run owes and takes an
+    /// answer then; on the pause's advice, then its answer, where a live engine's pause defers it; and on the resume once
+    /// the engine has gone where the live engine is stopping. A question recommended waits on its answer whatever the
+    /// engine does.
+    /// </summary>
+    [Fact]
+    public void AnOpenQuestion_WaitsOnItsNextStep_ByWhatTheEngineIsDoing()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: gate
+                type: pause
+                question: what now?
+                options: [stay, go]
+            """);
+        var flow = File(nameof(FlowRunStatus.Paused), [Step("gate", nameof(FlowInstanceState.Paused), "pause", started: At(10, 2))]);
+        FlowQuestionEntry Open(string id, FlowRecommendation recommendation)
+            => new(id, "open", "pause", At(10, 2), [], [new FlowQuestionOption("stay", "it stays"), new FlowQuestionOption("go", "it goes")], [], Recommendation: recommendation);
+        var questions = new FlowQuestionsFile(
+            1,
+            "r1",
+            AsOf,
+            [
+                Open("q1", new FlowRecommendation("deferred", Why: "the run is pausing, and no reason step is started before its pause is complete: the recommendation is sought then, or when the run is resumed where a stop came first")),
+                Open("q2", new FlowRecommendation("given", "go", Why: "it is ready", By: "advisor", Agent: "advisor")),
+                Open("q3", new FlowRecommendation("sought", Why: "a recommendation is being sought from the advisor")),
+            ]);
+        string[] Waits(string engine)
+            => [.. FlowStatus.Facts(definition, flow, questions, updates: null, new FlowEngineState(engine, engine == FlowEngineState.None ? null : "pid 7 on this machine", []), AsOf)
+                .Where(fact => fact.StartsWith("waits", StringComparison.Ordinal) || fact.StartsWith("          question", StringComparison.Ordinal))];
+
+        const string Answer = "          question q2 (pause) since 10:02:00Z: answer with 'dssharness answer-orchestrator r1 <answer> --question q2'";
+        string Resume(string id, string start)
+            => $"{start}question {id} (pause) since 10:02:00Z: its recommendation is still owed - no advisor seeks one between sessions, and 'dssharness resume-orchestrator r1' seeks it first; "
+                + $"answer with 'dssharness answer-orchestrator r1 <answer> --question {id}' then, and 'dssharness answer-orchestrator r1 abort --question {id}' is taken now";
+
+        foreach (var between in new[] { FlowEngineState.None, FlowEngineState.Gone })
+        {
+            Assert.Equal([Resume("q1", "waits     "), Answer, Resume("q3", "          ")], Waits(between));
+        }
+
+        const string PauseQ1 = "waits     question q1 (pause) since 10:02:00Z: its recommendation is still owed - the run seeks it once its pause is complete; "
+            + "answer with 'dssharness answer-orchestrator r1 <answer> --question q1' then, and 'dssharness answer-orchestrator r1 abort --question q1' is taken now";
+        const string AdvisedQ3 = "          question q3 (pause) since 10:02:00Z: its recommendation is being sought: answer with 'dssharness answer-orchestrator r1 <answer> --question q3', taken now and ending the asking";
+
+        foreach (var live in new[] { FlowEngineState.Running, FlowEngineState.Pausing, FlowEngineState.Recording })
+        {
+            Assert.Equal([PauseQ1, Answer, AdvisedQ3], Waits(live));
+        }
+
+        const string AdvisedQ1 = "waits     question q1 (pause) since 10:02:00Z: its recommendation is being sought: answer with 'dssharness answer-orchestrator r1 <answer> --question q1', taken now and ending the asking";
+
+        Assert.Equal([AdvisedQ1, Answer, AdvisedQ3], Waits(FlowEngineState.Starting));
+
+        string OnceGone(string id, string start)
+            => $"{start}question {id} (pause) since 10:02:00Z: its recommendation is still owed - the stop under way seeks none, and 'dssharness resume-orchestrator r1' seeks it first once the engine has gone; "
+                + $"answer with 'dssharness answer-orchestrator r1 <answer> --question {id}' then, and 'dssharness answer-orchestrator r1 abort --question {id}' is taken now";
+
+        Assert.Equal([OnceGone("q1", "waits     "), Answer, OnceGone("q3", "          ")], Waits(FlowEngineState.Stopping));
     }
 
     /// <summary>
@@ -542,7 +611,7 @@ public sealed class FlowStatusTests
                     type: orient
                     onFailure: recover
             """);
-        Assert.Empty(WorkflowValidator.Validate(definition, hasCommitTemplate: false));
+        Assert.Empty(WorkflowValidator.Validate(TestAdvice.Named(definition), hasCommitTemplate: false));
         var flow = File(
             nameof(FlowRunStatus.Running),
             [
@@ -593,7 +662,7 @@ public sealed class FlowStatusTests
                     type: orient
                     onFailure: recover
             """);
-        Assert.Empty(WorkflowValidator.Validate(definition, hasCommitTemplate: false));
+        Assert.Empty(WorkflowValidator.Validate(TestAdvice.Named(definition), hasCommitTemplate: false));
         var flow = File(
             nameof(FlowRunStatus.Running),
             [
@@ -616,7 +685,8 @@ public sealed class FlowStatusTests
     /// <summary>
     /// A handler that can still be raised counts, to its bound, its own visits and the steps its <c>then</c> sends the
     /// run back over - the step it names and what depends on it in its scope - at each visit; one that sends the run back
-    /// outside its own group is held by no numeric bound, the run's own bound of instances all that holds it, and is said.
+    /// over the group it is in is held to its bound in the scope its loop goes round in, as the engine counts it: past
+    /// its visits made in every visit of that group, each turn a new visit of the group whole.
     /// </summary>
     [Fact]
     public void AHandlersRedirect_CountsWhatItSendsTheRunBackOver_AtEachVisit()
@@ -666,12 +736,19 @@ public sealed class FlowStatusTests
             nameof(FlowRunStatus.Running),
             [
                 Step("prepare", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 1)),
-                Step("stage", nameof(FlowInstanceState.Running), group: true, started: At(10, 1)),
-                Step("stage.test", nameof(FlowInstanceState.Running), "orient", started: At(10, 9)),
+                Step("stage", nameof(FlowInstanceState.Skipped), group: true, started: At(10, 1), finished: At(10, 4)),
+                Step("stage.test", nameof(FlowInstanceState.Failed), "orient", started: At(10, 1), finished: At(10, 2)),
+                Step("stage.fix", nameof(FlowInstanceState.Done), "orient", started: At(10, 2), finished: At(10, 3), raisedBy: "stage.test"),
+                Step("prepare+2", nameof(FlowInstanceState.Done), "orient", started: At(10, 4), finished: At(10, 5), visit: 2),
+                Step("stage+2", nameof(FlowInstanceState.Running), group: true, started: At(10, 5), visit: 2),
+                Step("stage+2.test", nameof(FlowInstanceState.Running), "orient", started: At(10, 9)),
             ]);
 
+        // The two instances under way, and fix's loop going round at the top, where one of its three visits was made: two
+        // turns left, each fix, prepare and stage whole (its own record, test and fix's three visits) - 2 + 2 + 10 - with
+        // fix's three in the stage visit under way counted there too.
         Assert.Equal(
-            "left      at least 2 step instances, at most 4999 step instances (the engine's bounds and the run's own bound of at most 5000 instances); 'stage.fix' sends the run back to 'prepare', outside its own group",
+            "left      at least 2 step instances, at most 19 step instances (the engine's bounds)",
             FlowStatus.Facts(outward, staged, questions: null, updates: null, Engine, AsOf).First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
     }
 
@@ -834,6 +911,169 @@ public sealed class FlowStatusTests
             estimate  between 2m00s and 2m00s more, from the 2 step instances that ended Done in this run
             """,
             string.Join("\n", facts));
+    }
+
+    /// <summary>
+    /// A run paused with nothing left but a failure its ending owes the session that goes on - a pause recorded the step's
+    /// failure while it drained, and raised nothing - has work left by the engine's own rule of what keeps a run from done
+    /// (<see cref="FlowInstance.IsUnended"/>): the failure is counted and named among what is left, and the estimate says it
+    /// has no time to go by - never that nothing is left, which a run its engine still owes work never is.
+    /// </summary>
+    [Fact]
+    public void AFailureOwedToTheSessionThatGoesOn_IsLeft_AndHasNoTimeToGoBy()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: verify
+                type: test
+                dependsOn: [build]
+                onFailure: pause
+            """);
+        var flow = File(
+            nameof(FlowRunStatus.Paused),
+            [
+                Step("build", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 2)),
+                Step("verify", nameof(FlowInstanceState.Failed), "test", started: At(10, 2), finished: At(10, 4), failure: FlowStepRecord.NameOf(FlowFailure.Owed)),
+            ]);
+
+        var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, NoEngine, AsOf);
+
+        Assert.Equal(
+            """
+            left      at least 1 step instance, at most 1 step instance (nothing more can come); 1 failure owed to the session that goes on, which its handlers, its policy or the recovery decide: verify
+            estimate  none: what is left has no time of this run to go by - 1 failure owed to the session that goes on, which its handlers, its policy or the recovery decide: verify
+            """,
+            string.Join("\n", facts.Skip(4)));
+    }
+
+    /// <summary>
+    /// A handler an ending owes a raise - a pause recorded its source's ending and raised nothing - is left by the engine's
+    /// own rule of what keeps a run from done (<see cref="FlowInstance.RaisesOwed"/>), as the instance the resume raises:
+    /// counted and named among what is left by the visit the resume makes - <c>fix+2</c>, for the scope holds the visit
+    /// <c>fix</c> an earlier ending raised - and timed in the estimate by its step's own earlier visit, never left out as
+    /// though nothing were left.
+    /// </summary>
+    [Fact]
+    public void AHandlerAnEndingOwesARaise_IsLeft_AndTimedByItsStep()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on:
+                  step: build
+                  outcome: failure
+                then: build
+                maxVisits: 3
+            """);
+        var flow = File(
+            nameof(FlowRunStatus.Paused),
+            [
+                Step("build", nameof(FlowInstanceState.Failed), "orient", started: At(10, 0), finished: At(10, 1), handledBy: "fix"),
+                Step("fix", nameof(FlowInstanceState.Done), "orient", started: At(10, 1), finished: At(10, 4), raisedBy: "build"),
+                Step("build+2", nameof(FlowInstanceState.Failed), "orient", started: At(10, 4), finished: At(10, 5), visit: 2, handlers: [new FlowHandlerState("fix", "owed")]),
+            ]);
+
+        var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, NoEngine, AsOf);
+
+        Assert.Equal(
+            """
+            left      at least 1 step instance, at most 1 step instance (nothing more can come); 1 handler an ending owes a raise: fix+2
+            estimate  between 3m00s and 3m00s more, from the 1 step instance that ended Done in this run
+            """,
+            string.Join("\n", facts.Skip(4)));
+    }
+
+    /// <summary>
+    /// A raise whose visit is in the records is made, whatever its source's record still says - an older build wrote the
+    /// visit before it wrote its source's raise, so a crash between the two, or a status read between them, finds the raise
+    /// owed beside the visit it made: the visit is counted once, as itself, never beside a raise of the same id the facts
+    /// would invent - which counted it twice and, both timed by the handler's step, failed the whole facts call - and no
+    /// handler is said to be owed a raise. Here a loop's second iteration, whose failed build's handler a crash cut off
+    /// after its visit was recorded.
+    /// </summary>
+    [Fact]
+    public void ARaiseWhoseVisitIsRecorded_IsCountedOnceAsThatVisit_EvenWhereItsSourceStillSaysItOwed()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: rounds
+                repeat:
+                  until: 'rounds.done'
+                  maxIterations: 2
+                steps:
+                  - name: build
+                    type: orient
+                  - name: fix
+                    type: orient
+                    on:
+                      step: build
+                      outcome: failure
+            """);
+        var flow = File(
+            nameof(FlowRunStatus.Paused),
+            [
+                Step("rounds", nameof(FlowInstanceState.Running), group: true, started: At(10, 0)),
+                Step("rounds#1", nameof(FlowInstanceState.Done), group: true, started: At(10, 0), finished: At(10, 4), iteration: 1),
+                Step("rounds#1.build", nameof(FlowInstanceState.Failed), "orient", started: At(10, 0), finished: At(10, 1), handledBy: "fix", handlers: [new FlowHandlerState("fix", "done")]),
+                Step("rounds#1.fix", nameof(FlowInstanceState.Done), "orient", started: At(10, 1), finished: At(10, 4), raisedBy: "rounds#1.build"),
+                Step("rounds#2", nameof(FlowInstanceState.Running), group: true, started: At(10, 4), iteration: 2),
+                Step("rounds#2.build", nameof(FlowInstanceState.Failed), "orient", started: At(10, 4), finished: At(10, 5), handlers: [new FlowHandlerState("fix", "owed")]),
+                Step("rounds#2.fix", nameof(FlowInstanceState.NotStarted), "orient", raisedBy: "rounds#2.build"),
+            ]);
+
+        var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, NoEngine, AsOf);
+
+        Assert.Equal(
+            """
+            left      at least 3 step instances, at most 3 step instances (nothing more can come)
+            estimate  between 3m00s and 3m00s more, from the 2 step instances that ended Done in this run
+            """,
+            string.Join("\n", facts.Skip(4)));
+    }
+
+    /// <summary>
+    /// A raise its source's record says with no visit of it recorded - this build writes the source's raise before the
+    /// visit's first record, and a crash came between the two, or the status was read between them - is a raise still
+    /// owed, by the engine's own rule (<see cref="FlowInstance.RaisesOwed"/>): counted and named by the visit the resume
+    /// raises, never taken for a raise made, which no visit stands for.
+    /// </summary>
+    [Fact]
+    public void ARaiseSaidWithNoVisitRecorded_IsStillOwed_AndNamedByTheVisitTheResumeRaises()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on:
+                  step: build
+                  outcome: failure
+                then: build
+                maxVisits: 3
+            """);
+        var flow = File(
+            nameof(FlowRunStatus.Running),
+            [
+                Step("build", nameof(FlowInstanceState.Failed), "orient", started: At(10, 0), finished: At(10, 1), handledBy: "fix", handlers: [new FlowHandlerState("fix", "done")]),
+                Step("fix", nameof(FlowInstanceState.Done), "orient", started: At(10, 1), finished: At(10, 4), raisedBy: "build"),
+                Step("build+2", nameof(FlowInstanceState.Failed), "orient", started: At(10, 4), finished: At(10, 5), visit: 2, handlers: [new FlowHandlerState("fix", "raised")]),
+            ]);
+
+        var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, NoEngine, AsOf);
+
+        Assert.Equal(
+            "left      at least 1 step instance, at most 1 step instance (nothing more can come); 1 handler an ending owes a raise: fix+2",
+            facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
     }
 
     /// <summary>

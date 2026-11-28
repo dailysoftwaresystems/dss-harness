@@ -316,6 +316,20 @@ public sealed record ConfinedPath
     /// <summary>Why it is refused; null where it is not.</summary>
     public AgentPolicyAnswer.Denied? Denied { get; }
 
+    /// <summary>
+    /// This place, where <paramref name="policy"/> allows it as well: refused where it is refused already, else as the
+    /// policy answers the place. The one way a place held to the roots is then asked what the policy refuses inside them -
+    /// each place a tool of the harness's runtime reaches, and each file a run's own file input names, which every agent of
+    /// the run reads.
+    /// </summary>
+    /// <param name="policy">What the policy answers a place, by its absolute path.</param>
+    public ConfinedPath Allowed(Func<string, AgentPolicyAnswer> policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+
+        return Full is { } full && policy(full).Refusal() is { } denied ? new ConfinedPath(null, denied) : this;
+    }
+
     /// <summary>A place the tool may act on.</summary>
     internal static ConfinedPath Of(string full) => new(full, null);
 

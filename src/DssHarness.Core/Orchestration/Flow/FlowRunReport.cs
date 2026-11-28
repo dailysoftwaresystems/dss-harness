@@ -65,8 +65,8 @@ public sealed record FlowReportThresholds(
 /// <summary>
 /// The records a report is built from, and nothing else: the run's state in one file, its questions and answers, its
 /// plan updates, its events, the closure ledgers of its item agents, the issues it owed a later round and the
-/// definition it ran - all read from the run's own directory, never asked of a model or a host - and how the reader
-/// asked for it.
+/// definition it ran - all read from the run's own directory, never asked of a model or a host - with what its engine is
+/// doing as the reader read them, and how the reader asked for it.
 /// </summary>
 /// <param name="Layout">The run's own paths, where its records and its handoffs are.</param>
 /// <param name="Flow">The run's state, <c>flow.json</c>.</param>
@@ -76,11 +76,21 @@ public sealed record FlowReportThresholds(
 /// <param name="Ledgers">Each item agent's closure ledger, by its agent; empty where the run holds none.</param>
 /// <param name="Definition">The definition the run ran, frozen as it began; null where it cannot be read - the report then names no critical path, and says why.</param>
 /// <param name="Thresholds">The thresholds its signals are computed by (<see cref="FlowReportThresholds.Of"/>).</param>
-/// <param name="EventsTorn">Whether the events file's last line was torn - a writer killed mid-line - and set aside.</param>
+/// <param name="EventsSetAside">
+/// What the events file's reader set aside, in its own words (<see cref="FlowEventLog.Read"/>): a torn last line - a writer
+/// killed mid-line - or the lines from the first that holds a NUL on, what a power loss left of a pass; null where the file
+/// was read whole.
+/// </param>
 /// <param name="By">What the dollars are grouped by: <c>model</c> (where null), <c>provider</c>, <c>step</c>, <c>agent</c> or <c>type</c>.</param>
 /// <param name="Steps">The instances whose rows alone the steps table keeps; null for every one.</param>
 /// <param name="NextRound">The issues the run owed a later round, <c>next-round.json</c>, each with the item that settled it; null where the run owed none.</param>
 /// <param name="DefinitionWhy">Why the definition could not be read, where the file is there and does not read; null where it reads or is not there.</param>
+/// <param name="Engine">
+/// What the run's engine is doing as the report is asked for (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout)"/>),
+/// which the next step of each open question is named by (<see cref="FlowAnswerRules.NextStepOf"/>): the read and the
+/// analysis read it as they read the records; none for the report a session's end writes, for that session is leaving
+/// the run - and none where it is left out.
+/// </param>
 public sealed record FlowRunReportSource(
     OrchestratorLayout Layout,
     FlowFile Flow,
@@ -90,17 +100,23 @@ public sealed record FlowRunReportSource(
     IReadOnlyList<(string Agent, FlowClosureLedgerFile Ledger)>? Ledgers = null,
     WorkflowDefinition? Definition = null,
     FlowReportThresholds? Thresholds = null,
-    bool EventsTorn = false,
+    string? EventsSetAside = null,
     string? By = null,
     IReadOnlySet<string>? Steps = null,
     FlowNextRoundFile? NextRound = null,
-    string? DefinitionWhy = null);
+    string? DefinitionWhy = null,
+    FlowEngineState? Engine = null)
+{
+    /// <summary>What the run's engine is doing, none where the source names none.</summary>
+    public FlowEngineState EngineOrNone => Engine ?? FlowEngineState.NoEngine;
+}
 
 /// <summary>
 /// The report of a run, built from its records alone (<see cref="FlowRunReport.Of"/>): what the run was and how it
 /// stands, what it spent, one row per step with its waits and its run, the chain of steps a faster run must shorten,
 /// every failed attempt, every question a person answered, what its reviews converged to and the deterministic flags
-/// a reader starts from. The same records give the same bytes - the steps in the order the run made them, every row of
+/// a reader starts from. The same records give the same bytes, the run's engine doing the same (each open question's next
+/// step reads it, <see cref="FlowRunReportSource.Engine"/>) - the steps in the order the run made them, every row of
 /// a list with an id of its own (<c>id</c>: a step's and a link's its instance, a failed attempt's
 /// <c>&lt;instance&gt;@&lt;attempt&gt;</c>, a signal's <c>&lt;kind&gt;#&lt;n&gt;</c>, a question's its own, a dollars
 /// group's its name, a convergence row's its list, the item, step or agent that said it and what it is of), every number in one fixed form, times as the
@@ -128,9 +144,9 @@ public static partial class FlowRunReport
         var partial = source.Flow.Status is "Running";
         var notes = new JsonArray();
 
-        if (source.EventsTorn)
+        if (source.EventsSetAside is { } setAside)
         {
-            notes.Add($"the last line of '{source.Layout.EventsFile}' was torn - a writer stopped mid-line - and is not read: the report is as of the event before it");
+            notes.Add($"'{source.Layout.EventsFile}' was not read whole: {setAside}; the report is as of the event before it");
         }
 
         if (source.Definition is null)
@@ -403,27 +419,21 @@ public static partial class FlowRunReport
         return ends.Count > 0 ? ends.Max() : source.Flow.StartedAt;
     }
 
+    /// <summary>The kinds of event that record a session's beginning: its own, or one taken up by the engine that drove the session before.</summary>
+    private static readonly string[] SessionStarts = [FlowEvent.KindOf(FlowChangeKind.SessionBegan), FlowEvent.KindOf(FlowChangeKind.Resumed)];
+
     /// <summary>
     /// The run's own section: its sessions, its times, its budget. Its active time is the union of every attempt's runs -
-    /// the time at least one step's work ran; its pause is the time between its sessions, from the last record of one to
-    /// the start of the next; its wait for a person is each question's (<see cref="PersonWaitOf"/>), summed.
+    /// the time at least one step's work ran; its pause is the time between its sessions (<see cref="PausedSecondsOf"/>);
+    /// its wait for a person is each question's (<see cref="PersonWaitOf"/>), summed.
     /// </summary>
     private static JsonObject TheRun(FlowRunReportSource source, DateTimeOffset? at)
     {
         var events = source.Events ?? [];
         var began = events.FirstOrDefault(@event => @event.Kind == FlowEvent.KindOf(FlowChangeKind.SessionBegan))?.At ?? source.Flow.StartedAt;
-        var starts = new[] { FlowEvent.KindOf(FlowChangeKind.SessionBegan), FlowEvent.KindOf(FlowChangeKind.Resumed) };
-        var sessions = events.Count(@event => starts.Contains(@event.Kind, StringComparer.Ordinal));
+        var sessions = events.Count(@event => SessionStarts.Contains(@event.Kind, StringComparer.Ordinal));
         var wall = at is { } end && end > began ? Seconds((end - began).TotalSeconds) : null;
-        var paused = 0.0;
-
-        for (var index = 1; index < events.Count; index++)
-        {
-            if (starts.Contains(events[index].Kind, StringComparer.Ordinal) && events[index].At > events[index - 1].At)
-            {
-                paused += (events[index].At - events[index - 1].At).TotalSeconds;
-            }
-        }
+        var paused = PausedSecondsOf(events);
 
         var person = (source.Questions?.Questions ?? []).Sum(question => PersonWaitOf(question, at)?.TotalSeconds ?? 0);
 
@@ -438,6 +448,73 @@ public static partial class FlowRunReport
             ["waitingForAPersonSeconds"] = person > 0 ? Seconds(person) : null,
             ["budget"] = SpentOf(source.Flow.Spent with { Usd = Math.Round(source.Flow.Spent.Usd, 4, MidpointRounding.AwayFromZero) }),
         };
+    }
+
+    /// <summary>
+    /// The time between a run's sessions, in seconds, read from its events alone - the one reading of where a session ends
+    /// and the next begins: from a session's end - its last record, its <c>sessionEnded</c>, or where a crash ended it and
+    /// left none, its last event - to the next session's own first event, whatever its kind, by the session each event names
+    /// (<see cref="FlowEvent.Session"/>). A session records its beginning only once its start goes on, and what that start
+    /// took up is written before it - a stopped step made a new attempt, the handoff it is given, a stop it applies, each
+    /// held and stamped as the hold is made - as is an answer it took as it began; and what is written after a session's
+    /// end and before the next session's - an answer the session's last poll takes, an entry of the inbox weighed - is the
+    /// session's that ended, and ends no pause. So the time between two sessions falls before the next one's first event,
+    /// never before the record of its beginning, nor at what was written between. An older build's events, which name no
+    /// session, are read as that build's were: from a session's last record to the next event, and after a crash, which
+    /// left none, to the next session's record of its beginning.
+    /// </summary>
+    /// <param name="events">The run's events, in the order written.</param>
+    private static double PausedSecondsOf(IReadOnlyList<FlowEvent> events)
+    {
+        var ended = FlowEvent.KindOf(FlowChangeKind.SessionEnded);
+        var paused = 0.0;
+        var open = false;
+        DateTimeOffset? endedAt = null;
+
+        for (var index = 0; index < events.Count; index++)
+        {
+            var @event = events[index];
+            var gap = TimeSpan.Zero;
+
+            if (@event.Session is { } session)
+            {
+                // An event that names its session: the first of a session follows the one before's end - its last record,
+                // or where a crash ended it, its last event - whatever was written between the two.
+                if (index > 0 && events[index - 1].Session != session)
+                {
+                    gap = @event.At - (endedAt ?? events[index - 1].At);
+                    endedAt = null;
+                }
+            }
+            else if (endedAt is { } last)
+            {
+                // The first event after a session's last record is the next session's first.
+                gap = @event.At - last;
+                endedAt = null;
+            }
+            else if (open && index > 0 && SessionStarts.Contains(@event.Kind, StringComparer.Ordinal))
+            {
+                // A session begins while the one before never ended: a crash ended it, and its last record is not there.
+                gap = @event.At - events[index - 1].At;
+            }
+
+            if (gap > TimeSpan.Zero)
+            {
+                paused += gap.TotalSeconds;
+            }
+
+            if (string.Equals(@event.Kind, ended, StringComparison.Ordinal))
+            {
+                endedAt = @event.At;
+                open = false;
+            }
+            else if (SessionStarts.Contains(@event.Kind, StringComparer.Ordinal))
+            {
+                open = true;
+            }
+        }
+
+        return paused;
     }
 
     /// <summary>
@@ -508,8 +585,8 @@ public static partial class FlowRunReport
                 ["searches"] = tokens.Sum(use => use.Searches),
             },
             ["cacheSharePercent"] = input + cacheRead > 0 ? ShareOf(cacheRead, input + cacheRead) : null,
-            ["dollarsBy"] = DollarsBy(steps, source.By ?? Groupings[0]),
-            ["usd"] = Math.Round(steps.Sum(step => (step.Measure?.Totals?.Usd ?? 0) + (step.Measure?.Advice?.Usd ?? 0)), 4, MidpointRounding.AwayFromZero),
+            ["dollarsBy"] = DollarsBy(steps, source.Flow.Spent.Advice, source.By ?? Groupings[0]),
+            ["usd"] = Math.Round(steps.Sum(step => (step.Measure?.Totals?.Usd ?? 0) + (step.Measure?.Advice?.Usd ?? 0)) + (source.Flow.Spent.Advice?.Usd ?? 0), 4, MidpointRounding.AwayFromZero),
             ["uncounted"] = source.Flow.Spent.Uncounted,
             ["agents"] = steps.Where(step => step.Agent is { Length: > 0 }).Select(step => step.Agent!).Distinct(StringComparer.Ordinal).Count(),
             ["stepsRun"] = steps.Count(step => step.State == nameof(FlowInstanceState.Done)),
@@ -523,18 +600,22 @@ public static partial class FlowRunReport
 
     /// <summary>
     /// What the run's reasoning cost, grouped by <paramref name="by"/>: each part of each attempt by the model that served
-    /// it (<see cref="FlowStepAttempt.Parts"/>; an attempt a build kept no parts for as one part of its own model), and each
-    /// step's advice by the advisor's model - every dollar the totals count, once, in one group.
+    /// it (<see cref="FlowStepAttempt.Parts"/>; an attempt a build kept no parts for as one part of its own model), each
+    /// step's advice by the advisor's model, and the advice on the run's own question by its model, under the run's own
+    /// name where the dollars are grouped by step (<see cref="FlowQuestions.RunsOwn"/>) - every dollar the totals count,
+    /// once, in one group.
     /// </summary>
     /// <param name="steps">The run's steps.</param>
+    /// <param name="runsOwn">What the advisor spent on the run's own question; null where nothing was.</param>
     /// <param name="by">What the dollars are grouped by, one of <see cref="Groupings"/>.</param>
-    private static JsonObject DollarsBy(IReadOnlyList<FlowStepRecord> steps, string by)
+    private static JsonObject DollarsBy(IReadOnlyList<FlowStepRecord> steps, FlowStepAdvice? runsOwn, string by)
     {
         var parts = steps.SelectMany(step =>
             (step.Measure?.Attempts ?? []).SelectMany(attempt => attempt.Parts is { Count: > 0 } kept
-                ? kept.Select(part => (Step: step, Model: part.Model, Provider: part.Provider, Usd: part.Usd ?? 0, Tokens: part.Tokens?.AllTokens ?? 0))
-                : [(Step: step, attempt.Model, attempt.Provider, Usd: attempt.Usd ?? 0, Tokens: attempt.Tokens?.AllTokens ?? 0)])
-            .Concat(step.Measure?.Advice is { } advice ? [(Step: step, advice.Model, Provider: (string?)null, Usd: advice.Usd ?? 0, Tokens: advice.Tokens ?? 0)] : []));
+                ? kept.Select(part => (Instance: step.Instance, step.Agent, step.Type, Model: part.Model, Provider: part.Provider, Usd: part.Usd ?? 0, Tokens: part.Tokens?.AllTokens ?? 0))
+                : [(Instance: step.Instance, step.Agent, step.Type, attempt.Model, attempt.Provider, Usd: attempt.Usd ?? 0, Tokens: attempt.Tokens?.AllTokens ?? 0)])
+            .Concat(step.Measure?.Advice is { } advice ? [(Instance: step.Instance, step.Agent, step.Type, advice.Model, Provider: (string?)null, Usd: advice.Usd ?? 0, Tokens: advice.Tokens ?? 0)] : []))
+            .Concat(runsOwn is { } own ? [(Instance: FlowQuestions.RunsOwn, Agent: (string?)null, Type: (string?)null, own.Model, Provider: (string?)null, Usd: own.Usd ?? 0, Tokens: own.Tokens ?? 0)] : []);
 
         return new JsonObject
         {
@@ -543,10 +624,10 @@ public static partial class FlowRunReport
                 .Where(part => part.Usd > 0 || part.Tokens > 0)
                 .GroupBy(part => by switch
                 {
-                    "step" => part.Step.Instance,
-                    "agent" => part.Step.Agent ?? "-",
+                    "step" => part.Instance,
+                    "agent" => part.Agent ?? "-",
                     "provider" => part.Provider ?? "-",
-                    "type" => part.Step.Type ?? "-",
+                    "type" => part.Type ?? "-",
                     _ => part.Model ?? "-",
                 })
                 .OrderBy(group => group.Key, StringComparer.Ordinal)
@@ -575,6 +656,21 @@ public static partial class FlowRunReport
             {
                 ["steps"] = served.Count,
                 ["packTokens"] = served.Sum(step => step.Graph?["pack"]?["tokens"]?.GetValue<int>() ?? 0),
+                ["pulled"] = new JsonObject
+                {
+                    ["map"] = new JsonObject
+                    {
+                        ["pages"] = served.Sum(step => step.Graph?["pulled"]?["map"]?["pages"]?.GetValue<int>() ?? 0),
+                        ["tokens"] = served.Sum(step => step.Graph?["pulled"]?["map"]?["tokens"]?.GetValue<int>() ?? 0),
+                    },
+                    ["pack"] = new JsonObject
+                    {
+                        ["pages"] = served.Sum(step => step.Graph?["pulled"]?["pack"]?["pages"]?.GetValue<int>() ?? 0),
+                        ["tokens"] = served.Sum(step => step.Graph?["pulled"]?["pack"]?["tokens"]?.GetValue<int>() ?? 0),
+                        ["nodes"] = served.Sum(step => step.Graph?["pulled"]?["pack"]?["nodes"]?.GetValue<int>() ?? 0),
+                        ["used"] = served.Sum(step => step.Graph?["pulled"]?["pack"]?["used"]?.GetValue<int>() ?? 0),
+                    },
+                },
                 ["calls"] = served.Sum(step => step.Graph?["calls"]?.GetValue<int>() ?? 0),
                 ["servedTokens"] = served.Sum(step => step.Graph?["servedTokens"]?.GetValue<int>() ?? 0),
                 ["bodies"] = served.Sum(step => step.Graph?["bodies"]?.GetValue<int>() ?? 0),
@@ -589,7 +685,12 @@ public static partial class FlowRunReport
                     ["count"] = served.Sum(step => step.Graph?["wholeFileReads"]?["count"]?.GetValue<int>() ?? 0),
                     ["tokens"] = served.Sum(step => step.Graph?["wholeFileReads"]?["tokens"]?.GetValue<int>() ?? 0),
                 },
-                ["deniedReads"] = served.Sum(step => step.Graph?["deniedReads"]?.GetValue<int>() ?? 0),
+                ["outlinedReads"] = new JsonObject
+                {
+                    ["count"] = served.Sum(step => step.Graph?["outlinedReads"]?["count"]?.GetValue<int>() ?? 0),
+                    ["tokens"] = served.Sum(step => step.Graph?["outlinedReads"]?["tokens"]?.GetValue<int>() ?? 0),
+                    ["outlineTokens"] = served.Sum(step => step.Graph?["outlinedReads"]?["outlineTokens"]?.GetValue<int>() ?? 0),
+                },
                 ["escapes"] = new JsonObject
                 {
                     ["count"] = served.Sum(step => step.Graph?["escapes"]?["count"]?.GetValue<int>() ?? 0),
@@ -1224,7 +1325,7 @@ public static partial class FlowRunReport
 
     /// <summary>What is left for a person, as the session's end answers it - one line each.</summary>
     private static IReadOnlyList<string> LeftForAPerson(FlowRunReportSource source)
-        => FlowReports.LeftForAPerson(source.Layout, source.Flow, source.Questions, source.Updates).ToList();
+        => FlowReports.LeftForAPerson(source.Layout, source.Flow, source.Questions, source.EngineOrNone, source.Updates).ToList();
 
     /// <summary>What the run has spent of its budget, as every document says it.</summary>
     private static JsonObject SpentOf(FlowBudgetRecord spent)

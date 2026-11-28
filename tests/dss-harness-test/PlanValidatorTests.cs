@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Repository;
 
 namespace DssHarness.Tests;
 
@@ -9,7 +10,8 @@ namespace DssHarness.Tests;
 /// class is the item's own to change and there in the tree where it exists; a site is marked home exactly where it is
 /// the home, and every other site, which must change, is the item's too, for patching some of a class's sites is never
 /// done; more than one site means consolidate, as one site that is not the home does; a class is searched by data it
-/// can name again, and its universe holds the axes the repository declares; and one home belongs to one item. And of
+/// can name again, and its universe answers each axis one of the two ways an axis is answered and counts the cells its
+/// axes that apply make; and one home belongs to one item. And of
 /// its tests (P-C9): an item names the units of the tests its change affects, or says why it affects none. Each rule
 /// is red with itself removed, held by the reverts this file's twin methods name.
 /// </summary>
@@ -52,11 +54,15 @@ public sealed class PlanValidatorTests : IDisposable
 
     /// <summary>The check of a plan's items, as the validate-plan step makes it.</summary>
     private async Task<IReadOnlyList<string>> CheckAsync(TempDirectory repository, params JsonNode?[] items)
+        => await CheckAsync(repository, await new HarnessFactory().StartTreeAsync(repository.Path, Token), items);
+
+    /// <summary>The check of a plan's items against <paramref name="startTree"/>, as the validate-plan step of a run that started there makes it.</summary>
+    private static async Task<IReadOnlyList<string>> CheckAsync(TempDirectory repository, TreeDirectories startTree, params JsonNode?[] items)
     {
         var harness = new HarnessFactory();
 
         return new PlanValidator(harness.FileSystem, harness.PathBudget, harness.Platform)
-            .Check(items, await harness.ContextLoader.LoadAsync(repository.Path, Token), "r1", Flow);
+            .Check(items, await harness.ContextLoader.LoadAsync(repository.Path, Token), "r1", Flow, startTree);
     }
 
     /// <summary>
@@ -87,7 +93,7 @@ public sealed class PlanValidatorTests : IDisposable
     }
 
     /// <summary>A class of the plan, sound as given: its home among the item's own paths, the home itself its one site.</summary>
-    private static JsonObject Class(string id = "C1", string home = "src/one/home.cs", bool exists = true, string action = "fix-at-home", JsonObject[]? sites = null, JsonObject[]? searches = null, JsonObject[]? axes = null)
+    private static JsonObject Class(string id = "C1", string home = "src/one/home.cs", bool exists = true, string action = "fix-at-home", JsonObject[]? sites = null, JsonObject[]? searches = null, JsonObject? universe = null)
         => new()
         {
             ["id"] = id,
@@ -95,7 +101,7 @@ public sealed class PlanValidatorTests : IDisposable
             ["home"] = new JsonObject { ["path"] = home, ["symbol"] = "Decides", ["exists"] = exists },
             ["sites"] = new JsonArray([.. sites ?? [Site(path: home)]]),
             ["searches"] = new JsonArray([.. searches ?? [Search()]]),
-            ["universe"] = new JsonObject { ["axes"] = new JsonArray([.. axes ?? [Axis()]]), ["cells"] = 2 },
+            ["universe"] = universe ?? Universes.Of(("kinds", ["weekly", "monthly"])),
             ["action"] = action,
             ["notCovered"] = "",
         };
@@ -108,16 +114,68 @@ public sealed class PlanValidatorTests : IDisposable
     private static JsonObject Search(string query = "the diagnostic DX")
         => new() { ["data"] = "the diagnostic DX", ["via"] = "text", ["query"] = query, ["hits"] = 1 };
 
-    /// <summary>An axis of a universe, with the values the repository declares.</summary>
-    private static JsonObject Axis(string name = "kind", string[]? values = null)
-        => new() { ["name"] = name, ["values"] = new JsonArray([.. values ?? ["weekly", "monthly"]]), ["declaredIn"] = "closure.md" };
-
     /// <inheritdoc/>
     public void Dispose()
     {
         foreach (var made in _made)
         {
             made.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Each path an item owns or must not touch is read from the repository's root, as its agent's writes and its fold's
+    /// within read it: the plans the live runs had refused pass - an item owning the root's calc.c, calc.h and main.c that
+    /// must not touch the root's Makefile, and one owning src/click's types.py and a test beside one owning the root's
+    /// pyproject.toml and uv.lock - for a root-level name meets no other root-level name and no nested file. What does meet
+    /// is refused still: a directory the tree holds and a file in it, a pattern and what it matches, and a path not yet
+    /// made and one beneath it.
+    /// </summary>
+    [Fact]
+    public async Task EachPathAnItemNames_IsReadFromTheRoot_SoARootLevelFileMeetsNoOtherPath()
+    {
+        var repository = new TempDirectory();
+        _made.Add(repository);
+
+        foreach (var file in new[] { "file.txt", "Makefile", "calc.c", "calc.h", "main.c", "pyproject.toml", "uv.lock", "src/click/testing.py", "src/click/types.py", "tests/test_types/test_Tuple.py" })
+        {
+            repository.WriteFile(file, "content\n");
+        }
+
+        var harness = new HarnessFactory();
+        await harness.InitializeHarnessAsync(repository.Path, Token);
+        await harness.CommitAllAsync(repository.Path, "initial", Token);
+
+        Assert.Empty(await CheckAsync(
+            repository,
+            Owning("add-mul", ["calc.c", "calc.h", "main.c"], forbidden: ["Makefile"]),
+            Owning("tuple-types", ["src/click/types.py", "tests/test_types/test_Tuple.py"], forbidden: ["src/click/testing.py"]),
+            Owning("packaging", ["pyproject.toml", "uv.lock"], forbidden: ["src/**"])));
+
+        Assert.Equal(
+            [
+                "work items 'package' and 'testing' both own what 'src/click' and 'src/click/testing.py' match: no file is written by two items, so give it to one",
+                "work items 'globbed' and 'built' both own what '*.c' and 'calc.c' match: no file is written by two items, so give it to one",
+                "work items 'made' and 'inside' both own what 'src/new' and 'src/new/a.py' match: no file is written by two items, so give it to one",
+                "work item 'kept' owns 'tests/test_types' and must not touch 'tests/test_types/test_Tuple.py', which match the same paths: an item's forbidden paths are kept by the paths it owns",
+            ],
+            await CheckAsync(
+                repository,
+                Owning("package", ["src/click"]),
+                Owning("testing", ["src/click/testing.py"]),
+                Owning("globbed", ["*.c"]),
+                Owning("built", ["calc.c"]),
+                Owning("made", ["src/new"]),
+                Owning("inside", ["src/new/a.py"]),
+                Owning("kept", ["tests/test_types"], forbidden: ["tests/test_types/test_Tuple.py"])));
+
+        static JsonObject Owning(string name, string[] owned, string[]? forbidden = null)
+        {
+            var item = Item(name);
+            item["ownedPaths"] = new JsonArray([.. owned.Select(path => (JsonNode?)path)]);
+            item["forbiddenPaths"] = new JsonArray([.. (forbidden ?? []).Select(path => (JsonNode?)path)]);
+
+            return item;
         }
     }
 
@@ -226,6 +284,140 @@ public sealed class PlanValidatorTests : IDisposable
     }
 
     /// <summary>
+    /// A home or a site outside the item's owned paths only because the reading from the root changed what an entry meant
+    /// says how to write what it meant, in the words a step's writes and a fold's within say it: a directory to be made,
+    /// named with no trailing separator, names a file; a wildcard of one name names the root's own. Written so, they pass.
+    /// </summary>
+    [Fact]
+    public async Task AHomeOrASiteAnEntrysReadingLeftOut_SaysHowToWriteWhatItMeant()
+    {
+        var (_, repository) = await RepositoryAsync();
+        var made = Item("made", "src/fresh", classes: [Class("C1", "src/fresh/home.cs", exists: false, action: "consolidate", sites: [Site("src/one/home.cs", then: "reads-home")])]);
+        made["ownedPaths"] = new JsonArray("src/fresh", "src/one/**");
+        var wild = Item("wild", "*.cs", classes: [Class("C2", "src/two/home.cs", sites: [Site("src/two/home.cs"), Site("src/two/site.cs", then: "reads-home")], action: "consolidate")]);
+        wild["ownedPaths"] = new JsonArray("*.cs", "src/two/home.cs");
+
+        Assert.Equal(
+            [
+                "work item 'made''s C1 has its home at 'src/fresh/home.cs', which the item does not own: the home changes, and the item that changes it owns it; 'src/fresh' names a file: a directory to be made is written 'src/fresh/'",
+                "work item 'wild''s C2 has its site at 'src/two/site.cs' (reads-home) outside the item: the item owns it, or the class belongs to the item that owns it; '*.cs' names the root's own: '**/*.cs' names any depth",
+            ],
+            await CheckAsync(repository, made, wild));
+
+        made["ownedPaths"] = new JsonArray("src/fresh/", "src/one/**");
+        wild["ownedPaths"] = new JsonArray("**/*.cs");
+
+        // Each alone: '**/*.cs' owns what the other item owns too.
+        Assert.Empty(await CheckAsync(repository, made));
+        Assert.Empty(await CheckAsync(repository, wild));
+    }
+
+    /// <summary>
+    /// An entry an item owns, written with no trailing separator, that names a directory of the main tree the run's start
+    /// tree does not hold - one an earlier round's fold made - names that one path to every reader of the item's paths: the
+    /// builder's every write beneath it would be refused, and its fold would carry none of it. So the check refuses it, in
+    /// the words every refusal of the reading uses, saying to write it with a trailing separator; a directory both trees
+    /// hold, and the same entry written so, pass. An entry an item must not touch, written so, is no problem: nothing
+    /// gates a write by a forbidden path, so none would be refused for it.
+    /// </summary>
+    [Fact]
+    public async Task AnOwnedEntryNamingADirectoryOnlyTheMainTreeHolds_IsAProblem_SayingToWriteItEndingInASeparator_AndAForbiddenOneIsNot()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var startTree = await harness.StartTreeAsync(repository.Path, Token);
+
+        // The first round's fold made src/feature in the main tree since the run began.
+        repository.WriteFile("src/feature/made.cs", "made by the first round\n");
+        await harness.CommitAllAsync(repository.Path, "the first round", Token);
+
+        var made = Item("made", "src/feature");
+        var kept = Item("kept", "src/two/**");
+        kept["forbiddenPaths"] = new JsonArray("src/feature");
+        var there = Item("there", "src/other");
+
+        // The forbidden entry is said of nothing: the owned one alone is refused.
+        Assert.Equal(
+            ["work item 'made' owns 'src/feature', which names nothing beneath it: 'src/feature' names a file of the run's start tree, which the run's lists of paths are read against, and a directory of the main tree: write it 'src/feature/'"],
+            await CheckAsync(repository, startTree, made, kept, there));
+        Assert.Empty(await CheckAsync(repository, startTree, kept));
+
+        made["ownedPaths"] = new JsonArray("src/feature/");
+
+        Assert.Empty(await CheckAsync(repository, startTree, made, kept, there));
+    }
+
+    /// <summary>
+    /// Against a start tree that could not be read, two lists of entries that meet are named by a pair that meets whatever
+    /// the tree holds - read narrowly, as what may be written beneath each - with nothing said of the tree, before any pair
+    /// that meets only because every path was taken for one of its directories: a real conflict is never hidden behind one
+    /// the unread tree made, nor said with that tree's reason. Where no pair meets narrowly, the wide reading's pair is
+    /// named with the reason - two items' owned paths, and an item's owned and forbidden ones alike.
+    /// </summary>
+    [Fact]
+    public async Task AgainstAStartTreeThatCouldNotBeRead_AnOverlapNamesAPairThatMeetsWhateverTheTreeHolds_First()
+    {
+        var (_, repository) = await RepositoryAsync();
+        var unread = TreeDirectories.NoCommit;
+        var wide = "every path is taken for a directory of the run's start tree, which could not be read: the run names no commit it started from";
+        // Paths the main tree does not hold, so nothing but the overlaps is said.
+        var a = Item("a", "pkg/one");
+        a["ownedPaths"] = new JsonArray("pkg/one", "lib/x.c");
+        var b = Item("b", "pkg/**/*.cs");
+        b["ownedPaths"] = new JsonArray("pkg/**/*.cs", "lib/x.c");
+        var kept = Item("kept", "etc/one");
+        kept["ownedPaths"] = new JsonArray("etc/one", "etc/y.c");
+        kept["forbiddenPaths"] = new JsonArray("etc/**/*.h", "etc/y.c");
+
+        Assert.Equal(
+            [
+                "work items 'a' and 'b' both own what 'lib/x.c' and 'lib/x.c' match: no file is written by two items, so give it to one",
+                "work item 'kept' owns 'etc/y.c' and must not touch 'etc/y.c', which match the same paths: an item's forbidden paths are kept by the paths it owns",
+            ],
+            await CheckAsync(repository, unread, a, b, kept));
+
+        // With the pair that meets whatever the tree holds gone, the one the wide reading alone makes is named, saying why.
+        b["ownedPaths"] = new JsonArray("pkg/**/*.cs", "lib/z.c");
+        kept["forbiddenPaths"] = new JsonArray("etc/**/*.h", "etc/w.c");
+
+        Assert.Equal(
+            [
+                $"work items 'a' and 'b' both own what 'pkg/one' and 'pkg/**/*.cs' match: no file is written by two items, so give it to one; {wide}",
+                $"work item 'kept' owns 'etc/one' and must not touch 'etc/**/*.h', which match the same paths: an item's forbidden paths are kept by the paths it owns; {wide}",
+            ],
+            await CheckAsync(repository, unread, a, b, kept));
+    }
+
+    /// <summary>
+    /// Against a start tree that could not be read, every refusal its reading causes says why: an entry read as naming no
+    /// directory - what may be written beneath it - that the main tree holds as one, and a class's home and site beneath
+    /// it, say it after how to write the entry; two items' entries that meet only because every path was taken for a
+    /// directory - where two entries are weighed for meeting - say it too. A refusal the tree did not cause says nothing of it.
+    /// </summary>
+    [Fact]
+    public async Task AgainstAStartTreeThatCouldNotBeRead_EveryRefusalItsReadingCauses_SaysWhy()
+    {
+        var (_, repository) = await RepositoryAsync();
+        var unread = TreeDirectories.NoCommit;
+        var narrow = "no path is taken for a directory of the run's start tree, which could not be read: the run names no commit it started from";
+        var wide = "every path is taken for a directory of the run's start tree, which could not be read: the run names no commit it started from";
+        var classed = Item("a", "src/one", classes: [Class(sites: [Site(), Site("src/one/second.cs", then: "reads-home")], action: "consolidate")]);
+        var wild = Item("b", "src/**/*.cs");
+        var file = Item("c", "src/created/home.cs");
+
+        Assert.Equal(
+            [
+                $"work items 'a' and 'b' both own what 'src/one' and 'src/**/*.cs' match: no file is written by two items, so give it to one; {wide}",
+                $"work item 'a' owns 'src/one', which names nothing beneath it: 'src/one' names a file of the run's start tree, which the run's lists of paths are read against, and a directory of the main tree: write it 'src/one/'; {narrow}",
+                $"work item 'a''s C1 has its home at 'src/one/home.cs', which the item does not own: the home changes, and the item that changes it owns it; 'src/one' names a file: a directory to be made is written 'src/one/'; {narrow}",
+                $"work item 'a''s C1 has its site at 'src/one/second.cs' (reads-home) outside the item: the item owns it, or the class belongs to the item that owns it; 'src/one' names a file: a directory to be made is written 'src/one/'; {narrow}",
+
+                // A file a pattern matches meets it whatever the tree holds: the tree caused none of it.
+                "work items 'b' and 'c' both own what 'src/**/*.cs' and 'src/created/home.cs' match: no file is written by two items, so give it to one",
+            ],
+            await CheckAsync(repository, unread, classed, wild, file));
+    }
+
+    /// <summary>
     /// P-C5: more than one site means consolidate; one site that is not the home means it too; and create-home is
     /// refused where the home exists.
     /// </summary>
@@ -262,20 +454,80 @@ public sealed class PlanValidatorTests : IDisposable
             await CheckAsync(repository, unsearched, unqueried));
     }
 
-    /// <summary>P-C7: the universe of a class is the axes the repository declares, each with its values.</summary>
+    /// <summary>
+    /// P-C7: a universe counts the cells its axes that apply make - the product of the counts of their values, a further
+    /// axis's among them, and 1 where none applies - its count written as JSON writes a whole number; a count that is not
+    /// the product, or no count at all, is a problem naming the product and what makes it. Which axes a universe answers
+    /// is its schema's to hold, never the check's: a universe in which no axis applies is checked for its count alone.
+    /// </summary>
     [Fact]
-    public async Task AUniverseWithoutAxesOrAnAxisWithoutValues_IsAProblem()
+    public async Task AUniverseWhoseCellsAreNotTheProductOfItsAxesThatApply_IsAProblem()
     {
         var (_, repository) = await RepositoryAsync();
-        var unaxed = Item(classes: [Class(axes: [])]);
-        var empty = Item("two", "src/two/**", classes: [Class("C2", "src/two/home.cs", axes: [Axis("kind", [])])]);
+        var miscounted = Universes.Of(("formats", ["cs", "md"]), ("directions", ["in", "out", "both"]));
+        miscounted["cells"] = 4;
+        var further = Universes.Of(("formats", ["cs", "md"]), ("region", ["eu", "us", "asia"]));
+        further["cells"] = 2;
+        var none = Universes.Of();
+        none["cells"] = 2;
+        var uncounted = Universes.Of(("kinds", ["weekly", "monthly"]));
+        uncounted.Remove("cells");
+        var whole = Universes.Of(("kinds", ["weekly", "monthly"]), ("tiers", ["parse", "check", "emit"]));
+        whole["cells"] = JsonNode.Parse("6.0");
+        const string Rule = "a universe's cells are the product of the counts of the values of its axes that apply";
 
         Assert.Equal(
             [
-                "work item 'one''s C1 names no axis of its universe: the repository's closure text declares the axes a decision ranges over",
-                "work item 'two''s C2 holds no value for the axis 'kind': an axis holds what the repository declares for it",
+                $"work item 'one''s C1 counts 4 cells in its universe, and its axes that apply make 6 (formats 2 x directions 3): {Rule}",
+                $"work item 'two''s C2 counts 2 cells in its universe, and its axes that apply make 6 (formats 2 x region 3): {Rule}",
+                $"work item 'two''s C3 counts 2 cells in its universe, and no axis of it applies, which makes 1: {Rule}",
+                $"work item 'two''s C4 counts no cells in its universe, and its axes that apply make 2 (kinds 2): {Rule}",
             ],
-            await CheckAsync(repository, unaxed, empty));
+            await CheckAsync(
+                repository,
+                Item(classes: [Class(universe: miscounted)]),
+                Item("two", "src/two/**", classes: [Class("C2", "src/two/home.cs", universe: further), Class("C3", "src/two/home.cs", universe: none), Class("C4", "src/two/home.cs", universe: uncounted)]),
+                Item("three", "src/created/**", classes: [Class("C5", "src/created/home.cs", universe: whole), Class("C6", "src/created/home.cs", universe: Universes.Of())])));
+    }
+
+    /// <summary>
+    /// P-C7: every axis of a universe - each the schema lists and each further one - is answered in the one shape of an
+    /// axis and in one of its two ways: applying exactly where it names values, with where the repository declares them
+    /// and no why; not applying where it names none, with why and nothing declared. An answer that is neither is a
+    /// problem naming the axis and what it says wrongly, a blank declaredIn or why read as none; the plan's check holds it
+    /// within the step that gave it, as the schema holds the shape, so a planner chooses no shape and an answer neither way
+    /// is put right before an audit reads it.
+    /// </summary>
+    [Fact]
+    public async Task AnAxisAnsweredNeitherWay_IsAProblem()
+    {
+        var (_, repository) = await RepositoryAsync();
+        var undeclared = Universes.Of(("formats", ["cs", "md"]));
+        undeclared["formats"] = Universes.Answer(["cs", "md"], " ", string.Empty);
+        var reasonedToo = Universes.Of(("formats", ["cs", "md"]));
+        reasonedToo["formats"] = Universes.Answer(["cs", "md"], "closure.md", "it has one format");
+        var unreasoned = Universes.Of();
+        unreasoned["forms"] = Universes.Answer([], string.Empty, " ");
+        var declaredNone = Universes.Of();
+        declaredNone["tiers"] = Universes.Answer([], "src/Tiers.cs", "the decision passes one tier");
+        var further = Universes.Of(("region", ["eu"]));
+        further["further"]![0]!["answer"] = Universes.Answer(["eu"], string.Empty, "every region is one");
+        const string Rule = "an axis applies exactly where it names values - then it says where the repository declares them, and gives no why - and does not apply where it names none - then it says why, and declares nothing";
+
+        Assert.Equal(
+            [
+                $"work item 'one''s C1 names the values of its axis 'formats' and says not where the repository declares them: {Rule}",
+                $"work item 'one''s C2 names the values of its axis 'formats' and says why it does not apply: {Rule}",
+                $"work item 'one''s C3 names no value of its axis 'forms' and says not why it does not apply: {Rule}",
+                $"work item 'one''s C4 names no value of its axis 'tiers' and says where its values are declared: {Rule}",
+                $"work item 'one''s C5 names the values of its axis 'region' and says not where the repository declares them, and why it does not apply: {Rule}",
+            ],
+            await CheckAsync(
+                repository,
+                Item(classes: [Class(universe: undeclared), Class("C2", universe: reasonedToo), Class("C3", universe: unreasoned), Class("C4", universe: declaredNone), Class("C5", universe: further)])));
+
+        // Each answered one way or the other, the universes pass.
+        Assert.Empty(await CheckAsync(repository, Item(classes: [Class(universe: Universes.Of(("formats", ["cs", "md"]), ("region", ["eu"]))), Class("C2", universe: Universes.Of())])));
     }
 
     /// <summary>

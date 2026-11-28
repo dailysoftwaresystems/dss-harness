@@ -222,6 +222,14 @@ public sealed partial class HelpTests
                 + "folded and never committed, which what the run's end leaves for a person names too",
             workflows,
             StringComparison.Ordinal);
+        // A commit's hooks run in the person's own locale, as every command git runs hooks for does, each named.
+        Assert.Contains(
+            "git's commit and the repository's commit hooks run inside the operating system's isolation of the agents' work "
+                + "('help agent-clients'), in the person's own locale, as every git command git runs hooks for does (am, commit, "
+                + "merge, pull, rebase, cherry-pick, revert, checkout, switch, clone, worktree add, push, receive-pack, send-email, "
+                + "gc, p4 submit) while every other git of the tool's runs under LC_ALL=C, so a hook behaves as in their shell;",
+            workflows,
+            StringComparison.Ordinal);
         Assert.Contains(
             $"else the step's own message - none, or a blank one, fails it ({HarnessExit.ConfigInvalid}) - and the rest is written to the ledger",
             workflows,
@@ -304,8 +312,207 @@ public sealed partial class HelpTests
         Assert.Contains($"<step>/{OrchestratorLayout.StepFoldFileName} a fold, delete-agent, refresh or rebase step:", orchestrators, StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/ a refresh or a rebase of others:", orchestrators, StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepGraphFileName} a reason step that has a codebase graph: the line of its prompt - what its pack cost, or why none was given", orchestrators, StringComparison.Ordinal);
-        Assert.Contains("one line for each call of the graph tool, and one for each escape of its narrowing of reads and each whole read that narrowing refused", orchestrators, StringComparison.Ordinal);
+        Assert.Contains("one line for each call of the graph tool, and one for each escape of its narrowing of reads and each whole read that narrowing answered with the file's outline", orchestrators, StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepWorkingSetFileName} a reason step that has a codebase graph: the nodes it edited, served, read and found", orchestrators, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The help, the command's own help, the README and the architecture say what a run's own file input is: a file
+    /// inside the repository by its path from the root or an absolute one inside it, committed or not, decided as an
+    /// agent's read of it is - refused with no run started where it names none, where it or a link on its way leads out
+    /// of the repository, into a credential slot, a place the user keeps credentials in or a Claude Code directory, or where
+    /// the configuration's restrictions refuse its read, and read through the file as it was opened - copied into the run's
+    /// inputs as it starts, and read there - its copy's path - by every step of every session and every agent of the run,
+    /// whatever became of the file since; the orchestrators topic and the layout name the place.
+    /// </summary>
+    [Fact]
+    public async Task TheHelpAndTheDocuments_SayARunsFileInputIsCopiedAsItStarts_AndReadThereByEveryStepAndAgent()
+    {
+        Assert.Contains(
+            "and an input of the kind file naming a file inside the repository by its path from the root or an absolute one "
+                + $"inside it, committed or not, which the run copies into its own {HarnessLayout.OrchestratorInputsDirectoryName}/<input>/ as it starts, decided as an agent's "
+                + "read of it is (one that names none, or that leads out of the repository, into a credential slot, a place the user "
+                + "keeps credentials in - agentPolicy.hiddenPlaces among them - or a Claude Code directory, by its own path or a link on "
+                + $"its way, or whose read agentPolicy.restrictions refuse, is refused, {HarnessExit.Refused}, no run started) and read through the file as it was opened, so a link put on its way "
+                + "since reaches nothing: every step of every session reads that copy for it - {input.<name>} the copy's path - "
+                + "whatever became of the file since, and every agent of the run reads it, wherever its own tree was cut from;",
+            Prose.Words(HelpText.Of("workflows").StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"{HarnessLayout.OrchestratorInputsDirectoryName}/<input>/ the file one of the run's own file inputs named, copied as the run starts - committed or "
+                + "not - and kept for its life: what every step of every session reads for that input, whatever became of the file "
+                + "since, and every agent of the run reads; taken away with the run's directory",
+            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a file input names a file inside the repository by its path from the root or an absolute one inside it, decided as "
+                + "an agent's read of it is, which the run copies as it starts.",
+            Prose.Words((await CliRunner.RunAsync([FlowService.RunCommand, "--help"], TestContext.Current.CancellationToken)).StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "an input of the kind `file` names a file inside the repository by its path from the root, or an absolute one inside "
+                + $"it - committed or not, decided as an agent's read of it is: refused ({HarnessExit.Refused}) with nothing made where it names none, "
+                + "where it or a link on its way leads out of the repository, into a credential slot, a place the user keeps credentials "
+                + "in (`agentPolicy.hiddenPlaces` among them) or a Claude Code directory, or where `agentPolicy.restrictions` refuse its "
+                + "read, and read through the file "
+                + $"as it was opened - which the run copies into its own `{HarnessLayout.OrchestratorInputsDirectoryName}/<input>/` as it starts",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "every step of every session reads that copy for the input, whatever became of the file since, and every agent of "
+                + "the run reads it.",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "opens the file each of the run's own inputs of the kind `file` names where its value, given or its default, is not "
+                + "empty - a path from the main checkout's root or an absolute one inside it, read from the main checkout as it "
+                + "stands, committed or not, and decided as an agent's read of it is, since every agent of the run reads the copy - on "
+                + "the ground the one builder of an agent's ground builds for it "
+                + $"(`{nameof(DssHarness.Core.Agents.Policy.AgentStepGround)}.{nameof(DssHarness.Core.Agents.Policy.AgentStepGround.OfFileInputs)}`: an agent's read of the main checkout "
+                + "under the configuration the run starts under, never a ground built by hand beside it): held to the main checkout by "
+                + "where it leads, every link on its way followed - "
+                + $"the file's own and a directory's above it (`{nameof(DssHarness.Core.Agents.Runtime.ConfinedPaths)}`) - kept from every place no agent's read "
+                + "reaches - every credential slot of the tool, every Claude Code directory and every place the user keeps credentials "
+                + "in, `agentPolicy.hiddenPlaces` among them - and from every read `agentPolicy.restrictions` refuse "
+                + $"(`{nameof(DssHarness.Core.Agents.Policy.AgentPolicy)}`), and read through the file as it was opened, where it stands decided again before a byte "
+                + $"passes (`{nameof(DssHarness.Core.Agents.Runtime.AgentFiles)}.{nameof(DssHarness.Core.Agents.Runtime.AgentFiles.OpenDecided)}`), so a link put on its way since reaches nothing; anything else "
+                + $"refused ({HarnessExit.Refused}), naming the input and the path, no run started (`{nameof(FlowInputs)}.{nameof(FlowInputs.OpenFiles)}`) - makes the run's "
+                + $"directory and copies each file into it, `{HarnessLayout.OrchestratorInputsDirectoryName}/<input>/<the file's name>` (`{nameof(OrchestratorLayout)}.{nameof(OrchestratorLayout.InputCopy)}`), "
+                + "before it makes the run's record, its status and its owner",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What a step reads for such an input - `{input.<name>}` in every prompt and every expression, and a pull request's "
+                + $"base - is the copy's full path (`{nameof(FlowInputs)}.{nameof(FlowInputs.AsRead)}`, the one owner of what a step reads for an input, "
+                + "which every session hands the engine), so every step of every session, a resume's included, reads the file the run "
+                + "was started with, whatever the person did to it since; the run's records keep the value as it was given. That the run "
+                + $"keeps its copies is a fact of its own, recorded as it is made (`{nameof(FlowRunContext)}.{nameof(FlowRunContext.InputCopies)}`, `flow.json`'s "
+                + "`inputCopies`) and read back by every session: a run an older build made kept none and its `flow.json` says nothing of "
+                + "them, so its steps read each file input as it was given, as that build handed it to them, never the path of a copy that "
+                + $"was never made. Every agent of the run reads the run's `{HarnessLayout.OrchestratorInputsDirectoryName}/` as a root of its own (`{nameof(DssHarness.Core.Agents.Policy.AgentStepGround)}`)",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The README and the architecture say that a start whose file input's copy cannot be made is refused, naming the
+    /// input, with what the start had made of the run taken back, so no directory is left holding no run's record.
+    /// </summary>
+    [Fact]
+    public void TheDocuments_SayAStartWhoseFileInputsCopyCannotBeMade_IsRefused_WhatItMadeTakenBack()
+    {
+        Assert.Contains(
+            $"which the run copies into its own `{HarnessLayout.OrchestratorInputsDirectoryName}/<input>/` as it starts, a copy that cannot be made refusing the start "
+                + $"({HarnessExit.Refused}) as well, what the start had made of the run taken back",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The file's bytes are first read there: a place of the run or a copy that cannot be made - a file on a share gone, a "
+                + "locked range, a full disk - takes back what the start had made of the run, or says what it could not, and refuses "
+                + $"the start ({HarnessExit.Refused}), naming the input and why and that no run was started (`{nameof(FlowInputFiles)}.{nameof(FlowInputFiles.Keep)}`, "
+                + $"`{nameof(FlowSessions)}.{nameof(FlowSessions.CreateAsync)}`), so no directory is left holding no run's record, which a start of "
+                + "that name would be refused over.",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The help, the input's name key, the README and the architecture say that a workflow two of whose inputs differ by
+    /// case alone is refused, on every system alike, since a run keeps a file input's copy in a directory of the input's
+    /// name and a file system that folds case holds one for both.
+    /// </summary>
+    [Fact]
+    public void TheHelpAndTheDocuments_SayInputsWhoseNamesDifferByCaseAlone_AreRefused()
+    {
+        Assert.Contains(
+            "A workflow declares inputs - the values a run is started with, each with a kind, a default and the options it takes, "
+                + "two whose names differ by case alone refused on every system, since a file system that folds case holds one "
+                + $"{HarnessLayout.OrchestratorInputsDirectoryName}/<input>/ for both, and an input of the kind file",
+            Prose.Words(HelpText.Of("workflows").StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Equal(
+            "the input's name, as --input name=value spells it, apart from every other input's in more than case",
+            WorkflowKeys.Input.Single(key => key.Name == "name").Meaning);
+        Assert.Contains(
+            $"(a workflow two of whose inputs differ by case alone is refused where it is read, on every system, since a file system that folds case holds one such directory for both)",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A definition declares `inputs` - the values a run is started with, each with a kind, a default and the options it "
+                + "takes, two whose names differ by case alone refused on every system, since a run keeps a file input's copy in a "
+                + "directory of the input's name and a file system that folds case holds one for both - `params`,",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The README and the architecture say what a reason step holds of the tree of the agent it works in - write, whatever
+    /// its access, since the start of a step that works as an agent that only reads resets that tree and its work writes it,
+    /// from the moment its own agent is named - and that of two steps that go on with one step's work, two visits of one
+    /// that goes on with its own among them, the second starts once the first has ended or waits on a question, which holds
+    /// nothing, while an advice holds the tree it works in - within the recovery, only visits for the same failure or issue
+    /// share one agent, so visits for different issues run side by side; the step types' table says it in the claim it
+    /// carries.
+    /// </summary>
+    [Fact]
+    public void TheDocuments_SayAReasonStepHoldsWriteOnTheTreeOfTheAgentItWorksIn_WhateverItsAccess()
+    {
+        Assert.Equal(["read main", "write the tree of the agent it works in"], WorkflowStepTypes.Find("reason")!.ClaimsOf);
+        Assert.Contains(
+            "no two steps work in one agent's tree at once, for a reason step holds write on the tree of the agent it works in "
+                + "whatever its access, and an advice of the run's advisor holds the tree it works in while it runs - of two that go "
+                + "on with one step's work, two visits of one that goes on with its own among them, the second starts once the first "
+                + "has ended, or waits on a question with no advice on it still running, for a step that waits holds nothing (the recovery's "
+                + "visits go on with one another's work only for the same failure or issue: a visit for another issue diagnoses in an agent "
+                + "of its own, beside it):",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A reason step holds write on the tree of the agent it works in whatever its access "
+                + $"(`{nameof(FlowClaims)}.{nameof(FlowClaims.Of)}`, read through the step whose work it goes on with, `{nameof(FlowCoordinator)}.WorkingOf`): the start of a step "
+                + "that works as an agent that only reads resets that tree and its work writes it, so of two steps that go on with one "
+                + "reading step's work the second starts once the first has ended - two visits of one that goes on with its own, which "
+                + "work in the agent its first visit made, claiming that agent by the declaration before either is given it "
+                + $"(`{nameof(FlowCoordinator)}.ClaimedAgentOf`); within the recovery, by the declaration and the thing its visit puts right "
+                + $"(`{nameof(FlowInstance)}.{nameof(FlowInstance.RecoveryThread)}`, `RecoveryThreadOf`), so visits for different issues each make an agent of their own "
+                + "and diagnose side by side, each within the run's limits - and no step's start discards another's scratch under it. A reading step "
+                + "that begins work of its own is given its agent as it starts, and holds write on that agent's tree from then "
+                + $"(`{nameof(FlowCoordinator)}.ClaimsOf`, read again once `Start` names it), so what its attempt keeps held past its end names "
+                + "the tree too. A step that waits on a question holds nothing, so the second may start while the first waits - and the "
+                + "first's going on brings the tree there again; an advice of the run's advisor holds read on the tree it works in until "
+                + $"its runner ends (`{nameof(FlowClaims)}.{nameof(FlowClaims.OfAdvice)}`, the tree named as the asking step's own claims name it, "
+                + $"`{nameof(FlowCoordinator)}.AdvisedTreeOf`), so no step's start brings that tree elsewhere under the advice.",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The README, the help and the architecture say what an answer that goes on with an attempt finds of the tree of an
+    /// agent that only reads: the tree as its attempt left it, unless another step's start brought it elsewhere while the
+    /// attempt waited, or nothing tells who it was last brought for - then it is brought there again, and its agent told.
+    /// </summary>
+    [Fact]
+    public void TheDocuments_SayAnAnswerThatGoesOnFindsItsTreeBroughtAgain_WhereAnotherStepBroughtItElsewhere()
+    {
+        Assert.Contains(
+            "an answer that goes on with an attempt finds the tree as the attempt left it, unless another step working as the agent "
+                + "brought it elsewhere while the attempt waited, or nothing tells who it was last brought for: it is then brought there "
+                + "again as the attempt goes on, and its agent told that what it wrote there is gone;",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "An attempt that goes on with an answer in its own conversation - a person's, a limit's `more` or `compact` - is the same "
+                + "start going on, and finds the tree as its attempt left it, save where the record names another attempt - another step "
+                + "working as the agent started while this one waited, for a step that waits on a question holds no claim - or none, as a "
+                + "record an older tool wrote does: the tree is then brought there again as a start brings it, and the agent is told so at "
+                + "the head of the message it goes on with, where the tree stands and that what it wrote there is gone "
+                + $"(`{nameof(ReasonStepRunner)}.{nameof(ReasonStepRunner.TreeBroughtAgain)}`).",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"step attempt it was last brought for as `readiedFor` (`{nameof(AgentRecord)}.{nameof(AgentRecord.ReadiedFor)}`: the instance and the attempt,",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -319,7 +526,8 @@ public sealed partial class HelpTests
         var topic = HelpText.Of("workflows").StandardOutput;
 
         Assert.Contains(
-            "Worked examples, each a whole workflow as a file holds it: the two ways a step is raised by another step's ending - a repair that goes back to what failed, and a check that runs whenever a builder ends - and two loops a repository can build its own work around. Each holds as it is printed, read by the same reader that reads a workflow's own file.",
+            "Worked examples, each a whole workflow as a file holds it: the two ways a step is raised by another step's ending - a repair that goes back to what failed, and a check that runs whenever a builder ends - and two loops a repository can build its own work around. Each holds as it is printed, read by the same reader that reads a workflow's own file. "
+                + "Each names the advisor init writes beside the shipped workflow, as every workflow a run is started of names one: every question its steps raise is recommended before it is asked.",
             Prose.Words(topic),
             StringComparison.Ordinal);
 
@@ -369,19 +577,26 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The workflows topic says which check holds a round's items to the issues the run owes its next round, and what
-    /// settles one - an item that ends done with a commit of its own made, never one a person skipped - and where a
-    /// listed issue is shown.
+    /// The workflows topic says which check holds a round's items to the issues the run owes its next round, which checks
+    /// take an item that settles one - every check whose items a round opens with, the plan's among them, and no
+    /// recovery's - and what settles one - an item that ends done with a commit of its own made, never one a person
+    /// skipped - and where a listed issue is shown.
     /// </summary>
     [Fact]
     public void TheWorkflowsTopic_SaysWhichCheckHoldsTheIssuesOwedTheNextRound_AndWhatSettlesOne()
     {
         Assert.Contains(
-            "in next-round.json, which run.nextRound reads as the issues no work item has settled, and the check that opens a round - "
-                + "a validate-plan the forEach beside it expands from, where that group runs in rounds, in an iteration of a repeat or as "
-                + "the group plan updates add a round to with no loop around it, and no other check - holds its "
-                + "items to: each issue named in an item's settles, none left unsettled, the settling items first, and the rounds going on "
-                + "while one is left - never holding the round the issue came from. A forEach item that names an issue in settles settles "
+            "in next-round.json, which run.nextRound reads as the issues no work item has settled, and every check whose list the next "
+                + "round opens with holds that list to: the check that opens a round - a validate-plan the forEach beside it expands from, "
+                + "where that group runs in rounds, in an iteration of a repeat or as the group plan updates add a round to with no loop "
+                + "around it - and the plan's while that round is the first, or the plan update under way, raised by the check that opens "
+                + "it, joins it: each issue named in an item's settles, none left unsettled, the settling items listed and started first, built beside the rest, and the rounds going "
+                + "on while one is left - never holding the round the issue came from. Each holds the answer of the reason step whose items "
+                + "it reads to it within that step, so the planner and the self-audit settle an owed issue in their own conversation. Every "
+                + "check whose items a round opens with - that one, and each whose items read what that one's items read: the plan's, so "
+                + "the one a plan update sends the run back to - takes an item that settles one of those issues, and refuses one whose "
+                + "settles names an issue the run does not owe; any other check - a recovery's - refuses every settles. A forEach item that "
+                + "names an issue in settles settles "
                 + "it once it ends done with a commit of its own made, whatever the run takes plan updates by, and next-round.json says "
                 + "which item did; one that ends done with nothing committed - an item a person skipped - settles nothing, and the issue "
                 + "stays owed. It lists the rest, proven, with a title and a description, in the run's pre-existing-issues.json, shown in "
@@ -433,24 +648,63 @@ public sealed partial class HelpTests
                 + "paths and there in the tree where it exists, a site marked home exactly where it is the home by its path and "
                 + "symbol, every other site - which changes, reading the home or deleted - the item's too - patching some of a "
                 + "class's sites is never done - more than one site consolidated at the home, as one site that is not the home is, "
-                + "each class searched by data its queries name again, its universe holding the axes the repository declares, and "
+                + "each class searched by data its queries name again, its universe answering each axis in one of the two ways an axis "
+                + "is answered - values with where they are declared and no why, or no value with why and nothing declared - and "
+                + "counting the cells its axes that apply make - the "
+                + "product of the counts of their values, 1 where none applies, the plan's schema holding in the step that answers it "
+                + "that it answers every axis, in the one shape of an axis - and "
                 + "one home belonging to one item, two classes of one item sharing one as they may; and each item naming the tests its change affects in "
                 + "tests, one unit to an entry and none blank, or saying in noTests why it affects none - exactly one of the two.",
             prose,
             StringComparison.Ordinal);
+
+        // A plan check's rules and a class closure's hold the answer they read within the step that gives it, the check
+        // after it the record and the gate: said alike by the help and the README.
+        var readme = Prose.Document("README.md");
+
+        Assert.Contains(
+            "fails, as a definition that does not hold does. Where its items read the output of a reason step of its own scope - by the "
+                + "step's name, through latest of the work that step goes on with, or through previous in the iteration after - the same rules, "
+                + "with what it would be handed then, hold that step's answer as it is given, and what they find goes back to the agent in its "
+                + "own conversation until it answers clean or gives again what it was sent back with: a problem the planner can put right "
+                + "costs no planning iteration, and the check, run after it as before, records and gates what is still wrong.",
+            prose,
+            StringComparison.Ordinal);
+
+        foreach (var said in new[]
+        {
+            "the same rules, with what it would be handed then, hold that step's answer as it is given, and what they find goes back to the "
+                + "agent in its own conversation until it answers clean or gives again what it was sent back with: a problem the planner can "
+                + "put right costs no planning iteration, and the check, run after it as before, records and gates what is still wrong",
+            "the same rules hold that step's answer as it is given, over the agent's work as it then stands, and what they find goes back to "
+                + "the agent in its own conversation until it answers clean or gives again what it was sent back with,",
+            "a missing home audit, and whatever only a later step's work shows - its tests, a fold - stay the check's, run after it as "
+                + "before, the record and the gate",
+        })
+        {
+            Assert.Contains(said, prose, StringComparison.Ordinal);
+            Assert.Contains(said, readme, StringComparison.Ordinal);
+        }
         Assert.Contains(
             "create-agent makes the agent the engine named for it - a<N>, one past the highest the run's agent directories and step records hold, never given twice - for the model of the first reason step that works in it, or the default tier's first model where none does, both written to the step's record before the agent is made.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "reason works the step's agent: the one its in names or the work it goes on with (resume), or - where it names neither - the engine's own read-only agent, with no worktree, made before the step runs and deleted once no "
-                + "step can go on with its work; the step's model resolved with its agent definition below its own and its order built as entries of a model and one of its provider's keys, each entry's credential read from the slot "
+            "reason works the step's agent: the one its in names or the work it goes on with (resume), or - where it names neither - the engine's own read-only agent, made before the step runs and deleted once no "
+                + "step can go on with its work, its tree removed and nothing folded: a tree of its own, made as every agent's is, which the start of every step that works as it - each attempt of its first, and of each that goes on "
+                + "with its work - brings to the main checkout's HEAD then, or to the commit the step's commit names - a template filled as the step starts, whose value names a commit of the repository or fails the step with "
+                + "nothing changed, and a step that writes or works in an agent's worktree is refused one - whatever it wrote there before discarded, so the step reads exactly what that commit holds, starts in it, and may write "
+                + "it and its work directory, never folded, and is served the graph's view of that tree; an answer that goes on with an attempt finds the tree as the attempt left it, "
+                + "unless another step working as the agent brought it elsewhere while the attempt waited, or nothing tells who it was last brought for: it is then brought there again as the attempt goes on, and its agent told that what it wrote there is gone; "
+                + "no two steps work in one agent's tree at once, for a reason step holds write on the tree of the agent it works in whatever its access, and an advice of the run's advisor holds the tree it works in while it runs - "
+                + "of two that go on with one step's work, two visits of one that goes on with its own among them, the second starts once the first has ended, or waits on a question with no advice on it still running, for a step that waits holds nothing; "
+                + "the step's model resolved with its agent definition below its own and its order built as entries of a model and one of its provider's keys, each entry's credential read from the slot "
                 + "('help agent-clients'); its prompt file read and filled where the step starts, its writes given as an expression read there too - the names it yielded narrowing what it may write as a written-out list does - "
                 + "and each skill it names looked up again and the folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, "
                 + "and its going on by the client's kind - the stored conversation handed where the client goes on with one, a new launch rendered where it does not; and its answer, held to the schema its outputs names - one the engine reads, "
                 + "refused otherwise where the workflow is checked and again before any client is asked - the step's output. Where the repository declares legs, a step whose agent runs commands (its capabilities hold run) is given the measure tool on every client: one call takes a leg, its "
                 + "variant - the build configuration the leg's own configuration declares - a test filter and the cell of a universe being measured, runs those tests of that leg through the test service as a test step's legs are run, in the agent's worktree "
-                + "where it has one and in a local copy of the main tree where it does not, under the agents' isolation and the step's own record of what its legs start, and answers what they showed - passed where the leg passed, failed where its "
+                + "where it has one - an agent that only reads measures its own tree, at the main checkout's HEAD or the commit its step names - and in a local copy of the main tree where it does not, under the agents' isolation and the step's own record of what its legs start, and answers what they showed - passed where the leg passed, failed where its "
                 + "build or its tests failed, and unmeasured with why for anything else: a leg refused by another run's lock, skipped, stopped, a filter that matched no test, a leg not declared - the verdict as the ledger spells it, with the "
                 + "run's directory and the call's own records (measures/<call id>/ of the step's directory: the ledger, and what the call answered, which is what class-closure reads of what it measured); the call is a tool call of "
                 + "the step's stored stream, its id what a closure record's measuredBy cites. A failed "
@@ -472,12 +726,45 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "the question is open while the advice runs - an answer ends the asking, the question saying so, and the step that asked starts again only once the advice's runner has ended; "
-                + "a pause or a stop ends it too, the question saying the recommendation is sought at the resume - the recommendation written to the question with who gave it and where its records are, "
-                + "and none obtained said so, a bar that could not be read among the reasons; what every advice spent, an ended one's among them, is counted against the run's budget; "
-                + "and where the orchestrator names no advisor the question says so plainly. The advisor takes no question of a step that may ask (its agent recommends within its own), "
-                + "nor a pause step's that shows an upstream step's questions (they carry their recommendations), nor one the run's input answers, nor the budget's own, nor a kind its kinds leave out, "
-                + "and while the run is pausing the question says the recommendation is sought at the resume.",
+            "its answer held to the engine's own schema - one of the question's answers, with a text where that answer takes one - bounded by its own definition alone "
+                + "(maxTurns, maxBudgetUsd, maxMinutes), never by the run's budget or its reserve, so a question raised once the run is past its reserve is recommended as "
+                + "any other is, and retried as every agent; "
+                + "the question is open while the advice runs - an answer ends the asking, the question saying so, and the step that asked starts again only once the advice's runner has ended; "
+                + "a pause never ends it - it finishes as a machine step the pause leaves running does, the session waiting for it, and its recommendation is kept, so a resume that "
+                + "comes back to a pause pays for it once - and a stop ends it, one once the pause is complete among them, which starts no advice after it either, "
+                + "the question saying the recommendation is sought at the resume, which seeks it, unless the advice it ended still returns its recommendation, "
+                + "which the question keeps so the resume never pays for it again - "
+                + "the recommendation written to the question with who gave it and where its records are, "
+                + "and none obtained said so, a bar that could not be read among the reasons; what every advice spent, an ended one's among them, is counted against the run's budget "
+                + "as it is taken, an advice that spends the run to its reserve pausing it at once, and one taken while the run pauses already asking no second pause; "
+                + "and an advisor that obtains none - it failed past its retries among the reasons - leaves the question saying why, and the person is asked all the same. "
+                + "A question raised while the run is pausing says its recommendation is deferred, and once the pause is complete - whatever asked for it - every open question "
+                + "still owing its recommendation is advised before the session ends. "
+                + "The budget's own question is recommended too, raised once the budget's pause is complete and advised before the session ends: the advisor is asked of the run as a whole - "
+                + "its records under steps/run/advice/<n>/, {question.step} reading run, {question.record} the run's facts as ask-orchestrator-status gives them - held, as every "
+                + "advice is, to its own definition's bounds alone, and what it spends is the run's own, kept in flow.json's "
+                + "spent.advice and counted in the run's spend. Only an agent's own questions carry their recommendation within them and are not advised - a step's own agent's, "
+                + "and a pause step's that shows an upstream step's questions - nor is one the run's input or its configuration answers, which no person is asked. "
+                + "A person answers a question recommended: an answer to one still owing its recommendation that no advisor seeks now - between sessions, or while a pause defers it - "
+                + "is refused (13), nothing answered, and abort is taken; resume-orchestrator seeks it first, and a pause once it is complete, unless a stop came after it. "
+                + "The run's report, ask-orchestrator-status and every refusal of an answer name each open question's next step by one rule, over what the run's engine is doing: "
+                + "for one still owing its recommendation, resume-orchestrator, which seeks it first, where no engine runs the run; its answer, taken now and ending the asking, "
+                + "where a live engine's advisor seeks it or a live engine is starting, which seeks every recommendation the run owes; the pause's advice, then its answer, "
+                + "where a live engine's pause defers it; and resume-orchestrator once the engine "
+                + "has gone where it is stopping - abort taken now wherever one is owed - and answer-orchestrator for every other. "
+                + "An answer handed over as a session starts, to a question owing the recommendation that start seeks, waits for it and is taken once it is sought, "
+                + "ending the asking; only a start that seeks none for it, a stop or a pause asked as it began, refuses it - "
+                + "answer-orchestrator's own answer so refused its refusal (13) with the run's why on every exit of the session, whatever the session "
+                + "went on to do or met, the session's own end said after it and kept in --json's session (its summary and exitCode), and every other "
+                + "said with what became of it - and a live engine's state says it is starting only while its start takes such an answer, a stop or a "
+                + "pause asked of the start writing over the mark at once what the start stands on - the stop applied, or the pause asked, and the "
+                + "questions the past session left sought deferred - which every write of the session says after it, until the start's own end is written.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Every question the engine raises is recommended before a person is asked it, so every workflow a run is started of names an advisor - "
+                + "validate-workflow and a run's start refuse one that names none, naming the block init writes as the fix, and its retired kinds is refused, "
+                + "for every kind of question is recommended.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("params - its own knobs, defaulted in the file and read as param.<name>", prose, StringComparison.Ordinal);
@@ -487,9 +774,10 @@ public sealed partial class HelpTests
                 + "where it still fails; where every account it could use is at its limit, or its provider's service fails past the client's own tries, the run pauses safely "
                 + "instead and resumes that very step. The recovery's steps, written once, read the step that failed as source and see every step of the flow, find what "
                 + "went wrong and put it right; then the run goes where its onSuccess says - failed-step, the step that gave it its failure, which runs again "
-                + "from where it stopped - and a failure of its own work, past its steps' retries, does what its onFailure says: pause or stop; the recovery "
+                + "from where it stopped, once: the visit's own record says what it sent the run back to, whatever became of that since, and nothing is sent back "
+                + "into a work item a plan update is bringing to rest - and a failure of its own work, past its steps' retries, does what its onFailure says: pause or stop; the recovery "
                 + "never calls itself. A step that fails again goes to the recovery again by its own onFailure, until it passes, a person is asked, or maxVisits is met (absent, "
-                + $"the engine's bound of {FlowRecover.MostVisits} visits); past it the run asks (recoveryBound), with the advisor's recommendation of a fix: "
+                + $"{FlowRecover.MostVisits} visits of one step's failures, or of one issue's, each counted on its own); past it the run asks (recoveryBound), with the advisor's recommendation of a fix: "
                 + "more, one more recovery; direct, with the fix in words, for the next one; skip, where the step is skippable; or abort.",
             prose,
             StringComparison.Ordinal);
@@ -514,11 +802,11 @@ public sealed partial class HelpTests
                 + "and their task's seeds by default, as the planner is, which the measurement left as it was, and the "
                 + "reviewers, the self-audit, the diagnosis and the steps that verify and fix say graphFrom: changes - "
                 + "the request triage, whose work is text the map does not light, asks none, the plan audit and the "
-                + "item audit, the plan audit's agent on a later round's items, say graph: tools with graphPromptTokens: 0 "
-                + "- the tool, for a class's sites they search are what its sites answers, beside their own text search, "
-                + "and no pack, which lights none of a plan's text - the "
+                + "item audit, the plan audit's agent on a later round's items, say graph: tools - the tool, for a "
+                + "class's sites they search are what its sites answers, beside their own text search - the "
                 + "prioritiser and a review's scope are given the map alone, and the scribe's steps, which write the "
-                + "run's records, ask none of it. Where config.json declares "
+                + "run's records, ask none of it; no step says graphPromptTokens, for a step with the tool is pushed no "
+                + "map and no pack and asks the tool for them where it needs them. Where config.json declares "
                 + $"{WorkflowTemplates.ShippedWorkflowName}, init writes each of its "
                 + "files that is missing - the whole set where the repository has no definition of it yet, and where it has one only "
                 + "the shipped files that definition names, the workflows it uses among them - a shipped one taken out whole read from "
@@ -572,7 +860,7 @@ public sealed partial class HelpTests
                 + "passed: the call cited or a later one for passed, one whose record was written after the failing call's for failed-fixed - "
                 + "or reasoned why not, every test of the pin declared, the arm one of the registry its "
                 + "worktree holds and mutating the home's own file or a reason the class has nothing to mutate, the universe holding every "
-                + "planned axis and the claim naming each, the arms the builder's answer lists for the item's own sweep (the step's arms) "
+                + "axis the planned class's universe says applies and the claim naming each, the arms the builder's answer lists for the item's own sweep (the step's arms) "
                 + "the arms the record names and no other, an id one arm however its case is written - and each home's touches since its "
                 + "base, the item's own commits left out, a record "
                 + "without a home audit refused where the home was touched by other work; a class's paths - the plan's and the record's, the "
@@ -581,6 +869,12 @@ public sealed partial class HelpTests
                 + "own code. Its problems are the record's (1, which close-class repairs) apart from a missing home audit (2, which home-audit "
                 + "makes - a home touched by other work, or a class the item's ledger says a review reopened a second time), and it answers "
                 + "passed, problems, hotspots - the homes touched hotspot times or more - and touches. "
+                + "The record's problems reach the builder sooner: where the record reads the output of a reason step of the check's own "
+                + "scope - the builder's, or one that goes on with its work, through latest, close-class among them - the same rules hold that "
+                + "step's answer as it is given, over the agent's work as it then stands, and what they find goes back to the agent in its own "
+                + "conversation until it answers clean or gives again what it was sent back with, no close-class drawn for it; a missing home "
+                + "audit, and whatever only a later step's work shows - its tests, a fold - stay the check's, run after it as before, the "
+                + "record and the gate. "
                 + "route-findings routes the review's findings by the class of each, keeping the item's ledger (closure-ledger.json in its "
                 + "agent's directory) of the rounds that reopened each class, a round counted once by the routing that made it however often "
                 + "that routing runs: every introduced finding - a defect the diff made - goes back in rework as itself, the reopened findings "

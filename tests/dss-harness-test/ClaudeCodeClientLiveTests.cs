@@ -40,7 +40,7 @@ public sealed class ClaudeCodeClientLiveTests
     /// answer reads against the schema - and the launch's start names the user's settings and says the hooks are off.
     /// A second step's read of a credential slot is refused, and the step still completes. A third, asked for its handoff
     /// before the launch took its prompt, has the prompt dropped by the interrupt - named in its receipt by the id the
-    /// engine gave it - and its one turn is the handoff's. A fourth, with the web, fetches a page by the engine's tool
+    /// engine gave it - and its one exchange is the handoff's, the model's answers in it the run's turns. A fourth, with the web, fetches a page by the engine's tool
     /// server: connected before its init, the call asked of the engine and run by the harness's own fetch.
     /// </summary>
     [Fact]
@@ -112,7 +112,11 @@ public sealed class ClaudeCodeClientLiveTests
 
         Assert.True(handed.Status == AgentRunStatus.HandedOff, $"{handed.Status}: {handed.Error}");
         Assert.False(string.IsNullOrWhiteSpace(handed.Handoff?.Answer), handed.Handoff?.WhyNone);
-        Assert.Equal(1, handed.Turns);
+
+        // One exchange - the question's - whose answers, however many responses the model gave it, are the run's turns.
+        var exchange = Assert.Single(paused.All.OfType<TurnFinished>());
+        Assert.True(handed.Turns >= 1, "the model answered the handoff in no response");
+        Assert.Equal(((int?)handed.Turns, (int?)handed.Turns), (exchange.Answers, Assert.Single(paused.All.OfType<RunFinished>()).Turns));
         Assert.Equal([AgentMessageKind.FirstPrompt, AgentMessageKind.HandoffQuestion], paused.All.OfType<MessageSent>().Select(message => message.Which));
 
         TestContext.Current.SendDiagnosticMessage(

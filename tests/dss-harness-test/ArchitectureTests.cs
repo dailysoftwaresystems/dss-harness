@@ -159,6 +159,7 @@ public sealed class ArchitectureTests
     private static readonly Dictionary<string, string> OpenBelow = new(StringComparer.Ordinal)
     {
         ["DssHarness.Core.Application.IDocumentFacts"] = "what an operation did that every document it answers with says, which the service that did it fills and the session writes",
+        ["DssHarness.Core.Application.IEndWrites"] = "what an operation writes at its end once its work has stopped, which the service that writes it answers and a terminal's second interrupt says is still to come",
     };
 
     /// <summary>
@@ -492,6 +493,7 @@ public sealed class ArchitectureTests
         [@"DssHarness.Core\Agents\Runtime\CodebaseGraphTool.cs|MostCharacters"] = "paging: PageRoom.GraphAnswer, the graph answer's page size",
         [@"DssHarness.Core\Codebase\GraphPages.cs|LeastRoom"] = "paging: PageRoom.Least, the least a page is given",
         [@"DssHarness.Core\Pages\PageRoom.cs|Least"] = "paging: the least a page is given",
+        [@"DssHarness.Core\Pages\Pieces.cs|Least"] = "paging: the room the least piece of an entry takes, which a head given again leaves so no page passes its room",
         [@"DssHarness.Core\Sync\SyncServe.cs|MostFilesInABatch"] = "partition: files cross in batches, every one of them",
         [@"DssHarness.Core\Web\Index\SitemapFill.cs|MostStaleLines"] = "compaction: fill.jsonl is written anew once its stale lines outnumber those kept, never emptied",
 
@@ -559,6 +561,10 @@ public sealed class ArchitectureTests
             StringComparison.Ordinal);
         Assert.Contains(
             Prose.Words($"the few points it is open to below it, each reviewed with its reason - the facts every document of an operation says (`{nameof(DssHarness.Core.Application.IDocumentFacts)}`)"),
+            Prose.Words(architecture),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            Prose.Words($"what an operation writes at its end once its work has stopped (`{nameof(DssHarness.Core.Application.IEndWrites)}`), which the service that writes it answers and a terminal's second interrupt says is still to come"),
             Prose.Words(architecture),
             StringComparison.Ordinal);
         Assert.Contains("The command line builds no container", architecture, StringComparison.Ordinal);

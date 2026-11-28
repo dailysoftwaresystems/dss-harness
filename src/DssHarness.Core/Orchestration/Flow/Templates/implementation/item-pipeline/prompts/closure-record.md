@@ -28,7 +28,8 @@ one of its sites is left.
 1. Read each problem and find what in your change caused it: a planned site with no after, a home that is not the
    planned one with no homeMoved saying why, a search cited that no call of your streams made, a neighbour measured by
    nothing, a pin that names a test the worktree does not declare, an arm that is not the registry's or does not mutate
-   the home, a universe that leaves out a planned axis, a claim that names no universe.
+   the home, a universe that leaves out an axis the planned class's universe says applies, a claim that names no
+   universe.
 2. Do the work: search the data where the record says it was searched, by the tool, so the call is made and its id is
    yours to cite - every search cites the call that made it; measure the neighbours the claim rests on, with the
    measure tool, or write the reason one was not; consolidate a site the plan holds as reads-home into the home and
@@ -44,3 +45,7 @@ found, and its searches and measurements cite the calls that made them.
 
 When you report, the engine tests your work again, then runs the check again, and folds your work only where its tests
 pass and the record closes every class.
+
+## Issues that were there before
+
+{text.issuesBefore}

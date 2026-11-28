@@ -92,27 +92,34 @@ public sealed record AgentRecord
     /// <summary>What <see cref="Access"/> holds for an agent that works in a worktree of its own.</summary>
     public const string AccessWrite = "write";
 
-    /// <summary>What <see cref="Access"/> holds for an agent that reads the main tree and has no worktree.</summary>
+    /// <summary>
+    /// What <see cref="Access"/> holds for an agent that only reads: its tree is its own scratch, which the engine brings to
+    /// the main checkout's HEAD - or to the commit its step names - as each of its steps starts, and nothing it writes there
+    /// is ever folded.
+    /// </summary>
     public const string AccessRead = "read";
 
     /// <summary>
-    /// Whether the agent works in a worktree of its own (<see cref="AccessWrite"/>, which every record said before
-    /// there was another kind) or reads the main tree and has none (<see cref="AccessRead"/>), which the engine makes
-    /// for a read-only reason step. Null is write, so the tool writes no <c>access</c> for an agent with a worktree and
-    /// an older tool still reads its record.
+    /// Whether the agent works in a worktree of its own whose work is folded (<see cref="AccessWrite"/>, which every
+    /// record said before there was another kind) or only reads (<see cref="AccessRead"/>), which the engine makes for a
+    /// read-only reason step: a tree of its own as well, made by the same making, never folded, brought to the main
+    /// checkout's HEAD, or to the commit its step names, as each of its steps starts with whatever it wrote there before
+    /// discarded. Null is write, so the tool writes no <c>access</c> for an agent whose work is folded and an older tool
+    /// still reads its record.
     /// </summary>
     public string? Access { get; init; }
 
     /// <summary>
-    /// Whether the agent reads the main tree and has no worktree: what <see cref="Access"/> spells, read here as a
-    /// fact and written nowhere - a record is what another tool reads, and this is not one of its members.
+    /// Whether the agent only reads: what <see cref="Access"/> spells, read here as a fact and written nowhere - a record
+    /// is what another tool reads, and this is not one of its members.
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public bool Reads => Access == AccessRead;
 
     /// <summary>
-    /// Its worktree's address, <c>orchestrator/agent</c>: absent for an agent that reads the main tree, which
-    /// <see cref="Problem(string, string)"/> requires of one that does not.
+    /// Its worktree's address, <c>orchestrator/agent</c>, which <see cref="Problem(string, string)"/> requires of an agent
+    /// whose work is folded. Absent for an agent that only reads only in a record an older tool wrote, before such an
+    /// agent had a tree: the start of its next step makes the tree and records it.
     /// </summary>
     public string? Worktree { get; init; }
 
@@ -121,9 +128,9 @@ public sealed record AgentRecord
 
     /// <summary>
     /// What kind of tree its worktree is: <see cref="TreeRepository"/>, a repository of its own borrowing the main
-    /// checkout's objects, which every agent made with a worktree since is given; or, null, one of git's linked worktrees,
-    /// as an earlier version of the tool made every agent's, whose record writes no <c>tree</c>. Absent for an agent that
-    /// reads the main tree.
+    /// checkout's objects, which every agent made with a worktree since is given, every agent that only reads among them;
+    /// or, null, one of git's linked worktrees, as an earlier version of the tool made every agent's, whose record writes
+    /// no <c>tree</c>. Absent for an agent that only reads only where its record names no worktree.
     /// </summary>
     public string? Tree { get; init; }
 
@@ -136,13 +143,25 @@ public sealed record AgentRecord
 
     /// <summary>
     /// The worktrees root its worktree was made under, relative to the main checkout, as the configuration named it then:
-    /// where its worktree is, whatever the configuration says later. Absent for an agent that reads the main tree, which
-    /// <see cref="Problem(string, string)"/> requires of one that does not.
+    /// where its worktree is, whatever the configuration says later. <see cref="Problem(string, string)"/> requires it of
+    /// every record that names a worktree; absent where an older tool wrote an agent that only reads.
     /// </summary>
     public string? WorktreesRoot { get; init; }
 
-    /// <summary>The commit its worktree was made from; null until the worktree is made.</summary>
+    /// <summary>
+    /// The commit its worktree was made from; null until the worktree is made. For an agent that only reads, the main
+    /// checkout's HEAD its tree was last brought to as its last step started, or the commit that step named.
+    /// </summary>
     public string? Base { get; init; }
+
+    /// <summary>
+    /// For an agent that only reads, the step attempt its tree was last brought to the main checkout's HEAD - or to the
+    /// commit its step names - for (<see cref="AgentReadyRequest.For"/>), written before the bringing touches the tree: an
+    /// attempt that goes on after an answer reads it to tell whether another step's start brought the tree elsewhere while
+    /// it waited, and brings it there again where one did - or where this says none, as a record an older tool wrote does,
+    /// for then nothing tells. Null for an agent whose work is folded, whose tree is never brought anywhere.
+    /// </summary>
+    public AgentReadiedFor? ReadiedFor { get; init; }
 
     /// <summary>
     /// The commit a move of its base goes to, written before the move writes anything into its worktree and gone once
@@ -168,7 +187,7 @@ public sealed record AgentRecord
 
     /// <summary>
     /// The Claude session the agent runs as - a session's id or a subagent's - where it was given: never for an agent that
-    /// reads the main tree, which <see cref="Problem(string, string)"/> refuses.
+    /// only reads, which <see cref="Problem(string, string)"/> refuses.
     /// </summary>
     public string? Session { get; init; }
 
@@ -189,13 +208,14 @@ public sealed record AgentRecord
 
     /// <summary>
     /// Where its worktree is in the repository at <paramref name="layout"/>: under the worktrees root it was made under,
-    /// whatever the configuration names now. Null for an agent that reads the main tree, which has none.
+    /// whatever the configuration names now - an agent that only reads as well, whose tree is its own scratch. Null where
+    /// the record names no worktrees root: an agent that only reads whose record an older tool wrote.
     /// </summary>
     /// <param name="layout">The repository.</param>
     public string? WorktreePath(Repository.HarnessLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
-        return Reads || WorktreesRoot is not { } root
+        return WorktreesRoot is not { } root
             ? null
             : WorktreeAddress.Nested(Orchestrator, Name).PathUnder(layout.WorktreesDirectoryUnder(root));
     }
@@ -237,60 +257,83 @@ public sealed record AgentRecord
 
         if (Reads)
         {
-            // An agent that reads the main tree holds none of what a worktree is made of, and a record that says any
-            // of it is not the record of such an agent.
-            if (Worktree is { } worktree)
-            {
-                return $"it reads the main tree, and records the worktree '{worktree}'";
-            }
-
-            if (WorktreesRoot is { } root)
-            {
-                return $"it reads the main tree, and records the worktrees root '{root}'";
-            }
-
-            if (Tree is { } tree)
-            {
-                return $"it reads the main tree, and records its worktree as a '{tree}'";
-            }
-
-            if (Base is { } from)
-            {
-                return $"it reads the main tree, and records the base '{from}'";
-            }
-
+            // An agent that only reads never moves a base - its tree is brought to the main checkout's HEAD, or to the commit its
+            // step names, never rebased - and a record that says a move of one is not the record of such an agent.
             if (Moving is { } to)
             {
-                return $"it reads the main tree, and records a move of a base to '{to}'";
+                return $"it only reads, and records a move of a base to '{to}'";
             }
 
             if (MovingWith is not null)
             {
-                return "it reads the main tree, and records what a move of a base was told";
+                return "it only reads, and records what a move of a base was told";
             }
 
             if (MovingRemoved is not null)
             {
-                return "it reads the main tree, and records what a move of a base removed";
+                return "it only reads, and records what a move of a base removed";
             }
 
             // Nor does it record a session: deleting it looks for no transcript, so a session it named would be kept by
             // nothing.
             if (Session is { } session)
             {
-                return $"it reads the main tree, and records the session '{session}'";
+                return $"it only reads, and records the session '{session}'";
+            }
+
+            // Its tree is a repository of its own at its address, made under a worktrees root, and its record names the
+            // three together or - written by an older tool, before such an agent had a tree - none of them, nor a base.
+            if (Worktree is null)
+            {
+                if (WorktreesRoot is { } root)
+                {
+                    return $"it only reads, records no worktree, and records the worktrees root '{root}'";
+                }
+
+                if (Tree is { } tree)
+                {
+                    return $"it only reads, records no worktree, and records its worktree as a '{tree}'";
+                }
+
+                if (Base is { } from)
+                {
+                    return $"it only reads, records no worktree, and records the base '{from}'";
+                }
+            }
+            else
+            {
+                if (WorktreesRoot is null)
+                {
+                    return "it only reads, and records a worktree and no worktrees root it was made under";
+                }
+
+                if (Tree != TreeRepository)
+                {
+                    return $"it only reads, and records its worktree as one of git's linked worktrees, and an agent that only reads is given a '{TreeRepository}' of its own";
+                }
+
+                if (Worktree != WorktreeAddress.Nested(Orchestrator, Name).Name)
+                {
+                    return $"its worktree is '{Worktree}', and an agent's is '{WorktreeAddress.Nested(Orchestrator, Name).Name}'";
+                }
             }
         }
         else
         {
+            // Only the tree of an agent that only reads is ever brought anywhere for a step.
+            if (ReadiedFor is { } readied)
+            {
+                return $"its work is folded, and it records its tree as brought for '{readied.Instance}'";
+            }
+
             if (Worktree is null)
             {
-                return "it records no worktree, and an agent that does not read the main tree has one of its own";
+                return "it records no worktree, and an agent whose work is folded has one of its own";
             }
 
             if (WorktreesRoot is null)
             {
-                return "it records no worktrees root, and an agent that does not read the main tree was made under one";
+                return "it records no worktrees root, and an agent whose work is folded was made under one";
             }
 
             if (Worktree != WorktreeAddress.Nested(Orchestrator, Name).Name)
@@ -306,6 +349,11 @@ public sealed record AgentRecord
             ?? (WorktreesRoot is { } under ? OrchestrationRules.RelativePathProblem(under, "its worktrees root") : null)) is { } problem)
         {
             return problem;
+        }
+
+        if (ReadiedFor?.Problem() is { } readiedFor)
+        {
+            return $"the step its tree was last brought for: {readiedFor}";
         }
 
         if (Moving is not null && (Base is null || Moving == Base))
@@ -559,19 +607,25 @@ public static partial class OrchestrationRules
 
     /// <summary>
     /// The agents of <paramref name="orchestrator"/> that count against its limit, by name: every one not deleted - a closed
-    /// agent's worktree may still be there - and every one whose worktree git lists, record or not. An agent that reads
-    /// the main tree is none of these: the limit is a limit on worktrees, and it has none.
+    /// agent's worktree may still be there - and every one whose worktree git lists, record or not. An agent that only
+    /// reads is none of these, its tree listed or not: the limit is a limit on the worktrees whose work is folded, and its
+    /// tree is scratch the engine makes and discards as it needs.
     /// </summary>
     /// <param name="orchestrator">The orchestrator's name.</param>
     /// <param name="agents">Its agents' directories, each with its record where it reads.</param>
     /// <param name="worktrees">The worktrees git lists, by address.</param>
     public static IReadOnlyList<string> OpenAgents(string orchestrator, IEnumerable<AgentEntry> agents, IEnumerable<string> worktrees)
-        => [.. agents
-            .Where(entry => entry.Record is not { State: AgentStates.Deleted } && entry.Record is not { Access: AgentRecord.AccessRead })
+    {
+        var entries = agents.ToList();
+        var reading = entries.Where(entry => entry.Record is { Reads: true }).Select(entry => entry.Name).ToHashSet(StringComparer.Ordinal);
+
+        return [.. entries
+            .Where(entry => entry.Record is not { State: AgentStates.Deleted } && !reading.Contains(entry.Name))
             .Select(entry => entry.Name)
-            .Concat(worktrees.Select(worktree => WorktreeAddress.AgentOf(orchestrator, worktree)).OfType<string>())
+            .Concat(worktrees.Select(worktree => WorktreeAddress.AgentOf(orchestrator, worktree)).OfType<string>().Where(agent => !reading.Contains(agent)))
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)];
+    }
 
     /// <summary>What is wrong with the most agents an orchestrator allows with a worktree at once: at least one.</summary>
     /// <param name="parallel">The number, or null where none is given.</param>

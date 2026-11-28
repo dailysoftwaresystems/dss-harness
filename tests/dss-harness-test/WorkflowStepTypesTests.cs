@@ -24,7 +24,7 @@ public sealed class WorkflowStepTypesTests
             [
                 ("orient", "OrientRunner: FlowCheckout over IGitClient and GitRemotes, LegSelection.Resolve, TestInvocationResolver, AnchorCitationService.RootsOf, CiSettings.Unset, MutationService.Declares, OrchestrationRules.OpenAgents, TreeHolders"),
                 ("graphify-codebase", "GraphifyCodebaseRunner: ICodebaseGraphService.SyncAsync over IGitClient, CodeGraphExtractors and CodeGraphLinker, through OrchestrationStore"),
-                ("reason", "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)"),
+                ("reason", "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, a tree of its own), and each brings that tree to the main checkout's HEAD, or to the commit it names (IAgentService.ReadyAsync)"),
                 ("build", "BuildStepRunner: IBuildLegs over LegRunService, IAgentIsolation.ForExecutionAsync"),
                 ("test", "TestStepRunner: ITestLegs over LegRunService, IAgentIsolation.ForExecutionAsync"),
                 ("run", "RunStepRunner: IRunnerLegs over LegRunService, HarnessConfig.WritingRunners, IAgentIsolation.ForExecutionAsync"),
@@ -59,7 +59,7 @@ public sealed class WorkflowStepTypesTests
             [
                 ("orient", "read main"),
                 ("graphify-codebase", "read main, read the agent's tree where in names one"),
-                ("reason", "read main, write the agent's tree where its access is write"),
+                ("reason", "read main, write the tree of the agent it works in"),
                 ("build", "run(tree)"),
                 ("test", "run(tree)"),
                 ("run", "run(tree), write(tree) where its runner says writesTree"),
@@ -163,7 +163,7 @@ public sealed class WorkflowStepTypesTests
 
         Assert.Equal(
             [
-                ("orient", "branch, baseBranch, startCommit, hasRemote, hasLegs, legCount, anchors, ciConfigured, hasMutations, tests, dirtyPaths, openAgents, inFlight"),
+                ("orient", "branch, baseBranch, startCommit, hasRemote, onForge, hasLegs, legCount, anchors, ciConfigured, hasMutations, tests, dirtyPaths, openAgents, inFlight"),
                 ("graphify-codebase", "graph, view, commit, dirty, files, extracted, reused, removed, nodes, edges, languages, skipped, seconds"),
                 ("reason", null),
                 ("build", "passed, exitCode, verdicts, red, runDirectory, isolation"),

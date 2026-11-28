@@ -120,13 +120,18 @@ internal static class CommandRunner
     /// <param name="body">What the command does, given the run it began, or nothing where it began none.</param>
     /// <param name="beginsRun">Whether the parsed command line begins a run.</param>
     /// <param name="json">The command's <c>--json</c>, as <see cref="Wire(Command, Func{CommandContext, CancellationToken, Task{CommandOutcome}}, JsonAnswer?)"/> takes it.</param>
+    /// <param name="outputLogs">
+    /// Whether the command takes <see cref="OutputLogsOption"/>, which it then asks its session for - one of the commands
+    /// that drive a session of a run - and where the command line gives it, the session writes the zip at every end.
+    /// </param>
     /// <remarks>A command line that begins no run prints no <c>run &lt;id&gt;</c> line, and keeps no records.</remarks>
     internal static void Wire(
         Command command,
         Func<CommandContext, RunId?, CancellationToken, Task<CommandOutcome>> body,
         Func<ParseResult, bool> beginsRun,
-        JsonAnswer? json = null)
-        => Wire(command, body, json, beginsRun);
+        JsonAnswer? json = null,
+        bool outputLogs = false)
+        => Wire(command, body, json, beginsRun, outputLogs);
 
     /// <summary>
     /// Ends a command line the parser refused - an option its command does not take, an argument missing or one too
@@ -176,7 +181,8 @@ internal static class CommandRunner
         Command command,
         Func<CommandContext, RunId?, CancellationToken, Task<CommandOutcome>> body,
         JsonAnswer? json,
-        Func<ParseResult, bool> beginsRun)
+        Func<ParseResult, bool> beginsRun,
+        bool outputLogs = false)
     {
         ArgumentNullException.ThrowIfNull(command);
 
@@ -205,6 +211,7 @@ internal static class CommandRunner
                     BeginsRun = beginsRun(parseResult),
                     Document = asked ? DocumentKind.Own : DocumentKind.None,
                     Directory = parseResult.GetValue(GlobalOptions.Directory),
+                    OutputLogs = outputLogs ? OutputLogsOption.Requested(parseResult) : null,
                 },
                 new SessionFrontEnd(
                     Stopped: asked && json is not null

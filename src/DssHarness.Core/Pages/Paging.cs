@@ -69,7 +69,8 @@ public static class Paging
     /// entry, so the page that gives a block's lines names it. A result's block - its head an entry that counts, the lines
     /// beneath it riding on it and counting nothing - is given whole on one page where a page holds it, a page that gives
     /// anything before it ending before it; one wider than a page is given in parts, each page after its first beginning
-    /// with the head again, said as going on and counting nothing, so no line of it stands on a page without its result.
+    /// with the head again, said as going on and counting nothing, so no line of it stands on a page without its result -
+    /// where the page's room holds the head beside the least piece of what follows (<see cref="HoldsAgain"/>).
     /// Where a page would hold nothing, it takes as much of the first entry not yet given as its room holds, marked as going
     /// on: a page always moves the answer on, and none passes its room. Every page of it is given from what this fill
     /// found, so a later page is never filled again.
@@ -141,6 +142,18 @@ public static class Paging
 
     /// <summary>What a page that begins inside a result's block says at its head: the result's own entry, said again as going on (<see cref="Lay{TEntry}"/>).</summary>
     internal static string Again(string head) => $"{head} {TextCut.Ellipsis} goes on";
+
+    /// <summary>
+    /// Whether a page that begins inside a block, with <paramref name="left"/> of its room, gives the block's head again
+    /// (<see cref="Again"/>) at its <paramref name="cost"/> - what leads the entry it goes on with among it: only where the
+    /// room left beside it holds the least piece of that entry (<see cref="Pieces.Least"/>), so the head given again never
+    /// takes a page past its room. A head no page has room for beside anything is not given again: it was itself given in
+    /// pieces, its pages saying so. The one rule an answer laid in memory and a text streamed from its file give a head
+    /// again by (<see cref="TextPages"/>).
+    /// </summary>
+    /// <param name="cost">The characters the head said again takes, its line's end among them, with what leads the entry after it.</param>
+    /// <param name="left">The characters the page's room has left.</param>
+    internal static bool HoldsAgain(int cost, int left) => cost + Pieces.Least <= left;
 
     /// <summary>Whether <paramref name="other"/> is of the same block as <paramref name="entry"/>: the same block, said by the same name.</summary>
     internal static bool SameBlock<TEntry>(TEntry entry, TEntry other)
@@ -225,12 +238,12 @@ public static class Paging
                 var cutInside = false;
 
                 // A page that begins inside a result's block gives its head again first, said as going on and counting
-                // nothing: charged, with the section's caption, to the first entry the page gives of the section. A head no
-                // page has room for beside anything is not given again - it was itself given in pieces, its pages saying so.
+                // nothing: charged, with the section's caption, to the first entry the page gives of the section, where the
+                // room holds it beside the least piece of that entry (HoldsAgain).
                 var again = fill.Riding() is { } riding ? piece(riding, Again(riding.Text), false) : default;
                 var lead = caption + (again is null ? 0 : again.Text.Length + 1);
 
-                if (again is not null && given == 0 && lead >= left)
+                if (again is not null && given == 0 && !HoldsAgain(lead, left))
                 {
                     again = default;
                     lead = caption;

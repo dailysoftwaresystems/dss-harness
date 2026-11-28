@@ -65,17 +65,21 @@ For every class of your item, before you edit: read its invariant, its one home 
 them in the code; a site the list missed is yours to add, searched by the data (the kind, the key, the diagnostic,
 the literal) across every tier, format and file kind, not the file you saw it in. More than one site means you
 consolidate: the home decides, every other site reads it, the duplicates are deleted in this item. Patching one site
-of several is never done. Your test is table-driven over the universe the class names - each axis's values, both
-directions, every form - not over the reported case, so a value added to the vocabulary later is covered the day it
-lands; where this repository keeps mutation arms, your arm mutates the home. Before you report, sweep the
-neighbours: the same invariant at the other cells, the opposite direction, and the optimised form of the same
-source as `closure.md` names it, on each leg and on each reference separately; fix every failure in this item. A
-cell you cannot measure is named unmeasured, with the reason. Your report carries the record of each class:
+of several is never done. Your test is table-driven over the universe the class names - every value of each axis it
+says applies that a test can range over: its kinds, formats, entry points, tiers, forms and directions, and each
+further axis a test can - not over the reported case, so a value added to the vocabulary later is covered the day it
+lands. The targets and the configurations it says apply are no rows of a table: the pin covers them by running on each
+leg and in each configuration, as the gate runs it on the legs and the measure tool on a leg in a variant. Where this
+repository keeps mutation arms, your arm mutates the home. Before you report, sweep the neighbours: the same invariant at the other cells, the opposite direction, and the optimised form
+of the same source as `closure.md` names it, on each leg and on each reference separately; fix every failure in this
+item. A cell you cannot measure is named unmeasured, with the reason. Your report carries the record of each class:
 invariant, home, sites before and after, the searches, the universe covered, the pin, the arm, each neighbour and
-its measurement, and the closing claim, which names the universe and never the case. Nothing is folded without
-the record. Beside the record, your answer's `arms` lists every arm the record names, and no other - the item's own
+its measurement, and the closing claim, which names the universe and never the case. Nothing is folded without the
+record. Beside the record, your answer's `arms` lists every arm the record names, and no other - the item's own
 sweep runs those alone, on the bytes your fold lands as, and none where the list is empty; the check before the fold
-refuses a list that is not the record's arms.
+refuses a list that is not the record's arms. That check reads your answer as you give it, over your tree as it then
+stands: what it finds wrong with the record is told you here, in this conversation, to put right in the answer you
+give again.
 
 ## What to do
 
@@ -98,3 +102,7 @@ yours to work through.
 
 When you report, a person is first asked about anything you could not do; then the engine builds your worktree and
 runs your tests itself. A red result comes back to you with the output, so report what you saw.
+
+## Issues that were there before
+
+{text.issuesBefore}

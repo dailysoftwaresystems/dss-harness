@@ -56,3 +56,7 @@ whether it approves its plan beforehand and in which words, what is still ambigu
 assumptions, the blockers and the stops.
 
 Done is when a planner could begin from your answer and the request without asking what was meant.
+
+## Issues that were there before
+
+{text.issuesBefore}

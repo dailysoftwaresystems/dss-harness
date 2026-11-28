@@ -106,8 +106,9 @@ public sealed class GraphifyCodebaseRunnerTests : IDisposable
     /// <summary>
     /// With in, the step syncs the view of the worktree of the agent its create-agent made, held against the base - synced
     /// first where the run has none - as an overlay of each file the worktree holds otherwise and each of the base's it does
-    /// not hold, its output's view naming the agent; an agent that only reads has the base for its view, and an agent with
-    /// no worktree to list is refused (13), syncing nothing of it.
+    /// not hold, its output's view naming the agent; an agent that only reads has the base synced here, whatever its own
+    /// tree holds - that tree's view is its reason step's, synced once that step readied the tree - and an agent with no
+    /// worktree to list is refused (13), syncing nothing of it.
     /// </summary>
     [Fact]
     public async Task AStepNamingAnAgentsTree_SyncsThatAgentsView_HeldAgainstTheBase()
@@ -120,6 +121,7 @@ public sealed class GraphifyCodebaseRunnerTests : IDisposable
         OrchestrationKit.Write(worktree, Path.Combine("docs", "new.md"), "# New\n");
         File.Delete(Path.Combine(worktree, "a.txt"));
         await kit.CreateReadingAgentAsync("reader");
+        OrchestrationKit.Write(kit.Worktree("reader"), "b.txt", "two\nthe reader's scratch\n");
         var definition = Parse("""
             name: flow
             steps:
@@ -230,7 +232,7 @@ public sealed class GraphifyCodebaseRunnerTests : IDisposable
         Assert.Empty(WorkflowValidator.Validate(definition, hasCommitTemplate: false, files: null, languages: CodeGraphExtractors.OfThisBuild.Languages));
         var runner = new GraphOrScripted(Runner(harness));
         var place = new FlowRunPlace(repository.Path, "r1", null, definition);
-        var coordinator = new FlowCoordinator(definition, runner, new NoWrites(), TimeProvider.System, runName: "r1", place: place);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new NoWrites(), TimeProvider.System, runName: "r1", place: place);
 
         var end = await coordinator.RunAsync(Token);
 
@@ -260,7 +262,7 @@ public sealed class GraphifyCodebaseRunnerTests : IDisposable
         return (harness, repository);
     }
 
-    private static WorkflowDefinition Parse(string text) => WorkflowFileParser.Parse("workflows/flow/flow.yml", text);
+    private static WorkflowDefinition Parse(string text) => TestAdvice.Named(WorkflowFileParser.Parse("workflows/flow/flow.yml", text));
 
     private static WorkflowStep Step(WorkflowDefinition definition, string name) => definition.Steps.Single(step => step.Name == name);
     private static GraphifyCodebaseRunner Runner(HarnessFactory harness)

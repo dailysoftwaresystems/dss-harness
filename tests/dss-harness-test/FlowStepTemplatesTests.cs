@@ -71,6 +71,14 @@ public sealed class FlowStepTemplatesTests
                 type: ci-wait
                 commit: '{input.sha}'
             """), Upper, out _, out _)!;
+        var reader = FlowStepTemplates.Fill(Step("""
+              - name: triage
+                type: reason
+                agent: triage
+                commit: '{orient.startCommit}'
+                prompt: prompts/triage.md
+                outputs: schemas/triage.schema.json
+            """), Upper, out _, out _)!;
         var pause = FlowStepTemplates.Fill(Step("""
               - name: ask
                 type: pause
@@ -90,6 +98,9 @@ public sealed class FlowStepTemplatesTests
         Assert.Equal("{INPUT.BASE}", anchors.Base);
         Assert.Equal("{INPUT.BRANCH}", ci.Branch);
         Assert.Equal("{INPUT.SHA}", wait.Commit);
+
+        // A reason step's commit - the one its tree starts at - is filled as a CI wait's is; its files are not templates.
+        Assert.Equal(("{ORIENT.STARTCOMMIT}", "triage", "prompts/triage.md"), (reader.Commit, reader.Agent, reader.Prompt));
         Assert.Equal("go on with {input.what}?", pause.Question);
         Assert.Equal(("tidy", "{INPUT.A}", "{INPUT.B}"), (run.Runner, run.Inputs["first"], run.Inputs["second"]));
     }

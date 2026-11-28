@@ -29,6 +29,8 @@ namespace DssHarness.Core.Orchestration;
 /// &lt;step&gt;/step.json            in either kind of step's directory: the step's own record
 /// &lt;step&gt;/output.json          the step's output, validated
 /// &lt;step&gt;/handoff.md           the handoff a stop cut the step off with, until its next attempt is given it
+/// &lt;step&gt;/policy.json          a reason step: the policy it started under, the agents' configuration as each start read it
+/// &lt;step&gt;/untracked-at-start.jsonl   a reason step whose writes narrow its worktree: the paths the worktree held untracked as the step first started, which tell its own making apart
 /// &lt;step&gt;/ledger.json          a leg step: its legs' ledger, as --json gives it
 /// &lt;step&gt;/logs/                a leg step in an agent's worktree: each red leg's phase log that did not pass; a ci-wait: each red job's log
 /// &lt;step&gt;/fold.json            a fold family step: what its dry run named and stood, its question, each consent given, how its apply ended
@@ -192,6 +194,14 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The step's policy as it started under it: the agents' configuration as resolved - agentPolicy, the web search it asks, what it runs on - read when the step starts, as its prompts are.</summary>
     public const string PolicyFileName = "policy.json";
+
+    /// <summary>
+    /// The name of the file a reason step whose <c>writes</c> narrow what it writes in its worktree keeps, in its directory,
+    /// the worktree's untracked paths in as the step first started: what tells the step's own making apart, which it may
+    /// delete whatever its writes say (<see cref="Agents.Policy.AgentStepStart"/>); written once, and read by every later
+    /// attempt, answer and resume of the step.
+    /// </summary>
+    public const string StepUntrackedFileName = "untracked-at-start.jsonl";
 
     /// <summary>The name of the file a step's output is kept in, validated, in its directory.</summary>
     public const string StepOutputFileName = "output.json";
@@ -531,6 +541,38 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     public string ArtifactsDirectory => Path.Combine(Directory, Repository.HarnessLayout.OrchestratorArtifactsDirectoryName);
 
     /// <summary>
+    /// Where the run keeps the files its own inputs of the kind <c>file</c> were given (<see cref="HarnessLayout.OrchestratorInputsDirectoryName"/>):
+    /// made with the run, each file copied there as the run starts and kept for its life, and taken away with the run's
+    /// directory. The one owner of the shape: what a step reads for such an input is the copy's path here
+    /// (<see cref="InputCopy"/>), and every agent of the run reads this directory (<see cref="InputsDirectoryOf"/>).
+    /// </summary>
+    public string InputsDirectory => InputsDirectoryOf(Directory);
+
+    /// <summary>Where the run at <paramref name="runDirectory"/> keeps the files its own inputs of the kind <c>file</c> were given (<see cref="InputsDirectory"/>).</summary>
+    /// <param name="runDirectory">The run's own directory.</param>
+    public static string InputsDirectoryOf(string runDirectory)
+        => Path.Combine(runDirectory, Repository.HarnessLayout.OrchestratorInputsDirectoryName);
+
+    /// <summary>
+    /// The copy the run keeps of the file its input <paramref name="input"/> was given as <paramref name="given"/>:
+    /// <c>inputs/&lt;input&gt;/&lt;the file's own name&gt;</c>, a directory an input, so a step reads it by the name the person
+    /// gave it.
+    /// </summary>
+    /// <param name="input">
+    /// The input's name: a word of letters, digits and dashes, as every declared name is, and apart from every other input's
+    /// in more than case, as the definition's check holds it - so two inputs never share one directory on a file system
+    /// that folds case.
+    /// </param>
+    /// <param name="given">The path the input was given, relative to the repository's root.</param>
+    public string InputCopy(string input, string given)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(input);
+        ArgumentException.ThrowIfNullOrWhiteSpace(given);
+
+        return Path.Combine(InputsDirectory, input, Path.GetFileName(Path.TrimEndingDirectorySeparator(given)));
+    }
+
+    /// <summary>
     /// The run's state in one file: every step instance and what runs next. Shaped for a resume; written after the
     /// changed step's own files and before every other record of a change - the run's status, its issues and the event.
     /// </summary>
@@ -720,4 +762,100 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <param name="agent">The agent's name.</param>
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
     public string AgentStepRecordFile(string agent, string instance) => Path.Combine(AgentStepDirectory(agent, Flow.FlowInstanceId.DirectoryOf(instance)), StepRecordFileName);
+
+    /// <summary>
+    /// The places of a run's own directory, and of each agent's in it, whose writers keep bytes as they came - copied in,
+    /// or written by an agent, its commands or a provider - never through the mask a session keeps the run's records
+    /// through: each agent's Claude transcripts, its scratch and task files, the plans, the files the run's file inputs
+    /// were given, the run's artifacts, the remote workflows' files as they were fetched; and of each agent the bytes of
+    /// each file it was handed from the main tree, the anchor rows it files, what its worktree's evidence roots held, and
+    /// its conversations with an API client, whose messages are the provider's own bytes. The one owner of the set, beside
+    /// the places it is of (<see cref="AttemptPlacesKeptAsTheyCame"/> for the places of an attempt's directory).
+    /// </summary>
+    public static IReadOnlyList<RunPlace> RunPlacesKeptAsTheyCame { get; } =
+    [
+        new($"{LogsDirectoryName}/*", "each agent's Claude transcripts, copied as they are"),
+        new(WorkDirectoryName, "each agent's scratch and task files"),
+        new(PlansDirectoryName, "the plans, the orchestrator's and each agent's"),
+        new(HarnessLayout.OrchestratorInputsDirectoryName, "the files the run's file inputs were given, copied"),
+        new(HarnessLayout.OrchestratorArtifactsDirectoryName, "the run's artifacts"),
+        new(RemoteWorkflowsDirectoryName, "the remote workflows' files, as they were fetched"),
+        new($"{AgentsDirectoryName}/*/{SharedDirectoryName}", "the bytes of each file an agent was handed from the main tree"),
+        new($"{AgentsDirectoryName}/*/{RowsDirectoryName}", "the anchor rows an agent files"),
+        new($"{AgentsDirectoryName}/*/{EvidenceDirectoryName}", "what an agent's worktree's evidence roots held, copied"),
+        new($"{AgentsDirectoryName}/*/{SessionsDirectoryName}", "an agent's conversations with an API client, the provider's messages as they came"),
+    ];
+
+    /// <summary>
+    /// The directories of a run that each hold one attempt of an agent's or of the engine's work: every step's own
+    /// directory - the run's, and each agent's - each advice of an asking step, and each call of <c>ask-orchestrator</c>
+    /// and of <c>analyze-orchestrator-report</c>, each named below the run's directory, a <c>*</c> standing for any one
+    /// name. What each holds as it came is <see cref="AttemptPlacesKeptAsTheyCame"/>.
+    /// </summary>
+    public static IReadOnlyList<string> AttemptDirectories { get; } =
+    [
+        $"{StepsDirectoryName}/*",
+        $"{AgentsDirectoryName}/*/{StepsDirectoryName}/*",
+        $"{StepsDirectoryName}/*/{Flow.AdvisorRunner.AdviceDirectoryName}/*",
+        $"{AgentsDirectoryName}/*/{StepsDirectoryName}/*/{Flow.AdvisorRunner.AdviceDirectoryName}/*",
+        $"{AsksDirectoryName}/*",
+        $"{AnalysisDirectoryName}/*",
+    ];
+
+    /// <summary>
+    /// The places of an attempt's directory (<see cref="AttemptDirectories"/>) whose writers keep bytes as they came: each
+    /// red leg's phase log and each red CI job's log, copied - masked, where at all, by the runner's values alone, never by
+    /// the session's - and each red leg's log a measure call kept; what the attempt's agent was handed to read, its skills
+    /// and the copies its continuation record names, red legs' logs among them; a side agent's work directory and its
+    /// conversations with an API client; and the continuation record itself, which quotes red legs' lines as they came.
+    /// </summary>
+    public static IReadOnlyList<RunPlace> AttemptPlacesKeptAsTheyCame { get; } =
+    [
+        new(StepLogsDirectoryName, "each red leg's phase log and each red CI job's log, copied"),
+        new($"{Agents.AgentMeasureSupport.RecordsDirectoryName}/*/{StepLogsDirectoryName}", "each red leg's phase log a measure call kept"),
+        new(HandedDirectoryName, "what the attempt's agent was handed to read: its skills, and the copies its continuation record names"),
+        new(WorkDirectoryName, "a side agent's work directory"),
+        new(SessionsDirectoryName, "a side agent's conversations with an API client, the provider's messages as they came"),
+        new(
+            $"{Agents.AgentCallRecords.ToolResultsDirectoryName}/{Path.GetFileName(Agents.AgentCallRecords.ResultFile(string.Empty, Agents.Runtime.KeptResults.ContinuationId))}",
+            "the continuation record, which quotes red legs' lines as they came",
+            IsFile: true),
+    ];
+
+    /// <summary>
+    /// Whether <paramref name="relative"/>, a path below a run's directory spelled with forward separators, is a place whose
+    /// writer keeps bytes as they came - one of <see cref="RunPlacesKeptAsTheyCame"/>, or one of
+    /// <see cref="AttemptPlacesKeptAsTheyCame"/> in one of <see cref="AttemptDirectories"/> - a directory whole, or the one
+    /// file a place names: the one question every reader of the run's directory that holds no session's mask asks.
+    /// </summary>
+    /// <param name="relative">The path below the run's directory.</param>
+    /// <param name="isDirectory">Whether the path is a directory.</param>
+    public static bool IsKeptAsItCame(string relative, bool isDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(relative);
+
+        return RunPlacesKeptAsTheyCame.Any(place => place.IsFile != isDirectory && RunPlace.Names(place.Path, relative))
+            || AttemptDirectories.Any(attempt => AttemptPlacesKeptAsTheyCame.Any(place => place.IsFile != isDirectory && RunPlace.Names($"{attempt}/{place.Path}", relative)));
+    }
+}
+
+/// <summary>A place of a run's directory, as <see cref="OrchestratorLayout"/> marks it.</summary>
+/// <param name="Path">The place, name by name, joined by <c>/</c>, a <c>*</c> standing for any one name.</param>
+/// <param name="Holds">What it holds, as a sentence says it.</param>
+/// <param name="IsFile">Whether the place is one file; a directory, with all it holds, where it is not.</param>
+public sealed record RunPlace(string Path, string Holds, bool IsFile = false)
+{
+    /// <summary>Whether <paramref name="relative"/> is the place <paramref name="place"/> names, name by name, a <c>*</c> standing for any one.</summary>
+    /// <param name="place">The place's pattern.</param>
+    /// <param name="relative">A path, spelled with forward separators.</param>
+    public static bool Names(string place, string relative)
+    {
+        ArgumentNullException.ThrowIfNull(place);
+        ArgumentNullException.ThrowIfNull(relative);
+
+        var names = place.Split('/');
+        var path = relative.Split('/');
+
+        return names.Length == path.Length && names.Zip(path).All(pair => pair.First == "*" || string.Equals(pair.First, pair.Second, StringComparison.Ordinal));
+    }
 }

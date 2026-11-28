@@ -29,8 +29,8 @@ public static class WorkflowKeys
         new("priority", $"the run's priority in the machine's dispatch queue, which multiplies its share of the machine, a whole number from {Execution.DispatchOrder.LeastPriority}; absent, {Execution.DispatchOrder.LeastPriority}"),
         new("budget", "what a whole run's reasoning may cost, and the reserve that pauses the run first") { Keys = Budget },
         new("recommendations", "the file holding the repository's bar for recommendations, in this directory"),
-        new("texts", "the workflow's texts: each name a markdown file in this directory, read in a prompt as {text.<name>}; the shipped flow declares its recommendations and its closure here"),
-        new("advisor", "the agent that recommends an answer to a question the engine raises itself") { Keys = Advisor },
+        new("texts", $"the workflow's texts: each name a markdown file in this directory, read in a prompt as {{text.<name>}}; the shipped flow declares {ShippedTextsSaid} here"),
+        new("advisor", "the agent that recommends an answer to every question the engine raises before a person is asked it; a workflow a run is started of names one") { Keys = Advisor },
         new("reporter", "the agent that words what a run is doing for a person who asks") { Keys = Reporter },
         new("amend", "everything the workflow says about a request amended, or an answer changed, while a run works") { Keys = Amend },
         new("answers", "the answers the configuration gives to question kinds, beforehand") { Keys = WorkflowStepTypes.AnswerKeys },
@@ -41,6 +41,19 @@ public static class WorkflowKeys
         new("recover", "the steps a step gives its failure to where it says onFailure: recover: they find what went wrong and put it right") { Keys = Recover },
         new("codebaseGraph", "the shape of the run's one codebase graph, which every graphify-codebase step syncs; absent, every default") { Keys = CodebaseGraph },
     ];
+
+    /// <summary>
+    /// Every text the shipped flow declares, as the <c>texts</c> key's help names them - each name with its file, read
+    /// from the shipped definition itself (<see cref="WorkflowTemplates.ShippedTexts"/>), so a text added there is one
+    /// help names, and none it no longer declares is named.
+    /// </summary>
+    private static string ShippedTextsSaid
+        => WorkflowTemplates.ShippedTexts.Select(text => $"{text.Name} ({text.File})").ToArray() switch
+        {
+            [] => "none",
+            [var one] => one,
+            var all => $"{string.Join(", ", all[..^1])} and {all[^1]}",
+        };
 
     /// <summary>What the <c>codebaseGraph</c> section takes.</summary>
     public static IReadOnlyList<KeyDescription> CodebaseGraph =>
@@ -60,15 +73,15 @@ public static class WorkflowKeys
         new("steps", $"the recovery's own steps; each {ConfigKeys.TakesKeysOf(typeof(WorkflowStep))}, reads the step that failed as source, and sees every step of the flow") { Required = true },
         new("onSuccess", "where the run goes once the recovery's steps are done: failed-step, the step that gave it its failure, which runs again from where it stopped") { Required = true },
         new("onFailure", "what a failure inside the recovery does once its steps' retries are spent: pause, a person is asked, or stop - never recover, since no step calls itself") { Required = true },
-        new("maxVisits", $"how often the recovery may take the failures of one step in one scope, from 1 to {FlowRecover.MostVisits}; absent, the engine's bound of {FlowRecover.MostVisits} visits of one step in one scope; past it the run asks (recoveryBound), with the advisor's recommended fix"),
+        new("maxVisits", $"how often the recovery may take one thing - the failures of one step in one scope, or one issue sent to fix - from 1 to {FlowRecover.MostVisits}; absent, {FlowRecover.MostVisits}; past it the run asks (recoveryBound), with the advisor's recommended fix. It bounds that loop alone: the recovery takes any number of steps' failures and issues, each counted on its own"),
     ];
 
     /// <summary>What one declared input takes.</summary>
     public static IReadOnlyList<KeyDescription> Input =>
     [
-        new("name", "the input's name, as --input name=value spells it") { Required = true },
+        new("name", "the input's name, as --input name=value spells it, apart from every other input's in more than case") { Required = true },
         new("description", "what the value is for, shown when it is missing"),
-        new("kind", "text (the default) or file: a path inside the repository, checked when the run starts"),
+        new("kind", "text (the default) or file: a file inside the repository by its path from the root or an absolute one inside it, committed or not, decided as an agent's read of it is, which the run copies as it starts, its steps reading the copy in every session"),
         new("default", "what to use when nothing supplies it; empty is the input not given, and is always taken"),
         new("required", "refuse a run that gives it no value and declares no default"),
         new("options", "the values a text input takes; a run started with another is refused"),
@@ -109,7 +122,6 @@ public static class WorkflowKeys
         new("model", "the model outright, whose provider, key and client follow from it"),
         new("effort", "the effort the model is asked for: one level for every model it may run on, or a map of all and models' codes giving each its own"),
         new("client", "the client, where the provider is reached two ways"),
-        new("kinds", "the question kinds this advisor is asked about; absent, every one"),
         new("retries", "how often its agent is tried again where it failed, on each model it may use; absent, maxRetries"),
         new("backoffSeconds", $"seconds it waits before it is tried again, twice as long before each later try, at most {WorkflowStep.MostBackoffSeconds}; absent, the workflow's backoffSeconds"),
     ];

@@ -12,9 +12,12 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class FlowUseTests
 {
-    /// <summary>Parses a definition, refusing a file that does not read: these tests run one that does.</summary>
+    /// <summary>
+    /// Parses a definition, refusing a file that does not read: these tests run one that does, naming the test's advisor
+    /// where it names none, as every workflow a run is started of names one.
+    /// </summary>
     private static WorkflowDefinition Parse(string text)
-        => WorkflowFileParser.Parse("workflows/flow/flow.yml", text);
+        => TestAdvice.Named(WorkflowFileParser.Parse("workflows/flow/flow.yml", text));
 
     /// <summary>
     /// A pipeline a use names: two steps over its inputs, one declared output, and a recovery of its own - every kind
@@ -109,7 +112,7 @@ public sealed class FlowUseTests
                 dependsOn: [items]
             """);
 
-        var coordinator = new FlowCoordinator(definition, runner, Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, Facts(), new JumpingClock());
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(["items.implement", "items.verify", "after"], runner.Started);
@@ -217,7 +220,7 @@ public sealed class FlowUseTests
                   prompt: prompts/implement.md
             """, pipeline);
 
-        var coordinator = new FlowCoordinator(definition, runner, Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, Facts(), new JumpingClock());
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
         // The first item's implement step reads the item its use handed it, its filled title and the pipeline's own
@@ -255,7 +258,7 @@ public sealed class FlowUseTests
                   prompt: prompts/implement.md
             """, pipeline);
 
-        var coordinator = new FlowCoordinator(definition, runner, Facts(), new JumpingClock(), inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["title"] = "the run's own" });
+        var coordinator = TestAdvice.Coordinator(definition, runner, Facts(), new JumpingClock(), inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["title"] = "the run's own" });
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
         // The run was started with another text of the very name the called step reads, and its input is not the run's:
@@ -286,7 +289,7 @@ public sealed class FlowUseTests
                 when: 'items.changed[0] == "src/a.cs"'
             """);
 
-        var coordinator = new FlowCoordinator(definition, runner, Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, Facts(), new JumpingClock());
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["items"].State);
@@ -322,7 +325,7 @@ public sealed class FlowUseTests
                   type: orient
             """);
 
-        var coordinator = new FlowCoordinator(definition, runner, Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, Facts(), new JumpingClock());
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(["items.implement", "items.verify", "items.recover.diagnose", "items.verify+2"], runner.Started);
@@ -360,7 +363,7 @@ public sealed class FlowUseTests
                   type: orient
             """, pipeline);
 
-        var coordinator = new FlowCoordinator(definition, runner, Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, Facts(), new JumpingClock());
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(["items.implement", "items.verify", "items.recover.root-diagnose", "items.verify+2"], runner.Started);
@@ -388,7 +391,7 @@ public sealed class FlowUseTests
                   failTo: pause
             """, pipeline);
 
-        var coordinator = new FlowCoordinator(definition, runner, Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, Facts(), new JumpingClock());
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
         // The failure pauses the step, as the use filled it: the pipeline's own recovery is never raised, and neither
@@ -726,8 +729,8 @@ public sealed class FlowUseTests
 
     /// <summary>
     /// WF1: the resolution is what the run freezes and a resume is refused by - the same caller over a changed called
-    /// file resolves to another digest, and the rule that refuses a changed definition refuses it; the same file, the
-    /// same bytes.
+    /// file resolves to another digest of what it says, and the rule that refuses a changed definition refuses it; the
+    /// same file, the same digest.
     /// </summary>
     [Fact]
     public void AChangedCalledFile_ChangesTheDigestAResumeIsRefusedBy()
@@ -742,10 +745,62 @@ public sealed class FlowUseTests
                   prompt: prompts/implement.md
             """;
 
-        var before = FlowRunContext.DigestOf(Resolved(caller));
+        var before = FlowResume.Said(Resolved(caller));
 
-        Assert.Equal(before, FlowRunContext.DigestOf(Resolved(caller)));
-        Assert.NotEqual(before, FlowRunContext.DigestOf(Resolved(caller, pipeline: Swap(Pipeline, "- name: diagnose", "- name: healing"))));
+        Assert.Equal(before, FlowResume.Said(Resolved(caller)));
+        Assert.NotEqual(before, FlowResume.Said(Resolved(caller, pipeline: Swap(Pipeline, "- name: diagnose", "- name: healing"))));
+    }
+
+    /// <summary>
+    /// WF1: a resume compares what a use brings the run, never its fingerprint - the digest the build that began the run
+    /// made of the called file, which another build makes of the same words written its own way: a frozen definition
+    /// whose uses - the step's and the one inside its recovery - hold an earlier build's fingerprint is no change of the
+    /// entry this build resolves, and the same entry over a called file whose steps changed is still refused.
+    /// </summary>
+    [Fact]
+    public void AUsesFingerprintAnEarlierBuildMade_IsNoChange_AndAChangedCalledFileStillIs()
+    {
+        var caller = """
+            name: flow
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: remedy
+                  use: ./pipeline/pipeline.yml
+                  with:
+                    title: r
+                    prompt: prompts/implement.md
+            """;
+        var entry = Resolved(caller);
+        var earlier = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData("the called file, as an earlier build wrote its definition"u8));
+        var frozen = entry with
+        {
+            Steps = [entry.Steps[0] with { Use = entry.Steps[0].Use! with { Fingerprint = earlier } }],
+            Recover = entry.Recover! with { Steps = [entry.Recover.Steps[0] with { Use = entry.Recover.Steps[0].Use! with { Fingerprint = earlier } }] },
+        };
+        var file = new FlowFile(1, "r1", "flow", FlowRunContext.DigestOf(frozen), new Dictionary<string, string>(), "Paused", new FlowBudgetRecord(0, 0, 0), 0, [], [], DateTimeOffset.UnixEpoch);
+        var layout = new DssHarness.Core.Orchestration.OrchestratorLayout("r1", Path.Combine(Path.GetTempPath(), "r1"));
+
+        // The fingerprints differ, and the digest the run recorded with them: only what the use brings is held the same.
+        Assert.NotEqual(entry.Steps[0].Use!.Fingerprint, frozen.Steps[0].Use!.Fingerprint);
+        Assert.NotEqual(FlowRunContext.DigestOf(entry), file.DefinitionDigest);
+
+        FlowResume.RefuseAChangedDefinition(file, layout, frozen, entry);
+
+        var refused = Assert.Throws<HarnessException>(() => FlowResume.RefuseAChangedDefinition(file, layout, frozen, Resolved(caller, pipeline: Swap(Pipeline, "- name: diagnose", "- name: healing"))));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            "workflow 'flow', as the repository's config declares it now, has changed since run 'r1' began, and a run goes on only under the definition it began with; "
+            + "run-orchestrator flow starts a new run of it. Nothing of run 'r1' was changed.",
+            refused.Message);
     }
 
     /// <summary>
@@ -1023,7 +1078,7 @@ public sealed class FlowUseTests
     {
         var gated = Swap(Pipeline, "    prompt: prompts/implement.md\n", "    prompt: '{input.prompt}'\n");
         var runner = new FakeRunner();
-        var coordinator = new FlowCoordinator(
+        var coordinator = TestAdvice.Coordinator(
             Resolved("""
                 name: flow
                 steps:
@@ -1064,7 +1119,7 @@ public sealed class FlowUseTests
             "steps:\n  - name: spare\n    type: orient\n    when: 'input.alternatives'\n  - name: implement\n");
 
         var open = new FakeRunner();
-        _ = await new FlowCoordinator(Resolved("""
+        _ = await TestAdvice.Coordinator(Resolved("""
             name: flow
             steps:
               - name: items
@@ -1078,7 +1133,7 @@ public sealed class FlowUseTests
         Assert.Equal(["items.spare", "items.implement", "items.verify"], open.Started.Where(started => started.StartsWith("items.", StringComparison.Ordinal)));
 
         var closed = new FakeRunner();
-        var shut = new FlowCoordinator(Resolved("""
+        var shut = TestAdvice.Coordinator(Resolved("""
             name: flow
             steps:
               - name: items
@@ -1218,7 +1273,7 @@ public sealed class FlowUseTests
         var pipeline = Swap(Pipeline, "steps:\n  - name: implement\n", "steps:\n  - name: flaky\n    type: orient\n  - name: implement\n");
 
         var governed = new FakeRunner().On("flaky", () => FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "still incomplete"));
-        var run = new FlowCoordinator(
+        var run = TestAdvice.Coordinator(
             Resolved($"""
                 name: flow
                 maxRetries: 3
@@ -1240,7 +1295,7 @@ public sealed class FlowUseTests
         Assert.Equal(FlowInstanceState.Failed, run.Instances["items.flaky"].State);
 
         var plain = new FakeRunner().On("flaky", () => FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "still incomplete"));
-        var ungoverned = new FlowCoordinator(
+        var ungoverned = TestAdvice.Coordinator(
             Resolved($"""
                 name: flow
                 maxRetries: 3
@@ -1269,7 +1324,7 @@ public sealed class FlowUseTests
     [Fact]
     public async Task TheStepsOfAUseThatGovernsItself_CountAgainstTheirOwnGateAlone()
     {
-        var run = new FlowCoordinator(
+        var run = TestAdvice.Coordinator(
             Resolved(GatedCaller(runGate: 2), Swap(TwoReasoners, "name: pipeline\n", "name: pipeline\nmaxReasoningAgents: 1\n")),
             new FakeRunner(),
             Facts(),
@@ -1291,7 +1346,7 @@ public sealed class FlowUseTests
     [Fact]
     public async Task TheStepsOfAUseThatDeclaresNoGate_CountAgainstTheRunsGate()
     {
-        var run = new FlowCoordinator(
+        var run = TestAdvice.Coordinator(
             Resolved(GatedCaller(runGate: 1), Swap(TwoReasoners, "name: pipeline\n", "name: pipeline\nmaxRetries: 1\n")),
             new FakeRunner(),
             Facts(),
@@ -1311,7 +1366,7 @@ public sealed class FlowUseTests
     public async Task TheGateOfAUseThatGovernsItself_IsCountedAcrossEveryItemOfItsForEach()
     {
         var runner = new FakeRunner().On("listing", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["list"] = new JsonArray(1, 2, 3) }));
-        var run = new FlowCoordinator(
+        var run = TestAdvice.Coordinator(
             Resolved("""
                 name: flow
                 maxReasoningAgents: 4
@@ -1413,7 +1468,7 @@ public sealed class FlowUseTests
                 """;
 
         var governed = new FakeRunner();
-        var run = new FlowCoordinator(Resolved(Caller(governs: true), pipeline), governed, Facts(), new JumpingClock());
+        var run = TestAdvice.Coordinator(Resolved(Caller(governs: true), pipeline), governed, Facts(), new JumpingClock());
         _ = await run.RunAsync(TestContext.Current.CancellationToken);
 
         // The workflow's accept ended the loop at its bound, before the run's abort was ever asked.
@@ -1422,7 +1477,7 @@ public sealed class FlowUseTests
 
         var plain = new FakeRunner();
         var ungovernedDefinition = Resolved(Caller(governs: false), pipeline);
-        var ungoverned = new FlowCoordinator(ungovernedDefinition, plain, Facts(), new JumpingClock());
+        var ungoverned = TestAdvice.Coordinator(ungovernedDefinition, plain, Facts(), new JumpingClock());
         _ = await ungoverned.RunAsync(TestContext.Current.CancellationToken);
 
         // Without the key, the workflow's answers are not applied: the question is a person's.
@@ -1468,7 +1523,7 @@ public sealed class FlowUseTests
                 """;
 
         var governed = new FakeAdvisor(answer: "accept");
-        var governedRun = new FlowCoordinator(
+        var governedRun = TestAdvice.Coordinator(
             Resolved(Caller(governs: true), pipeline),
             new FakeRunner(),
             Facts(),
@@ -1485,7 +1540,7 @@ public sealed class FlowUseTests
         Assert.Equal(("given", "consul"), (governedRun.Questions.Single().Recommendation?.State, governedRun.Questions.Single().Recommendation?.Agent));
 
         var plain = new FakeAdvisor(answer: "accept");
-        var plainRun = new FlowCoordinator(
+        var plainRun = TestAdvice.Coordinator(
             Resolved(Caller(governs: false), pipeline),
             new FakeRunner(),
             Facts(),
@@ -1516,7 +1571,7 @@ public sealed class FlowUseTests
             var hold = groupAnswers ? "  - name: hold\n    answers:\n      loopBound: accept\n" : "  - name: hold\n";
             var pipeline = Swap(Pipeline, "steps:\n  - name: implement\n", $"steps:\n{hold}    steps:\n      - name: spin\n        repeat:\n          until: 'false'\n          maxIterations: 1\n        steps:\n          - name: once\n            type: orient\n  - name: implement\n");
             pipeline = workflowAnswers ? Swap(pipeline, "name: pipeline\n", "name: pipeline\nanswers:\n  loopBound: accept\n") : pipeline;
-            var run = new FlowCoordinator(Resolved("""
+            var run = TestAdvice.Coordinator(Resolved("""
                 name: flow
                 answers:
                   loopBound: accept
@@ -1580,7 +1635,7 @@ public sealed class FlowUseTests
                   title: t
                   prompt: prompts/implement.md
             """, pipeline);
-        var coordinator = new FlowCoordinator(
+        var coordinator = TestAdvice.Coordinator(
             definition,
             new FakeRunner(),
             Facts(),
@@ -1593,7 +1648,7 @@ public sealed class FlowUseTests
         Assert.Equal((FlowInstanceState.Done, (string?)null), (coordinator.Instances["items.implement"].State, coordinator.Instances["items.implement"].Error));
 
         // A run that reads no workflow files reads no text, and says so: never a text read as nothing.
-        var unread = new FlowCoordinator(definition, new FakeRunner(), Facts(), new JumpingClock());
+        var unread = TestAdvice.Coordinator(definition, new FakeRunner(), Facts(), new JumpingClock());
         _ = await unread.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(FlowInstanceState.Failed, unread.Instances["first"].State);
@@ -1698,7 +1753,7 @@ public sealed class FlowUseTests
         async Task<FlowCoordinator> RunAsync(int? runCap, string pipelineText)
         {
             var runner = new FakeRunner().On("list", () => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["items"] = new JsonArray([1, 2, 3]) }));
-            var run = new FlowCoordinator(Resolved($"""
+            var run = TestAdvice.Coordinator(Resolved($"""
                 name: flow{(runCap is { } cap ? $"\nmaxInstances: {cap}" : string.Empty)}
                 steps:
                   - name: list
@@ -1773,7 +1828,7 @@ public sealed class FlowUseTests
                   when: 'input.title == "the run''s own" && param.tone == "loud"'
             """, Pipeline[..Pipeline.IndexOf("\nrecover:", StringComparison.Ordinal)]);
 
-        var coordinator = new FlowCoordinator(definition, runner, Facts(), new JumpingClock(), inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["title"] = "the run's own" });
+        var coordinator = TestAdvice.Coordinator(definition, runner, Facts(), new JumpingClock(), inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["title"] = "the run's own" });
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
         // The recovery's step read the run's title and tone - the pipeline's are 'the pipeline's own' and 'plain' - and ran.
@@ -1841,7 +1896,7 @@ public sealed class FlowUseTests
                   type: orient
             """), "flow", path => files.GetValueOrDefault(path)).Definition;
 
-        var coordinator = new FlowCoordinator(definition, runner, Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, Facts(), new JumpingClock());
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
         // The recovery took the member's failure in the item it failed in, and the member ran again there.
@@ -1860,7 +1915,7 @@ public sealed class FlowUseTests
     {
         var pipeline = Swap(Pipeline, "    retries: 1\n    onFailure: recover\n", "    retries: 0\n    onFailure: '{input.failTo}'\n");
         var runner = new FakeRunner().On("verify", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "verify failed"));
-        var coordinator = new FlowCoordinator(Resolved("""
+        var coordinator = TestAdvice.Coordinator(Resolved("""
             name: flow
             steps:
               - name: items
@@ -1893,7 +1948,7 @@ public sealed class FlowUseTests
         var pipeline = Swap(Pipeline, "  - name: failTo\n    kind: step\n    default: continue\n", "  - name: failTo\n    kind: step\n    default: continue\n  - name: back\n    kind: step\n");
         pipeline = Swap(pipeline, "    retries: 1\n    onFailure: recover\n", "    retries: 0\n  - name: mend\n    type: orient\n    on:\n      step: verify\n      outcome: failure\n    then: '{input.back}'\n");
         var runner = new FakeRunner().On("verify", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "verify failed"));
-        var coordinator = new FlowCoordinator(Resolved("""
+        var coordinator = TestAdvice.Coordinator(Resolved("""
             name: flow
             steps:
               - name: items
@@ -1936,7 +1991,7 @@ public sealed class FlowUseTests
 
         Assert.Empty(problems);
 
-        var coordinator = new FlowCoordinator(definition, runner, Facts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, Facts(), new JumpingClock());
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -1954,7 +2009,7 @@ public sealed class FlowUseTests
         var pipeline = Swap(Pipeline, "    retries: 1\n    onFailure: recover\n", "    retries: 0\n    onFailure: recover\n  - name: mend\n    type: orient\n    maxVisits: 1\n    on:\n      step: verify\n      outcome: failure\n    then: implement\n");
         var failures = 0;
         var runner = new FakeRunner().On("verify", () => ++failures <= 2 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed) : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(Resolved("""
+        var coordinator = TestAdvice.Coordinator(Resolved("""
             name: flow
             steps:
               - name: items
@@ -1980,7 +2035,7 @@ public sealed class FlowUseTests
     public async Task AnInputReadInsideAUseWhoseWithCouldNotBeRead_IsRefused_NeverTheCallersInput()
     {
         var pipeline = Swap(Pipeline, "  - name: verify\n", "  - name: tidy\n    type: orient\n    always: true\n    when: 'input.title == \"the run''s own\"'\n  - name: verify\n");
-        var coordinator = new FlowCoordinator(Resolved("""
+        var coordinator = TestAdvice.Coordinator(Resolved("""
             name: flow
             inputs:
               - name: title
@@ -2012,7 +2067,7 @@ public sealed class FlowUseTests
     public async Task AForEachWhoseItemsWithCannotBeRead_FailsWithNoneOfItsItemsOpened()
     {
         var runner = new FakeRunner().On("listing", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["list"] = new JsonArray(new JsonObject { ["label"] = "a" }, new JsonObject()) }));
-        var coordinator = new FlowCoordinator(Resolved("""
+        var coordinator = TestAdvice.Coordinator(Resolved("""
             name: flow
             steps:
               - name: listing
@@ -2043,7 +2098,7 @@ public sealed class FlowUseTests
     public async Task AUsedWorkflowsOutput_FromAStepItSkipped_IsAbsent_AndTheUseEndsDone()
     {
         var pipeline = Swap(Pipeline, "    outputs: schemas/implement.json\n", "    outputs: schemas/implement.json\n    when: 'false'\n");
-        var coordinator = new FlowCoordinator(Resolved("""
+        var coordinator = TestAdvice.Coordinator(Resolved("""
             name: flow
             steps:
               - name: items
@@ -2068,7 +2123,7 @@ public sealed class FlowUseTests
     public async Task AUsedWorkflowsOutput_ThatCannotBeRead_FailsTheUse()
     {
         var pipeline = Swap(Pipeline, "outputs:\n  - name: changed\n    from: implement.latest.changed\n", "outputs:\n  - name: changed\n    from: implement.latest.changed\n  - name: notes\n    from: text.notes\n");
-        var coordinator = new FlowCoordinator(Resolved("""
+        var coordinator = TestAdvice.Coordinator(Resolved("""
             name: flow
             steps:
               - name: items
@@ -2095,7 +2150,7 @@ public sealed class FlowUseTests
     {
         var pipeline = Swap(Pipeline, "    outputs: schemas/implement.json\n", "    outputs: schemas/implement.json\n    when: 'input.title == \"filled\"'\n");
         var runner = new FakeRunner().On("implement", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["changed"] = new JsonArray("src/a.cs") }));
-        var coordinator = new FlowCoordinator(Resolved("""
+        var coordinator = TestAdvice.Coordinator(Resolved("""
             name: flow
             inputs:
               - name: title
@@ -2131,7 +2186,7 @@ public sealed class FlowUseTests
     {
         var pipeline = Swap(Pipeline, "    outputs: schemas/implement.json\n", "    outputs: schemas/implement.json\n    when: 'input.title == \"filled\"'\n");
         var runner = new FakeRunner().On("probe", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed));
-        var coordinator = new FlowCoordinator(Resolved("""
+        var coordinator = TestAdvice.Coordinator(Resolved("""
             name: flow
             inputs:
               - name: title

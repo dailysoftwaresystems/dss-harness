@@ -1,5 +1,6 @@
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Orchestration;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Worktrees;
@@ -56,11 +57,12 @@ internal sealed class OrchestrationKit
     /// <summary>
     /// A repository holding <c>a.txt</c>, <c>b.txt</c> and <c>docs/x.md</c>, run through init with
     /// <paramref name="settings"/> and the hosts <paramref name="hosts"/> declares - each ssh host with its entry in
-    /// sshItems - ignoring the evidence root, all of it committed, and orchestrator <c>o1</c> created.
+    /// sshItems - ignoring the evidence root, all of it committed, and orchestrator <c>o1</c> created - every program its
+    /// services start passing through <paramref name="processes"/> where one is given.
     /// </summary>
-    public static async Task<OrchestrationKit> PrepareAsync(TempDirectory temp, int? parallel = null, WorktreeSettings? settings = null, HostsConfig? hosts = null)
+    public static async Task<OrchestrationKit> PrepareAsync(TempDirectory temp, int? parallel = null, WorktreeSettings? settings = null, HostsConfig? hosts = null, Func<IProcessRunner, IProcessRunner>? processes = null)
     {
-        var harness = new HarnessFactory();
+        var harness = new HarnessFactory(processes: processes);
         var declared = hosts ?? new HostsConfig();
 
         await harness.InitializeHarnessAsync(
@@ -115,13 +117,13 @@ internal sealed class OrchestrationKit
     }
 
     /// <summary>
-    /// Creates agent <paramref name="agent"/> with no worktree, which reads the main tree and records no session, failing
-    /// the test where it is not created.
+    /// Creates agent <paramref name="agent"/> that only reads - its tree made at the main checkout's HEAD, recording no
+    /// session - failing the test where it is not created.
     /// </summary>
     public async Task CreateReadingAgentAsync(string agent)
     {
         var created = await Harness.AgentService.CreateAsync(
-            new AgentCreateRequest(Main, Orchestrator, agent, "model-b", Empty: false, Session: null, NoWorktree: true), Token);
+            new AgentCreateRequest(Main, Orchestrator, agent, "model-b", Empty: false, Session: null, ReadsOnly: true), Token);
 
         Assert.True(created.Outcome.Succeeded, Describe(created.Outcome));
     }

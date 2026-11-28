@@ -29,7 +29,7 @@ public sealed partial class HelpTests
 {
     /// <summary>
     /// The agent-clients topic says what the claude-code client does with a launch - a new session each time, streamed
-    /// both ways, every tool the engine's tool server's and none of Claude Code's own, the page an answer of it holds, every
+    /// both ways, its turns the model's answers, every tool the engine's tool server's and none of Claude Code's own, the page an answer of it holds, every
     /// call asked of the engine, the repair, the message at work, the handoff, the model held, the environment, a key passed
     /// over - its tools and names read from the types that hold them.
     /// </summary>
@@ -57,6 +57,14 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
+            "- and never Agent, Task, Skill, AskUserQuestion, EnterPlanMode, ExitPlanMode. Its turns are the model's answers, as on the API clients and as "
+                + "Claude Code counts the turns its --max-turns holds the step's maxTurns to: each response a launch writes - the lines of one response "
+                + "sharing its message id, a line that names none an answer of its own, a message Claude Code writes itself none - counted as it "
+                + "arrives, over every launch of the run, so a launch cut before its turn's result still counts what it answered; the run's result, "
+                + "a side-task's record and a step's measure say them, never the engine's messages to the launch. None of Claude Code's own tools",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "None of Claude Code's own tools is given: --tools names none (--tools \"\"), so its shell and its file tools (Read, Grep, Glob, "
                 + "Write, Edit, NotebookEdit, Bash) reach no launch, and a side-task alone keeps Claude Code's own WebFetch and WebSearch beside the "
                 + "engine's; each call is asked of the engine and run by the tool runtime below as on the API clients - a command by run_command, "
@@ -75,17 +83,19 @@ public sealed partial class HelpTests
                 + "answers them on the API clients - its edit operation among them - and each recorded as a line of the step's graph - a step whose "
                 + "agent runs commands, of a repository that "
                 + "declares legs, takes the measure tool from the same server, by the one rule the tool runtime offers it by, its calls answered and "
-                + "recorded as every tool call is. A step's first user message holds the run's "
-                + "repository map first, then its context pack, then its task - every launch a conversation of its own, it is given them as every "
+                + "recorded as every tool call is. A step's first user message holds what of the graph it is pushed - the run's "
+                + "repository map first, then its context pack, a step at graph: map both and one with the tool neither, unless its graphPromptTokens pushes its pack - "
+                + "then its task - every launch a conversation of its own, it is given them as every "
                 + "launch is, and the order puts them at the head of the message so every turn after the first reads them from Claude Code's own "
                 + "cache; the engine sets no mark of its own. A launch whose init does not show that server "
                 + "connected with its tools taken, or that connects another, never started;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "A step whose reads are narrowed (graphReads: narrow, 'help codebase-graph') is denied a whole view_file - one with no start_line "
-                + "and no end_line - of a file its graph holds parsed over the narrowing bound, by the tool runtime as on the API clients "
-                + "and with the same words, a range passing and the same two escapes counted and recorded as the graph's lines.",
+            "A step whose reads are narrowed (graphReads: narrow, 'help codebase-graph') is answered a whole view_file - one with no start_line "
+                + "and no end_line - of a file its graph holds parsed over the narrowing bound with the file's outline in its place, by the tool "
+                + "runtime as on the API clients and with the same words, a range passing and the same two escapes counted and recorded as the "
+                + "graph's lines; its search_files hits and its ranges answer from the graph as they do there.",
             prose,
             StringComparison.Ordinal);
         Assert.DoesNotContain("its edit operation is not given on this client", prose, StringComparison.Ordinal);
@@ -103,7 +113,11 @@ public sealed partial class HelpTests
         Assert.Contains("(CLAUDECODE, CLAUDE_PID and CLAUDE_EFFORT, and every name beginning CLAUDE_CODE_, CLAUDE_AGENT_SDK_, CLAUDE_PREVIEW_ or MCP_ but CLAUDE_CODE_GIT_BASH_PATH, which says only where a program is, and a name agentPolicy.keepEnvironment gives back), none of what every child of an agent loses (the tool runtime below)", prose, StringComparison.Ordinal);
         Assert.Contains(
             "and the names the engine sets: DISABLE_COMPACT=1, DISABLE_AUTOUPDATER=1, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, CLAUDE_CODE_RETRY_WATCHDOG=0, "
-                + "MAX_MCP_OUTPUT_TOKENS=98304. A key Claude Code reports invalid is passed over",
+                + "MAX_MCP_OUTPUT_TOKENS=98304, FORCE_PROMPT_CACHING_5M=0, DISABLE_PROMPT_CACHING=0, DISABLE_PROMPT_CACHING_HAIKU=0, "
+                + "DISABLE_PROMPT_CACHING_SONNET=0, DISABLE_PROMPT_CACHING_OPUS=0, DISABLE_PROMPT_CACHING_FABLE=0, DISABLE_PROMPT_CACHING_MYTHOS=0, "
+                + "and CLAUDE_CODE_PROMPT_CACHE_TTL and CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL at agentClients.claude-code.cacheTtl "
+                + "(5m where nothing is said), so cacheTtl alone says how a launch caches whatever the person's environment or settings hold. "
+                + "A key Claude Code reports invalid is passed over",
             prose,
             StringComparison.Ordinal);
         Assert.DoesNotContain("BASH_DEFAULT_TIMEOUT_MS", prose, StringComparison.Ordinal);
@@ -160,8 +174,8 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The README and the architecture say the claude-code client and how it signs in as the help does, and the
-    /// architecture names its owners by the types that are them.
+    /// The README and the architecture say the claude-code client - what its turns are among it - and how it signs in as
+    /// the help does, and the architecture names its owners by the types that are them.
     /// </summary>
     [Fact]
     public async Task TheDocumentsSayTheClaudeCodeClient()
@@ -194,6 +208,14 @@ public sealed partial class HelpTests
                 + "`mcp__dssharness__replace_in_file`, `mcp__dssharness__insert_in_file`, `mcp__dssharness__create_directory`, `mcp__dssharness__delete_file`, "
                 + "`mcp__dssharness__delete_directory`, `mcp__dssharness__move_path`; `run`: `mcp__dssharness__run_command`; `web`: `mcp__dssharness__web_fetch`, "
                 + "`mcp__dssharness__web_search`), never one that starts agents, loads skills, asks a person or plans.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Its turns are the model's answers, as on the API clients and as Claude Code counts the turns its `--max-turns` holds the step's "
+                + "`maxTurns` to: each response a launch writes - the lines of one response sharing its message id, a line that names none an answer of "
+                + "its own, a message Claude Code writes itself none - counted as it arrives, over every launch of the run, so a launch cut before its "
+                + "turn's result still counts what it answered; the run's result, a side-task's record and a step's measure say them, never the "
+                + "engine's messages to the launch.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -274,6 +296,14 @@ public sealed partial class HelpTests
             $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools.ServedName)}",
             $"{nameof(DssHarness.Core.Agents.AgentToolRunner)}.{nameof(DssHarness.Core.Agents.AgentToolRunner.Harness)}",
             $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine.CallResult)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine.CallResult.RefusedByRule)}",
+
+            // What the run's turns are on this client, and who reads them: each response counted by its id, the exchange's
+            // end and the run's end saying them, the measure reading them.
+            $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine.Assistant)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine.Assistant.Id)}",
+            $"{nameof(DssHarness.Core.Agents.AgentRunResult)}.{nameof(DssHarness.Core.Agents.AgentRunResult.Turns)}",
+            $"{nameof(DssHarness.Core.Agents.TurnFinished)}.{nameof(DssHarness.Core.Agents.TurnFinished.Answers)}",
+            $"{nameof(DssHarness.Core.Agents.RunFinished)}.{nameof(DssHarness.Core.Agents.RunFinished.Turns)}",
+            $"{nameof(AgentRunSpend)}.{nameof(AgentRunSpend.TurnsTaken)}",
         })
         {
             Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);

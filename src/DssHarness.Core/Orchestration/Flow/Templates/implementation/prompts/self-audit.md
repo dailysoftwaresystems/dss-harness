@@ -82,6 +82,13 @@ The work is in the main tree, committed; `git diff {orient.startCommit} HEAD` sh
 
 {run.nextRound}
 
+- Every issue that was there before the run that the run has taken, each with its id, what became of it, its title
+  and where; empty where none is:
+
+{run.preExisting}
+
+{text.fixes}
+
 Where a line says that a step left no output, that thing was not read or did not run in this run: it is unknown, and never a pass.
 Name it under unverified; it is a finding only where the line says the step failed, not where it was skipped.
 
@@ -103,10 +110,12 @@ Name it under unverified; it is a finding only where the line says the step fail
    compare what you find with the records, and measure two cells of the universe the pin does not name, plus the
    optimised form, with the measure tool on each leg and reference it reaches - and where you cannot, a site still
    deciding the same thing, or a neighbour that fails, is a finding, green or not, and gets a work item.
-5. Each issue the run owes its next round, listed above, becomes the first work item of that round: make it one, with
-   its size and a class - it is a defect too, and the plan's rules of a class apply to it - and name the issue it
-   settles in `settles`, by its id exactly. The round's check refuses a round whose items leave one unsettled, and the
-   rounds do not end while one is.
+5. Each issue the run owes its next round, listed above, becomes a work item of that round, listed and started first,
+   built beside the rest - no other item may need its result. Make it one built to the issue's size - the files its
+   fix touches among the paths it owns, what must be built and measured first in its instructions - with its class,
+   for it is a defect too and the plan's rules of a class apply to it, or, where its fix decides nothing, why in
+   noClass; and name the issue it settles in `settles`, by its id exactly. The round's check refuses a round whose
+   items leave one unsettled, and the rounds do not end while one is.
 6. Say unverified of what you could not verify.
 
 ## The tests a work item names
@@ -128,9 +137,18 @@ that repairs it names the tests.
 Whether the round is clean, which is true exactly when you give no work item; the findings; what you could not
 verify; and the work items of a further round, shaped as the plan's items are, as many as the findings need: each sized to one
 builder's cycle, never more and never a sliver of one, each with its own definition of done - statements a check can
-answer one by one, the first of them the finding it settles - and each that changes a decision with its classes, or
-saying why in noClass where it decides none. An item that settles an issue the run owes names it in `settles`. Each takes a name no work item of this run has had, in this round or an
+answer one by one, by the rule for a definition of done below, the run's base commit being `{orient.startCommit}`, the
+first of them the finding it settles - and each that changes a decision with its classes - each
+universe answering every axis with its values or why it does not apply - or saying why in noClass where it decides none. An item that settles an issue the run owes names it in `settles`. Each takes a name no work item of this run has had, in this round or an
 earlier one: the run knows a work item by its name, and keeps its tests and its updates under it, so a further item
 named as one already built would stand in that item's place - a follow-up to an item is a work item of its own, named
 for what it settles. Where the item audit found a site an item's class lacked or a cell its
 universe left out, the item that settles it carries the class whole: its site list extended by what the audit found.
+
+## A definition of done
+
+{text.done}
+
+## Issues that were there before
+
+{text.issuesBefore}

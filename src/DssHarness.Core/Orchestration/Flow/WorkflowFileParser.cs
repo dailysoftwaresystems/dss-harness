@@ -41,8 +41,12 @@ public static class WorkflowFileParser
     /// </summary>
     private static readonly YamlRules Rules = new("a definition writes each of its steps out, so that what it says is what it reads");
 
-    /// <summary>Top-level keys a workflow file takes.</summary>
-    private static readonly IReadOnlyList<string> FileKeys = KeyDescription.Names(WorkflowKeys.File);
+    /// <summary>
+    /// Top-level keys a workflow file takes, read from the table where a file is read - never held from the reader's
+    /// first use, for the table says the shipped workflow's texts (<see cref="WorkflowTemplates.ShippedTexts"/>), which
+    /// are read by this reader in turn (<see cref="TextsOf"/>).
+    /// </summary>
+    private static IReadOnlyList<string> FileKeys => KeyDescription.Names(WorkflowKeys.File);
 
     /// <summary>
     /// Parses <paramref name="text"/> as the workflow definition at <paramref name="path"/>.
@@ -251,6 +255,26 @@ public static class WorkflowFileParser
     }
 
     /// <summary>
+    /// The texts the workflow definition <paramref name="text"/> declares, read by the rules <see cref="Parse"/> reads them
+    /// by and nothing else of the file: what help says of the shipped workflow's texts (<see cref="WorkflowTemplates.ShippedTexts"/>),
+    /// read without the table of the file's keys, which that saying is part of. None where it declares none.
+    /// </summary>
+    /// <param name="path">Where the text came from, quoted in every refusal about it.</param>
+    /// <param name="text">The file's contents.</param>
+    /// <exception cref="HarnessException">The file holds no one document, or its texts do not read.</exception>
+    public static IReadOnlyDictionary<string, string> TextsOf(string path, string text)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(text);
+
+        var problems = new List<string>();
+        var root = YamlReading.Root(text, "a workflow's definition holds one, so that nothing has to decide which of them a run ran", problems, Rules);
+        var texts = root?.Children.Where(child => YamlReading.ScalarOf(child.Key) == "texts").Select(child => ReadTexts(child.Value, problems)).FirstOrDefault();
+
+        return root is not null && problems.Count == 0 ? texts ?? new Dictionary<string, string>(StringComparer.Ordinal) : throw Refuse(path, problems);
+    }
+
+    /// <summary>
     /// Reads the <c>codebaseGraph</c> section: each list as written - one given empty kept empty, for the check to refuse
     /// (V52) - and each value as the file holds it.
     /// </summary>
@@ -314,7 +338,8 @@ public static class WorkflowFileParser
 
     /// <summary>
     /// The keys <c>codebaseGraph</c> took before what they set went: each is refused naming why, so a reader takes the
-    /// line out knowing what became of it rather than looking for where it moved.
+    /// line out knowing what became of it rather than looking for where it moved. A frozen definition an earlier release
+    /// wrote still reads its <c>maxFileBytes</c>, and ignores it (<see cref="FrozenDefinition.Retired"/>).
     /// </summary>
     internal static string? RetiredGraphKey(string key)
         => key == "maxFileBytes"
@@ -438,21 +463,17 @@ public static class WorkflowFileParser
             return null;
         }
 
-        var keys = CollectKeys(mapping, "advisor", KeyDescription.Names(WorkflowKeys.Advisor), problems, RetiredAgentKey);
+        var keys = CollectKeys(mapping, "advisor", KeyDescription.Names(WorkflowKeys.Advisor), problems, key => RetiredAdvisorKey(key) ?? RetiredAgentKey(key));
         var read = ReadAgentSelection(keys, "advisor", problems);
         var agent = RequireScalarIn(keys, "advisor.agent", problems);
         var prompt = RequireScalarIn(keys, "advisor.prompt", problems);
-        var kinds = StringListIn(keys, "advisor.kinds", problems) ?? [];
-
-        // V43: the kinds an advisor recommends for, read as every kind where the key is left out.
-        RefuseGivenEmpty(keys, "advisor.kinds", "name the kinds it recommends for", "every kind", problems);
 
         if (agent is null || prompt is null)
         {
             return null;
         }
 
-        return new FlowAdvisor(agent, prompt, read.Tier, read.Model, read.Effort, read.Client, kinds)
+        return new FlowAdvisor(agent, prompt, read.Tier, read.Model, read.Effort, read.Client)
         {
             Retries = IntIn(keys, "advisor.retries", problems),
             BackoffSeconds = IntIn(keys, "advisor.backoffSeconds", problems),
@@ -517,14 +538,13 @@ public static class WorkflowFileParser
                     break;
 
                 // Read by the caller, which owns them: the agent each runs, which both require, the
-                // prompts each is asked with, the kinds an advisor is asked about, and how each is tried again.
+                // prompts each is asked with, and how each is tried again.
                 case "retries":
                 case "backoffSeconds":
                 case "agent":
                 case "prompt":
                 case "statusPrompt":
                 case "askPrompt":
-                case "kinds":
                     break;
 
                 default:
@@ -913,6 +933,16 @@ public static class WorkflowFileParser
             "provider" => "a model's code is listed by one provider, which it names",
             _ => null,
         };
+
+    /// <summary>
+    /// The keys the advisor took before what they set went: each is refused naming why, so a reader takes the line out
+    /// knowing what became of it. A frozen definition an earlier release wrote still reads its <c>kinds</c>, and ignores
+    /// it (<see cref="FrozenDefinition.Retired"/>).
+    /// </summary>
+    internal static string? RetiredAdvisorKey(string key)
+        => key == "kinds"
+            ? "every kind of question the engine raises is recommended by the advisor before a person is asked it, so an advisor names no kinds"
+            : null;
 
     /// <summary>
     /// Reads one step, at <paramref name="depth"/> levels of nesting: a typed step, or a group
@@ -1319,6 +1349,7 @@ public static class WorkflowFileParser
                     ResumePrompt = ScalarIn(keys, $"{where}.resumePrompt", problems),
                     Outputs = ScalarIn(keys, $"{where}.outputs", problems),
                     Access = EnumIn(keys, $"{where}.access", problems, ["read", "write"]),
+                    Commit = ScalarIn(keys, $"{where}.commit", problems),
                     Resume = ScalarIn(keys, $"{where}.resume", problems),
                     Independent = BooleanIn(keys, $"{where}.independent", problems),
                     OnPreExisting = ScalarIn(keys, $"{where}.onPreExisting", problems),

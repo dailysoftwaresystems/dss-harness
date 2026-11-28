@@ -27,18 +27,34 @@ public sealed record TextEntry(string Text, int Counts = 1) : IPageEntry
 /// <summary>
 /// Where a page of a text begins: the byte in the text's file its first character is - in the file's own encoding, after
 /// its mark - the line that character is of, from 1, and how many characters into that line it is: 0 where the page
-/// begins with a line, more where it goes on with a piece of a line the page before ended inside.
+/// begins with a line, more where it goes on with a piece of a line the page before ended inside; and, where it begins
+/// inside a block of the text (<see cref="TextBlock"/>), the block's head, which it gives again first.
 /// </summary>
 /// <param name="Offset">The page's first byte, from the file's start.</param>
 /// <param name="FirstLine">The line the page begins in, from 1.</param>
 /// <param name="FirstColumn">The characters of that line the pages before gave.</param>
-public readonly record struct TextPageMark(long Offset, long FirstLine, long FirstColumn);
+/// <param name="Head">
+/// The head of the block the page begins inside, given again first; null where it begins inside none, or where its room
+/// holds the head beside nothing - a head wider than a page among them.
+/// </param>
+public readonly record struct TextPageMark(long Offset, long FirstLine, long FirstColumn, TextPageHead? Head = null);
+
+/// <summary>
+/// The head of the block a page of a text begins inside (<see cref="TextPageMark.Head"/>): where the text's file holds the
+/// line that heads it - its first byte and the bytes its characters take, its ending not among them - and the line it is,
+/// from 1: the line itself is read from the file with the page, never kept.
+/// </summary>
+/// <param name="Offset">The head line's first byte, from the file's start.</param>
+/// <param name="Length">The bytes its characters take.</param>
+/// <param name="Line">The line it is, from 1.</param>
+public readonly record struct TextPageHead(long Offset, int Length, long Line);
 
 /// <summary>
 /// The kept form of a text's pages: where each page begins (<see cref="TextPageMark"/>), never the text, laid once from
 /// the file and kept for the conversation's life - so a page of a 2 GB log at 32K a page is read by seeking to one of some
 /// 65,000 marks - under the digest of the bytes they were laid on, which a page asked of a file that changed since is not
-/// read from (<see cref="TextPagesFreshness"/>).
+/// read from (<see cref="TextPagesFreshness"/>). A form of an earlier schema - its marks naming no block's head - reads as
+/// none, and the pages are laid again.
 /// </summary>
 /// <param name="Schema">The record's schema it was written under.</param>
 /// <param name="Key">The ask it is kept for, as <see cref="PageKey"/> spells it.</param>
@@ -49,8 +65,8 @@ public readonly record struct TextPageMark(long Offset, long FirstLine, long Fir
 /// <param name="Asked">How the pages name what was asked, for a page past the last to say.</param>
 public sealed record TextPagesKept(int Schema, string Key, string Path, string Digest, long Lines, IReadOnlyList<TextPageMark> Marks, string Asked)
 {
-    /// <summary>The schema this build reads.</summary>
-    public const int CurrentSchema = 1;
+    /// <summary>The schema this build reads: 2 since a page that begins inside a block names its head.</summary>
+    public const int CurrentSchema = 2;
 
     /// <summary>The contract the kept form is written and read with: one line of a state file's (<see cref="JsonStateFile.LineOptions"/>).</summary>
     public static JsonTypeInfo<TextPagesKept> Contract { get; } = KeptAnswers.Contract<TextPagesKept>(JsonStateFile.LineOptions);
@@ -64,8 +80,9 @@ public sealed record TextPagesKept(int Schema, string Key, string Path, string D
             : string.IsNullOrWhiteSpace(Asked) ? "it names no ask to say"
             : Lines < 1 ? "a text holds a line at the least"
             : Marks is null || Marks.Count == 0 ? "it marks where each page begins"
-            : Marks[0].FirstLine != 1 || Marks[0].FirstColumn != 0 || Marks[0].Offset < 0 ? "its first page begins at the text's first line"
+            : Marks[0].FirstLine != 1 || Marks[0].FirstColumn != 0 || Marks[0].Offset < 0 || Marks[0].Head is not null ? "its first page begins at the text's first line"
             : !InOrder(Marks, Lines) ? "its pages begin in the text's order, each in a line of it"
+            : !Headed(Marks) ? "the head a page gives again is a whole line of the text before the page"
             : null;
 
     /// <summary>Whether each mark begins after the one before it, in the file and in the text, and in a line of the text.</summary>
@@ -84,6 +101,14 @@ public sealed record TextPagesKept(int Schema, string Key, string Path, string D
 
         return true;
     }
+
+    /// <summary>
+    /// Whether each head a page gives again is a line of the text before the page: past the text's first byte, its
+    /// characters and the ending after them before the page's first byte, and its line before the page's first.
+    /// </summary>
+    private static bool Headed(IReadOnlyList<TextPageMark> marks)
+        => marks.All(mark => mark.Head is not { } head
+            || (head.Offset >= marks[0].Offset && head.Length >= 0 && head.Offset + head.Length < mark.Offset && head.Line >= 1 && head.Line < mark.FirstLine));
 }
 
 /// <summary>
@@ -127,7 +152,11 @@ public sealed class TextPagesFreshness : IKeptFreshness<TextPagesKept>
 /// the one rule a piece is cut by (<see cref="Pieces"/>), the page that ends inside it saying the line goes on - the pages
 /// an answer laid in memory of the same lines gives (<see cref="Paging.Lay"/>), its header among them. A page's lines are
 /// numbered <c>&lt;line&gt;\t&lt;text&gt;</c> where its pages are, as <c>view_file</c> numbers a file's lines; a piece that goes
-/// on from another is not.
+/// on from another is not. A text laid with the blocks its writer kept beside it (<see cref="TextBlocks"/>) - a search's
+/// hits beneath their declaration's line - gives a page that begins inside a block its head again first, said as going on
+/// and counting nothing, charged to the page's room where the room holds it beside the least piece of what follows
+/// (<see cref="Paging.HoldsAgain"/>), as a page of an answer laid in memory gives a result's block's; a page that begins at
+/// a block's head, and every page of a text laid as its lines alone, is as it was.
 /// </summary>
 public static class TextPages
 {
@@ -192,7 +221,26 @@ public static class TextPages
     /// <param name="numbered">Whether each line is numbered, as a page of it says it.</param>
     /// <param name="cancellationToken">Stops the read.</param>
     /// <exception cref="InvalidDataException">The file does not read as text, with why, in <see cref="EncodedText"/>'s words.</exception>
-    public static async Task<TextPagesKept> LayAsync(Func<string, Stream> open, string path, string key, string asked, int room, bool numbered, CancellationToken cancellationToken)
+    public static Task<TextPagesKept> LayAsync(Func<string, Stream> open, string path, string key, string asked, int room, bool numbered, CancellationToken cancellationToken)
+        => LayAsync(open, path, key, asked, room, numbered, blocks: null, cancellationToken);
+
+    /// <summary>
+    /// Lays the pages of the text at <paramref name="path"/> as <see cref="LayAsync(Func{string, Stream}, string, string, string, int, bool, CancellationToken)"/>
+    /// lays them, with the <paramref name="blocks"/> its writer kept beside it, read in the same pass: a page that begins
+    /// inside one gives its head again first. Blocks that are no blocks of the text - written beside it as it was before it
+    /// changed, or not read as blocks are (<see cref="TextBlocks.Problem"/>) - give it none: its pages are laid again as its
+    /// lines alone.
+    /// </summary>
+    /// <param name="open">Opens the file at a path to read, from its start.</param>
+    /// <param name="path">The file, absolute.</param>
+    /// <param name="key">The ask the pages are kept for (<see cref="PageKey"/>).</param>
+    /// <param name="asked">How the pages name what was asked, for a page past the last to say.</param>
+    /// <param name="room">The characters a page gives its lines (<see cref="PageRoom.For"/>), <see cref="PageRoom.Least"/> at the least.</param>
+    /// <param name="numbered">Whether each line is numbered, as a page of it says it.</param>
+    /// <param name="blocks">The text's blocks, read as its pages are laid; null where it is laid as its lines alone.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    /// <exception cref="InvalidDataException">The file does not read as text, with why, in <see cref="EncodedText"/>'s words.</exception>
+    public static async Task<TextPagesKept> LayAsync(Func<string, Stream> open, string path, string key, string asked, int room, bool numbered, TextBlocks? blocks, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(open);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -200,6 +248,18 @@ public static class TextPages
         ArgumentException.ThrowIfNullOrWhiteSpace(asked);
         ArgumentOutOfRangeException.ThrowIfLessThan(room, PageRoom.Least);
 
+        // Blocks known already to be none of the text's - another schema's - cost no pass of their own.
+        var laid = blocks is { Problem: null } ? await LaidAsync(open, path, key, asked, room, numbered, blocks, cancellationToken).ConfigureAwait(false) : null;
+
+        return laid ?? (await LaidAsync(open, path, key, asked, room, numbered, blocks: null, cancellationToken).ConfigureAwait(false))!;
+    }
+
+    /// <summary>
+    /// The pages of the text at <paramref name="path"/>, laid in one pass over its bytes with <paramref name="blocks"/> where
+    /// they are given; null where they were and are no blocks of the text: not its as it is, or not read as blocks are.
+    /// </summary>
+    private static async Task<TextPagesKept?> LaidAsync(Func<string, Stream> open, string path, string key, string asked, int room, bool numbered, TextBlocks? blocks, CancellationToken cancellationToken)
+    {
         var stream = open(path);
 
         await using (stream.ConfigureAwait(false))
@@ -213,19 +273,64 @@ public static class TextPages
             long line = 1;
             long column = 0;
 
+            // The head of the block the lines given last are of, where a page gave it whole: the block, where its line is,
+            // and its text - a page's room at the most - for a page that begins inside the block to give again.
+            (TextBlock Block, TextPageHead Head, string Text)? held = null;
+
             // Whether every line is given: none is left to begin where the text has ended after a line - an empty text is
             // one empty line, given first.
             async Task<bool> DoneAsync() => column == 0 && line > 1 && await text.AtEndAsync(cancellationToken).ConfigureAwait(false);
 
+            // Gives the rest of the line - its next count characters - and its ending: a line given whole that heads a block
+            // is the head a page beginning inside the block gives again, where its line ends where the block's own begin.
+            async Task GivenAsync(int count, bool whole)
+            {
+                var begins = text.Offset;
+                var heads = whole && blocks?.At(begins) is { } block && block.Head == begins ? block : (TextBlock?)null;
+                var said = heads is null ? null : text.Peek(count);
+
+                text.Consume(count);
+                var ends = text.Offset;
+                await text.ConsumeLineAsync(0, cancellationToken).ConfigureAwait(false);
+
+                if (heads is not { } headed)
+                {
+                    return;
+                }
+
+                if (text.Offset != headed.Body)
+                {
+                    blocks!.Refuse("a block's head is no one line of the text");
+                    return;
+                }
+
+                held = (headed, new TextPageHead(begins, (int)(ends - begins), line), said!);
+            }
+
             while (!await DoneAsync().ConfigureAwait(false))
             {
-                marks.Add(new TextPageMark(text.Offset, line, column));
                 var left = room;
                 var given = 0;
+                TextPageHead? again = null;
+
+                // A page that begins inside a block gives its head again first, said as going on and counting nothing - a
+                // head given whole, where the page's room holds it beside the least of the line it goes on with.
+                if (blocks?.At(text.Offset) is { } inside && inside.Body <= text.Offset && held is { } head && head.Block == inside)
+                {
+                    var cost = Paging.Again(Lead(head.Head.Line, numbered) + head.Text).Length + 1;
+
+                    if (Paging.HoldsAgain(cost + (column == 0 ? Lead(line, numbered).Length : 0), left))
+                    {
+                        left -= cost;
+                        again = head.Head;
+                    }
+                }
+
+                marks.Add(new TextPageMark(text.Offset, line, column, again));
 
                 while (!await DoneAsync().ConfigureAwait(false))
                 {
-                    var prefix = column == 0 && numbered ? Paging.Number(line) + "\t" : string.Empty;
+                    var prefix = column == 0 ? Lead(line, numbered) : string.Empty;
                     var continued = column > 0;
                     var lead = continued ? 1 : 0;
 
@@ -236,7 +341,7 @@ public static class TextPages
 
                     if (ends && remaining <= fits)
                     {
-                        await text.ConsumeLineAsync(remaining, cancellationToken).ConfigureAwait(false);
+                        await GivenAsync(remaining, whole: !continued).ConfigureAwait(false);
                         left -= lead + prefix.Length + remaining + 1;
                         given++;
                         line++;
@@ -253,17 +358,17 @@ public static class TextPages
                     // cut by, handed as much of the rest as the rule looks at.
                     var (seen, _) = await text.LineAheadAsync(Pieces.Window(continued, left) - lead - prefix.Length, cancellationToken).ConfigureAwait(false);
                     var rest = (continued ? TextCut.Ellipsis.ToString() : prefix) + text.Peek(seen);
-                    var head = Pieces.Head(rest, continued, left);
+                    var piece = Pieces.Head(rest, continued, left);
 
-                    if (head.Length == rest.Length)
+                    if (piece.Length == rest.Length)
                     {
-                        await text.ConsumeLineAsync(seen, cancellationToken).ConfigureAwait(false);
+                        await GivenAsync(seen, whole: !continued).ConfigureAwait(false);
                         line++;
                         column = 0;
                         break;
                     }
 
-                    var taken = Pieces.Taken(head, continued) - prefix.Length;
+                    var taken = Pieces.Taken(piece, continued) - prefix.Length;
                     text.Consume(taken);
                     column += taken;
                     break;
@@ -271,16 +376,25 @@ public static class TextPages
             }
 
             // The digest FileContentHash gives the same bytes, taken as they were read.
-            return new TextPagesKept(TextPagesKept.CurrentSchema, key, path, Convert.ToHexStringLower(hash.GetHashAndReset()), line - 1, marks, asked);
+            var digest = Convert.ToHexStringLower(hash.GetHashAndReset());
+
+            return blocks is not null && !string.Equals(blocks.End(text.Offset), digest, StringComparison.Ordinal)
+                ? null
+                : new TextPagesKept(TextPagesKept.CurrentSchema, key, path, digest, line - 1, marks, asked);
         }
     }
 
+    /// <summary>What leads the text of <paramref name="line"/> as a page gives it whole: its number and a tab where the page is numbered, nothing where not.</summary>
+    private static string Lead(long line, bool numbered) => numbered ? Paging.Number(line) + "\t" : string.Empty;
+
     /// <summary>
     /// The text's <paramref name="page"/>, read from the file by seeking to its mark and decoding only its own bytes: its
-    /// header where the text holds more than one page or <paramref name="note"/> is said, its lines - numbered where
-    /// <paramref name="numbered"/> - a piece of a line marked where it goes on and went on, and the page that ends inside a
-    /// line saying the line goes on; a page past the last is refused with the text's range. The file is the one the pages
-    /// were laid on: its digest is theirs (<see cref="TextPagesFreshness"/>), as its asker sees to.
+    /// header where the text holds more than one page or <paramref name="note"/> is said, the head of the block it begins
+    /// inside again where its mark names one (<see cref="TextPageMark.Head"/>) - read from its own bytes, said as going on
+    /// and counting nothing - its lines - numbered where <paramref name="numbered"/> - a piece of a line marked where it goes
+    /// on and went on, and the page that ends inside a line saying the line goes on; a page past the last is refused with the
+    /// text's range. The file is the one the pages were laid on: its digest is theirs (<see cref="TextPagesFreshness"/>), as
+    /// its asker sees to.
     /// </summary>
     /// <param name="fileSystem">The file system the file is read through.</param>
     /// <param name="kept">The text's pages, as they were laid.</param>
@@ -337,28 +451,23 @@ public static class TextPages
         var mark = kept.Marks[given - 1];
         TextPageMark? next = given < pages ? kept.Marks[given] : null;
         var cut = next is { FirstColumn: > 0 };
-        string chars;
+        var chars = await CharsAsync(open, kept.Path, mark.Offset, next?.Offset, $"its page {Paging.Number(given)} decodes no more", cancellationToken).ConfigureAwait(false);
+        var entries = new List<TextEntry>();
 
-        var stream = open(kept.Path);
-
-        await using (stream.ConfigureAwait(false))
+        // A page that begins inside a block gives its head again first, said as going on and counting nothing: the line is
+        // read from where the mark says the file holds it, which is the file the pages were laid on.
+        if (mark.Head is { } head)
         {
-            var start = new byte[4];
-            var read = await TextSource.FillAsync(stream, start, cancellationToken).ConfigureAwait(false);
-            var (encoding, _) = TextSource.EncodingOf(start.AsSpan(0, read));
-            var bytes = await TextSource.SpanAsync(stream, start.AsMemory(0, read), mark.Offset, next?.Offset, kept.Path, cancellationToken).ConfigureAwait(false);
+            var again = await CharsAsync(open, kept.Path, head.Offset, head.Offset + head.Length, $"the head its page {Paging.Number(given)} gives again decodes no more", cancellationToken).ConfigureAwait(false);
 
-            try
+            if (LineEnds.IndexOf(again) >= 0)
             {
-                chars = encoding.GetString(bytes);
+                throw new InvalidDataException($"'{kept.Path}' does not read as it did when its pages were laid: the head its page {Paging.Number(given)} gives again is no one line");
             }
-            catch (DecoderFallbackException)
-            {
-                throw new InvalidDataException($"'{kept.Path}' does not read as it did when its pages were laid: its page {Paging.Number(given)} decodes no more");
-            }
+
+            entries.Add(new TextEntry(Paging.Again(Lead(head.Line, numbered) + again), Counts: 0));
         }
 
-        var entries = new List<TextEntry>();
         var number = mark.FirstLine;
         var segments = Segments(chars);
 
@@ -366,7 +475,7 @@ public static class TextPages
         {
             var continued = at == 0 && mark.FirstColumn > 0;
             var piece = at == segments.Count - 1 && cut;
-            var lead = continued ? TextCut.Ellipsis.ToString() : numbered ? Paging.Number(number) + "\t" : string.Empty;
+            var lead = continued ? TextCut.Ellipsis.ToString() : Lead(number, numbered);
 
             entries.Add(new TextEntry(lead + segments[at] + (piece ? TextCut.Ellipsis.ToString() : string.Empty), continued ? 0 : 1));
             number++;
@@ -394,6 +503,34 @@ public static class TextPages
             kept.Lines,
             [new PageOfSection<TextEntry>(null, entries)],
             note);
+    }
+
+    /// <summary>
+    /// The characters of the file at <paramref name="path"/> from its byte <paramref name="from"/> to <paramref name="to"/> -
+    /// to its end where that is null - decoded strictly by the encoding its first bytes say: a span that no longer decodes
+    /// is the file's refusal, saying <paramref name="what"/>.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The span no longer reads as it did when the pages were laid.</exception>
+    private static async Task<string> CharsAsync(Func<string, Stream> open, string path, long from, long? to, string what, CancellationToken cancellationToken)
+    {
+        var stream = open(path);
+
+        await using (stream.ConfigureAwait(false))
+        {
+            var start = new byte[4];
+            var read = await TextSource.FillAsync(stream, start, cancellationToken).ConfigureAwait(false);
+            var (encoding, _) = TextSource.EncodingOf(start.AsSpan(0, read));
+            var bytes = await TextSource.SpanAsync(stream, start.AsMemory(0, read), from, to, path, cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                return encoding.GetString(bytes);
+            }
+            catch (DecoderFallbackException)
+            {
+                throw new InvalidDataException($"'{path}' does not read as it did when its pages were laid: {what}");
+            }
+        }
     }
 
     /// <summary>

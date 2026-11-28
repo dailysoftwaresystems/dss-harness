@@ -144,17 +144,26 @@ public static class OrchestrationReports
                 ? $"  piece {piece.Kind} '{piece.ItemName()}' is carried out by '{carried}'"
                 : piece.Placed is { } placed
                     ? $"  piece {piece.Kind} '{piece.ItemName()}' is placed in '{placed}' and not drawn yet"
-                    : $"  piece {piece.Kind} '{piece.ItemName()}' is owed to {piece.OwedTo}";
+                    : piece.Withdrawal == true
+                        ? $"  piece {piece.Kind} '{piece.ItemName()}' is taken out of the work items of {piece.OwedTo}"
+                        : $"  piece {piece.Kind} '{piece.ItemName()}' is owed to {piece.OwedTo}";
         }
 
         if (update.AddedIteration is { } added)
         {
-            yield return $"  {Flow.FlowReports.IterationSaidOf(added)} was added for update {update.Id}";
+            yield return update.AddedWithdrawnBy is { } by
+                ? $"  {Flow.FlowReports.TakenBackSaidOf(added, update.Id, by)}"
+                : $"  {Flow.FlowReports.IterationSaidOf(added)} was added for update {update.Id}";
         }
 
         if (update.AskedAtBound is { } asked)
         {
             yield return $"  {Flow.FlowReports.AskedAtBoundSaidOf(asked, update.Id)}";
+        }
+
+        if (update.CheckedAgain is { } again)
+        {
+            yield return $"  {Flow.FlowReports.CheckedAgainSaidOf(again, update.Id)}";
         }
     }
 
@@ -173,7 +182,8 @@ public static class OrchestrationReports
 
         return record.State switch
         {
-            AgentStates.Live when record.Reads => $"{record.Name}  live, reads the main tree (no worktree){kept}",
+            AgentStates.Live when record.Reads && agent.WorktreeExists => $"{record.Name}  live, only reads, in its tree at '{agent.WorktreePath}', base {Base(record.Base)}{kept}",
+            AgentStates.Live when record.Reads => $"{record.Name}  live, only reads, and has no tree yet: the start of its next step makes it{kept}",
             AgentStates.Live when !agent.WorktreeExists => $"{record.Name}  live, and its worktree is gone from '{agent.WorktreePath}'{kept}",
             AgentStates.Live when agent.WorktreeProblem is { } problem => $"{record.Name}  live, and its worktree at '{agent.WorktreePath}' cannot be worked on: {problem.TrimEnd('.')}{kept}",
             AgentStates.Live => $"{record.Name}  live at '{agent.WorktreePath}', base {Base(record.Base)}{Session(record.Session)}{kept}",
@@ -285,7 +295,7 @@ public static class OrchestrationReports
             ["model"] = record.Model,
             ["createdAt"] = Moment(record.CreatedAt),
             ["worktree"] = record.Worktree,
-            ["kind"] = record.Reads ? null : record.OwnRepository ? Worktrees.WorktreeListing.RepositoryKind : Worktrees.WorktreeListing.WorktreeKind,
+            ["kind"] = record.Worktree is null ? null : record.OwnRepository ? Worktrees.WorktreeListing.RepositoryKind : Worktrees.WorktreeListing.WorktreeKind,
             ["path"] = agent.WorktreePath,
             ["worktreeExists"] = agent.WorktreeExists,
             ["worktreeProblem"] = agent.WorktreeProblem,
@@ -305,7 +315,7 @@ public static class OrchestrationReports
             ["transcripts"] = agent.Transcripts == 0 ? null : layout.TranscriptsDirectory(name),
         };
 
-        // The kind of agent is named where it is the rarer one, so an agent with a worktree's node is what it always was.
+        // The kind of agent is named where it is the rarer one, so the node of an agent whose work is folded is what it always was.
         if (record.Reads)
         {
             node["access"] = record.Access;

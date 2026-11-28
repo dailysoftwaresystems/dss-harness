@@ -265,10 +265,13 @@ internal static class ZaiApiFixtures
     /// <summary>The stored answer <paramref name="name"/>, streamed <paramref name="chunk"/> bytes at a time.</summary>
     public static ApiReply Reply(string name, int chunk = 5) => ApiReply.Stream(Read(name), chunk);
 
-    /// <summary>A message that answers <paramref name="text"/> and stops, in the chunks Z.AI writes one in.</summary>
-    public static ApiReply Answer(string text)
+    /// <summary>
+    /// A message of <paramref name="model"/>'s - the model asked, as Z.AI names the one that answers - that answers
+    /// <paramref name="text"/> and stops, in the chunks Z.AI writes one in.
+    /// </summary>
+    public static ApiReply Answer(string model, string text)
         => ApiReply.Stream(
-            "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":" + JsonSerializer.Serialize(text) + "}}]}\n\n"
-            + "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":8,\"total_tokens\":28,\"prompt_tokens_details\":{\"cached_tokens\":0}}}\n\n"
+            "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"model\":" + JsonSerializer.Serialize(model) + ",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":" + JsonSerializer.Serialize(text) + "}}]}\n\n"
+            + "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"model\":" + JsonSerializer.Serialize(model) + ",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":8,\"total_tokens\":28,\"prompt_tokens_details\":{\"cached_tokens\":0}}}\n\n"
             + "data: [DONE]\n\n");
 }

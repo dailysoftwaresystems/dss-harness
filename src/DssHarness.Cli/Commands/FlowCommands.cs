@@ -1,4 +1,5 @@
 using System.CommandLine;
+using DssHarness.Core.Application;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
@@ -33,7 +34,7 @@ internal static class FlowCommands
         string command,
         Func<FlowInterrupts, CancellationToken, Task<CommandOutcome>> session,
         CancellationToken commandToken)
-        => new FlowTerminal(context.Get<IHarnessOutput>(), command).RunAsync(session, commandToken);
+        => new FlowTerminal(context.Get<IHarnessOutput>(), command, end: context.Get<IEndWrites>()).RunAsync(session, commandToken);
 
     /// <summary>
     /// The <c>--json</c> answer of the two ask commands: the same document wherever they stop, the facts and the answer
@@ -60,7 +61,7 @@ internal static class RunOrchestratorCommand
     private static readonly Option<string[]> InputOption = new("--input")
     {
         HelpName = "k=v",
-        Description = "An input the run is started with, as name=value; name=@<file> gives a text input the text of a file, read relative to --directory. Once for each input.",
+        Description = "An input the run is started with, as name=value; name=@<file> gives a text input the text of a file, read relative to --directory, and a file input names a file inside the repository by its path from the root or an absolute one inside it, decided as an agent's read of it is, which the run copies as it starts. Once for each input.",
     };
 
     internal static Command Create()
@@ -70,6 +71,7 @@ internal static class RunOrchestratorCommand
         command.Options.Add(RunOption);
         command.Options.Add(InputOption);
         command.Options.Add(OrchestrationArguments.Json);
+        OutputLogsOption.AddTo(command);
         GlobalOptions.AddTo(command);
 
         CommandRunner.Wire(
@@ -87,7 +89,8 @@ internal static class RunOrchestratorCommand
                     token),
                 cancellationToken),
             beginsRun: run => true,
-            FlowCommands.Answer);
+            FlowCommands.Answer,
+            outputLogs: true);
 
         return command;
     }
@@ -105,6 +108,7 @@ internal static class ResumeOrchestratorCommand
         var command = new Command(Name, "Go on with a run from its records alone, where it stood: what a stop, a crash or an answer left - each stopped step from its own handoff, a failure that ended the run run again, what the run owed made first - under the definition it began with; refused while another run of the repository is unfinished with work in the tree, and when run from inside a session or group a step of any run of the repository left running, which the next command from outside ends.");
         command.Arguments.Add(RunArgument);
         command.Options.Add(OrchestrationArguments.Json);
+        OutputLogsOption.AddTo(command);
         GlobalOptions.AddTo(command);
 
         CommandRunner.Wire(
@@ -115,7 +119,8 @@ internal static class ResumeOrchestratorCommand
                 (interrupts, token) => context.Get<IFlowService>().ResumeAsync(context.Directory, context.ParseResult.GetRequiredValue(RunArgument), context.Json, interrupts, token),
                 cancellationToken),
             beginsRun: run => true,
-            FlowCommands.Answer);
+            FlowCommands.Answer,
+            outputLogs: true);
 
         return command;
     }

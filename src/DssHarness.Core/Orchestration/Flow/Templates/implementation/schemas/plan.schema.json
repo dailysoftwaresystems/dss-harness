@@ -17,7 +17,7 @@
     },
     "done": {
       "type": "string",
-      "description": "The plan's definition of done: what holds when this whole plan is built - the request answered, each item's own definition of done met, the repository's checks green. Written as statements a check can answer one by one; the run's final audit holds the round against it."
+      "description": "The plan's definition of done: what holds when this whole plan is built - the request answered, each item's own definition of done met, the repository's checks green. Written as statements a check can answer one by one, each by the rule for a definition of done your task gives; the run's final audit holds the round against it."
     },
     "source": {
       "type": "string",
@@ -191,18 +191,18 @@
         },
         "done": {
           "type": "string",
-          "description": "The item's definition of done: what must hold for the item to be finished, as statements a person or a check can answer one by one - the behaviours built, the test that pins each, and what is true of the tree when the builder reports. The builder works to it, the review weighs it and the run's final audit checks it."
+          "description": "The item's definition of done: what must hold for the item to be finished, as statements a person or a check can answer one by one - the behaviours built, the test that pins each, and what is true of the tree when the builder reports - each statement written by the rule for a definition of done your task gives. The builder works to it, the review weighs it and the run's final audit checks it."
         },
         "ownedPaths": {
           "type": "array",
-          "description": "The path patterns this item may write, from the repository's root: a file, or a glob where ** matches any depth (src/Orders/**). No file is matched by the patterns of two items.",
+          "description": "The paths this item may write, each from the repository's root - a name with no slash is the root's own file, never one at any depth: a file (calc.c, src/Orders/Order.cs), a directory and everything in it (src/Orders, or src/Orders/ where the tree the run started from does not hold it - made since the run began, or still to be made), or a glob, anchored at the root too, where * matches within one name and ** any depth (src/Orders/**, **/*.md). A path names what is beneath it only where it names a directory, so the root's Makefile and calc.c meet nothing but themselves. No path is matched by the entries of two items.",
           "items": {
             "type": "string"
           }
         },
         "forbiddenPaths": {
           "type": "array",
-          "description": "Path patterns, written as ownedPaths are, that this item must not touch, though they are near its work.",
+          "description": "Paths, written and read as ownedPaths are, that this item must not touch, though they are near its work; none may match a path the item owns.",
           "items": {
             "type": "string"
           }
@@ -302,7 +302,14 @@
         },
         "settles": {
           "type": "string",
-          "description": "The id of the issue of the run's next round this item settles (nx-<n>), exactly as the run names it; empty or absent where it settles none. A defect the run took from its own rounds is a work item like any other: it decides a class, and it is built first."
+          "description": "The id of the issue of the run's next round this item settles (nx-<n>), exactly as the run names it; empty or absent where it settles none. A defect the run took from its own rounds is a work item like any other, built to the issue's size: it decides a class, or says in noClass why it decides none, and it is listed and started first, built beside the rest - no other item may need its result."
+        },
+        "needs": {
+          "type": "array",
+          "description": "The ids of the issues the recovery is fixing or fixed - or that are joined to one still being triaged - whose fix this item builds on, each exactly as the run's list of the issues it has taken names it; empty or absent where it needs none.",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -390,7 +397,7 @@
         },
         "searches": {
           "type": "array",
-          "description": "Each search made to find the sites, by the data that decides - a kind, a schema key, a diagnostic, a verb, a literal - so the list can be made again: the graph's sites first, which joins every place that decides the data and says by its coverage lines what it searched by text alone - its find, node and related beside it for the names and for what reads and calls them - and text search for what it does not see, each such search said in notCovered.",
+          "description": "Each search made to find the sites, by the data that decides - a kind, a schema key, a diagnostic, a verb, a literal - so the list can be made again: the graph's sites first, which joins every place that decides the data and says by its coverage lines what it searched by text alone - its find, node and related beside it for the names and for what reads and calls them, its impact for everything a change of a node reaches, its around and its outline to know where a node stands before reading a file whole - and text search for what it does not see, each such search said in notCovered.",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -423,44 +430,78 @@
         "universe": {
           "type": "object",
           "additionalProperties": false,
+          "description": "The universe the class's decision ranges over: an answer for every axis the repository's closure text lists, and for each further axis it names under its heading \"This repository\" - each in the one shape an axis is answered in, applying with its values and where the repository declares them, or not applying with why - and the count of its cells.",
           "required": [
-            "axes",
+            "kinds",
+            "targets",
+            "configurations",
+            "formats",
+            "entryPoints",
+            "tiers",
+            "forms",
+            "directions",
+            "further",
             "cells"
           ],
           "properties": {
-            "axes": {
+            "kinds": {
+              "$ref": "#/$defs/axis",
+              "description": "Each kind or type the decision ranges over - an enum's members, a schema's keys, a table's rows."
+            },
+            "targets": {
+              "$ref": "#/$defs/axis",
+              "description": "Each target or platform the repository builds for that reaches the decision: its legs."
+            },
+            "configurations": {
+              "$ref": "#/$defs/axis",
+              "description": "Each build configuration and optimisation level the decision is built in - Debug and Release, -O0 and -O2, /Od and /O2."
+            },
+            "formats": {
+              "$ref": "#/$defs/axis",
+              "description": "Each input and output format the decision reads or writes."
+            },
+            "entryPoints": {
+              "$ref": "#/$defs/axis",
+              "description": "Each entry point that reaches the decision - command line, API, configuration file, UI."
+            },
+            "tiers": {
+              "$ref": "#/$defs/axis",
+              "description": "Each tier or layer the decision passes - parse, check, lower, emit; request, service, store."
+            },
+            "forms": {
+              "$ref": "#/$defs/axis",
+              "description": "Each form of the construct - declare, define, reference; read, write; with and without the qualifier."
+            },
+            "directions": {
+              "$ref": "#/$defs/axis",
+              "description": "Both directions - accepted and refused; serialise and deserialise; encode and decode."
+            },
+            "further": {
               "type": "array",
-              "description": "The axes the class's decision ranges over, taken from the repository's closure text, each with where it is declared.",
+              "description": "Each further axis the repository's closure text names under its heading \"This repository\", answered as the axes above are. The references and the optimised forms the text names are no axes - every cell is measured on each of them - and are answered neither here nor above. Empty where the heading names no further axis.",
               "items": {
                 "type": "object",
                 "additionalProperties": false,
                 "required": [
                   "name",
-                  "values",
-                  "declaredIn"
+                  "answer"
                 ],
                 "properties": {
                   "name": {
                     "type": "string",
-                    "description": "The axis: a kind, a target, a configuration, a format, an entry point, a tier, a form, a direction."
+                    "pattern": "\\S",
+                    "description": "The axis, as the closure text names it."
                   },
-                  "values": {
-                    "type": "array",
-                    "description": "The values the repository declares for it.",
-                    "items": {
-                      "type": "string"
-                    }
-                  },
-                  "declaredIn": {
-                    "type": "string",
-                    "description": "Where the repository declares them."
+                  "answer": {
+                    "$ref": "#/$defs/axis",
+                    "description": "The axis's answer."
                   }
                 }
               }
             },
             "cells": {
               "type": "integer",
-              "description": "The count of the axes' product: the cells the decision ranges over."
+              "description": "The cells the decision ranges over: the product of the counts of the values of the axes that apply, and 1 where none applies."
             }
           }
         },
@@ -476,6 +517,33 @@
         "notCovered": {
           "type": "string",
           "description": "What was searched by text because the graph does not see it, by file kind, said plainly; empty where the graph covered every search."
+        }
+      }
+    },
+    "axis": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One axis of a class's universe, answered in one shape whether it applies or not. It applies exactly where values names some: then declaredIn says where the repository declares them, and why is empty. Where values is empty it does not apply: then why says why, and declaredIn is empty. The plan's check holds each answer to one of the two, within the step that gives it.",
+      "required": [
+        "values",
+        "declaredIn",
+        "why"
+      ],
+      "properties": {
+        "values": {
+          "type": "array",
+          "description": "Every value the repository declares for the axis, named concretely: the axis whole, from a search of the tree for every cell of its kind. Empty where the decision does not range over the axis.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "declaredIn": {
+          "type": "string",
+          "description": "Where the repository declares the values; empty where there are none."
+        },
+        "why": {
+          "type": "string",
+          "description": "Where there are no values, why the decision does not range over the axis, as something an auditor can check in the code; empty where there are values."
         }
       }
     }

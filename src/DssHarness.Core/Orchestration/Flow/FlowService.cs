@@ -45,7 +45,11 @@ public interface IFlowService : IUseCase
     /// <param name="cancellationToken">A hard stop of the session: the run ends stopped, in order.</param>
     Task<CommandOutcome> ResumeAsync(string startDirectory, string run, bool json, FlowInterrupts? interrupts = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Answers a question of a run and goes on: handed to the engine where one is running it (<c>inbox.json</c>), else a session of the run's own.</summary>
+    /// <summary>
+    /// Answers a question of a run and goes on: handed to the engine where one is running it (<c>inbox.json</c>), else a
+    /// session of the run's own - refused (13) there, nothing touched, where the question still owes its recommendation,
+    /// which no advisor seeks between sessions: <c>resume-orchestrator</c> seeks it first, and <c>abort</c> is taken.
+    /// </summary>
     /// <param name="startDirectory">The directory the command acts on, and where <paramref name="textFile"/> is read from.</param>
     /// <param name="run">The run.</param>
     /// <param name="answer">The answer, spelled as the question's options spell it.</param>
@@ -102,7 +106,8 @@ public interface IFlowService : IUseCase
     Task<CommandOutcome> AskAsync(string startDirectory, string run, string? question, bool json, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// The run's report, built from its records alone - the same bytes for the same records, whether the run has ended
+    /// The run's report, built from its records alone - the same bytes for the same records and the same state of its
+    /// engine, which names each open question's next step (<see cref="FlowAnswerRules.NextStepOf"/>), whether the run has ended
     /// or is still going (said so at the time of its last record, marked partial): the deterministic report the
     /// session's end writes, in text, as one JSON document or as Markdown. Reads only: nothing of the run is written.
     /// </summary>
@@ -164,6 +169,7 @@ public sealed record FlowTimings(TimeSpan PollEvery, TimeSpan WatchEvery, TimeSp
 /// <param name="clock">When the run's records are written, and how every wait of these commands is timed.</param>
 /// <param name="timings">How often the commands look; <see cref="FlowTimings.Default"/> where not given.</param>
 /// <param name="updates">Finds the Claude Code the advisor's and the reporter's orders start, never changing it; null where nothing starts one.</param>
+/// <param name="reached">Told the run the command reached, as soon as its record is there for it; null where nothing reads it.</param>
 public sealed class FlowService(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -184,7 +190,8 @@ public sealed class FlowService(
     Agents.Isolation.IAgentIsolation isolation,
     TimeProvider? clock = null,
     FlowTimings? timings = null,
-    Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null) : IFlowService
+    Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null,
+    FlowRunReached? reached = null) : IFlowService
 {
     /// <summary>The command that starts a run.</summary>
     public const string RunCommand = "run-orchestrator";
@@ -328,6 +335,16 @@ public sealed class FlowService(
         FlowRunContext runContext;
         IReadOnlyDictionary<string, IReadOnlyList<string>>? named = null;
 
+        // Every agent of the run reads a file input's copy, so each is decided as an agent's read of it is: on the ground
+        // the one builder of an agent's ground builds for it, under this configuration and this machine's places no agent
+        // reaches.
+        var launch = new ReasonLaunch(_fileSystem, _platform, keyStore, updates, isolation);
+        var inputGround = Agents.Policy.AgentStepGround.OfFileInputs(
+            context.Config,
+            context.Layout.MainCheckoutRoot,
+            launch.ClaudeDirectories(context.Config, context.Layout),
+            launch.CredentialPlaces(context.Config));
+
         try
         {
             (layout, runContext) = await _sessions.CreateAsync(
@@ -335,13 +352,15 @@ public sealed class FlowService(
                 workflow,
                 EveryRun(context, RunCommand),
                 RunCommand,
+                inputGround,
                 run,
                 given,
                 checkout.Head,
                 checkout.Branch,
                 refusal: name =>
                 {
-                    var (refused, lists) = Start(checkout, workflow, resolved, name);
+                    // The run this start makes keeps its file inputs' copies, as every run this build makes does.
+                    var (refused, lists) = Start(checkout, workflow, FlowInputs.AsRead(workflow, resolved, OrchestratorLayout.Of(context.Layout, name), copies: true), name);
                     named = lists;
                     return refused ?? FlowRunPaths.RefusalAtStart(_pathBudget, context, name, workflow, _platform.PlatformKey, files);
                 },
@@ -358,6 +377,9 @@ public sealed class FlowService(
                 : refused;
         }
 
+        // The run is made: whatever ends the command from here, it ended over this run.
+        reached?.Reach(context.Layout, layout);
+
         // A base that cannot be told held the checkout's branch to nothing: the start says so, never silently. The remote
         // workflows the check resolved are kept with the run's frozen definition as the session begins - every file as
         // the check read and hashed it - and read from there as the run goes on, so no pruning of the user's cache takes
@@ -366,7 +388,7 @@ public sealed class FlowService(
             context,
             layout,
             RunCommand,
-            checkout.BaseUnknown(FlowTemplate.PullRequestBase(workflow, resolved, layout.Name, out _)),
+            checkout.BaseUnknown(FlowTemplate.PullRequestBase(workflow, FlowInputs.AsRead(workflow, resolved, layout, runContext.InputCopies), layout.Name, out _)),
             () =>
             {
                 WorkflowCache.OfRun(_fileSystem, layout).Keep(check.Remotes);
@@ -388,7 +410,7 @@ public sealed class FlowService(
             return refused;
         }
 
-        var (digest, changed) = await EntryDigestAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
+        var (entry, changed) = await EntryAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
 
         if (changed is not null)
         {
@@ -407,7 +429,7 @@ public sealed class FlowService(
             return Ended(layout, ResumeCommand, outcome, ResultOf(layout, outcome), json);
         }
 
-        return await SessionAsync(context, layout, ResumeCommand, reclaimed, () => Resumed(layout, digest!), answered: null, interrupts, json, cancellationToken).ConfigureAwait(false);
+        return await SessionAsync(context, layout, ResumeCommand, reclaimed, () => Resumed(layout, entry!), answered: null, interrupts, json, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -509,7 +531,7 @@ public sealed class FlowService(
 
             // The session is held to the definition it began with, as a resume is, and begins with the change: the
             // engine holds the set to its window and to once, and the change goes by the gates every update passes.
-            var (digestOfChange, changedDefinition) = await EntryDigestAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
+            var (entryOfChange, changedDefinition) = await EntryAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
 
             if (changedDefinition is not null)
             {
@@ -533,7 +555,7 @@ public sealed class FlowService(
                 layout,
                 AnswerCommand,
                 reclaimedChange,
-                () => Resumed(layout, digestOfChange!),
+                () => Resumed(layout, entryOfChange!),
                 (set.Id, answer, changes, null),
                 interrupts,
                 json,
@@ -578,6 +600,18 @@ public sealed class FlowService(
         }
 
         var takes = FlowAnswerRules.TextOf(text);
+        var engineRuns = _owner.Live(layout) is not null;
+
+        // A question is answered recommended, by the one rule the engine holds a person's answer to: with no engine
+        // running the run no advisor seeks a recommendation, so an answer to a question still owing one is refused
+        // before anything of the run is touched - abort taken - naming its next step, the resume, which seeks it first.
+        // A running engine weighs an answer handed to it by the same rule from its own state, an advice of its own under
+        // way or not.
+        if (!engineRuns
+            && FlowAnswerRules.Unrecommended(run, asked.Id, answer, FlowAnswerRules.NextStepOf(asked, FlowEngineState.NoEngine)) is { } owed)
+        {
+            return Refuse(layout, AnswerCommand, owed, json);
+        }
 
         // Where an engine is running the run, the answer is handed to it and the command returns: it lands in the
         // inbox under an id of its own, the engine takes it at its poll, and no second engine is started. An engine
@@ -586,7 +620,7 @@ public sealed class FlowService(
         // read the inbox, this command is that next session itself, and its answer is the entry it handed over.
         string? handedUnder = null;
 
-        if (_owner.Live(layout) is not null)
+        if (engineRuns)
         {
             handedUnder = FlowInboxAnswer.NewId();
             _store.AddToInbox(layout, new FlowInboxAnswer(handedUnder, asked.Id, answer, _clock.GetUtcNow(), takes));
@@ -616,7 +650,7 @@ public sealed class FlowService(
         }
 
         // The session is held to the definition it began with, as a resume is.
-        string? digest;
+        WorkflowDefinition? declared;
         string? reclaimed;
 
         while (true)
@@ -631,7 +665,7 @@ public sealed class FlowService(
 
             try
             {
-                (digest, var changed) = await EntryDigestAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
+                (declared, var changed) = await EntryAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
 
                 if (changed is not null)
                 {
@@ -677,7 +711,7 @@ public sealed class FlowService(
             try
             {
                 List<string> said = reclaimed is null ? [] : [reclaimed];
-                var settled = new Offered { [handedUnder] = Task.FromResult(FlowHandedOver.RecordedAlready) };
+                var settled = new Offered { [handedUnder] = Task.FromResult(new FlowWeighed(FlowHandedOver.RecordedAlready)) };
                 _ = SayUnemptied(layout, settled, Empty(layout, settled), said);
 
                 return AnswerOfWeighed(weighed, layout, run, answer, asked.Id, said, json)!;
@@ -691,7 +725,7 @@ public sealed class FlowService(
         // The session begins with the answer: the question it names, answered by a person through this command - under
         // the inbox entry it was handed over under, where it was, so the run weighs that entry once - and everything
         // that can run after it.
-        return await SessionAsync(context, layout, AnswerCommand, reclaimed, () => Resumed(layout, digest!), (asked.Id, answer, takes, handedUnder), interrupts, json, cancellationToken).ConfigureAwait(false);
+        return await SessionAsync(context, layout, AnswerCommand, reclaimed, () => Resumed(layout, declared!), (asked.Id, answer, takes, handedUnder), interrupts, json, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1036,10 +1070,13 @@ public sealed class FlowService(
             return CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(run));
         }
 
-        if (_store.ReadFlow(layout) is not { } flow)
+        // The run's state is read with what its engine is doing, by the one path every reader of the two takes.
+        if (OrchestratorService.EngineOf(_store, _owner, layout) is not { } read)
         {
             return CommandOutcome.Refused($"run '{run}' holds no '{layout.FlowFile}' to report on");
         }
+
+        var (flow, engine) = read;
 
         // A row asked of an instance the run does not hold is refused, named: an empty table would say the run ran none.
         var wanted = steps is { Count: > 0 } named ? named.ToHashSet(StringComparer.Ordinal) : null;
@@ -1050,7 +1087,7 @@ public sealed class FlowService(
             return CommandOutcome.Usage($"--steps names {string.Join(", ", unknown.Select(instance => $"'{instance}'"))}, which run '{run}' does not hold");
         }
 
-        var report = FlowRunReport.Of(SourceOf(layout, flow, FlowReportThresholds.Of(context.Config, top), by, wanted));
+        var report = FlowRunReport.Of(SourceOf(layout, flow, engine, FlowReportThresholds.Of(context.Config, top), by, wanted));
 
         if (json)
         {
@@ -1066,15 +1103,16 @@ public sealed class FlowService(
     /// A run's records as they stand, for its report - the one place the read verb, the analysis and the session's end
     /// read them: its state, questions, updates, events (a torn last line said in its notes), its item agents' closure
     /// ledgers, the issues it owed a later round and its frozen definition - read as the definition or why it cannot be
-    /// read, so the report says which it was rather than the read refusing the whole report - with the thresholds every
-    /// report of the run is computed by.
+    /// read, so the report says which it was rather than the read refusing the whole report - with what its engine is
+    /// doing and the thresholds every report of the run is computed by.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
     /// <param name="flow">The run's state.</param>
+    /// <param name="engine">What the run's engine is doing, as the read and the analysis read it (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout)"/>); none for the session's end, which is leaving the run.</param>
     /// <param name="thresholds">The thresholds its signals are computed by (<see cref="FlowReportThresholds.Of"/>).</param>
     /// <param name="by">What the dollars are grouped by; null for the model.</param>
     /// <param name="steps">The instances whose rows alone the steps table keeps; null for every one.</param>
-    private FlowRunReportSource SourceOf(OrchestratorLayout layout, FlowFile flow, FlowReportThresholds thresholds, string? by = null, IReadOnlySet<string>? steps = null)
+    private FlowRunReportSource SourceOf(OrchestratorLayout layout, FlowFile flow, FlowEngineState engine, FlowReportThresholds thresholds, string? by = null, IReadOnlySet<string>? steps = null)
     {
         var (events, torn) = FlowEventLog.Read(_fileSystem, layout.EventsFile);
         var (definition, why) = _store.ReadDefinitionOrWhy(layout);
@@ -1088,11 +1126,12 @@ public sealed class FlowService(
             LedgersOf(layout, flow),
             definition,
             thresholds,
-            EventsTorn: torn is not null,
+            EventsSetAside: torn,
             By: by,
             Steps: steps,
             NextRound: _store.ReadNextRound(layout),
-            DefinitionWhy: why);
+            DefinitionWhy: why,
+            Engine: engine);
     }
 
     /// <inheritdoc/>
@@ -1117,10 +1156,12 @@ public sealed class FlowService(
             return CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(run));
         }
 
-        if (_store.ReadFlow(layout) is not { } flow)
+        if (OrchestratorService.EngineOf(_store, _owner, layout) is not { } read)
         {
             return CommandOutcome.Refused($"run '{run}' holds no '{layout.FlowFile}' to analyse");
         }
+
+        var (flow, engine) = read;
 
         var (definition, definitionWhy) = _store.ReadDefinitionOrWhy(layout);
 
@@ -1131,7 +1172,7 @@ public sealed class FlowService(
                 : $"'{layout.DefinitionFile}' is not there, so run '{run}' holds no definition to analyse");
         }
 
-        var report = FlowRunReport.Of(SourceOf(layout, flow, FlowReportThresholds.Of(context.Config)));
+        var report = FlowRunReport.Of(SourceOf(layout, flow, engine, FlowReportThresholds.Of(context.Config)));
         var said = report.ToJsonString(ReportJson.Options);
         var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(said)));
 
@@ -1292,10 +1333,12 @@ public sealed class FlowService(
             return CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(run));
         }
 
-        if (_store.ReadFlow(layout) is not { } flow)
+        if (OrchestratorService.EngineOf(_store, _owner, layout) is not { } read)
         {
             return HandMade(layout, question is not null, json);
         }
+
+        var (flow, engine) = read;
 
         var definition = _store.ReadDefinition(layout);
 
@@ -1305,7 +1348,6 @@ public sealed class FlowService(
         }
 
         var asOf = _clock.GetUtcNow();
-        var engine = OrchestratorService.EngineOf(_store, _owner, layout, flow);
         var facts = FlowStatus.Facts(definition, flow, _store.ReadFlowQuestions(layout), _store.ReadFlowUpdates(layout), engine, asOf);
         var text = string.Join("\n", facts);
 
@@ -1564,6 +1606,8 @@ public sealed class FlowService(
             return (CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(run)), context, layout);
         }
 
+        // The run is there: whatever ends the command from here, it ended over this run.
+        reached?.Reach(context.Layout, layout);
         await _children.SweepAsync(layout, command).ConfigureAwait(false);
         return (null, context, layout);
     }
@@ -1582,14 +1626,15 @@ public sealed class FlowService(
         => () => _children.SweepAsync(_store.Orchestrators(context.Layout), command).GetAwaiter().GetResult();
 
     /// <summary>
-    /// The digest of the repository's entry for the workflow the run began with, as it reads now in the definition tree
-    /// - the main checkout, <paramref name="definitionTree"/>, whichever tree the command was typed in - or the refusal
+    /// The repository's entry for the workflow the run began with, as it reads now in the definition tree - the main
+    /// checkout, <paramref name="definitionTree"/>, whichever tree the command was typed in - which the session's resume
+    /// holds to what the run's frozen definition says (<see cref="FlowResume.RefuseAChangedDefinition"/>), or the refusal
     /// (13) where the entry is no longer one that holds: a run goes on only under the definition it began with. The remote
     /// workflows the check resolved, each at the commit the run began with and read from the run's own copy first, are
     /// kept again in that copy where it does not hold them whole, so a session reads every file it began with whatever a
     /// pruning did meanwhile.
     /// </summary>
-    private async Task<(string? Digest, CommandOutcome? Refused)> EntryDigestAsync(string definitionTree, OrchestratorLayout layout, CancellationToken cancellationToken)
+    private async Task<(WorkflowDefinition? Entry, CommandOutcome? Refused)> EntryAsync(string definitionTree, OrchestratorLayout layout, CancellationToken cancellationToken)
     {
         var frozen = _store.ReadDefinition(layout);
 
@@ -1638,16 +1683,16 @@ public sealed class FlowService(
             return (null, CommandOutcome.Failed(ex.ExitCode, $"run '{layout.Name}' began of workflow '{frozen.Name}', and the remote workflows it began with could not be kept with it again in '{layout.RemoteWorkflowsDirectory}': {ex.Message.TrimEnd('.')}. Nothing else of the run was changed."));
         }
 
-        return (FlowRunContext.DigestOf(entry), null);
+        return (entry, null);
     }
 
-    /// <summary>What a session over a run already made goes on from: the definition it began with, the state it left reconciled and held to <paramref name="digest"/>, and the run as its records name it.</summary>
-    private (WorkflowDefinition Definition, FlowRunContext Context, FlowResumeState? Resume) Resumed(OrchestratorLayout layout, string digest)
+    /// <summary>What a session over a run already made goes on from: the definition it began with, the state it left reconciled and held to what <paramref name="entry"/> says, and the run as its records name it.</summary>
+    private (WorkflowDefinition Definition, FlowRunContext Context, FlowResumeState? Resume) Resumed(OrchestratorLayout layout, WorkflowDefinition entry)
     {
         var definition = _store.ReadDefinition(layout)
             ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.DefinitionFile}' is not there, so run '{layout.Name}' holds no definition to go on with");
 
-        var resume = new FlowResume(_store, layout, _fileSystem).Load(digest);
+        var resume = new FlowResume(_store, layout, _fileSystem).Load(entry);
 
         return (definition, FlowRunContext.Resumed(definition, resume.File), resume);
     }
@@ -1677,6 +1722,34 @@ public sealed class FlowService(
     }
 
     /// <summary>
+    /// Begins the masks the session keeps its records through (<see cref="SessionMasks"/>), told to what the command leaves
+    /// at its end (<see cref="FlowRunReached.Masked"/>): first the secrets the configuration appoints that the key slot
+    /// answers, built as every launch's mask is (<see cref="ReasonLaunch.Mask"/>), which holds it - or why it could not be
+    /// built, which leaves the output logs without what only it would have masked. Never a failure of the session's: a
+    /// slot that cannot be read fails each step that reads it, as it always has.
+    /// </summary>
+    private void BeginMasks(HarnessContext context)
+    {
+        var masks = SessionMasks.OfSession()!;
+        reached?.Masked(masks);
+
+        if (Agents.AgentProviders.Resolve(context.Config).Providers is not { } providers)
+        {
+            masks.Unbuilt("the configuration's providers do not resolve, so it appoints no secret a mask could be built of");
+            return;
+        }
+
+        try
+        {
+            _ = new ReasonLaunch(_fileSystem, _platform, keyStore, updates, isolation).Mask(context.Layout, providers);
+        }
+        catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+        {
+            masks.Unbuilt($"the key slot could not be read: {ex.Message.TrimEnd('.')}");
+        }
+    }
+
+    /// <summary>
     /// One session of a run, from its owner claimed to its end: the engine built over the run's records, the answer it
     /// begins with, what was handed to an engine that ended before it took it, then driven - again, where an answer
     /// handed over as it ended settles the question it paused on - and the report written. However it ends - a
@@ -1699,6 +1772,18 @@ public sealed class FlowService(
         var said = new List<string>();
         var inbox = answered?.Inbox is not null;
         var offered = new Offered();
+        var waited = new List<Waited>();
+
+        // Whether the session was driven past the answer it began with, whether what became of what was handed to it is
+        // said already, and what became of the command's own answer: what each exit of the session answers by.
+        var driven = false;
+        var told = false;
+        FlowWeighed? own = null;
+
+        // The session holds its run from here to its end: what it finds of where its trees are, and of the machine's gh
+        // login, it finds once, for every layer its work passes through.
+        using var session = EngineSession.Begin();
+        BeginMasks(context);
 
         // What the session says before anything else: a dead owner it reclaimed, or what a start could not hold its
         // checkout to.
@@ -1715,21 +1800,35 @@ public sealed class FlowService(
         {
             var (definition, runContext, resume) = begin();
 
-            using var records = new FlowRunRecords(_fileSystem, _store, layout, runContext, _clock);
+            Action<string> warn = line => _output.Warn(command, line);
+            using var records = new FlowRunRecords(_fileSystem, _store, layout, runContext, _clock, warn);
+
+            // The one tree the run's lists of paths are read against for its whole life - the tree of the commit it started
+            // from, which no fold of the run changes - read once for the session: the plan's check, the holds, a step's
+            // writes and a fold's within ask it alike. One that could not be read is warned of once, through the records'
+            // warner, and every refusal its reading causes says why too.
+            var startTree = await TreeDirectories.AtAsync(_gitClient, context.Layout.MainCheckoutRoot, runContext.StartCommit, _platform.PathComparison, cancellationToken).ConfigureAwait(false);
+
+            if (startTree.UnreadWarning is { } unread)
+            {
+                warn(unread);
+            }
 
             // Every step is handed the run it belongs to, and each create-agent step the model its agent is made for,
             // resolved from the configuration as the definition's check resolves it; a run step claims its tree as the
-            // configuration's runners say a run of it writes there.
+            // configuration's runners say a run of it writes there. The inputs are what the run's steps read - a file
+            // input the copy the run made of it as it started, where its records say it keeps one, else as given - in
+            // every session alike; its records keep them as given.
             var coordinator = new FlowCoordinator(
                 definition,
                 _runner,
                 new ConfiguredRunnerFacts(context.Config),
                 _clock,
-                runContext.Inputs,
+                FlowInputs.AsRead(definition, runContext.Inputs, layout, runContext.InputCopies),
                 records,
                 resume,
                 layout.Name,
-                new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, runContext.StartCommit, definition, runContext.Branch),
+                new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, runContext.StartCommit, definition, runContext.Branch) { StartTree = startTree },
                 Agents.AgentProviders.Resolve(context.Config).Providers is { } providers
                     ? WorkflowValidator.AgentModels(
                         definition,
@@ -1740,7 +1839,7 @@ public sealed class FlowService(
                 async (run, agent, token) =>
                 {
                     // The engine's own deleting of a read-only agent whose work is over: applied, with nothing to fold
-                    // and no worktree to remove, and its failure - refused, or thrown - said in the run's log, for the
+                    // and its tree removed, and its failure - refused, or thrown - said in the run's log, for the
                     // run goes on whatever it did. An agent with no record is deleted already, by an earlier session of
                     // the run's or by its person, and nothing is left to delete or to say.
                     CommandOutcome outcome;
@@ -1772,11 +1871,12 @@ public sealed class FlowService(
 
                     return outcome;
                 },
-                new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output, isolation, updates),
+                new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output, isolation, _owner, updates, _clock),
                 updates: () => _store.ReadFlowUpdates(layout),
                 workflowFileIfThere: named => WorkflowNamedFiles.OfRun(_fileSystem, _platform.PathComparison, layout).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"),
                 runFacts: (instance, fact) => RunFactOf(context, layout, instance, fact),
-                agentLive: agent => _store.ReadAgent(layout, agent) is { State: Orchestration.AgentStates.Live });
+                agentLive: agent => _store.ReadAgent(layout, agent) is { State: Orchestration.AgentStates.Live },
+                startTreeDirectories: startTree.Meeting);
             var before = _store.ReadFlowQuestions(layout);
 
             // What a session before this one recorded and left queued - an amendment given while no engine ran - is
@@ -1791,7 +1891,10 @@ public sealed class FlowService(
                 // id by the one owner of an entry weighed once: taken or refused, the run's records hold it under that
                 // id, so the inbox's pass below never weighs it a second time, and the poller empties it as settled. The
                 // command met it unweighed once it held the run - one a session before weighed is the command's to
-                // answer, before any session (AnswerOfWeighed) - so this session weighs it first.
+                // answer, before any session (AnswerOfWeighed) - so this session weighs it first. One to a question owing
+                // the recommendation this session's start seeks - it was handed to a live engine, which takes it as it
+                // seeks that - waits for the advice, and the session goes on: what became of it is answered once the
+                // session has weighed it, below.
                 string? problem;
                 bool taken;
 
@@ -1801,9 +1904,15 @@ public sealed class FlowService(
                 }
                 else if (given.Inbox is { } entry)
                 {
-                    var handed = coordinator.AnswerHandedOver(given.Question, given.Answer, given.Text, out problem, AnswerCommand, entry);
-                    offered[entry] = Task.FromResult(handed);
-                    taken = handed != FlowHandedOver.Refused;
+                    var handed = coordinator.WeighHandedOver(given.Question, given.Answer, given.Text, AnswerCommand, entry);
+                    offered[entry] = handed;
+                    taken = handed is not { IsCompletedSuccessfully: true, Result.How: FlowHandedOver.Refused };
+                    problem = taken ? null : handed.Result.Problem;
+
+                    if (!handed.IsCompleted)
+                    {
+                        waited.Add(new Waited(entry, given.Answer, given.Question, handed));
+                    }
                 }
                 else
                 {
@@ -1816,25 +1925,35 @@ public sealed class FlowService(
                 }
             }
 
-            // What was handed to an engine whose session ended before it took it is this session's to take - and what
-            // cannot be read of it is said and left for the next session: the command's own answer, recorded above,
-            // stands, and the run is driven on. What it takes, the poller empties from the inbox at its first read.
-            inbox |= Guarded("handed to the engine as its session began", said, () => TakeInbox(layout, coordinator, offered, said)).Seen > 0;
+            // What was handed to an engine whose session ended before it took it is this session's to take - an answer to
+            // a question owing the recommendation this session's start seeks waiting for that advice, as one handed to a
+            // live engine's start does - and what cannot be read of it is said and left for the next session: the
+            // command's own answer, recorded above, stands, and the run is driven on. What it takes, the poller empties
+            // from the inbox at its first read.
+            inbox |= Guarded("handed to the engine as its session began", said, () => TakeInbox(layout, coordinator, offered, said, waited)).Seen > 0;
 
             FlowSessionEnd end;
             string? unemptied;
+            driven = true;
 
             while (true)
             {
                 end = await DriveAsync(layout, command, coordinator, interrupts, offered, cancellationToken).ConfigureAwait(false);
 
                 // The last poll, the poller stopped: where an answer it takes settles the question the session paused
-                // on, the run is driven again - whatever emptying the inbox of it then meets, for it is taken.
-                var (taken, seen) = LastPoll(layout, coordinator, offered, said);
+                // on, the run is driven again - whatever emptying the inbox of it then meets, for it is taken - and that
+                // drive's start takes what the engine stands on after the poll, as the line says.
+                var (taken, seen, asked, standing) = LastPoll(layout, coordinator, offered, said);
                 inbox |= seen > 0;
                 unemptied = Empty(layout, offered);
+                var goesOn = taken > 0 && end is { Status: FlowRunStatus.Paused, Pause: null };
 
-                if (taken > 0 && end is { Status: FlowRunStatus.Paused, Pause: null })
+                if (asked is { } handed)
+                {
+                    said.Add(AskedAsTheSessionEnded(handed, goesOn ? standing : null));
+                }
+
+                if (goesOn)
                 {
                     continue;
                 }
@@ -1842,17 +1961,19 @@ public sealed class FlowService(
                 break;
             }
 
-            // An answer offered that the session never settled stays for the next session; one the session settled - taken,
-            // or refused and recorded - that the inbox would not let go is said apart, for it was weighed: the run's records
-            // hold it under its entry's id, so the next session only empties it from the inbox.
-            inbox |= SayUnsettled(layout, offered, said);
-            inbox |= SayUnemptied(layout, offered, unemptied, said);
+            // What became of what was handed to the session is said once it is over, by the one owner every exit of the
+            // session says it by - the command's own answer among it, read from what the session weighed.
+            (own, var settled) = SayWhatWasHandedOver(layout, answered, waited, offered, () => unemptied, said);
+            told = true;
+            inbox |= settled;
 
             var flow = _store.ReadFlow(layout)
                 ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.FlowFile}' is not there after the session of run '{layout.Name}', which writes it at every change");
 
             FlowStepGraph.PutAwayRunPages(_fileSystem, _output, layout, flow);
-            var source = SourceOf(layout, flow, FlowReportThresholds.Of(context.Config));
+            // The session is leaving the run: its report names each open question's next step as no engine running it
+            // would, whatever owner the records still name as it is written.
+            var source = SourceOf(layout, flow, FlowEngineState.NoEngine, FlowReportThresholds.Of(context.Config));
             var questions = source.Questions;
             var exit = ExitOf(end, flow);
             var left = FlowReports.Write(_fileSystem, source, end.Summary, exit, _clock.GetUtcNow());
@@ -1870,29 +1991,28 @@ public sealed class FlowService(
                 flow.Spent,
                 exit,
                 named);
+            var (outcome, answer) = SessionAnswer(layout.Name, answered, own, new FlowSessionSaid(end.Summary, exit), wentOn: true, result, said, [.. left, .. result.RecordLines]);
 
-            return Ended(layout, command, new CommandOutcome(exit, end.Summary, [.. said, .. left, .. result.RecordLines]), result, json);
+            return Ended(layout, command, outcome, answer, json);
         }
         catch (HarnessException ex)
         {
             // A refusal met inside the session - an answer the run does not take, a state that cannot be taken up, a
-            // definition changed - is answered as a refusal, naming the run's records as they stand; the report is the
-            // last session's, for a refused session is none. An answer handed over that a refused start weighed was
-            // handed back, for the start wrote nothing: it stays in the inbox, said as one the session never settled.
-            // The command's own answer, handed over before its session began and never weighed - the session was refused
-            // first - stays there too; one weighed and refused is settled under its entry's id, and leaves the inbox now
-            // as what a session settled does at its end.
-            inbox |= SayUnsettled(layout, offered, said);
-
-            if (answered is { Inbox: { } own } unweighed && !offered.ContainsKey(own))
+            // definition changed, a record the session's end could not read - is answered as a refusal, naming the run's
+            // records as they stand; the report is the last session's, for a refused session is none. What became of
+            // what was handed to the session is said by the one owner its end in order says it by, where that end did not
+            // say it already: an answer a refused start weighed was handed back, for the start wrote nothing, and stays in
+            // the inbox; one weighed and settled leaves it now, as what a session settled does at its end; and the
+            // command's own answer, refused as the session's start weighed it, is the command's refusal here too, the
+            // session's own end said after it where the session went on.
+            if (!told)
             {
-                said.Add(StaysHandedOver(layout, unweighed.Answer, unweighed.Question));
+                (own, var handed) = SayWhatWasHandedOver(layout, answered, waited, offered, () => Empty(layout, offered), said);
+                inbox |= handed;
             }
 
-            inbox |= SayUnemptied(layout, offered, Empty(layout, offered), said);
             var flow = SafeRead(() => _store.ReadFlow(layout));
             IReadOnlyList<FlowRecordPath> records = flow is not null ? RecordsOf(layout, inbox) : inbox ? [new FlowRecordPath("inbox", layout.InboxFile)] : [];
-            var outcome = new CommandOutcome(ex.ExitCode, ex.Message, [.. said, .. records.Select(record => $"{record.What}: {record.Path}")]);
             var result = FlowRunResult.Empty(ex.ExitCode, ex.Message) with
             {
                 Run = layout.Name,
@@ -1900,8 +2020,9 @@ public sealed class FlowService(
                 Spent = flow?.Spent,
                 Records = records,
             };
+            var (outcome, answer) = SessionAnswer(layout.Name, answered, own, new FlowSessionSaid(ex.Message, ex.ExitCode), driven, result, said, [.. records.Select(record => $"{record.What}: {record.Path}")]);
 
-            return Ended(layout, command, outcome, result, json);
+            return Ended(layout, command, outcome, answer, json);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -2001,19 +2122,7 @@ public sealed class FlowService(
     /// </summary>
     private void Tick(OrchestratorLayout layout, FlowCoordinator coordinator, Offered offered)
     {
-        switch (_store.TakeStopFile(layout))
-        {
-            case { Pause: { } pause }:
-                coordinator.RequestPause("command", pause.All);
-                break;
-
-            case { Stop: not null }:
-                // The hard stop asked of the engine from another terminal: everything in flight cancelled and ended
-                // stopped by the loop, which alone owns the graph, and the session ends with it.
-                coordinator.RequestStop();
-                break;
-        }
-
+        _ = HandOnWhatIsAsked(layout, coordinator);
         Settle(layout, offered);
 
         var inbox = _store.ReadInbox(layout);
@@ -2040,23 +2149,81 @@ public sealed class FlowService(
     }
 
     /// <summary>
-    /// The last poll of a session, its poller stopped: a request asked as the session ended was asked of this session and
-    /// of none after it, and an answer the loop never weighed - never offered it, or handed back - is taken here. What
-    /// cannot be read is said and left for the next session of the run, and the session's end stands. Emptying the inbox
-    /// of what the session settled is <see cref="Empty"/>'s, after, apart from the take: a removal that fails never
-    /// unsays an answer taken.
+    /// The last poll of a session, its poller stopped: a pause or a stop asked as the session ended is handed to the engine
+    /// as every poll hands one (<see cref="HandOnWhatIsAsked"/>) - the session an answer this poll takes drives the run on
+    /// with takes what the engine then stands on as it begins, and where none follows it ends with this session - and an
+    /// answer the loop never weighed - never offered it, or handed back - is taken here. What the engine stands on is read
+    /// of the engine once both are handed to it (<see cref="FlowCoordinator.AskedOfTheNextStart"/>), never of what
+    /// <c>stop.json</c> held: an abort this poll takes, or a stop handed to it before, stands in the place of a pause asked
+    /// beside it. What cannot be read is said and left for the next session of the run, and the session's end stands.
+    /// Emptying the inbox of what the session settled is <see cref="Empty"/>'s, after, apart from the take: a removal that
+    /// fails never unsays an answer taken.
     /// </summary>
-    /// <returns>How many answers were taken, and how many were read.</returns>
-    private (int Taken, int Seen) LastPoll(OrchestratorLayout layout, FlowCoordinator coordinator, Offered offered, List<string> said)
-        => Guarded("asked of the engine as its session ended", said, () =>
+    /// <returns>
+    /// How many answers were taken, how many were read, what was asked through <c>stop.json</c> - null where nothing was -
+    /// and what the engine's next start stands on after the poll, null where it stands on nothing.
+    /// </returns>
+    private (int Taken, int Seen, FlowAsked? Asked, FlowAsked? Standing) LastPoll(OrchestratorLayout layout, FlowCoordinator coordinator, Offered offered, List<string> said)
+    {
+        FlowAsked? asked = null;
+        var (taken, seen) = Guarded("asked of the engine as its session ended", said, () =>
         {
-            if (_store.TakeStopFile(layout) is { } late)
-            {
-                said.Add($"a {(late.Pause is not null ? "pause" : "stop")} asked as the session ended was taken with it");
-            }
-
+            asked = HandOnWhatIsAsked(layout, coordinator);
             return TakeInbox(layout, coordinator, offered, said);
         });
+
+        return (taken, seen, asked, coordinator.AskedOfTheNextStart);
+    }
+
+    /// <summary>
+    /// What a session says of a pause or a stop asked through <c>stop.json</c> as it ended (<paramref name="asked"/>), by what
+    /// the engine stands on after its last poll (<paramref name="standing"/>): taken with the session where no drive follows
+    /// it, or the engine stands on nothing; taken by the start of the drive that follows where the engine stands on it; and,
+    /// where the engine stands on another - a stop, asked of it by an abort the poll took or before the poll, beside the pause
+    /// asked - that the other replaces it, and is what the drive's start takes.
+    /// </summary>
+    /// <param name="asked">What <c>stop.json</c> asked.</param>
+    /// <param name="standing">What the next drive's start stands on; null where no drive follows, or it stands on nothing.</param>
+    private static string AskedAsTheSessionEnded(FlowAsked asked, FlowAsked? standing)
+    {
+        var what = WordOf(asked);
+
+        return standing switch
+        {
+            null => $"a {what} asked as the session ended was taken with it",
+            { } held when held == asked => $"a {what} asked as the session ended was handed to the engine, and the session the run is driven on with takes it as it begins",
+            { } held => $"a {what} asked as the session ended was handed to the engine, and a {WordOf(held)} asked of it replaces it: the session the run is driven on with takes the {WordOf(held)} as it begins",
+        };
+
+        static string WordOf(FlowAsked ask) => ask.ToString().ToLower(CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Takes what another process asked of the engine through <c>stop.json</c> and hands it to the engine, which alone
+    /// applies it: the safe pause - its machine steps stopped too where it says all - or the hard stop, everything in flight
+    /// cancelled and ended stopped by the loop, which alone owns the graph. The one owner of an ask a poll takes, every
+    /// tick's (<see cref="Tick"/>) and the session's last (<see cref="LastPoll"/>) alike: what is taken from the file is
+    /// never only removed, so a stop or a pause read as a session ends reaches the engine as one read while it runs does,
+    /// and the next session it drives takes it as it begins, as it takes one asked between sessions by any other way - by
+    /// the engine's own rule of what it stands on, a stop asked of it keeping no pause beside it.
+    /// </summary>
+    /// <returns>What was asked, or null where nothing was: what the engine stands on after it is the engine's to say (<see cref="FlowCoordinator.AskedOfTheNextStart"/>).</returns>
+    private FlowAsked? HandOnWhatIsAsked(OrchestratorLayout layout, FlowCoordinator coordinator)
+    {
+        switch (_store.TakeStopFile(layout))
+        {
+            case { Pause: { } pause }:
+                coordinator.RequestPause("command", pause.All);
+                return FlowAsked.Pause;
+
+            case { Stop: not null }:
+                coordinator.RequestStop();
+                return FlowAsked.Stop;
+
+            default:
+                return null;
+        }
+    }
 
     /// <summary>
     /// Empties from the inbox, between two drives, what the session settled (<see cref="Settle"/>), where what the removal
@@ -2078,20 +2245,187 @@ public sealed class FlowService(
     }
 
     /// <summary>
-    /// The line saying an answer the command handed over that no session weighed - its own session refused before it
-    /// did - stays in the inbox, for the next session of the run to take.
+    /// The line saying an answer the command handed over that no session settled - never weighed, its session refused
+    /// before it was, or handed back by a start that wrote nothing - stays in the inbox, for the next session of the run to
+    /// take.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
     /// <param name="answer">The answer handed over.</param>
     /// <param name="question">The question it answers.</param>
     private static string StaysHandedOver(OrchestratorLayout layout, string answer, string question)
-        => $"the answer '{answer}' handed over for question '{question}' stays in '{layout.InboxFile}', and the next session of the run takes it";
+        => $"{HandedOverAbout(answer, question)} stays in '{layout.InboxFile}', and the next session of the run takes it";
+
+    /// <summary>An answer handed over through the inbox, as every line that says what became of it names it.</summary>
+    /// <param name="answer">The answer handed over.</param>
+    /// <param name="question">The question it answers.</param>
+    private static string HandedOverAbout(string answer, string question)
+        => $"the answer '{answer}' handed over for question '{question}'";
+
+    /// <summary>
+    /// One answer handed over that waited for the recommendation its question owes, which the session's start seeks
+    /// (<see cref="FlowCoordinator.WeighHandedOver"/>): its inbox entry's id, the answer and its question, and what the start
+    /// settled it with once it had weighed it.
+    /// </summary>
+    /// <param name="Id">The inbox entry's id.</param>
+    /// <param name="Answer">The answer handed over.</param>
+    /// <param name="Question">The question it answers.</param>
+    /// <param name="Weighed">What became of it, with why where it was refused; cancelled where the start never weighed it.</param>
+    private sealed record Waited(string Id, string Answer, string Question, Task<FlowWeighed> Weighed);
+
+    /// <summary>
+    /// Says, once the session is over - however it ended, in order or by a refusal met inside it - what became of what was
+    /// handed to it through the inbox: the one owner of it, which every exit of the session calls. Each answer that waited
+    /// for the recommendation the session's start sought (<see cref="SayWhatWaited"/>), those the session never settled
+    /// (<see cref="SayUnsettled"/>) and those it settled that the inbox would not let go (<see cref="SayUnemptied"/>); and of
+    /// the command's own answer (<see cref="OwnAnswerOf"/>) - read from what the run's records and the session hold of it,
+    /// never from what the session still offers, which forgets an entry once it leaves the inbox - taken as the session
+    /// began, said so; never weighed, or handed back by a start that wrote nothing, said to stay in the inbox for the next
+    /// session (<see cref="StaysHandedOver"/>); and refused, the command's own line (<see cref="SessionAnswer"/>).
+    /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="answered">The answer the session began with; null where it began with none.</param>
+    /// <param name="waited">The answers that waited for the start's advice, in the order handed over.</param>
+    /// <param name="offered">What the session holds of what was handed over.</param>
+    /// <param name="empty">
+    /// Empties the inbox of what the session settled - asked once what it never settled is said, for the emptying forgets
+    /// every offer completed - and says why it could not; null where it did, or nothing was left to empty.
+    /// </param>
+    /// <param name="said">What the session says.</param>
+    /// <returns>What became of the command's own answer - null where it handed none, or the session settled none of it - and whether the inbox is named among the session's records.</returns>
+    private (FlowWeighed? Own, bool Inbox) SayWhatWasHandedOver(
+        OrchestratorLayout layout,
+        (string Question, string Answer, string? Text, string? Inbox)? answered,
+        List<Waited> waited,
+        Offered offered,
+        Func<string?> empty,
+        List<string> said)
+    {
+        var entry = answered?.Inbox;
+        var own = entry is null ? null : OwnAnswerOf(layout, entry, offered);
+
+        SayWhatWaited(waited, entry, said);
+        var inbox = SayUnsettled(layout, offered, entry, said);
+
+        if (answered is { Inbox: { } mine } given)
+        {
+            if (own is null)
+            {
+                said.Add(StaysHandedOver(layout, given.Answer, given.Question));
+            }
+            else if (own.How == FlowHandedOver.Taken && !waited.Any(answer => string.Equals(answer.Id, mine, StringComparison.Ordinal)))
+            {
+                // One that waited for the start's advice is said taken with what waited.
+                said.Add($"{HandedOverAbout(given.Answer, given.Question)} was taken as the session began");
+            }
+        }
+
+        inbox |= SayUnemptied(layout, offered, empty(), said);
+        return (own, inbox);
+    }
+
+    /// <summary>
+    /// What became of the answer the command handed over under its own inbox entry <paramref name="entry"/>, once its session
+    /// is over: what the run's records hold under the entry's id - taken, or refused with the run's why - and otherwise what
+    /// the session settled it with, which it keeps past the entry's leaving the inbox (<see cref="Offered.WhatBecameOf"/>),
+    /// so a record the session's end could not read never turns an answer it weighed into one it never did. Null where
+    /// neither holds it - never weighed, or handed back by a start that wrote nothing - so it stays in the inbox.
+    /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="entry">The inbox entry's id.</param>
+    /// <param name="offered">What the session holds of what was handed over.</param>
+    private FlowWeighed? OwnAnswerOf(OrchestratorLayout layout, string entry, Offered offered)
+        => Weigh(layout, entry) switch
+        {
+            (_, { } refused) => new FlowWeighed(FlowHandedOver.Refused, refused.Why),
+            ({ }, _) => new FlowWeighed(FlowHandedOver.Taken),
+            _ => offered.WhatBecameOf(entry),
+        };
+
+    /// <summary>
+    /// The command's answer once its session is over, however the session ended - its end in order, or a refusal met
+    /// inside it: where the run refused the answer the command handed over under its own inbox entry (<paramref name="own"/>)
+    /// - it waited for the recommendation the session's start sought, and a stop or a pause asked as that start began
+    /// sought none for it, or the session weighed it refused at once - the command's refusal, by the one rule an answer it
+    /// handed over is answered by whichever session weighed it (<see cref="OwnRefused"/>): 13 with the run's why, whatever
+    /// the session went on to do, its own end - its line and its code - said after it and kept beside it in the command's
+    /// document (<see cref="FlowRunResult.Session"/>) where it went on. Otherwise the session's own end is the command's.
+    /// </summary>
+    /// <param name="run">The run's name.</param>
+    /// <param name="answered">The answer the session began with; null where it began with none.</param>
+    /// <param name="own">What became of the command's own answer (<see cref="SayWhatWasHandedOver"/>).</param>
+    /// <param name="session">The session's own end: its line and its code.</param>
+    /// <param name="wentOn">Whether the session was driven: false where the refusal of the answer it began with ended it first, so its end is that refusal's.</param>
+    /// <param name="result">The session's document.</param>
+    /// <param name="said">What the session said.</param>
+    /// <param name="after">What the command says after it: what is left for a person, and the records.</param>
+    private static (CommandOutcome Outcome, FlowRunResult Result) SessionAnswer(
+        string run,
+        (string Question, string Answer, string? Text, string? Inbox)? answered,
+        FlowWeighed? own,
+        FlowSessionSaid session,
+        bool wentOn,
+        FlowRunResult result,
+        IReadOnlyList<string> said,
+        IReadOnlyList<string> after)
+    {
+        if (answered is { Inbox: not null } mine && own is { How: FlowHandedOver.Refused, Problem: { } why })
+        {
+            var refused = OwnRefused(run, mine.Answer, mine.Question, why, [.. said, .. wentOn ? new[] { $"the session it began went on without it: {session.Said}" } : [], .. after]);
+            return (refused, result with { Summary = refused.Message, ExitCode = refused.ExitCode, Session = wentOn ? session : null });
+        }
+
+        return (new CommandOutcome(session.ExitCode, session.Summary, [.. said, .. after]), result);
+    }
+
+    /// <summary>
+    /// Says what became of each answer handed over that waited for the recommendation its question owes - taken once it
+    /// was sought, or not taken and why, a stop or a pause asked as the start began having sought none for it - once the
+    /// session's start has weighed it, as what became of one weighed at once is said as it is weighed (<see cref="TakeInbox"/>).
+    /// The command's own is the command's answer (<see cref="SessionAnswer"/>) where it was refused, and said here where it
+    /// was taken; one the start never weighed, handed back, is said as one the session never settled is.
+    /// </summary>
+    /// <param name="waited">The answers that waited, in the order handed over.</param>
+    /// <param name="own">The inbox entry the command handed its own answer over under; null where it handed none.</param>
+    /// <param name="said">What the session says.</param>
+    private static void SayWhatWaited(IEnumerable<Waited> waited, string? own, List<string> said)
+    {
+        foreach (var answer in waited.Where(answer => answer.Weighed.IsCompletedSuccessfully))
+        {
+            var about = $"{HandedOverAbout(answer.Answer, answer.Question)}, which waited for the recommendation its question owes,";
+
+            switch (answer.Weighed.Result)
+            {
+                case { How: FlowHandedOver.Taken }:
+                    said.Add($"{about} was taken once it was sought");
+                    break;
+                case { How: FlowHandedOver.Refused } refused when !string.Equals(answer.Id, own, StringComparison.Ordinal):
+                    said.Add($"{about} was not taken: {refused.Problem}");
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// What the command answers where the run refused the answer it handed over under its own inbox entry, whichever session
+    /// weighed it - the engine it was handed to, one that claimed the run before the command's claim, or the command's own,
+    /// whose start it waited for: the run's refusal (13) with the run's why, as the run's records hold it under the entry's
+    /// id - the one rule of it, whatever the session that weighed it went on to do, for the act the command was asked for
+    /// was not taken.
+    /// </summary>
+    /// <param name="run">The run's name.</param>
+    /// <param name="answer">The answer handed over.</param>
+    /// <param name="question">The question it answers.</param>
+    /// <param name="why">Why the run did not take it, as its records say.</param>
+    /// <param name="details">What the command says after it.</param>
+    private static CommandOutcome OwnRefused(string run, string answer, string question, string why, IReadOnlyList<string> details)
+        => CommandOutcome.Refused(NotTaken(run, answer, question, why), details);
 
     /// <summary>
     /// The one owner of what the command answers for an answer it handed over under its own inbox entry that a session
-    /// of the run weighed - the engine it was handed to, a session that claimed the run before the command's claim, live
-    /// or gone since: taken, said taken; refused, the run's refusal (13) with the run's why; the questions and the inbox
-    /// named either way, after what the command said before. Null where no session weighed it.
+    /// of the run weighed before the command's own session - the engine it was handed to, a session that claimed the run
+    /// before the command's claim, live or gone since: taken, said taken; refused, the run's refusal (13) with the run's why
+    /// (<see cref="OwnRefused"/>); the questions and the inbox named either way, after what the command said before. Null
+    /// where no session weighed it.
     /// </summary>
     /// <param name="weighed">What the run's questions hold under the entry's id (<see cref="FlowQuestionsFile.Weighed"/>).</param>
     /// <param name="layout">The run's layout.</param>
@@ -2112,7 +2446,7 @@ public sealed class FlowService(
         }
         else if (weighed.Refused is { } refusal)
         {
-            outcome = CommandOutcome.Refused(NotTaken(run, answer, question, refusal.Why), [.. said, .. named]);
+            outcome = OwnRefused(run, answer, question, refusal.Why, [.. said, .. named]);
         }
         else
         {
@@ -2131,7 +2465,7 @@ public sealed class FlowService(
 
     /// <summary>
     /// The run's refusal of an answer the command handed over, as the run's records hold it under the entry's id
-    /// (<see cref="AnswerOfWeighed"/>).
+    /// (<see cref="OwnRefused"/>).
     /// </summary>
     /// <param name="run">The run's name.</param>
     /// <param name="answer">The answer handed over.</param>
@@ -2142,12 +2476,16 @@ public sealed class FlowService(
 
     /// <summary>
     /// Says the answers handed over that the session never settled - never weighed, or handed back by the loop, as a
-    /// refused start hands back what it weighed - each of which stays in the inbox for the next session of the run.
+    /// refused start hands back what it weighed - each of which stays in the inbox for the next session of the run; the
+    /// command's own (<paramref name="own"/>) apart, which its own line says (<see cref="SayWhatWasHandedOver"/>).
     /// </summary>
     /// <returns>Whether there was one, so the inbox is named among the session's records.</returns>
-    private static bool SayUnsettled(OrchestratorLayout layout, Offered offered, List<string> said)
+    private static bool SayUnsettled(OrchestratorLayout layout, Offered offered, string? own, List<string> said)
     {
-        var handed = offered.Where(pair => !pair.Value.IsCompletedSuccessfully).Select(pair => pair.Key).ToList();
+        var handed = offered
+            .Where(pair => !pair.Value.IsCompletedSuccessfully && !string.Equals(pair.Key, own, StringComparison.Ordinal))
+            .Select(pair => pair.Key)
+            .ToList();
 
         if (handed.Count == 0)
         {
@@ -2182,7 +2520,7 @@ public sealed class FlowService(
     /// amendment offered to the loop, or taken between two drives, with how it was settled - and which of them were
     /// amendments, so what is said of them names each by what it is.
     /// </summary>
-    private sealed class Offered : Dictionary<string, Task<FlowHandedOver>>
+    private sealed class Offered : Dictionary<string, Task<FlowWeighed>>
     {
         /// <summary>A session's entries, by their ids, none yet.</summary>
         public Offered()
@@ -2192,6 +2530,22 @@ public sealed class FlowService(
 
         /// <summary>The ids of the entries that are amendments of the request; every other is an answer.</summary>
         public HashSet<string> Amendments { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// What the session settled each entry it no longer holds with, by its id: kept as the entry is forgotten once the
+        /// inbox lets it go (<see cref="Settle"/>), so what is said of an entry the session weighed never reads it as one
+        /// it never weighed.
+        /// </summary>
+        public Dictionary<string, FlowWeighed> Weighed { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// What the session settled the entry <paramref name="id"/> with - an offer it still holds, completed, or one it
+        /// forgot as it left the inbox; null where it settled none: never weighed, still under way, or handed back.
+        /// </summary>
+        public FlowWeighed? WhatBecameOf(string id)
+            => TryGetValue(id, out var offer)
+                ? offer.IsCompletedSuccessfully ? offer.Result : null
+                : Weighed.GetValueOrDefault(id);
 
         /// <summary>The entries <paramref name="ids"/> counted by what each is: answers and amendments, each kind named once where any is.</summary>
         public string Counted(IReadOnlyCollection<string> ids)
@@ -2230,7 +2584,8 @@ public sealed class FlowService(
     /// which it settles only once what became of it is written (a session's start holds its writes, and hands back what
     /// it weighed where it is refused), and one weighed between two drives (<see cref="TakeInbox"/>) - and forgets each
     /// offer the loop handed back, which stays in the inbox for whoever takes it next. The one owner of emptying a
-    /// settled answer: it is forgotten only once the inbox has let it go - a removal that fails leaves it settled, tried
+    /// settled answer: it is forgotten only once the inbox has let it go, what it was settled with kept
+    /// (<see cref="Offered.Weighed"/>) - a removal that fails leaves it settled, tried
     /// again at the next poll or the next drive's end, and never offered to the engine nor taken a second time; one the
     /// inbox still holds as the session ends is settled by the run's records, under its entry's id, so the next session
     /// only empties it.
@@ -2242,6 +2597,7 @@ public sealed class FlowService(
             if (!HandedBack(offer))
             {
                 _ = _store.RemoveFromInbox(layout, id);
+                offered.Weighed[id] = offer.Result;
             }
 
             _ = offered.Remove(id);
@@ -2250,13 +2606,14 @@ public sealed class FlowService(
     }
 
     /// <summary>Whether the loop handed <paramref name="offer"/> back - cancelled as its session ended, never weighed, or weighed by a start that wrote nothing: the answer is no longer the session's, and stays in the inbox.</summary>
-    private static bool HandedBack(Task<FlowHandedOver> offer)
+    private static bool HandedBack(Task<FlowWeighed> offer)
         => offer is { IsCompleted: true, IsCompletedSuccessfully: false };
 
     /// <summary>
     /// Takes everything in the inbox the session does not hold - never offered to the loop, or handed back by it -
     /// between two drives: each answer weighed by the engine under its entry's id
-    /// (<see cref="FlowCoordinator.AnswerHandedOver(string, string, string?, out string?, string?, string?, bool, DateTimeOffset?)"/>) - and each amendment of
+    /// (<see cref="FlowCoordinator.WeighHandedOver"/>) - one handed over as the session begins to a question owing the
+    /// recommendation its start seeks waiting for that advice, said so, and settled as the start weighs it - and each amendment of
     /// the request weighed against the same gates
     /// (<see cref="FlowCoordinator.AmendmentHandedOver(string, string, out string?, string?, DateTimeOffset?, string?)"/>) -
     /// applied as a person's through <c>answer-orchestrator</c> or <c>amend-orchestrator-request</c>; or - where the
@@ -2264,10 +2621,16 @@ public sealed class FlowService(
     /// records hold it already - a session before this one weighed it, and its removal failed or was cut off - only
     /// emptied from the inbox. Each is settled as one the loop weighed is - held as an offer completed - and counted
     /// then, so <see cref="Settle"/> empties it from the inbox and tries again where that fails, and nothing takes or
-    /// offers it a second time.
+    /// offers it a second time. One that waits for the advice the start seeks joins <paramref name="waited"/>, for what
+    /// became of it to be said once the start has weighed it (<see cref="SayWhatWaited"/>).
     /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="coordinator">The engine.</param>
+    /// <param name="offered">What the session holds of what was handed over.</param>
+    /// <param name="said">What the session says.</param>
+    /// <param name="waited">Where an answer that waits for the start's advice is kept; null between a session's drives, where none waits.</param>
     /// <returns>How many were taken, and how many were read.</returns>
-    private (int Taken, int Seen) TakeInbox(OrchestratorLayout layout, FlowCoordinator coordinator, Offered offered, List<string> said)
+    private (int Taken, int Seen) TakeInbox(OrchestratorLayout layout, FlowCoordinator coordinator, Offered offered, List<string> said, List<Waited>? waited = null)
     {
         var taken = 0;
         var seen = 0;
@@ -2282,24 +2645,29 @@ public sealed class FlowService(
             }
 
             seen++;
-            var handed = coordinator.AnswerHandedOver(entry.Question, entry.Answer, entry.Text, out var problem, AnswerCommand, entry.Id, entry.Again, entry.At);
-            var about = $"the answer '{entry.Answer}' handed over for question '{entry.Question}'";
+            var handed = coordinator.WeighHandedOver(entry.Question, entry.Answer, entry.Text, AnswerCommand, entry.Id, entry.Again, entry.At);
+            var about = HandedOverAbout(entry.Answer, entry.Question);
 
-            switch (handed)
+            switch (handed is { IsCompletedSuccessfully: true } weighed ? weighed.Result : null)
             {
-                case FlowHandedOver.Taken:
+                case { How: FlowHandedOver.Taken }:
                     taken++;
                     said.Add($"{about} was taken from the inbox");
                     break;
-                case FlowHandedOver.Refused:
-                    said.Add($"{about} was not taken: {problem}");
+                case { How: FlowHandedOver.Refused } refused:
+                    said.Add($"{about} was not taken: {refused.Problem}");
+                    break;
+                case { How: FlowHandedOver.RecordedAlready }:
+                    said.Add($"{about} was recorded by the run already, so it is only emptied from the inbox");
                     break;
                 default:
-                    said.Add($"{about} was recorded by the run already, so it is only emptied from the inbox");
+                    // What became of it is said once the start has weighed it (SayWhatWaited).
+                    said.Add($"{about} waits for the recommendation its question owes, which this session seeks first, and is weighed once it is sought");
+                    waited?.Add(new Waited(entry.Id, entry.Answer, entry.Question, handed));
                     break;
             }
 
-            offered[entry.Id] = Task.FromResult(handed);
+            offered[entry.Id] = handed;
         }
 
         foreach (var entry in held?.Amendments ?? [])
@@ -2327,7 +2695,7 @@ public sealed class FlowService(
                     break;
             }
 
-            offered[entry.Id] = Task.FromResult(handed);
+            offered[entry.Id] = Task.FromResult(new FlowWeighed(handed, handed is FlowHandedOver.Refused ? problem : null));
             _ = offered.Amendments.Add(entry.Id);
         }
 

@@ -154,14 +154,14 @@ public enum AgentToolsOwner
 public sealed record AgentRoot(string Path, bool Writable);
 
 /// <summary>
-/// Where a run works: its agent's worktree where it has one - else the main checkout, which it only reads - its work
-/// directory either way, the extra roots its definition names, and the working directory it starts from.
+/// Where a run works: its agent's worktree - an agent that only reads has one too, its own scratch - its work directory,
+/// the extra roots its definition names, and the working directory it starts from.
 /// </summary>
-/// <param name="Worktree">Its agent's worktree; null for an agent with none, which reads the main tree.</param>
+/// <param name="Worktree">Its agent's worktree; null for a run of no agent's, and for an agent whose record an older tool wrote with no tree.</param>
 /// <param name="WorkDirectory">The agent's own <c>work/&lt;agent&gt;/</c>, which it reads and writes either way.</param>
 /// <param name="MainCheckout">The main checkout.</param>
 /// <param name="ExtraRoots">The extra roots, each readable, writable where its definition says.</param>
-/// <param name="WorkingDirectory">Where the client starts the agent: the worktree, else the work directory.</param>
+/// <param name="WorkingDirectory">Where the client starts the agent: the worktree, else its work directory - the reporter's, a run of no agent's.</param>
 /// <param name="RunDirectory">The run's directory: the reporter's, and where a step's web search keeps the run's record, <c>web/searches.jsonl</c>.</param>
 public sealed record AgentWorkspace(
     string? Worktree,
@@ -169,7 +169,15 @@ public sealed record AgentWorkspace(
     string MainCheckout,
     IReadOnlyList<AgentRoot> ExtraRoots,
     string WorkingDirectory,
-    string RunDirectory);
+    string RunDirectory)
+{
+    /// <summary>
+    /// Whether its agent only reads: its worktree is its own scratch, the main checkout's HEAD as its step started, which it
+    /// writes - nothing of it is ever folded - and the main checkout is a root it reads, the run's records and logs among
+    /// what it holds. False for an agent whose work is folded, and for a run of no agent's.
+    /// </summary>
+    public bool OnlyReads { get; init; }
+}
 
 /// <summary>
 /// The output a run is to produce, where its step names one: what its answer's envelope holds as its output
@@ -199,6 +207,17 @@ public sealed record AgentOutput(string Name, string Schema, int MaxRepairs = 2,
     /// count of repairs as a schema's problem (<see cref="StructuredOutputGate"/>).
     /// </summary>
     public Func<System.Text.Json.Nodes.JsonNode, IReadOnlyList<string>>? Holds { get; init; }
+
+    /// <summary>
+    /// What a step that judges the answer finds wrong with an output that reads against the schema and holds to the step's
+    /// own rules - a plan's work items, held by the plan check that reads them; a builder's closing record, by the class
+    /// closure - each problem as that step words it; null where none judges it so. The gate hands each back to the agent in
+    /// the same conversation, as a schema's problem is, and counts none among its repairs: the agent answers again until its
+    /// output passes, or gives an output it gave already in this run, which says it cannot put right what is left - and the
+    /// run then completes with that output as given, for the step that judges it records what is still wrong and gates on
+    /// it (<see cref="StructuredOutputGate"/>).
+    /// </summary>
+    public Func<System.Text.Json.Nodes.JsonNode, Task<IReadOnlyList<string>>>? Corrections { get; init; }
 
     /// <summary>
     /// Why <see cref="Schema"/> is no schema an answer can be held to, as <see cref="Schemas.JsonSchemaSubset.TextProblems"/>
@@ -378,6 +397,40 @@ public sealed record AgentWebSearch(
     int MaxPerStep,
     IReadOnlyDictionary<string, Web.Search.WebSearchKey> Keys)
 {
+    /// <summary>
+    /// What the search does with the machine's gh login while it runs (<see cref="Web.Search.WebSearchRenewal"/>), over the
+    /// mask the run's records are kept through; null where it renews nothing, and each key is sent as it was read.
+    /// </summary>
+    public Web.Search.WebSearchRenewal? Renewal { get; init; }
+
+    /// <summary>
+    /// This search kept going over the machine's gh login while it runs, with the mask its run's records are kept through:
+    /// where a source of it is signed by the login, renewing by <paramref name="logins"/> (<see cref="Renewal"/>) over a mask
+    /// that begins as <paramref name="mask"/> and comes to hold each token read again before it is sent
+    /// (<see cref="Execution.GrowingMask"/>), held by the engine session's masks (<see cref="Execution.SessionMasks"/>); else
+    /// this search and <paramref name="mask"/> as they are.
+    /// </summary>
+    /// <param name="mask">The mask the run begins with; null where it carries no secret.</param>
+    /// <param name="logins">The machine's gh logins, as the search's keys were read of them.</param>
+    /// <param name="layout">The repository, whose main checkout <c>gh</c> runs in.</param>
+    public (AgentWebSearch Search, Execution.ILineMask? Mask) Renewing(Runners.ActionValues? mask, Ci.GhLogins logins, Repository.HarnessLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(logins);
+        ArgumentNullException.ThrowIfNull(layout);
+
+        if (!Sources.Any(source => source.Credential?.Host is not null))
+        {
+            return (this, mask);
+        }
+
+        var growing = new Execution.GrowingMask(mask ?? Runners.ActionValues.Empty);
+
+        // Held by the engine session's masks as it grows, so the command's output logs are masked of each token it comes to hold.
+        Execution.SessionMasks.OfSession()?.Hold(growing);
+
+        return (this with { Renewal = new Web.Search.WebSearchRenewal(logins, layout, growing) }, growing);
+    }
+
     /// <summary>The search a step whose <c>search</c> is <paramref name="search"/> is given of <paramref name="sources"/>, with <paramref name="keys"/>.</summary>
     /// <param name="sources">The configuration's web search.</param>
     /// <param name="search">The step's <c>search</c>; <see langword="null"/> where it names none.</param>
@@ -406,8 +459,9 @@ public sealed record AgentKey(string Name, string Value)
 /// </summary>
 public sealed class AgentMessages
 {
-    private readonly Channel<string> _messages = Channel.CreateUnbounded<string>(
-        new UnboundedChannelOptions { SingleReader = true });
+    // Read by more than one at a time: a client hands the launch what waits as its interrupt is raised, on the thread
+    // that raises it, while its own reader waits for the next message.
+    private readonly Channel<string> _messages = Channel.CreateUnbounded<string>();
 
     private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -428,17 +482,20 @@ public sealed class AgentMessages
 
     /// <summary>
     /// Takes the oldest message posted and not yet taken, without waiting: for a client that gives the agent what it was
-    /// told at the points its loop reaches, rather than as each is posted (<see cref="ReadAllAsync"/>).
+    /// told at the points its loop reaches, or as each is posted (<see cref="WaitToReadAsync"/>).
     /// </summary>
     /// <param name="message">The message; null where none waits.</param>
     /// <returns>Whether one waited.</returns>
     public bool TryTake([System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out string message) => _messages.Reader.TryRead(out message);
 
-    /// <summary>Each message the engine has told the agent, as it is told, until the run ends.</summary>
+    /// <summary>
+    /// Waits until a message is posted and not yet taken, for a client that gives the agent each message as it is posted
+    /// - taking what waits with <see cref="TryTake"/> - rather than at the points its loop reaches.
+    /// </summary>
     /// <param name="cancellationToken">Stops waiting.</param>
-    /// <returns>The messages, in the order they were posted.</returns>
-    public IAsyncEnumerable<string> ReadAllAsync(CancellationToken cancellationToken)
-        => _messages.Reader.ReadAllAsync(cancellationToken);
+    /// <returns>True once one waits; false once the messages were ended and every one was taken.</returns>
+    public ValueTask<bool> WaitToReadAsync(CancellationToken cancellationToken)
+        => _messages.Reader.WaitToReadAsync(cancellationToken);
 
     /// <summary>Ends the messages: no more will be posted, and the reader's wait ends.</summary>
     public void Complete()
@@ -470,11 +527,28 @@ public sealed class AgentTurnInterrupt
 
     private readonly TaskCompletionSource _asked = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    /// <summary>Interrupts the agent's current turn.</summary>
-    public void Interrupt() => _asked.TrySetResult();
+    private readonly CancellationTokenSource _raised = new();
+
+    /// <summary>
+    /// Interrupts the agent's current turn: what <see cref="WhenAsked"/> was given runs first, on this thread, so the
+    /// interrupt reaches the client after every message posted before it and before any posted after.
+    /// </summary>
+    public void Interrupt()
+    {
+        _raised.Cancel();
+        _asked.TrySetResult();
+    }
 
     /// <summary>Completes once <see cref="Interrupt"/> is raised.</summary>
     public Task Asked => _asked.Task;
+
+    /// <summary>
+    /// Runs <paramref name="asked"/> as the interrupt is raised, on the thread that raises it - at once, on this one,
+    /// where it was raised already: for a client whose wire orders the interrupt among the messages posted to it.
+    /// </summary>
+    /// <param name="asked">What the client does with the interrupt; it must not throw.</param>
+    /// <returns>The registration, disposed once the client no longer serves the run: its disposal waits for a call under way.</returns>
+    public CancellationTokenRegistration WhenAsked(Action asked) => _raised.Token.Register(asked);
 }
 
 /// <summary>
@@ -553,7 +627,8 @@ public sealed record AgentStepRequest(
     /// <summary>
     /// The run's codebase section, the <c>&lt;codebase&gt;</c> part of the first user message of each launch that begins a
     /// conversation of its own, after the repository map where there is one (<see cref="AgentPromptParts"/>): a reason
-    /// step's context pack, or the sentence for a graph the run never built; null where the run was given none.
+    /// step's context pack, or the sentence for a graph the run never built, where its step pushes its pack; null or empty
+    /// where the run was pushed none - a step whose graph is tools asks the graph tool's pack for its pages.
     /// </summary>
     public string? Codebase { get; init; }
 
@@ -562,7 +637,8 @@ public sealed record AgentStepRequest(
     /// user message of each launch that begins a conversation of its own (<see cref="AgentPromptParts"/>): the run's
     /// own, made once for each ground of reads the run's steps share, from the base as it stood when the first graphed
     /// reason step of that ground was given its prompt - the same bytes for every step that reads alike, so a client that
-    /// caches a prefix reads it from the cache; null where the run was given none.
+    /// caches a prefix reads it from the cache - pushed to a step whose graph is map; null where the run was pushed none -
+    /// a step whose graph is tools asks the graph tool's map for its pages.
     /// </summary>
     public string? Map { get; init; }
 
@@ -820,7 +896,8 @@ public sealed record AgentRun(
     /// <summary>
     /// The run's codebase section, the <c>&lt;codebase&gt;</c> part of the first user message of each launch that begins a
     /// conversation of its own, after the repository map where there is one (<see cref="AgentPromptParts"/>): a reason
-    /// step's context pack, or the sentence for a graph the run never built; null where the run was given none.
+    /// step's context pack, or the sentence for a graph the run never built, where its step pushes its pack; null or empty
+    /// where the run was pushed none - a step whose graph is tools asks the graph tool's pack for its pages.
     /// </summary>
     public string? Codebase { get; init; }
 
@@ -829,8 +906,8 @@ public sealed record AgentRun(
     /// first user message of each launch that begins a conversation of its own (<see cref="AgentPromptParts"/>): the run's
     /// own, made once for each ground of reads the run's steps share, from the base as it stood when the first graphed
     /// reason step of that ground was given its prompt - the same bytes for every step that reads alike, so a client that
-    /// caches a prefix reads it
-    /// from the cache; null where the run was given none.
+    /// caches a prefix reads it from the cache - pushed to a step whose graph is map; null where the run was pushed none -
+    /// a step whose graph is tools asks the graph tool's map for its pages.
     /// </summary>
     public string? Map { get; init; }
 
@@ -964,7 +1041,7 @@ public sealed record AgentEntries(Configuration.AgentProviderConfig Provider, Co
 /// The tool, answering from the run's own view of its graph; null where none was built, and every call of the tool then
 /// answers <see cref="Gone"/>.
 /// </param>
-/// <param name="Recorded">Told of each line the graph leaves - a call, an escape, a denied read - where the run keeps them; null where it keeps none.</param>
+/// <param name="Recorded">Told of each line the graph leaves - a call, an escape, a whole read answered with the file's outline - where the run keeps them; null where it keeps none.</param>
 /// <param name="AfterWriteAsync">
 /// Syncs the graph by what a write or a command of the run's wrote, and makes <paramref name="Tool"/> answer from the view
 /// it leaves (<see cref="Runtime.AfterWrites.SyncGraphAsync"/>); null where nothing syncs.
@@ -981,7 +1058,7 @@ public sealed record AgentGraphSupport(
     /// <summary>The tool's name, as the runtime offers it and an agent calls it.</summary>
     public const string ToolName = "graph";
 
-    /// <summary>Why no graph was built, where none was - every call of the tool answers it, and the run's codebase section says it; null where one was.</summary>
+    /// <summary>Why no graph was built, where none was - every call of the tool answers it, and the run's codebase section says it where its step pushes its pack; null where one was.</summary>
     public string? Gone { get; init; }
 }
 

@@ -528,7 +528,6 @@ public sealed partial class GitClient(
                 directory,
                 ["cat-file", "--batch-check=%(objecttype) %(objectname)"],
                 echoOutput: false,
-                untranslated: false,
                 indexFile: null,
                 input.ToString(),
                 cancellationToken)
@@ -705,7 +704,6 @@ public sealed partial class GitClient(
                 directory,
                 ["--literal-pathspecs", "checkout", "--no-overlay", "--quiet", commit, "--pathspec-from-file=-", "--pathspec-file-nul"],
                 echoOutput: false,
-                untranslated: false,
                 indexFile: null,
                 string.Join('\0', paths),
                 cancellationToken)
@@ -767,7 +765,6 @@ public sealed partial class GitClient(
                     directory,
                     ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", GitOwnSettings.SubmoduleCommits, "--"],
                     echoOutput: false,
-                    untranslated: false,
                     index,
                     standardInput: null,
                     cancellationToken,
@@ -815,7 +812,7 @@ public sealed partial class GitClient(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commit);
 
-        var result = await RunCoreAsync(directory, ["reset", "--mixed", "--quiet", commit, "--"], echoOutput: false, untranslated: false, cancellationToken).ConfigureAwait(false);
+        var result = await RunCoreAsync(directory, ["reset", "--mixed", "--quiet", commit, "--"], echoOutput: false, cancellationToken).ConfigureAwait(false);
 
         Ensure(result, $"move '{directory}' to {commit}");
     }
@@ -861,7 +858,7 @@ public sealed partial class GitClient(
         ];
 
         Task<GitCommandResult> RunAsync(IReadOnlyList<string> arguments, ChildInput? input)
-            => RunCoreAsync(directory, [.. command, .. arguments], echoOutput: false, untranslated: false, indexFile: null, input, cancellationToken, objects: how.Store);
+            => RunCoreAsync(directory, [.. command, .. arguments], echoOutput: false, indexFile: null, input, cancellationToken, objects: how.Store);
 
         var ids = new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -1011,7 +1008,6 @@ public sealed partial class GitClient(
             directory,
             ["--no-optional-locks", "status", "--porcelain", "-z", "--untracked-files=no", "--ignore-submodules=all"],
             echoOutput: false,
-            untranslated: false,
             indexCopy,
             standardInput: null,
             cancellationToken,
@@ -1184,14 +1180,16 @@ public sealed partial class GitClient(
     public async Task<bool> IsIgnoredAsync(
         string directory,
         string path,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool asTheIndexHolds = false)
     {
         // check-ignore's exit code is three valued: 0 matched, 1 did not match, and
         // anything else is a failure. Folding the third into "not ignored" would
-        // report a secret as safe to copy because the question itself errored.
+        // report a secret as safe to copy because the question itself errored. Without
+        // --no-index, a path the index tracks is never ignored, as git reads it.
         var result = await RunAsync(
             directory,
-            ["check-ignore", "--quiet", "--no-index", "--", Literally(path)],
+            ["check-ignore", "--quiet", .. asTheIndexHolds ? Array.Empty<string>() : ["--no-index"], "--", Literally(path)],
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return result.ExitCode switch
@@ -1735,6 +1733,23 @@ public sealed partial class GitClient(
             .Where(entry => entry.IsFile)
             .Select(entry => entry.Name)];
 
+    public async Task<IReadOnlyList<GitName>> ListDirectoriesAtCommitAsync(
+        string directory,
+        string commit,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commit);
+
+        // With -t every tree on the way is listed beside what it holds, an empty one among them, so each directory is its
+        // own entry, never only a parent read off a file's path.
+        var result = await RunForBytesAsync(directory, ["ls-tree", "-r", "-t", "-z", "--full-tree", commit], cancellationToken)
+            .ConfigureAwait(false);
+
+        Ensure(result, $"list the directories at {commit}");
+
+        return [.. TreeEntries(result.StandardOutput).Where(entry => !entry.IsFile).Select(entry => entry.Name)];
+    }
+
     public async Task<IReadOnlyList<GitName>> ListNamesAsync(
         string directory,
         IReadOnlyList<string> arguments,
@@ -1816,7 +1831,6 @@ public sealed partial class GitClient(
             directory,
             arguments,
             echoOutput: false,
-            untranslated: false,
             indexFile: null,
             standardInput,
             cancellationToken,
@@ -1966,7 +1980,7 @@ public sealed partial class GitClient(
         IReadOnlyList<string> arguments,
         bool echoOutput = false,
         CancellationToken cancellationToken = default)
-        => RunCoreAsync(directory, arguments, echoOutput, untranslated: false, cancellationToken);
+        => RunCoreAsync(directory, arguments, echoOutput, cancellationToken);
 
     /// <inheritdoc/>
     public Task<GitCommandResult> RunWithinAsync(
@@ -1974,7 +1988,7 @@ public sealed partial class GitClient(
         IReadOnlyList<string> arguments,
         TimeSpan limit,
         CancellationToken cancellationToken = default)
-        => RunCoreAsync(directory, arguments, echoOutput: false, untranslated: false, indexFile: null, standardInput: null, cancellationToken, limit: limit);
+        => RunCoreAsync(directory, arguments, echoOutput: false, indexFile: null, standardInput: null, cancellationToken, limit: limit);
 
     /// <inheritdoc/>
     public Task<GitCommandResult> RunWithHooksAsync(
@@ -1988,7 +2002,6 @@ public sealed partial class GitClient(
             directory,
             arguments,
             echoOutput: false,
-            untranslated: false,
             indexFile: null,
             standardInput: null,
             cancellationToken,
@@ -2006,7 +2019,6 @@ public sealed partial class GitClient(
             directory,
             arguments,
             echoOutput: false,
-            untranslated: true,
             indexFile: null,
             standardInput is null ? null : ChildInput.Of(standardInput),
             cancellationToken,
@@ -2019,7 +2031,7 @@ public sealed partial class GitClient(
 
         // Asked as git asks it before it connects, of the helpers the configuration names: one that has none to give
         // answers nothing, for nobody is there to type one.
-        var result = await RunCoreAsync(directory, ["credential", "fill"], echoOutput: false, untranslated: true, indexFile: null, ChildInput.Of($"url={url}\n\n"), cancellationToken)
+        var result = await RunCoreAsync(directory, ["credential", "fill"], echoOutput: false, indexFile: null, ChildInput.Of($"url={url}\n\n"), cancellationToken)
             .ConfigureAwait(false);
 
         if (!result.Succeeded)
@@ -2039,29 +2051,23 @@ public sealed partial class GitClient(
     }
 
     /// <summary>
-    /// Runs a read-only query whose failure message is inspected, with git's messages
-    /// untranslated.
+    /// Runs a read-only query whose failure message is inspected: "not a git repository"
+    /// (<see cref="NotARepositoryAnswers"/>) and "not a gitdir" are recognised by their text, which every git of the tool's
+    /// says untranslated but one git runs the repository's hooks for, which no question is
+    /// (<see cref="GitOwnSettings.Untranslated"/>).
     /// </summary>
-    /// <remarks>
-    /// "not a git repository" (<see cref="NotARepositoryAnswers"/>) and "not a gitdir" are recognised by their text, and a translated
-    /// git answers in another language, so these queries run under <c>LC_ALL=C</c>. The override is kept
-    /// to them alone: every other git command, including those that run the user's hooks,
-    /// keeps the user's locale, because forcing C onto a hook changes how it handles
-    /// anything outside ASCII.
-    /// </remarks>
     private Task<GitCommandResult> RunQueryAsync(
         string directory,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
-        => RunCoreAsync(directory, arguments, echoOutput: false, untranslated: true, cancellationToken);
+        => RunCoreAsync(directory, arguments, echoOutput: false, cancellationToken);
 
     private Task<GitCommandResult> RunCoreAsync(
         string directory,
         IReadOnlyList<string> arguments,
         bool echoOutput,
-        bool untranslated,
         CancellationToken cancellationToken)
-        => RunCoreAsync(directory, arguments, echoOutput, untranslated, indexFile: null, standardInput: null, cancellationToken);
+        => RunCoreAsync(directory, arguments, echoOutput, indexFile: null, standardInput: null, cancellationToken);
 
     /// <summary>
     /// Runs git against <paramref name="indexFile"/> instead of the work tree's own index: a copy
@@ -2073,13 +2079,12 @@ public sealed partial class GitClient(
         IReadOnlyList<string> arguments,
         string? standardInput,
         CancellationToken cancellationToken)
-        => RunCoreAsync(directory, arguments, echoOutput: false, untranslated: false, indexFile, standardInput, cancellationToken);
+        => RunCoreAsync(directory, arguments, echoOutput: false, indexFile, standardInput, cancellationToken);
 
     private async Task<GitCommandResult> RunCoreAsync(
         string directory,
         IReadOnlyList<string> arguments,
         bool echoOutput,
-        bool untranslated,
         string? indexFile,
         ChildInput? standardInput,
         CancellationToken cancellationToken,
@@ -2117,11 +2122,6 @@ public sealed partial class GitClient(
         // directories git named before its launch, whatever its own files say now.
         arguments = GitOwnSettings.Arguments(arguments);
         GitOwnSettings.Apply(environment, _system, arguments, hooksRun: hooks is not null, directory, pins);
-
-        if (untranslated)
-        {
-            environment["LC_ALL"] = "C";
-        }
 
         // An index of the tool's own is never one git leaves files unexamined in: under core.ignoreStat git marks each entry
         // it writes as unchanged, and every comparison made with it would then read an edited file as its entry's blob.

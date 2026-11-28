@@ -80,8 +80,11 @@ public static partial class HelpTopics
             "ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its "
             + $"{OrchestratorLayout.HandoffFileName} where one stopped it, and for a reason step the {OrchestratorLayout.PolicyFileName} it started under - the agents' "
             + "configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps "
-            + "that start after it and never one under way - and, where the step has a codebase graph, its graph.jsonl (a "
-            + $"line for each launch's first message, each call of the graph tool, each escape of its narrowed reads), its {OrchestratorLayout.StepPagesDirectoryName}/ (the whole result of each ask of more than one page its graph tool answered, and where each page of a call's whole result read_result reads begins, one file an ask, each kept packed for the conversation's life and put away when it ends, so a later page, a resumed conversation and a step that goes on with its work read pages of that one result) and its working-set.json, the "
+            + "that start after it and never one under way - and, where its writes narrow its worktree, the "
+            + $"{OrchestratorLayout.StepUntrackedFileName} its first start took (the paths the worktree held untracked then, which "
+            + "tell what the step's own commands made, and may take back, from what was there) - and, where the step has a "
+            + "codebase graph, its graph.jsonl (a "
+            + $"line for each launch's first message, each call of the graph tool, each escape of its narrowed reads and each whole read they answered with the file's outline), its {OrchestratorLayout.StepPagesDirectoryName}/ (the whole result of each ask of more than one page its graph tool answered, and where each page of a call's whole result read_result reads begins, one file an ask, each kept packed for the conversation's life and put away when it ends, so a later page, a resumed conversation and a step that goes on with its work read pages of that one result) and its working-set.json, the "
             + "seeds of the packs of the steps after it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/",
             "ignored; API clients only: one conversation with the provider, in the provider's own form"),
@@ -91,7 +94,8 @@ public static partial class HelpTopics
             + "ready, its waits by cause whole across sessions, its run time, its pause, and one entry per attempt - "
             + "what served it, the price copied as its cost was counted, the tokens by kind, the dollars, the turns, "
             + "the tools, the compactions, the pages past the first its graph calls asked for - with the advisor's spend beside them; the run's `spent` is the sum of its "
-            + "steps'), and an attempt a crash cut off has its measure completed at the resume from the step's stored "
+            + "steps' and of what the advisor spent on the run's own question, its budget's - kept as `spent.advice`, "
+            + "its records under `steps/run/advice/<n>/`), and an attempt a crash cut off has its measure completed at the resume from the step's stored "
             + "stream"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{HarnessLayout.OrchestratorTempDirectoryName}/<launch>/",
             "ignored; every temporary directory a run's launch and its children keep, one directory a launch (its "
@@ -100,6 +104,10 @@ public static partial class HelpTopics
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{HarnessLayout.OrchestratorArtifactsDirectoryName}/",
             "ignored; the run's artifacts, made with the run and kept for its life: read and copied wherever they "
             + "are asked for while it runs, and taken away with the run's directory"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{HarnessLayout.OrchestratorInputsDirectoryName}/<input>/",
+            "ignored; the file one of the run's own file inputs named, copied as the run starts and kept for its life: "
+            + "what every step of every session reads for that input, whatever became of the file since, and every agent "
+            + "of the run reads; taken away with the run's directory"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/.../<instance>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}",
             "ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
             + "runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what "

@@ -61,11 +61,11 @@ public static partial class HelpTopics
         builder.AppendLine("and their task's seeds by default, as the planner is, which the measurement left as it was, and the");
         builder.AppendLine("reviewers, the self-audit, the diagnosis and the steps that verify and fix say graphFrom: changes -");
         builder.AppendLine("the request triage, whose work is text the map does not light, asks none, the plan audit and the");
-        builder.AppendLine("item audit, the plan audit's agent on a later round's items, say graph: tools with graphPromptTokens: 0");
-        builder.AppendLine("- the tool, for a class's sites they search are what its sites answers, beside their own text search,");
-        builder.AppendLine("and no pack, which lights none of a plan's text - the");
+        builder.AppendLine("item audit, the plan audit's agent on a later round's items, say graph: tools - the tool, for a");
+        builder.AppendLine("class's sites they search are what its sites answers, beside their own text search - the");
         builder.AppendLine("prioritiser and a review's scope are given the map alone, and the scribe's steps, which write the");
-        builder.AppendLine("run's records, ask none of it. Where");
+        builder.AppendLine("run's records, ask none of it; no step says graphPromptTokens, for a step with the tool is pushed no");
+        builder.AppendLine("map and no pack and asks the tool for them where it needs them. Where");
         builder.AppendLine($"config.json declares {WorkflowTemplates.ShippedWorkflowName},");
         builder.AppendLine("init writes each of its files that is missing - the whole set where the repository has no");
         builder.AppendLine("definition of it yet, and where it has one only the shipped files that definition names,");
@@ -92,15 +92,34 @@ public static partial class HelpTopics
         builder.AppendLine("for the folder alone would name a workflow it has not got; --from vendors a remote one.");
         builder.AppendLine();
         builder.AppendLine("A workflow declares inputs - the values a run is started with, each with a kind, a");
-        builder.AppendLine("default and the options it takes; params - its own knobs, defaulted in the file and read");
-        builder.AppendLine("as param.<name>; and outputs - what the whole workflow produces, each from a step of");
-        builder.AppendLine("the flow. Its steps are of the types below, or groups holding steps of their own: a");
+        builder.AppendLine("default and the options it takes, two whose names differ by case alone refused on every");
+        builder.AppendLine($"system, since a file system that folds case holds one {HarnessLayout.OrchestratorInputsDirectoryName}/<input>/ for both, and an");
+        builder.AppendLine("input of the kind file naming a file inside the repository by its path from the root or an");
+        builder.AppendLine($"absolute one inside it, committed or not, which the run copies into its own {HarnessLayout.OrchestratorInputsDirectoryName}/<input>/");
+        builder.AppendLine("as it starts, decided as an agent's read of it is (one that names none, or that leads out");
+        builder.AppendLine("of the repository, into a credential slot, a place the user keeps credentials in -");
+        builder.AppendLine("agentPolicy.hiddenPlaces among them - or a Claude Code directory, by its own path or a link");
+        builder.AppendLine($"on its way, or whose read agentPolicy.restrictions refuse, is refused, {HarnessExit.Refused}, no run");
+        builder.AppendLine("started) and read through the file as it was opened, so a link");
+        builder.AppendLine("put on its way since reaches nothing: every step of every session reads that copy for it");
+        builder.AppendLine("- {input.<name>} the copy's path - whatever became of the file since, and every agent of");
+        builder.AppendLine("the run reads it, wherever its own tree was cut from; params - its own knobs, defaulted in");
+        builder.AppendLine("the file and read as param.<name>; and outputs - what the whole workflow produces, each");
+        builder.AppendLine("from a step of the flow. Its steps are of the types below, or groups holding steps of their own: a");
         builder.AppendLine("group runs its steps once for each work item a forEach yields, again and again until a");
         builder.AppendLine("repeat's bound is met, or once as a block that gathers its members' findings. Every");
         builder.AppendLine("step's name is a lower-case word with dashes within, unique among its siblings; steps");
         builder.AppendLine($"nest at most {WorkflowFileParser.MaxDepth} deep. A step raised by another step's ending says on - by the outcome");
         builder.AppendLine("(failure, success or end, a failure by exit code) - and sends the run back with then;");
-        builder.AppendLine("the schedule never starts it. A step gives a failure nothing handles to the workflow's");
+        builder.AppendLine("the schedule never starts it. What depends on a step that failed waits for each handler its");
+        builder.AppendLine("failure raised to end - one that failed once its failure is decided, never while it asks,");
+        builder.AppendLine("the recovery works on it or the run it stopped is still to resume - while what depends on a");
+        builder.AppendLine("step that ended done starts beside the handlers its success raised. A handler made again, a");
+        builder.AppendLine("group answered retry or one the recovery put right, is a new visit raised by the same ending,");
+        builder.AppendLine("which waits on it; and a step run again as a new attempt raises its handlers anew, for that");
+        builder.AppendLine("attempt's own ending. A fail answer at a handler's bound after a failure gives that ending up:");
+        builder.AppendLine("the failure stands, and the ending waits on none of its handlers any more.");
+        builder.AppendLine("A step gives a failure nothing handles to the workflow's");
         builder.AppendLine("recover by saying onFailure: recover, itself or through a group around it - never a");
         builder.AppendLine("reasoning step, whose agent is tried again (retries, waiting backoffSeconds, twice as long");
         builder.AppendLine("each time) and on each model of its fallback, and which asks where it still fails; where");
@@ -108,12 +127,15 @@ public static partial class HelpTopics
         builder.AppendLine("client's own tries, the run pauses safely instead and resumes that very step. The recovery's steps,");
         builder.AppendLine("written once, read the step that failed as source and see every step of the flow, find");
         builder.AppendLine("what went wrong and put it right; then the run goes where its onSuccess says - failed-step,");
-        builder.AppendLine("the step that gave it its failure, which runs again from where it stopped - and a failure");
+        builder.AppendLine("the step that gave it its failure, which runs again from where it stopped, once: the visit's");
+        builder.AppendLine("own record says what it sent the run back to, whatever became of that since, and nothing is");
+        builder.AppendLine("sent back into a work item a plan update is bringing to rest - and a failure");
         builder.AppendLine("of its own work, past its steps' retries, does what its onFailure says: pause or stop; the");
         builder.AppendLine("recovery never calls itself. A step that fails again goes to the recovery again by its own");
         builder.AppendLine("onFailure, until it");
-        builder.AppendLine($"passes, a person is asked, or maxVisits is met (absent, the engine's bound of {FlowRecover.MostVisits}");
-        builder.AppendLine("visits); past it the run asks (recoveryBound), with the advisor's recommendation of a fix:");
+        builder.AppendLine($"passes, a person is asked, or maxVisits is met (absent, {FlowRecover.MostVisits} visits of one step's");
+        builder.AppendLine("failures, or of one issue's, each counted on its own); past it the run asks (recoveryBound),");
+        builder.AppendLine("with the advisor's recommendation of a fix:");
         builder.AppendLine("more, one more recovery; direct, with the fix in words, for the next one; skip, where the");
         builder.AppendLine("step is skippable; or abort.");
         builder.AppendLine();
@@ -185,9 +207,11 @@ public static partial class HelpTopics
         builder.AppendLine("preapproved is a run's input alone, whatever the key says. A workflow file that uses itself,");
         builder.AppendLine($"directly or through others, is refused with the circle of the files that close it, and steps nest at most {WorkflowFileParser.MaxDepth}");
         builder.AppendLine("deep in all, a used workflow's own counted below the step that uses it; a run records each");
-        builder.AppendLine("use's resolution, and a resume is refused where what the called workflow says changed since");
-        builder.AppendLine("the run began - the digest of its parsed definition, taken as the run's own definition's is,");
-        builder.AppendLine("so a comment or line endings change nothing - as its own definition's would.");
+        builder.AppendLine("use's resolution, and a resume is refused where what the called workflow brings the run");
+        builder.AppendLine("changed since it began - its steps and every part of it the run carries, compared with the");
+        builder.AppendLine("rest of the run's definition, so a comment or line endings change nothing - as its own");
+        builder.AppendLine("definition's would; the fingerprint the run records of it is no part of that, for another");
+        builder.AppendLine("build makes its own of the same words.");
         builder.AppendLine();
         AppendWrapped(builder, RemoteWorkflowsHelp);
         builder.AppendLine();
@@ -227,17 +251,81 @@ public static partial class HelpTopics
         builder.AppendLine("critical, to fix at its root (a step it was in the way of runs again from where it stopped);");
         builder.AppendLine("sends a defect in code the run's change does not touch, that blocks nothing, to the run's next");
         builder.AppendLine("round - sized, by its files, what must be built and what measured first, in next-round.json,");
-        builder.AppendLine("which run.nextRound reads as the issues no work item has settled, and the check that opens a");
-        builder.AppendLine("round - a validate-plan the forEach beside it expands from, where that group runs in rounds, in an");
-        builder.AppendLine("iteration of a repeat or as the group plan updates add a round to with no loop around it, and no");
-        builder.AppendLine("other check - holds its items to: each issue named in an item's settles, none left unsettled,");
-        builder.AppendLine("the settling items first, and the rounds going on while one is left - never holding the round the");
-        builder.AppendLine("issue came from. A forEach item that names an issue in settles settles it once it ends done with a");
-        builder.AppendLine("commit of its own made, whatever the run takes plan updates by, and next-round.json says which");
-        builder.AppendLine("item did; one that ends done with nothing committed - an item a person skipped - settles nothing,");
-        builder.AppendLine("and the issue stays owed. It lists the rest, proven, with a title and a description, in the run's");
-        builder.AppendLine("pre-existing-issues.json, shown in the pull request's body and the handoff. Where a workflow has");
-        builder.AppendLine("such a step, every other reasoning step names it, so no issue is lost.");
+        builder.AppendLine("which run.nextRound reads as the issues no work item has settled, and every check whose list the");
+        builder.AppendLine("next round opens with holds that list to: the check that opens a round - a validate-plan the forEach");
+        builder.AppendLine("beside it expands from, where that group runs in rounds, in an iteration of a repeat or as the group");
+        builder.AppendLine("plan updates add a round to with no loop around it - and the plan's while that round is the first,");
+        builder.AppendLine("or the plan update under way, raised by the check that opens it, joins it: each issue named in an");
+        builder.AppendLine("item's settles, none left unsettled, the settling items listed and started first, built beside the");
+        builder.AppendLine("rest, and the rounds going on while one is left - never holding the round the issue came from. Each");
+        builder.AppendLine("holds the answer of the reason step whose items it reads to it within that step, so the planner and");
+        builder.AppendLine("the self-audit settle an owed issue in their own conversation. Every check whose items a round opens");
+        builder.AppendLine("with - that one, and each whose items read what that one's items read: the plan's, so the one a plan");
+        builder.AppendLine("update sends the run back to - takes an item that settles one of those issues, and refuses one whose");
+        builder.AppendLine("settles names an issue the run does not owe; any other check - a recovery's - refuses every settles.");
+        builder.AppendLine("A forEach item that names an issue in settles settles it once it ends done with a commit of its own");
+        builder.AppendLine("made, whatever the run takes plan updates by, and next-round.json says which item did; one that ends");
+        builder.AppendLine("done with nothing committed - an item a person skipped - settles nothing, and the issue stays owed.");
+        builder.AppendLine("It lists the rest, proven, with a title and a description, in the run's pre-existing-issues.json,");
+        builder.AppendLine("shown in the pull request's body and the handoff. Where a workflow has such a step, every other");
+        builder.AppendLine("reasoning step");
+        builder.AppendLine("names it, so no issue is lost; and each is told, at the end of its prompt, every issue the run");
+        builder.AppendLine("holds where it starts - each one's id, what became of it, its title and where it is - and reports");
+        builder.AppendLine("one again only where it stops its own work. The triage is told those taken before its own, with");
+        builder.AppendLine("the ids of those it may join - being triaged, being fixed or fixed - and names by its id the one");
+        builder.AppendLine("its issue repeats (duplicate, in duplicates) or whose root cause it shares (join, in joins) - only");
+        builder.AppendLine("one taken before its own, or the step fails, so no two issues ever name each other, and of two");
+        builder.AppendLine("raised together the later names the earlier. A duplicate is settled by what becomes of the issue");
+        builder.AppendLine("it repeats - a step it stops runs again once that issue is settled, as a join's does - save where");
+        builder.AppendLine("that issue's fix was done before the duplicate's issue was met: it did not hold, the triage is");
+        builder.AppendLine("told so, and an answer naming it a duplicate fails the step, for the issue is fixed again.");
+        builder.AppendLine();
+        builder.AppendLine("An issue sent to fix is the recovery's at once, its visit beside any other at work - save one a");
+        builder.AppendLine("step of a visit of the recovery reported, which waits for that visit to end, for the recovery");
+        builder.AppendLine("never calls itself, and one a visit at work fixes already for another step it stopped, which");
+        builder.AppendLine("waits for that visit, or for the one it joined to - so one defect has one fix at a time: a visit");
+        builder.AppendLine("that ended failed is at work until what its failure does is answered, and answered retry, the");
+        builder.AppendLine("fix waits for its next visit; one a plan update ended, in a work item it brought to rest, is");
+        builder.AppendLine("over, and the fix that waited for it is taken; a step two issues stop runs again once, after");
+        builder.AppendLine("both are settled.");
+        builder.AppendLine("From the moment it is sent to fix until its visit ends, the issue holds the files its triage's where");
+        builder.AppendLine("names - each a path from the repository's root, never a command - and, once a check of its");
+        builder.AppendLine("visit has read the remedy items its diagnosis gives, the paths those items own: an instance of");
+        builder.AppendLine("the work-item group that has not begun and owns one of them, or whose item names the issue's id in");
+        builder.AppendLine("its needs - the fix it builds on - starts once that visit has ended, building on the tree the fix");
+        builder.AppendLine("leaves, its record naming the fix it waits for - the issue's title and its visit - and the files");
+        builder.AppendLine("it holds, or that the item needs it; every other item goes on at once. An issue joined to one");
+        builder.AppendLine("still being triaged holds no file yet, but an item that needs it waits for that triage, and then");
+        builder.AppendLine("for the fix it goes with - or, where that triage ends without a fix and the joined issue is triaged");
+        builder.AppendLine("again on its own, for that new triage, and then for the fix it sends or goes with, the item's needs");
+        builder.AppendLine("followed from the id it names. What it holds and what an item owns are read from the repository's");
+        builder.AppendLine("root, as the plan's check reads an item's paths: a root-level file the fix holds keeps only the");
+        builder.AppendLine("item owning that file waiting. The plan's check refuses a needs that names no issue the recovery");
+        builder.AppendLine("is fixing or fixed, nor one joined to an issue still being triaged; a recovery's check refuses");
+        builder.AppendLine("every needs and every settles, saying why - its remedies are never held for a fix and settle no");
+        builder.AppendLine("issue; and the planner's prompts and the self-audit read the rule once, the workflow's text fixes");
+        builder.AppendLine("(fixes.md), beside the issues the run has taken.");
+        builder.AppendLine("run.preExisting says");
+        builder.AppendLine("each issue in the order it was taken - the order its triage ended, a resume's as before it -");
+        builder.AppendLine("and an always step starts once no issue's triage or fix is at work beside it, one the always");
+        builder.AppendLine("phase raised among them, so what it is told of the issues is true when it is told; one that");
+        builder.AppendLine("waits on a person is said as it stands.");
+        builder.AppendLine();
+        builder.AppendLine("An issue joined to another, being triaged or being fixed, takes no visit of its own: it goes");
+        builder.AppendLine("with that issue's fix - waiting for its triage, where it is still triaged - and a visit whose");
+        builder.AppendLine("diagnosis began after the join reads every issue joined to it as source.joined, each with its");
+        builder.AppendLine("id, its end settling all of them, run.preExisting saying each 'fixed with <id>' and a step one");
+        builder.AppendLine("of them stopped running again. One that joined while a visit of that fix was diagnosing takes a");
+        builder.AppendLine("visit of its own once that visit has fixed it, and one joined to an issue fixed already takes");
+        builder.AppendLine("one at once, each reading what that fix did as source.joinedTo; and where the issue it joined");
+        builder.AppendLine("ends without a fix, it is triaged again on its own - as a duplicate is where the triage of the");
+        builder.AppendLine("issue it repeats ends without a decision, its failure passed over, so neither is lost. Each");
+        builder.AppendLine("visit counts against the run's limits as every step does, and a visit's diagnosis goes on with");
+        builder.AppendLine("the last one of what it puts right - the same failure, or the same issue whichever step met it,");
+        builder.AppendLine("in whatever words a duplicate or a join of it gave, and however often after a fix that did not");
+        builder.AppendLine("hold - apart from where its bound counts it. That thread is decided as the visit is made, from");
+        builder.AppendLine("what had ended then, and kept in the visit's record: a resume goes on in the same one, whatever");
+        builder.AppendLine("a duplicate or a join that ended since says of what an earlier visit fixed.");
         builder.AppendLine();
         builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");
         builder.AppendLine("may run on, or a map giving each its own - all for the rest, a model's code for one, so a");
@@ -322,9 +410,11 @@ public static partial class HelpTopics
             + "(failed, refused, where HEAD is detached), baseBranch - the pull-request step's base, filled from the run's inputs "
             + "and its name, else the default branch of the remote the run's branch goes to (the push step's remote, else the one "
             + "the branch tracks, else origin, else the only one), null where there is none - startCommit, the commit the run "
-            + "started from; hasRemote; hasLegs and legCount, every declared leg; anchors, a citation root that names something once read, as "
+            + "started from; hasRemote; onForge, whether that remote's address names a repository on a forge - where a pull "
+            + "request is opened and CI is read - and not a path on this machine, a file:// address or a path on an ssh server; "
+            + "hasLegs and legCount, every declared leg; anchors, a citation root that names something once read, as "
             + "check-anchor-citations reads them; "
-            + "ciConfigured, ci.legJobPattern, ci.buildStep and ci.testStep each set and a base branch to read CI on; hasMutations, "
+            + "ciConfigured, ci.legJobPattern, ci.buildStep and ci.testStep each set and a base branch on a forge to read CI on; hasMutations, "
             + "mutations.registry naming a file in the tree; tests, for each leg that tests, its name, the program, the filter's "
             + "option and the exclusions its test invocation applies on the leg's operating system (exclude, remoteExcludes; where "
             + "ctest is given -LE more than once, a test is left out only where it matches every one); "
@@ -339,7 +429,21 @@ public static partial class HelpTopics
             + "of a work item of an earlier round, for the run knows a work item by its name alone; a round added to a group "
             + "with no loop around it builds the owed work alone, its own items being those the round before built - "
             + "ownedPaths, forbiddenPaths and the lists reuses, creates and replaces - an item without them is of "
-            + "the wrong shape; no path owned by two items, and none an item owns that it must not touch; the path budget of the "
+            + "the wrong shape; no path owned by two items, and none an item owns that it must not touch - each entry read from "
+            + "the repository's root, as the item's agent's writes and its fold's within read it: a path names that one path, and "
+            + "what is beneath it only where it names a directory, one the tree holds or one ending in a separator, and a pattern "
+            + "is anchored there too, ** for any depth, so two entries meet only where some path a tree can hold matches both - "
+            + "a path the tree does not hold meeting one beneath it, which is real only where it is a directory; the tree asked "
+            + "is the run's start tree, the commit it started from, for the check, the holds, every step's writes and every "
+            + "fold's within alike, whatever the run's folds make of the trees, and a path it cannot answer for counts as a "
+            + "directory where two entries are weighed for meeting, as none where it is what an item may write; a class's home "
+            + "or site refused beneath an entry that names a file says a directory to be made is written with a trailing "
+            + "separator, and one at a depth an entry of one name no longer reaches says '**/' reaches any depth; an entry an item "
+            + "owns with no trailing separator that names a directory the main tree holds and the start tree does not - one an "
+            + "earlier round made - is refused, for its builder's every write beneath it would be, saying to write it ending in "
+            + "one, while one it must not touch never is, for no write is refused by a forbidden path; a start tree "
+            + "that cannot be read is warned of once a session, and each refusal its reading causes says why - two items' entries "
+            + "named as meeting whatever the tree holds before any the wide reading alone makes meet; the path budget of the "
             + "worktree each would get, with the copies and workers its legs keep inside it and the deepest file it owns; every "
             + "path it reuses or replaces there in the main tree, something under one of the three, and a why and a search for "
             + "each thing it creates; and each item declaring the classes of the decisions it changes or saying in noClass why it "
@@ -348,7 +452,11 @@ public static partial class HelpTopics
             + "paths and there in the tree where it exists, a site marked home exactly where it is the home by its path and "
             + "symbol, every other site - which changes, reading the home or deleted - the item's too - patching some of a "
             + "class's sites is never done - more than one site consolidated at the home, as one site that is not the home is, "
-            + "each class searched by data its queries name again, its universe holding the axes the repository declares, and "
+            + "each class searched by data its queries name again, its universe answering each axis in one of the two ways an axis "
+            + "is answered - values with where they are declared and no why, or no value with why and nothing declared - and "
+            + "counting the cells its axes that apply make - the "
+            + "product of the counts of their values, 1 where none applies, the plan's schema holding in the step that answers it "
+            + "that it answers every axis, in the one shape of an axis - and "
             + "one home belonging to one item, two classes of one item sharing one as they may; and each item naming the tests its change affects in "
             + "tests, one unit to an entry and none blank, or saying in noTests why it affects none - exactly one of the two. A step given the pieces of a plan update (a scope that yields a list not empty) checks them "
             + "with the items, each problem among the rest: each piece of one of the four kinds (added, changed, removed, told) "
@@ -356,16 +464,50 @@ public static partial class HelpTopics
             + "no two pieces naming one work item; a changed or a removed piece naming a work item the plan had before the "
             + "update, and an added one naming none a round of the run carries - one that does such an item again is changed; "
             + "and the items the update places checked with those of the round it joins, as one list - among themselves "
-            + "where the run has no round. One whose items yield no list, or whose scope yields neither a list nor nothing, "
-            + "fails, as a definition that does not hold does. create-agent makes the agent the engine named for it - a<N>, one past the "
+            + "where the run has no round - the rules that read the main tree as it now is (an owned entry naming one of its "
+            + "directories, a path reused or replaced, a class's home and sites being there) holding every item still to be "
+            + "built and passing over, in that list and in the plan's own, every item an opened round of the run holds that no "
+            + "added or changed piece places and no owed piece does again, a step whose scope yields an empty list alike, for "
+            + "each was checked when its round opened, against the tree of that moment, and what a fold has made of the tree "
+            + "since is no breach of it - and every removed piece's item, whatever round holds it or none, for an item taken "
+            + "back builds nothing; an item of a round that has not opened - of the list the check that opens it was opening it "
+            + "with, where that check raised the update - is held to the tree as it is, and so is every item of a plan's first "
+            + "check, before any round. The check that opens a round passes over the same: an owed removed piece's item, and "
+            + "the own items of a round that carries the owed work alone, which the round before built; and it drops each item "
+            + "an update took out of its list. Where the check that opens a round raised the update, the round it joins is the list "
+            + "that check was opening it with, which no instance carries yet, and the update's check holds that list whether or "
+            + "not the update answers a piece - the names an earlier round carries refused among its items as the check that "
+            + "opens it refuses them, but those the updates owe or the pieces place - so the planner is told within its own "
+            + "step what the round still wants: a changed or a removed piece may name any item of "
+            + "it, a removed one taking it out of that list, and the planner is shown each among the run's work, not begun. One whose items yield no list, or whose scope yields neither a list nor nothing, "
+            + "fails, as a definition that does not hold does. Where its items read the output of a reason step of its own "
+            + "scope - by the step's name, through latest of the work that step goes on with, or through previous in the "
+            + "iteration after - the same rules, with what it would be handed then, hold that step's answer as it is given, and "
+            + "what they find goes back to the agent in its own conversation until it answers clean or gives again what it was "
+            + "sent back with: a problem the planner can put right costs no planning iteration, and the check, run after it as "
+            + "before, records and gates what is still wrong. "
+            + "create-agent makes the agent the engine named for it - a<N>, one past the "
             + "highest the run's agent directories and step records hold, never given twice - for the model of the first reason "
             + "step that works in it, or the default tier's first model where none does, both written to the step's record before "
             + "the agent is made. Run again, it reads the agent first: none, it is made; whole, it is done; made part way with its "
             + "worktree's commit recorded, its seeding is finished; made part way without it, it is deleted, and closed - its "
             + "removal begun - its removal is finished; that, or deleted, the name is spent and the step fails, its next attempt "
             + "named anew. reason works the step's agent: the one its in names or the work it goes on with (resume), or - where it "
-            + "names neither - the engine's own read-only agent, with no worktree, made before the step runs and deleted once no "
-            + "step can go on with its work; the step's model resolved with its agent definition below its own and its order built "
+            + "names neither - the engine's own read-only agent, made before the step runs and deleted once no step can go on with "
+            + "its work, its tree removed and nothing folded: a tree of its own, made as every agent's is, which the start of every "
+            + "step that works as it - each attempt of its first, and of each that goes on with its work - brings to the main "
+            + "checkout's HEAD then, or to the commit the step's commit names - a template filled as the step starts, whose value "
+            + "names a commit of the repository or fails the step with nothing changed, and a step that writes or works in an "
+            + "agent's worktree is refused one - whatever it wrote there before discarded, so the step reads exactly what that "
+            + "commit holds, starts in it, and may write it and its work directory, never folded, and is served the graph's view "
+            + "of that tree; an answer that goes on with an "
+            + "attempt finds the tree as the attempt left it, unless another step working as the agent brought it elsewhere while "
+            + "the attempt waited, or nothing tells who it was last brought for: it is then brought there again as the attempt goes "
+            + "on, and its agent told that what it wrote there is gone; no two steps work in one agent's tree at once, for a reason "
+            + "step holds write on the tree of the agent it works in whatever its access, and an advice of the run's advisor holds "
+            + "the tree it works in while it runs - of two that go on with one step's work, two visits of one that goes on with its "
+            + "own among them, the second starts once the first has ended, or waits on a question with no advice on it still "
+            + "running, for a step that waits holds nothing; the step's model resolved with its agent definition below its own and its order built "
             + "as entries of a model and one of its provider's keys, each entry's credential read from the slot "
             + "('help agent-clients'); its prompt file read and filled where the step starts, its writes given as an "
             + "expression read there too - the names it yielded narrowing what it may write as a written-out list does - "
@@ -378,7 +520,9 @@ public static partial class HelpTopics
             + "every client: one call takes a leg, its "
             + "variant - the build configuration the leg's own configuration declares - a test filter and the cell of a universe "
             + "being measured, runs those tests of that leg through the test service as a test step's legs are run, in the agent's worktree "
-            + "where it has one and in a local copy of the main tree where it does not, under the agents' isolation and the step's "
+            + "where it has one - an agent that only reads measures its own tree, at the main checkout's HEAD or the commit its step "
+            + "names - and in a local copy "
+            + "of the main tree where it does not, under the agents' isolation and the step's "
             + "own record of what its legs start, and answers what they showed - passed where the leg passed, failed where its "
             + "build or its tests failed, and unmeasured with why for anything else: a leg refused by another run's lock, "
             + "skipped, stopped, a filter that matched no test, a leg not declared - the verdict as the ledger spells it, with the "
@@ -417,21 +561,50 @@ public static partial class HelpTopics
             + "gave the run answers first, where they gave it: the first preAnswer whose when holds answers at once, as a "
             + "configured answer would, and an entry that quotes words holds only where they are not empty and stand in the "
             + "input they are said to be of, every run of white space compared as one space - reported words the input does "
-            + "not hold answer nothing, the record says so, and the person is asked. Before a person is left with a question "
-            + "the engine raises itself, the orchestrator's advisor recommends on it: one reason step that only reads, run in "
+            + "not hold answer nothing, the record says so, and the person is asked. Every question the engine raises is "
+            + "recommended before a person is asked it, so every workflow a run is started of names an advisor - validate-workflow "
+            + "and a run's start refuse one that names none, naming the block init writes as the fix, and its retired kinds is "
+            + "refused, for every kind of question is recommended. The orchestrator's advisor is one reason step that only reads, run in "
             + "the place the asking step works in with its records and its own conversations under advice/<n>/ of the asking "
             + "step's own directory, numbered after those already there, its answer held to the engine's own schema - one of "
-            + "the question's answers, with a text where that answer takes one - bounded by its definition and by what is left "
-            + "of the run's dollars, and retried as every agent; the question is open while the advice runs - an answer ends "
+            + "the question's answers, with a text where that answer takes one - bounded by its own definition alone (maxTurns, "
+            + "maxBudgetUsd, maxMinutes), never by the run's budget or its reserve, so a question raised once the run is past "
+            + "its reserve is recommended as any other is, and retried as every agent; the question is open while the advice runs - an answer ends "
             + "the asking, the question saying so, and the step that asked starts again only once the advice's runner has "
-            + "ended; a pause or a stop ends it too, the question saying the recommendation is sought at the resume - the "
+            + "ended; a pause never ends it - it finishes as a machine step the pause leaves running does, the session waiting "
+            + "for it, and its recommendation is kept, so a resume that comes back to a pause pays for it once - and a stop "
+            + "ends it, one once the pause is complete among them, which starts no advice after it either, the question saying "
+            + "the recommendation is sought at the resume, which seeks it, unless the advice it ended still returns its "
+            + "recommendation, which the question keeps so the resume never pays for it again - the "
             + "recommendation written to the question with who gave it and where its records are, and none obtained said "
             + "so, a bar that could not be read among the reasons; what every advice spent, an ended one's among them, is "
-            + "counted against the run's budget; and where the orchestrator names no advisor the question says so plainly. "
-            + "The advisor takes no question of a step that may ask (its agent recommends within its own), nor a pause step's "
-            + "that shows an upstream step's questions (they carry their recommendations), nor one the run's input answers, "
-            + "nor the budget's own, nor a kind its kinds leave out, and while the run is pausing the question says the "
-            + "recommendation is sought at the resume. "
+            + "counted against the run's budget as it is taken, an advice that spends the run to its reserve pausing it at "
+            + "once, and one taken while the run pauses already asking no second pause; and an advisor that obtains none - it failed past its retries among the "
+            + "reasons - leaves the question saying why, and the person is asked all the same. A question raised while the run "
+            + "is pausing says its recommendation is deferred, and once the pause is complete - whatever asked for it - every "
+            + "open question still owing its recommendation is advised before the session ends. The budget's own question is "
+            + "recommended too, raised once the budget's pause is complete and advised before the session ends: the advisor is asked of the "
+            + "run as a whole - its records under steps/run/advice/<n>/, {question.step} reading run, {question.record} the "
+            + "run's facts as ask-orchestrator-status gives them - held, as every advice is, to its own definition's bounds "
+            + "alone, and what it spends is the run's own, kept in flow.json's "
+            + "spent.advice and counted in the run's spend. Only an agent's own questions carry their recommendation within "
+            + "them and are not advised - a step's own agent's, and a pause step's that shows an upstream step's questions - "
+            + "nor is one the run's input or its configuration answers, which no person is asked. A person answers a question "
+            + "recommended: an answer to one still owing its recommendation that no advisor seeks now - between sessions, or "
+            + "while a pause defers it - is refused (13), nothing answered, and abort is taken; resume-orchestrator seeks it "
+            + "first, and a pause once it is complete, unless a stop came after it. The run's report, ask-orchestrator-status and every refusal "
+            + "of an answer name each open question's next step by one rule, over what the run's engine is doing: for one still owing its "
+            + "recommendation, resume-orchestrator, which seeks it first, where no engine runs the run; its answer, taken now and ending the "
+            + "asking, where a live engine's advisor seeks it or a live engine is starting, which seeks every recommendation the run owes; the "
+            + "pause's advice, then its answer, where a live engine's pause defers it; and "
+            + "resume-orchestrator once the engine has gone where it is stopping - abort taken now wherever one is owed - and answer-orchestrator "
+            + "for every other. An answer handed over as a session starts, to a question owing the recommendation that start seeks, waits for "
+            + "it and is taken once it is sought, ending the asking; only a start that seeks none for it, a stop or a pause asked as it began, refuses it - "
+            + "answer-orchestrator's own answer so refused its refusal (13) with the run's why on every exit of the session, whatever the session "
+            + "went on to do or met, the session's own end said after it and kept in --json's session (its summary and exitCode), and every other "
+            + "said with what became of it - and a live engine's state says it is starting only while its start takes such an answer, a stop or a "
+            + "pause asked of the start writing over the mark at once what the start stands on - the stop applied, or the pause asked, and the "
+            + "questions the past session left sought deferred - which every write of the session says after it, until the start's own end is written. "
             + "build, test, run and check-mutations run their legs as the commands of those names do, in the worktree "
             + "of the agent their in names, else the main checkout: test with its filter, exclude and labels and run with its "
             + "inputs - a filter, an exclusion or a label that fills to nothing is not given - and check-mutations with its arms, "
@@ -515,7 +688,8 @@ public static partial class HelpTopics
             + "anything answering passed: the call cited or a later one for passed, one whose record was written after the "
             + "failing call's for failed-fixed - or reasoned why not, every test of the pin declared, the arm one of the registry its "
             + "worktree holds and mutating "
-            + "the home's own file or a reason the class has nothing to mutate, the universe holding every planned axis and "
+            + "the home's own file or a reason the class has nothing to mutate, the universe holding every axis the planned "
+            + "class's universe says applies and "
             + "the claim naming each, the arms the builder's answer lists for the item's own sweep (the step's arms) the arms "
             + "the record names and no other, an id one arm however its case is written - and each home's touches since its "
             + "base, the item's own commits left out, a record "
@@ -525,7 +699,13 @@ public static partial class HelpTopics
             + "the weighing's own code. Its problems are the record's (1, which close-class repairs) apart from a missing "
             + "home audit (2, which home-audit makes - a home touched by other work, or a class the item's ledger says a "
             + "review reopened a second time), and it answers passed, problems, hotspots - the homes touched hotspot "
-            + "times or more - and touches. route-findings routes the review's findings by the class of each, keeping "
+            + "times or more - and touches. The record's problems reach the builder sooner: where the record reads the "
+            + "output of a reason step of the check's own scope - the builder's, or one that goes on with its work, through "
+            + "latest, close-class among them - the same rules hold that step's answer as it is given, over the agent's work "
+            + "as it then stands, and what they find goes back to the agent in its own conversation until it answers clean "
+            + "or gives again what it was sent back with, no close-class drawn for it; a missing home audit, and whatever "
+            + "only a later step's work shows - its tests, a fold - stay the check's, run after it as before, the record and "
+            + "the gate. route-findings routes the review's findings by the class of each, keeping "
             + "the item's ledger (closure-ledger.json in its agent's directory) of the rounds that reopened each class, a "
             + "round counted once by the routing that made it however often that routing runs: every introduced finding - a "
             + "defect the diff made - goes back in rework as itself, the reopened findings of one class go back as one "
@@ -645,12 +825,15 @@ public static partial class HelpTopics
             + "ignored - each path its folds changed that git ignores, folded and never committed, which what the run's end "
             + "leaves for a person names too - run again once it has committed, the commit it made - and, where it ran git's "
             + "commit, isolation: git's commit and the repository's commit hooks run inside the operating system's isolation "
-            + "of the agents' work ('help agent-clients'), and where this machine has none agentPolicy.isolation required fails "
+            + "of the agents' work ('help agent-clients'), in the person's own locale, as every git command git runs hooks for "
+            + $"does ({string.Join(", ", DssHarness.Core.Git.GitHooks.Runners)}) while every other git of the tool's runs under "
+            + $"{DssHarness.Core.Git.GitOwnSettings.LocaleVariable}={DssHarness.Core.Git.GitOwnSettings.Locale}, so a hook behaves "
+            + "as in their shell; and where this machine has none agentPolicy.isolation required fails "
             + $"it ({HarnessExit.ToolMissing}) before anything is staged, preferred runs them outside. What a run checked "
             + "is text any template reads: {run.ran}, every check that ended so far, a line each with where it ran and its "
             + "verdict, each leg's for a step that runs legs; {run.notRun}, each check not run yet, by its step's name, and each "
             + "skipped or never reached, with why; and {run.red}, each red result not seen green since by a later visit of the "
-            + "same step - a red leg, with what its line said of the units its build failed where its own tool failed it, a "
+            + "same step checking the same - in the recovery, a visit for the same failure or issue - a red leg, with what its line said of the units its build failed where its own tool failed it, a "
             + "red check of CI, an anchor check's findings, a plan's problems, a failure - each 'none' "
             + "where it names nothing. The checks are the steps of type "
             + $"{string.Join(", ", WorkflowStepTypes.All.Where(type => type.Checks).Select(type => type.Type))} and a reason step "
@@ -750,13 +933,18 @@ public static partial class HelpTopics
         builder.AppendLine("Worked examples, each a whole workflow as a file holds it: the two ways a step is raised");
         builder.AppendLine("by another step's ending - a repair that goes back to what failed, and a check that runs");
         builder.AppendLine("whenever a builder ends - and two loops a repository can build its own work around. Each");
-        builder.AppendLine("holds as it is printed, read by the same reader that reads a workflow's own file.");
+        builder.AppendLine("holds as it is printed, read by the same reader that reads a workflow's own file. Each");
+        builder.AppendLine("names the advisor init writes beside the shipped workflow, as every workflow a run is");
+        builder.AppendLine("started of names one: every question its steps raise is recommended before it is asked.");
 
         AppendExample(
             builder,
             """
             # example: repair
             name: example-repair
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
             steps:
               - name: builder
                 type: create-agent
@@ -797,6 +985,9 @@ public static partial class HelpTopics
             """
             # example: smoke
             name: example-smoke
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
             steps:
               - name: builder
                 type: create-agent
@@ -824,6 +1015,9 @@ public static partial class HelpTopics
             """
             # example: issues
             name: example-issues
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
             maxOpenAgents: 1
             steps:
               - name: issues
@@ -885,6 +1079,9 @@ public static partial class HelpTopics
             """
             # example: review
             name: example-review
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
             steps:
               - name: builder
                 type: create-agent

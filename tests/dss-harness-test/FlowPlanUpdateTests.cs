@@ -108,6 +108,59 @@ public sealed class FlowPlanUpdateTests
             dependsOn: [gate]
         """;
 
+    /// <summary>
+    /// The flow of <see cref="Lean"/> whose last step, <c>later</c>, is a reason step at the top level, outside every
+    /// group: a safe pause hands it off, and no group stands open over it.
+    /// </summary>
+    private const string ReasoningLast = """
+        name: flow
+        inputs:
+          - name: request
+        steps:
+          - name: ask
+            type: pause
+            question: '{input.request}'
+            options: [stay, go]
+          - name: planning
+            dependsOn: [ask]
+            gather: [scope]
+            steps:
+              - name: plan
+                type: reason
+                agent: planner
+                prompt: plan.md
+                outputs: plan.json
+              - name: planupdate
+                type: reason
+                agent: planner
+                prompt: plan.md
+                outputs: plan.json
+              - name: check
+                type: orient
+                dependsOn: [plan]
+          - name: gate
+            type: pause
+            question: held?
+            options: [stay, go]
+            dependsOn: [planning]
+          - name: later
+            type: reason
+            agent: builder
+            prompt: later.md
+            outputs: later.json
+            dependsOn: [gate]
+        """;
+
+    /// <summary>The flow of <see cref="Lean"/> with a handler of <c>later</c>'s ending done: <c>tell</c>, raised by that ending alone.</summary>
+    private const string Telling = Lean + """
+
+          - name: tell
+            type: orient
+            on:
+              step: later
+              outcome: success
+        """;
+
     /// <summary>The flow of <see cref="Lean"/> whose planning step gives a failed update up: <c>onFailure: continue</c>.</summary>
     private static WorkflowDefinition GivingUp
     {
@@ -249,7 +302,7 @@ public sealed class FlowPlanUpdateTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // To the pause inside the planning, where no update is under way: its own question says so.
             _ = await coordinator.RunAsync(Token);
@@ -315,6 +368,307 @@ public sealed class FlowPlanUpdateTests
     }
 
     /// <summary>
+    /// A run a safe pause left inside its planning block - the block standing open over its planner, handed off, and
+    /// nothing asked - is not done to the engine that takes it up: before its first session the run stands paused, and an
+    /// amendment handed over then passes the gate that refuses a run with nothing left to go back to, and is taken - as a
+    /// queued one the session's start takes, or one in the inbox, is.
+    /// </summary>
+    [Fact]
+    public async Task ARunPausedInsideItsPlanning_IsNotDone_AndTakesAnAmendmentBeforeItsNextSession()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Lean);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = new FakeRunner();
+        var inputs = new Dictionary<string, string> { ["request"] = "build the tool" };
+        _ = runner.Hold("plan");
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: inputs, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The planner runs inside the block, and the safe pause hands it off.
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("planning.plan").WaitAsync(Bound, Token);
+            coordinator.RequestPause("command");
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(Bound, Token)).Status);
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: inputs, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            Assert.Equal(
+                [("planning", nameof(FlowInstanceState.Running)), ("planning.plan", nameof(FlowInstanceState.Stopped))],
+                harness.OrchestrationStore.ReadFlow(layout)!.Steps.Where(step => step.Step.StartsWith("planning", StringComparison.Ordinal)).Select(step => (step.Instance, step.State)));
+            Assert.Equal(FlowRunStatus.Paused, resumed.Status);
+            Assert.Equal(FlowHandedOver.Taken, resumed.AmendmentHandedOver("in fact, build only the parser", "amend-orchestrator-request", out var problem));
+            Assert.Null(problem);
+            Assert.Equal(("u1", FlowUpdateStates.UnderWay), (harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().Id, harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().State));
+        }
+    }
+
+    /// <summary>
+    /// A run a safe pause left at a reason step outside every group - handed off and stopped, to run again at the resume,
+    /// no group standing open over it and nothing else left - is not done to the engine built from its records: before its
+    /// first session the run stands paused, so the amendment amend-orchestrator-request queued while no engine ran passes
+    /// the gate that refuses a run with nothing left to go back to and is taken as the session's start takes it, nothing
+    /// written done meanwhile; and the session then plans it and runs the step again.
+    /// </summary>
+    [Fact]
+    public async Task ARunPausedAtAReasonStepOutsideEveryGroup_IsNotDoneBeforeItsNextSession_AndTakesItsQueuedAmendment()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(ReasoningLast);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var clock = new JumpingClock();
+
+        using (records)
+        {
+            var run = await ToLaterInFlightAsync(definition, records, harness, layout, clock);
+            run.Coordinator.RequestPause("command");
+            Assert.Equal(FlowRunStatus.Paused, (await run.Session.WaitAsync(Bound, Token)).Status);
+        }
+
+        Assert.Equal((nameof(FlowRunStatus.Paused), nameof(FlowInstanceState.Stopped)), StandingOf(harness, layout, "later"));
+        Queue(harness, layout, clock, "in fact, build only the parser");
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var runner = new FakeRunner();
+
+        using (again)
+        {
+            var resumed = Resumed(definition, again, harness, layout, runner, clock);
+
+            Assert.Equal(FlowRunStatus.Paused, resumed.Status);
+            Assert.Equal(["update u1, an amendment queued until the run could take it, was taken"], resumed.TakeQueuedUpdates());
+
+            // Taken, and the run's state never said done for it: what the taking wrote says the run paused until the
+            // session goes on with it.
+            Assert.Equal([("u1", FlowUpdateStates.UnderWay, (string?)null)], UpdatesOf(harness, layout).Updates.Select(update => (update.Id, update.State, update.Why)));
+            Assert.Equal((nameof(FlowRunStatus.Paused), nameof(FlowInstanceState.Stopped)), StandingOf(harness, layout, "later"));
+            Assert.Equal("u1", harness.OrchestrationStore.ReadFlow(layout)!.Hold!.Update);
+
+            // The session plans the amendment, and only then runs the step the pause handed off again.
+            var end = await Task.Run(() => resumed.RunAsync(Token), Token).WaitAsync(Bound, Token);
+
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+            Assert.Equal([("u1", FlowUpdateStates.Done)], UpdatesOf(harness, layout).Updates.Select(update => (update.Id, update.State)));
+            Assert.Equal("planning.planupdate", runner.Started[0]);
+            Assert.Equal("later", runner.Started[^1]);
+            Assert.Single(runner.Started, started => started == "later");
+        }
+    }
+
+    /// <summary>
+    /// An answer changed before the next session of a run a safe pause left at a reason step outside every group - the
+    /// change answer-orchestrator --again gives the engine it builds from the run's records, within the change's window -
+    /// is taken: the run is not done, for the step the pause handed off runs again at the resume, and the gate that
+    /// refuses a change with nothing left to go back to lets it through.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerChangedBeforeTheNextSessionOfARunPausedAtAReasonStepOutsideEveryGroup_IsTaken()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(ReasoningLast);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var clock = new JumpingClock();
+        string gate;
+
+        using (records)
+        {
+            var run = await ToLaterInFlightAsync(definition, records, harness, layout, clock);
+            gate = run.Gate;
+            run.Coordinator.RequestPause("command");
+            Assert.Equal(FlowRunStatus.Paused, (await run.Session.WaitAsync(Bound, Token)).Status);
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = Resumed(definition, again, harness, layout, new FakeRunner(), clock);
+
+            Assert.True(resumed.TryChangeAnswer("stay", null, out var problem, "answer-orchestrator", gate), problem ?? "changed");
+            Assert.Null(problem);
+            Assert.Equal(
+                [("u1", FlowUpdateCauses.ChangedAnswer, FlowUpdateStates.UnderWay, gate, "go", "stay")],
+                UpdatesOf(harness, layout).Updates.Select(update => (update.Id, update.Cause, update.State, update.Question, update.FromAnswer, update.ToAnswer)));
+            Assert.Equal(nameof(FlowRunStatus.Paused), harness.OrchestrationStore.ReadFlow(layout)!.Status);
+        }
+    }
+
+    /// <summary>
+    /// A run a hard stop ended while its last step ran - stopped, to run again at the resume, nothing else left - is not
+    /// done to the engine built from its records either: before its first session it stands paused, and the amendment
+    /// queued while no engine ran is taken, nothing written done meanwhile.
+    /// </summary>
+    [Fact]
+    public async Task AHardStoppedRun_IsNotDoneBeforeItsNextSession_AndTakesItsQueuedAmendment()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(ReasoningLast);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var clock = new JumpingClock();
+
+        using (records)
+        {
+            var run = await ToLaterInFlightAsync(definition, records, harness, layout, clock);
+            run.Coordinator.RequestStop();
+            Assert.Equal(FlowRunStatus.Stopped, (await run.Session.WaitAsync(Bound, Token)).Status);
+        }
+
+        Assert.Equal((nameof(FlowRunStatus.Stopped), nameof(FlowInstanceState.Stopped)), StandingOf(harness, layout, "later"));
+        Queue(harness, layout, clock, "in fact, build only the parser");
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = Resumed(definition, again, harness, layout, new FakeRunner(), clock);
+
+            Assert.Equal(FlowRunStatus.Paused, resumed.Status);
+            Assert.Equal(["update u1, an amendment queued until the run could take it, was taken"], resumed.TakeQueuedUpdates());
+            Assert.Equal([("u1", FlowUpdateStates.UnderWay, (string?)null)], UpdatesOf(harness, layout).Updates.Select(update => (update.Id, update.State, update.Why)));
+            Assert.Equal((nameof(FlowRunStatus.Paused), nameof(FlowInstanceState.Stopped)), StandingOf(harness, layout, "later"));
+        }
+    }
+
+    /// <summary>
+    /// A failure a safe pause left owed - a machine step the pause left running that ended failed, whose policy the next
+    /// session decides - keeps the run from done to the engine built from its records: before its first session it
+    /// stands paused, and the amendment queued while no engine ran is taken, nothing written done meanwhile.
+    /// </summary>
+    [Fact]
+    public async Task AFailureAPauseLeftOwed_KeepsTheRunFromDoneBeforeItsNextSession_AndItsQueuedAmendmentIsTaken()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Lean);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var clock = new JumpingClock();
+
+        using (records)
+        {
+            var run = await ToLaterInFlightAsync(definition, records, harness, layout, clock);
+            run.Coordinator.RequestPause("command");
+            // The machine step ends failed - with a code no retry takes - while the pause records what it left running.
+            run.Later.SetResult(FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "a leg failed"));
+            Assert.Equal(FlowRunStatus.Paused, (await run.Session.WaitAsync(Bound, Token)).Status);
+            Assert.Equal(FlowFailure.Owed, run.Coordinator.Instances["later"].Failure);
+        }
+
+        Assert.Equal((nameof(FlowRunStatus.Paused), nameof(FlowInstanceState.Failed)), StandingOf(harness, layout, "later"));
+        Queue(harness, layout, clock, "in fact, build only the parser");
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = Resumed(definition, again, harness, layout, new FakeRunner(), clock);
+
+            Assert.Equal(FlowRunStatus.Paused, resumed.Status);
+            Assert.Equal(["update u1, an amendment queued until the run could take it, was taken"], resumed.TakeQueuedUpdates());
+            Assert.Equal([("u1", FlowUpdateStates.UnderWay, (string?)null)], UpdatesOf(harness, layout).Updates.Select(update => (update.Id, update.State, update.Why)));
+            Assert.Equal((nameof(FlowRunStatus.Paused), nameof(FlowInstanceState.Failed)), StandingOf(harness, layout, "later"));
+        }
+    }
+
+    /// <summary>
+    /// A handler a safe pause left owed - a machine step the pause left running ended done, and the raise of its handler
+    /// waits for the next session - keeps the run from done to the engine built from its records, though every step of it
+    /// has ended: before its first session it stands paused, and the amendment queued while no engine ran is taken,
+    /// nothing written done meanwhile.
+    /// </summary>
+    [Fact]
+    public async Task AHandlerAPauseLeftOwed_KeepsTheRunFromDoneBeforeItsNextSession_AndItsQueuedAmendmentIsTaken()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Telling);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var clock = new JumpingClock();
+
+        using (records)
+        {
+            var run = await ToLaterInFlightAsync(definition, records, harness, layout, clock);
+            run.Coordinator.RequestPause("command");
+            run.Later.SetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+            Assert.Equal(FlowRunStatus.Paused, (await run.Session.WaitAsync(Bound, Token)).Status);
+        }
+
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        Assert.Equal((nameof(FlowRunStatus.Paused), nameof(FlowInstanceState.Done)), StandingOf(harness, layout, "later"));
+        Assert.Equal([new FlowHandlerState("tell", "owed")], flow.Steps.Single(step => step.Instance == "later").Handlers);
+        Assert.DoesNotContain(flow.Steps, step => step.Step == "tell");
+        Queue(harness, layout, clock, "in fact, build only the parser");
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = Resumed(definition, again, harness, layout, new FakeRunner(), clock);
+
+            Assert.Equal(FlowRunStatus.Paused, resumed.Status);
+            Assert.Equal(["update u1, an amendment queued until the run could take it, was taken"], resumed.TakeQueuedUpdates());
+            Assert.Equal([("u1", FlowUpdateStates.UnderWay, (string?)null)], UpdatesOf(harness, layout).Updates.Select(update => (update.Id, update.State, update.Why)));
+            Assert.Equal(nameof(FlowRunStatus.Paused), harness.OrchestrationStore.ReadFlow(layout)!.Status);
+        }
+    }
+
+    /// <summary>A run driven to its last step in flight (<see cref="ToLaterInFlightAsync"/>).</summary>
+    /// <param name="Coordinator">The engine.</param>
+    /// <param name="Session">Its session under way.</param>
+    /// <param name="Later">What holds <c>later</c> open, for the test to end it as it ends.</param>
+    /// <param name="Gate">The id of the question of the gate before <c>later</c>: the last a person answered.</param>
+    private sealed record InFlight(FlowCoordinator Coordinator, Task<FlowSessionEnd> Session, TaskCompletionSource<FlowStepResult> Later, string Gate);
+
+    /// <summary>
+    /// Drives a run of <paramref name="definition"/> to its last step in flight: the first pause answered, the planning
+    /// block run, the gate answered, and <c>later</c> started and held open.
+    /// </summary>
+    private static async Task<InFlight> ToLaterInFlightAsync(WorkflowDefinition definition, FlowRunRecords records, HarnessFactory harness, OrchestratorLayout layout, TimeProvider clock)
+    {
+        var runner = new FakeRunner();
+        var later = runner.Hold("later");
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, inputs: Request, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+        _ = await coordinator.RunAsync(Token);
+        Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+        _ = await coordinator.RunAsync(Token);
+        var gate = coordinator.OpenQuestions.Single().Id;
+        Assert.True(coordinator.TryAnswer(gate, "go", null, out _));
+
+        var session = coordinator.RunAsync(Token);
+        await runner.StartedAsync("later").WaitAsync(Bound, Token);
+        return new InFlight(coordinator, session, later, gate);
+    }
+
+    /// <summary>An engine built from the run's records, as a command that goes on with the run builds one, before its session.</summary>
+    private static FlowCoordinator Resumed(WorkflowDefinition definition, FlowRunRecords records, HarnessFactory harness, OrchestratorLayout layout, FakeRunner runner, TimeProvider clock)
+        => TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, inputs: Request, records: records, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+    /// <summary>The request every run of these tests is given.</summary>
+    private static Dictionary<string, string> Request => new() { ["request"] = "build the tool" };
+
+    /// <summary>An amendment recorded queued, as amend-orchestrator-request records one where no engine runs the run.</summary>
+    private static void Queue(HarnessFactory harness, OrchestratorLayout layout, TimeProvider clock, string text)
+    {
+        var given = clock.GetUtcNow();
+        _ = harness.OrchestrationStore.AddUpdate(layout, "r1", given, id => new FlowUpdateEntry(id, FlowUpdateCauses.Amendment, FlowUpdateStates.Queued, given, Amendment: text, Through: "amend-orchestrator-request"));
+    }
+
+    /// <summary>The run's status and the state of one of its instances, as <c>flow.json</c> says them.</summary>
+    private static (string Run, string Step) StandingOf(HarnessFactory harness, OrchestratorLayout layout, string instance)
+    {
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        return (flow.Status, flow.Steps.Single(step => step.Instance == instance).State);
+    }
+
+    /// <summary>
     /// An update that arrives while another is under way is queued, and taken when that one is done, in the order
     /// given: each is planned by its own visit of the planning step, and the check runs again for each.
     /// </summary>
@@ -328,7 +682,7 @@ public sealed class FlowPlanUpdateTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -376,7 +730,7 @@ public sealed class FlowPlanUpdateTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -416,7 +770,7 @@ public sealed class FlowPlanUpdateTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -441,7 +795,7 @@ public sealed class FlowPlanUpdateTests
 
         using (again)
         {
-            var resumed = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             // The question the probe asked is open, and the run paused beside it with the update under way: the
             // answer drives the update to its end - the scope rests, the plan stands, the hold ends, `later` runs.
@@ -461,6 +815,293 @@ public sealed class FlowPlanUpdateTests
             Assert.Contains(runner.Started, started => started == "later");
             Assert.Null(harness.OrchestrationStore.ReadFlow(layout)!.Hold);
         }
+    }
+
+    /// <summary>
+    /// The flow of <see cref="Lean"/> whose planning ends with a review that makes an agent of its own after the check: the
+    /// redirect an update's <c>then</c> decides, which resets the review with the check, would leave that agent open, and asks.
+    /// </summary>
+    private const string Reviewed = """
+        name: flow
+        inputs:
+          - name: request
+        steps:
+          - name: ask
+            type: pause
+            question: '{input.request}'
+            options: [stay, go]
+          - name: planning
+            dependsOn: [ask]
+            gather: [scope]
+            steps:
+              - name: plan
+                type: reason
+                agent: planner
+                prompt: plan.md
+                outputs: plan.json
+              - name: planupdate
+                type: reason
+                agent: planner
+                prompt: plan.md
+                outputs: plan.json
+              - name: check
+                type: orient
+                dependsOn: [plan]
+              - name: review
+                dependsOn: [check]
+                steps:
+                  - name: reviewer
+                    type: create-agent
+                    agent: reviewer
+          - name: gate
+            type: pause
+            question: held?
+            options: [stay, go]
+            dependsOn: [planning]
+          - name: later
+            type: orient
+            dependsOn: [gate]
+        """;
+
+    /// <summary>
+    /// The first session of a run of <paramref name="definition"/> over <paramref name="crashing"/>, until the process ends
+    /// where it says: the run is paused at its gate once the planning has run, an amendment is handed over and the gate
+    /// answered, and the session begins the update - its planning step ends done, and its <c>then</c> is decided. The
+    /// workflow's files are read through <paramref name="workflowFile"/> where it is given, and none are read where not.
+    /// </summary>
+    private static async Task UntilTheThenIsDecidedAsync(WorkflowDefinition definition, IFlowRecords crashing, HarnessFactory harness, OrchestratorLayout layout, Func<string?, string, string>? workflowFile = null)
+    {
+        var coordinator = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, workflowFile: workflowFile, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+        _ = await coordinator.RunAsync(Token);
+        Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+        _ = await coordinator.RunAsync(Token);
+        var gate = coordinator.OpenQuestions.Single().Id;
+        Assert.Equal(FlowHandedOver.Taken, coordinator.AmendmentHandedOver("in fact, build only the parser", "amend-orchestrator-request", out _));
+        Assert.True(coordinator.TryAnswer(gate, "go", null, out _));
+
+        _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+    }
+
+    /// <summary>
+    /// The decision of an update's <c>then</c> and the redirect it names are one fact, the redirect's own write: whichever
+    /// write of the decision the process ends at - the redirect's, or the update's entry naming the then after it - the
+    /// session that takes the run up runs the check the then names on the updated plan before its pieces are placed, once,
+    /// and the redirect is decided once. An entry an older build wrote naming the then before a redirect the process never
+    /// wrote reads as the then undecided, so it is decided again and the check runs all the same - never a plan standing on
+    /// a check that never ran on it.
+    /// </summary>
+    /// <param name="crashAt">The write of the decision the process ends at, and whose records hold it.</param>
+    [Theory]
+    [InlineData("the redirect")]
+    [InlineData("the update's then")]
+    [InlineData("the redirect, never written, beside an older build's entry")]
+    public async Task TheThenOfAnUpdate_IsDecidedWithItsRedirect_SoTheCheckRunsOnTheNewPlanWhereverTheProcessEnds(string crashAt)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Lean);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var older = crashAt.EndsWith("an older build's entry", StringComparison.Ordinal);
+        var crashing = crashAt == "the update's then"
+            ? new CrashingRecords(records, updates => updates.Updates.Any(update => update.Then is not null))
+            : new CrashingRecords(records, _ => false, lands: !older, picksRun: run => run.Redirects?.Any(redirect => redirect.Handler == "planning.planupdate") == true);
+
+        using (records)
+        {
+            await UntilTheThenIsDecidedAsync(definition, crashing, harness, layout);
+            Assert.True(crashing.Ended);
+        }
+
+        var entry = harness.OrchestrationStore.ReadFlowUpdates(layout)!;
+
+        if (older)
+        {
+            // The records as an older build left them: the update's entry names its then, and no redirect was written.
+            harness.OrchestrationStore.WriteFlowUpdates(layout, entry with { Updates = [.. entry.Updates.Select(update => update with { Then = "check" })] });
+        }
+
+        // On disk: the update under way, its then named only where the entry was written after the redirect, or by the
+        // older build.
+        Assert.Equal((FlowUpdateStates.UnderWay, crashAt == "the redirect" ? null : "check"), (harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().State, harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().Then));
+
+        // Each run of the check in the session that takes the run up, with where the update stood as it began.
+        var checks = new List<(string Instance, string State)>();
+        var runner = new FakeRunner().On("check", run =>
+        {
+            checks.Add((run.Instance, harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().State));
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            Assert.Equal(FlowRunStatus.Done, (await resumed.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        // The check ran once more, on the plan the update brought, while the update was still under way - before anything
+        // was placed and the update done.
+        Assert.Equal([("planning.check+2", FlowUpdateStates.UnderWay)], checks);
+        var done = harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single();
+        Assert.Equal((FlowUpdateStates.Done, "check"), (done.State, done.Then));
+        Assert.Contains(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Instance == "planning.check" && step.LeftBy == "planning.planupdate");
+
+        // The redirect was decided once, whichever session decided it.
+        Assert.Single(
+            FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Select(read => read.Detail),
+            detail => detail == "the run is sent to 'check' by 'planning.planupdate'");
+    }
+
+    /// <summary>
+    /// The decision of an update's <c>then</c> whose redirect asks - it would leave the review's agent open - is the
+    /// redirect's own write too, with the question it asks written just before: where the process ended at the question's
+    /// write, the question asks of no redirect, the replay withdraws it, and the session that takes the run up decides the
+    /// then again, asking anew; where it ended at the redirect's write or the entry's after it, the then stands decided and
+    /// the session waits on the question asked, never asking it twice - and a <c>stay</c> answered there gives the redirect
+    /// up for good, the plan standing as the stay leaves it, never the then decided again. An entry an older build wrote
+    /// naming the then before the question was written reads as undecided, and the then is asked anew all the same. Never
+    /// is the plan placed without the question asked.
+    /// </summary>
+    /// <param name="crashAt">The write of the decision the process ends at, and whose records hold it.</param>
+    [Theory]
+    [InlineData("the question")]
+    [InlineData("the redirect")]
+    [InlineData("the update's then")]
+    [InlineData("the question, beside an older build's entry")]
+    public async Task TheThenOfAnUpdateThatAsks_IsDecidedWithItsRedirect_AskedOnceWhereverTheProcessEnds(string crashAt)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Reviewed);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var anew = crashAt.StartsWith("the question", StringComparison.Ordinal);
+        var crashing = crashAt switch
+        {
+            "the update's then" => new CrashingRecords(records, updates => updates.Updates.Any(update => update.Then is not null)),
+            "the redirect" => new CrashingRecords(records, _ => false, picksRun: run => run.Redirects?.Any(redirect => redirect.Handler == "planning.planupdate") == true),
+            _ => new CrashingRecords(records, _ => false, picksQuestions: questions => questions.Any(question => question is { Kind: "openAgents", State: "open" })),
+        };
+
+        using (records)
+        {
+            await UntilTheThenIsDecidedAsync(definition, crashing, harness, layout);
+            Assert.True(crashing.Ended);
+        }
+
+        if (crashAt.EndsWith("an older build's entry", StringComparison.Ordinal))
+        {
+            // The records as an older build left them: the update's entry names its then, written before the question.
+            var entry = harness.OrchestrationStore.ReadFlowUpdates(layout)!;
+            harness.OrchestrationStore.WriteFlowUpdates(layout, entry with { Updates = [.. entry.Updates.Select(update => update with { Then = "check" })] });
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            // The session waits on the question the then's redirect asks of the review's agent, the update under way and
+            // nothing placed: asked anew where the process ended at the question's own write, or the one asked before.
+            var resumed = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            Assert.Equal(FlowRunStatus.Paused, (await resumed.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            var asked = Assert.Single(resumed.OpenQuestions);
+            Assert.Equal(("openAgents", "planning.planupdate"), (asked.Kind, asked.Instance));
+            Assert.Equal(FlowUpdateStates.UnderWay, harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().State);
+            Assert.Equal(
+                anew ? ["withdrawn", "open"] : ["open"],
+                harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions.Where(question => question.Kind == "openAgents").Select(question => question.State));
+
+            // A stay gives the redirect up, and the then stands decided: the plan stands, the update is done, and nothing
+            // asks again.
+            Assert.True(resumed.TryAnswer(asked.Id, "stay", null, out var problem), problem);
+            _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+        }
+
+        var done = harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single();
+        Assert.Equal((FlowUpdateStates.Done, "check"), (done.State, done.Then));
+        Assert.Equal(
+            anew ? ["withdrawn", "answered"] : ["answered"],
+            harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions.Where(question => question.Kind == "openAgents").Select(question => question.State));
+    }
+
+    /// <summary>The flow of <see cref="Reviewed"/> whose workflow answers the question of open agents beforehand: <c>stay</c>, taken at once as it is raised.</summary>
+    private const string ReviewedStaying = Reviewed + """
+
+        answers:
+          openAgents: stay
+        """;
+
+    /// <summary>
+    /// A <c>stay</c> that gave up the redirect an update's <c>then</c> decided, before the update's entry named the then,
+    /// leaves the then decided all the same: no redirect is owed any more and the entry names none, and the question the
+    /// redirect asked, answered, is the decision - so the session that takes the run up never decides the then again, never
+    /// asking a second time of the agents it would leave open, nor making the redirect the stay gave up. The stay is one the
+    /// workflow's <c>answers</c> give, taken at once as the question is raised, the process ending as the entry is written
+    /// after it; or a person's, given between two sessions - the process having ended as the entry was written, the
+    /// question's recommendation said not obtained, for the bar it is sought by cannot be read - and taken before the next
+    /// session's start, whose own writes the process ends before making.
+    /// </summary>
+    /// <param name="stayBy">Who gave the stay, and when.</param>
+    [Theory]
+    [InlineData("the configuration, at once")]
+    [InlineData("a person, before the next session's start")]
+    public async Task TheThenOfAnUpdateAStayGaveUpBeforeItsEntryNamedIt_IsNeverDecidedAgain(string stayBy)
+    {
+        using var temp = new TempDirectory();
+        var configured = stayBy == "the configuration, at once";
+        var definition = configured ? Parse(ReviewedStaying) : Parse(Reviewed) with { Recommendations = "bar.md" };
+        Func<string?, string, string> workflowFile = (_, named) => named == "bar.md"
+            ? throw new HarnessException(HarnessExit.ConfigInvalid, $"'{named}', a workflow file, is not at '.harness-config/workflows/flow/{named}'; write it there, beside the definition that names it")
+            : "Plan the work.";
+        var inputs = new Dictionary<string, string> { ["request"] = "build the tool" };
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        // The process ends at the update's entry naming the then, before that write lands: the question and the redirect
+        // asking it are written, and - where the workflow answers it - the stay that gave the redirect up.
+        var crashing = new CrashingRecords(records, updates => updates.Updates.Any(update => update.Then is not null), lands: false);
+
+        using (records)
+        {
+            await UntilTheThenIsDecidedAsync(definition, crashing, harness, layout, workflowFile);
+            Assert.True(crashing.Ended);
+        }
+
+        if (!configured)
+        {
+            // Between two sessions a person answers stay, taken before the next session's start, and the process ends
+            // before that start makes its writes.
+            var (_, _, between) = Records("r1", temp.Path, definition);
+
+            using (between)
+            {
+                var answering = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), inputs: inputs, records: between, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), workflowFile: workflowFile, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+                var asked = Assert.Single(answering.OpenQuestions);
+                Assert.Equal(("openAgents", "planning.planupdate"), (asked.Kind, asked.Instance));
+                Assert.True(answering.TryAnswer(asked.Id, "stay", null, out var problem, "answer-orchestrator"), problem);
+            }
+        }
+
+        // What either way of giving the stay leaves on disk, where only the question says the then was decided: the stay
+        // given, the redirect it gave up gone, the update under way and its entry naming no then.
+        var stayed = Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents");
+        Assert.Equal(("answered", "stay"), (stayed.State, stayed.Answers[^1].Answer));
+        Assert.Empty(harness.OrchestrationStore.ReadFlow(layout)!.Redirects ?? []);
+        Assert.Equal((FlowUpdateStates.UnderWay, (string?)null), (harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().State, harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().Then));
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), inputs: inputs, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), workflowFile: workflowFile, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            Assert.Equal(FlowRunStatus.Done, (await resumed.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        // The plan stood as the stay left it, the update done naming its then, and nothing asked of the agents again.
+        var done = harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single();
+        Assert.Equal((FlowUpdateStates.Done, "check"), (done.State, done.Then));
+        Assert.Equal(
+            [stayed.Id],
+            harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions.Where(question => question.Kind == "openAgents").Select(question => question.Id));
+        Assert.DoesNotContain(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.LeftBy == "planning.planupdate");
     }
 
     /// <summary>
@@ -524,7 +1165,7 @@ public sealed class FlowPlanUpdateTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -553,6 +1194,105 @@ public sealed class FlowPlanUpdateTests
     }
 
     /// <summary>
+    /// An update whose plan the check its <c>then</c> names refuses, where the loop around the planning is accepted at its
+    /// bound as it stood, is given up - failed, with why, nothing placed, the hold ended - and the run goes on with the
+    /// plan as it was: no plan of it will ever stand, and the run is never held for ever on it.
+    /// </summary>
+    [Fact]
+    public async Task AnUpdateWhosePlanIsRefused_WhenTheLoopAroundItsPlanningIsAcceptedAtItsBound_IsGivenUp()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            inputs:
+              - name: request
+            steps:
+              - name: ask
+                type: pause
+                question: '{input.request}'
+                options: [stay, go]
+              - name: planning
+                dependsOn: [ask]
+                repeat:
+                  until: 'check.ok'
+                  maxIterations: 1
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: planner
+                    prompt: plan.md
+                    outputs: plan.json
+                  - name: planupdate
+                    type: reason
+                    agent: planner
+                    prompt: plan.md
+                    outputs: plan.json
+                  - name: check
+                    type: validate-plan
+                    items: 'planning.plan.items'
+                    dependsOn: [plan]
+              - name: gate
+                type: pause
+                question: held?
+                options: [stay, go]
+                dependsOn: [planning]
+              - name: later
+                type: orient
+                dependsOn: [gate]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        // The plan the run began from passes its check; the update's plan never does.
+        var checks = 0;
+        var runner = new FakeRunner()
+            .On("plan", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"items": [], "scope": []}""")))
+            .On("planupdate", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"items": [], "scope": []}""")))
+            .On("check", _ => Interlocked.Increment(ref checks) == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": true, "problems": [], "items": []}"""))
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": false, "problems": ["two items own one file"], "items": []}""")));
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            _ = await coordinator.RunAsync(Token);
+            var gate = coordinator.OpenQuestions.Single();
+            Assert.Equal("held?", gate.Problem);
+
+            // The update's check refuses its plan: the loop around the planning asks at its bound, and is accepted.
+            Assert.Equal(FlowHandedOver.Taken, coordinator.AmendmentHandedOver("narrow it", "amend-orchestrator-request", out var problem));
+            Assert.Null(problem);
+            _ = await coordinator.RunAsync(Token);
+            var bound = coordinator.OpenQuestions.Single(question => question.Kind == "loopBound");
+            Assert.True(coordinator.TryAnswer(bound.Id, "accept", null, out _));
+
+            var held = await coordinator.RunAsync(Token);
+            Assert.Equal(FlowRunStatus.Paused, held.Status);
+            Assert.Equal([gate.Id], coordinator.OpenQuestions.Select(question => question.Id));
+
+            var update = harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single();
+            Assert.Equal(
+                (FlowUpdateStates.Failed, "'check' refused its plan, and nothing around its planning step 'planning#1.planupdate' plans it again: the request is recorded and no plan holds it"),
+                (update.State, update.Why));
+            Assert.Null(harness.OrchestrationStore.ReadFlow(layout)!.Hold);
+
+            // The run goes on with the plan as it was.
+            Assert.True(coordinator.TryAnswer(gate.Id, "go", null, out _));
+            var end = await coordinator.RunAsync(Token);
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Contains(runner.Started, started => started == "later");
+        }
+
+        // The architecture says it where it says how a refused plan is settled.
+        Assert.Contains(
+            "where nothing around the planning plans it again - the loop accepted at its bound as it stood, or no loop there is - the update is given up",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A changed answer that arrives while an update is under way is queued behind it, as an amendment is: the answer
     /// is not applied until its turn, and when the first update is done the change is applied and planned - the set's
     /// one change, both answers kept, the second naming the update that took it.
@@ -567,7 +1307,7 @@ public sealed class FlowPlanUpdateTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             var ask = coordinator.OpenQuestions.Single().Id;
@@ -629,7 +1369,7 @@ public sealed class FlowPlanUpdateTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -648,7 +1388,7 @@ public sealed class FlowPlanUpdateTests
 
         using (again)
         {
-            var resumed = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             Assert.True(resumed.TryAnswer(gate, "go", null, out _));
             var end = await Task.Run(() => resumed.RunAsync(Token), Token).WaitAsync(Bound, Token);
@@ -677,7 +1417,7 @@ public sealed class FlowPlanUpdateTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             var ask = coordinator.OpenQuestions.Single().Id;
@@ -721,7 +1461,7 @@ public sealed class FlowPlanUpdateTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             ask = coordinator.OpenQuestions.Single().Id;
@@ -740,7 +1480,7 @@ public sealed class FlowPlanUpdateTests
 
         using (again)
         {
-            var resumed = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             Assert.True(resumed.TryAnswer(resumed.OpenQuestions.Single().Id, "go", null, out _));
             var end = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
@@ -818,7 +1558,7 @@ public sealed class FlowPlanUpdateTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -873,9 +1613,13 @@ public sealed class FlowPlanUpdateTests
         var runner = new FakeRunner();
         var planning = runner.Hold("planupdate");
 
+        // A clock whose timers fire only when the test moves it: the planning step's handoff turn passes its bound when
+        // the test says, at once, never after the real seconds it names.
+        var clock = new TimerClock();
+
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -887,10 +1631,15 @@ public sealed class FlowPlanUpdateTests
 
             // The session starts the planning step - held open by the test - and a pause is asked of the engine.
             var session = coordinator.RunAsync(Token);
-            await runner.StartedAsync("planning.planupdate");
+            await runner.StartedAsync("planning.planupdate").WaitAsync(Bound, Token);
+            var armed = clock.Waiting;
             coordinator.RequestPause("command");
 
-            var paused = await session;
+            // The held planner answers no turn: once the turn's bound is armed, the clock is moved past it - the 180 s a
+            // step that declares no handoffSeconds is given - and the attempt is ended, handed off.
+            await clock.WaitingAsync(armed + 1).WaitAsync(Bound, Token);
+            clock.Advance(TimeSpan.FromSeconds(180));
+            var paused = await session.WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Paused, paused.Status);
             Assert.Equal(FlowUpdateStates.UnderWay, harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().State);
@@ -903,7 +1652,7 @@ public sealed class FlowPlanUpdateTests
 
         using (again)
         {
-            var resumed = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
             var end = await resumed.RunAsync(Token);
 
@@ -918,5 +1667,149 @@ public sealed class FlowPlanUpdateTests
             Assert.Contains(runner.Started, started => started == "later");
             Assert.Null(harness.OrchestrationStore.ReadFlow(layout)!.Hold);
         }
+    }
+
+    /// <summary>
+    /// An updated plan stands only once what its <c>then</c> set going has ended: a step of it a pause stopped - here
+    /// <c>pause --all</c> stopping the machine step the then reset - is left of the run, to run again at the resume
+    /// (<see cref="FlowInstance.IsLeft"/>), so the update stays under way and nothing of it is placed while that step has
+    /// not ended, where the plan stood over it at once; and the resume runs the step again, and the plan stands once it ends.
+    /// </summary>
+    [Fact]
+    public async Task APlanStandsOnlyOnceWhatItsThenSetGoingHasEnded_NeverOverAStepAPauseStopped()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Lean);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var runner = new FakeRunner();
+        TaskCompletionSource<FlowStepResult> checking;
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            _ = await coordinator.RunAsync(Token);
+            var gate = coordinator.OpenQuestions.Single().Id;
+            Assert.Equal(FlowHandedOver.Taken, coordinator.AmendmentHandedOver("in fact, build only the parser", "amend-orchestrator-request", out _));
+            Assert.True(coordinator.TryAnswer(gate, "go", null, out _));
+
+            // The check the then resets is held open by the test from here on, and a pause that stops the machine steps
+            // too is asked once its new visit runs.
+            checking = runner.Hold("check");
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("planning.check+2").WaitAsync(Bound, Token);
+            coordinator.RequestPause("command", all: true);
+
+            var paused = await session.WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            Assert.Equal(FlowInstanceState.Stopped, coordinator.Instances["planning.check+2"].State);
+            Assert.Equal(FlowUpdateStates.UnderWay, harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().State);
+            Assert.NotNull(harness.OrchestrationStore.ReadFlow(layout)!.Hold);
+        }
+
+        checking.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            var end = await resumed.RunAsync(Token);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            var update = harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single();
+            Assert.Equal(("u1", FlowUpdateStates.Done), (update.Id, update.State));
+
+            // The stopped check ran again - the same visit, a new attempt - and only then did the plan stand.
+            Assert.Equal(2, runner.Started.Count(started => started == "planning.check+2"));
+            Assert.Null(harness.OrchestrationStore.ReadFlow(layout)!.Hold);
+        }
+    }
+
+    /// <summary>
+    /// An engine made for a run that begins stands paused, never done, before its first session and as that session's
+    /// start is shown - what its top declares and has not drawn yet is left of the run - so an amendment weighed then is
+    /// taken, never refused as given to a run that is done and has nothing to go back to.
+    /// </summary>
+    [Fact]
+    public async Task AnEngineForARunThatBegins_StandsPausedBeforeAndAsItsFirstSessionBegins_AndTakesAnAmendmentThen()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Lean);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        FlowCoordinator? coordinator = null;
+        var shownAsTheSessionBegins = new List<FlowRunStatus>();
+        var driven = false;
+
+        using (records)
+        {
+            // Read as the session's first write is made, before that write is shown: what the session's start is shown.
+            var looked = new Looked(records, () =>
+            {
+                if (driven && shownAsTheSessionBegins.Count == 0)
+                {
+                    shownAsTheSessionBegins.Add(coordinator!.Status);
+                }
+            });
+            coordinator = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: looked, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            Assert.Equal(FlowRunStatus.Paused, coordinator.Status);
+            Assert.Equal(FlowHandedOver.Taken, coordinator.AmendmentHandedOver("in fact, build only the parser", "amend-orchestrator-request", out var problem));
+            Assert.Null(problem);
+
+            driven = true;
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+            Assert.Equal([FlowRunStatus.Paused], shownAsTheSessionBegins);
+        }
+
+        // Taken before the plan's scope began, the amendment is done at once: every step that starts reads it.
+        var update = harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single();
+        Assert.Equal(("u1", FlowUpdateStates.DoneAtOnce), (update.Id, update.State));
+    }
+
+    /// <summary>The run's records, each write passed on after a look the test takes at the engine as it is made.</summary>
+    private sealed class Looked(IFlowRecords inner, Action looking) : IFlowRecords
+    {
+        /// <inheritdoc/>
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+        {
+            looking();
+            inner.Write(kind, snapshot, instance, from, to, attempt, detail);
+        }
+
+        /// <inheritdoc/>
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+            => inner.Question(questions, refused);
+
+        /// <inheritdoc/>
+        public void Updates(FlowUpdatesFile updates)
+            => inner.Updates(updates);
+
+        /// <inheritdoc/>
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+            => inner.AffectedTests(entries);
+
+        /// <inheritdoc/>
+        public string NameAgent(IReadOnlyCollection<string> recorded)
+            => inner.NameAgent(recorded);
+
+        /// <inheritdoc/>
+        public void Flush()
+            => inner.Flush();
+
+        /// <inheritdoc/>
+        public void Stand(FlowStartsStanding standing, IReadOnlyCollection<string> leftSought)
+            => inner.Stand(standing, leftSought);
+
+        /// <inheritdoc/>
+        public void Unstand()
+            => inner.Unstand();
     }
 }

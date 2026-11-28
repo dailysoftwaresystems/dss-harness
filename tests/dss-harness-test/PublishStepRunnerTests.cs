@@ -319,8 +319,8 @@ public sealed class PublishStepRunnerTests
 
     /// <summary>
     /// A title blank once filled fails the step (12); HEAD detached, no remote, a remote the push step names that the
-    /// repository does not have, no base it can tell and a base that is the branch itself each refuse it (13); and the
-    /// forge is never asked.
+    /// repository does not have, a remote whose address names no repository on a forge - a repository on this machine -,
+    /// no base it can tell and a base that is the branch itself each refuse it (13); and the forge is never asked.
     /// </summary>
     [Fact]
     public async Task APullRequestItCannotPlace_IsRefused_AndTheForgeIsNeverAsked()
@@ -333,6 +333,9 @@ public sealed class PublishStepRunnerTests
         var blank = await runner.RunAsync(Run(kit, PullRequestStep() with { Title = "  " }, body: "the body\n"), Token);
         var elsewhere = await runner.RunAsync(Run(kit, PullRequestStep(), body: "the body\n", definition: PushingTo("elsewhere")), Token);
         var itself = await runner.RunAsync(Run(kit, PullRequestStep() with { Base = "work" }, body: "the body\n"), Token);
+        await kit.Harness.RunGitAsync(kit.Main, ["remote", "set-url", "origin", temp.Combine("elsewhere.git")], Token);
+        var local = await runner.RunAsync(Run(kit, PullRequestStep(), body: "the body\n"), Token);
+        await kit.Harness.RunGitAsync(kit.Main, ["remote", "set-url", "origin", "https://github.com/acme/widgets.git"], Token);
         await kit.Harness.RunGitAsync(kit.Main, ["update-ref", "-d", "refs/remotes/origin/main"], Token);
         var unknown = await runner.RunAsync(Run(kit, PullRequestStep(), body: "the body\n"), Token);
         await kit.Harness.RunGitAsync(kit.Main, ["remote", "remove", "origin"], Token);
@@ -343,7 +346,10 @@ public sealed class PublishStepRunnerTests
         Assert.Equal(
             (false, HarnessExit.ConfigInvalid, "'pr' has a title that is blank once filled, and a pull request takes one: give the step a title, or values that fill it. Nothing was opened."),
             (blank.Passed, blank.Exit, blank.Error));
-        Assert.All([elsewhere, itself, unknown, none, detached], refused => Assert.Equal((false, HarnessExit.Refused), (refused.Passed, refused.Exit)));
+        Assert.All([elsewhere, itself, local, unknown, none, detached], refused => Assert.Equal((false, HarnessExit.Refused), (refused.Passed, refused.Exit)));
+        Assert.Equal(
+            "'pr' opens its pull request on a forge, and remote 'origin' names no repository on a forge - its address is a path on this machine, a file:// address or a path on an ssh server, which takes a push and has no pull requests: push to a remote on a forge, or leave the step out of a run whose remote has no pull requests (the shipped flow runs it only where orient.onForge). Nothing was opened.",
+            local.Error);
         Assert.Equal(
             "'pr' opens its pull request on the remote the push step names, 'elsewhere', which is not a remote of this repository (origin): name one of them on the push step, or add it. Nothing was opened.",
             elsewhere.Error);
@@ -387,12 +393,11 @@ public sealed class PublishStepRunnerTests
 
     /// <summary>
     /// The forge answering what is no list of pull requests, or opening one without naming its address, fails the step
-    /// (20) saying what it answered; one that did not answer in time is not done (21), whether it opened one not known;
-    /// and a remote whose address names no repository on a forge leaves the forge's tool to
-    /// read the remotes itself, no --repo given.
+    /// (20) saying what it answered; and one that did not answer in time is not done (21), whether it opened one not
+    /// known.
     /// </summary>
     [Fact]
-    public async Task AForgeThatAnswersNothingItCanRead_FailsTheStep_AndAnAddressOfNoForgeNamesNoRepository()
+    public async Task AForgeThatAnswersNothingItCanRead_FailsTheStep()
     {
         using var temp = new TempDirectory();
         var kit = await ForgedAsync(temp);
@@ -404,15 +409,11 @@ public sealed class PublishStepRunnerTests
             () => PullRequests(kit, requests, null, Exited(0, "[]"), Exited(0, "done\n")).RunAsync(Run(kit, PullRequestStep(), body: "b"), Token));
         var late = await Assert.ThrowsAsync<HarnessException>(
             () => PullRequests(kit, requests, null, Exited(0, "[]"), new ProcessResult(-1, string.Empty, string.Empty, TimeSpan.FromMinutes(5), TimedOut: true)).RunAsync(Run(kit, PullRequestStep(), body: "b"), Token));
-        await kit.Harness.RunGitAsync(kit.Main, ["remote", "set-url", "origin", temp.Combine("elsewhere.git")], Token);
-        requests.Clear();
-        _ = await PullRequests(kit, requests, null, Exited(0, """[{"number":1,"url":"https://example.com/pull/1","isCrossRepository":false}]""")).RunAsync(Run(kit, PullRequestStep(), body: "b"), Token);
 
         Assert.Equal((HarnessExit.CommandFailed, "gh answered no list of pull requests open from 'work': {}"), (unlisted.ExitCode, unlisted.Message));
         Assert.Equal((HarnessExit.CommandFailed, "gh said it opened a pull request from 'work', and named no address of one: done"), (unaddressed.ExitCode, unaddressed.Message));
         Assert.Equal(HarnessExit.Incomplete, late.ExitCode);
         Assert.Contains("did not answer within 5 minutes, so whether a pull request was opened from 'work' to 'main' is not known.", late.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("--repo", Assert.Single(requests).Arguments);
     }
 
     /// <summary>

@@ -10,7 +10,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// The syncs of a run's codebase graph the engine makes of its own, each under the claim its step already holds and none a
 /// step: the view of a step that reads it where it starts (<see cref="FlowStepRunners.ReadsViewAtStart"/>) - the agent's
-/// it works in, the base for one that reads; the base by the paths the run's folds changed that the graph has not taken
+/// worktree it works in - and the view of the own tree of an agent that only reads once its step's runner brought that
+/// tree to the main checkout's HEAD or to the commit the step names, or found it as the attempt an answer goes on with left
+/// it (<see cref="ReadiedAsync"/>); the base by the paths the run's folds changed that the graph has not taken
 /// yet, after each fold and deletion and before its next attempt does anything; the target's view after a refresh or a
 /// rebase, where it has one; the view of a leg step's tree checked by the files its red legs' digests name, which their
 /// places' declarations are read from (<see cref="DeclarationsAsync"/>); and the view of each agent that is no longer live
@@ -50,9 +52,10 @@ public sealed class FlowGraphSyncs(
 
     /// <summary>
     /// The commit a step's tree's work started from, which change-first compares the tree with: an agent's worktree's base
-    /// as its record says it - where its worktree was made, or where its last refresh or rebase brought it - and for the
-    /// main checkout, which an agent that reads and a step with no agent work in, the commit the run started from. Null
-    /// where neither is recorded: a worktree not made yet, a run started beside the tree's history.
+    /// as its record says it - where its worktree was made, or where its last refresh or rebase brought it - and for the tree
+    /// of an agent that only reads, which holds what the main checkout committed or the commit its step names, and the main
+    /// checkout, which a step with no agent works in, the commit the run started from. Null where neither is recorded: a
+    /// worktree not made yet, a run started beside the tree's history.
     /// </summary>
     /// <param name="agent">The record of the agent the step works in; null for a step with none.</param>
     /// <param name="startCommit">The commit the run started from, as its records keep it; null where they name none.</param>
@@ -89,24 +92,51 @@ public sealed class FlowGraphSyncs(
     }
 
     /// <summary>
-    /// The worktree whose view <paramref name="agent"/>'s steps are served and synced: its own, where its record names one;
-    /// null for an agent that reads - whose view is the base - and for one whose worktree its record does not place.
+    /// The worktree whose view <paramref name="agent"/>'s steps are served and synced, as <paramref name="step"/> asks it:
+    /// its own, where its record names one - the tree of an agent that only reads as well, for the step that readies it and
+    /// reads it (<see cref="ViewsOwnTree"/>), so every agent with a tree of its own is served the view of the tree it reads;
+    /// null for an agent that only reads on any other step, whose tree stands as its last step left it - the base is its
+    /// view there - and for one whose worktree its record does not place.
     /// </summary>
     /// <param name="agent">The agent's name.</param>
     /// <param name="record">The agent's record.</param>
     /// <param name="layout">The repository's layout, which places the worktree under the worktrees root.</param>
-    public static CodebaseGraphWorktree? WorktreeOf(string agent, AgentRecord record, HarnessLayout layout)
+    /// <param name="step">The step the view is asked for.</param>
+    public static CodebaseGraphWorktree? WorktreeOf(string agent, AgentRecord record, HarnessLayout layout, WorkflowStep step)
     {
         ArgumentNullException.ThrowIfNull(record);
+        ArgumentNullException.ThrowIfNull(step);
 
-        return record.Reads ? null : record.WorktreePath(layout) is { } worktree ? new CodebaseGraphWorktree(agent, worktree) : null;
+        return record.Reads && !ViewsOwnTree(record, step) ? null : record.WorktreePath(layout) is { } worktree ? new CodebaseGraphWorktree(agent, worktree) : null;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="step"/>, working as the agent <paramref name="record"/> is of, is served the view of that agent's
+    /// own tree though the agent only reads: a reason step, whose runner brings that tree to the main checkout's HEAD - or to
+    /// the commit the step names (<c>commit</c>) - before anything of the step reads it, so the tree holds what that commit
+    /// holds and never the main checkout's uncommitted changes, nor a fold that landed since; the graph it is served - the
+    /// declarations, outlines and narrowing of its reads among it, and the working set its reads are placed by - is of that
+    /// tree, never of the main checkout beside it. Such a view is synced once the step's runner readied the tree - or found
+    /// it as the attempt an answer goes on with left it, what that attempt wrote there among it (<see cref="ReadiedAsync"/>) -
+    /// never at the step's start before it, when the tree may stand as the agent's last step left it.
+    /// </summary>
+    /// <param name="record">The record of the agent the step works as.</param>
+    /// <param name="step">The step, its templates filled.</param>
+    public static bool ViewsOwnTree(AgentRecord record, WorkflowStep step)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentNullException.ThrowIfNull(step);
+
+        return record.Reads && step is { Type: "reason" };
     }
 
     /// <summary>
     /// A step that reads the graph's view starts - a reason step, or a class-closure check
-    /// (<see cref="FlowStepRunners.ReadsViewAtStart"/>): its view is synced by a whole listing - the agent's it works in,
-    /// the base for one that reads - where the run has a graph, so a person's change of the main tree and the agent's own
-    /// work since its last step are in what it is served, or what it judges.
+    /// (<see cref="FlowStepRunners.ReadsViewAtStart"/>): its view is synced by a whole listing - the agent's worktree it
+    /// works in, the base for a step of no agent's - where the run has a graph, so the agent's own work since its last step
+    /// is in what it is served, or what it judges. A step whose agent only reads views its own tree
+    /// (<see cref="ViewsOwnTree"/>) and is synced by <see cref="ReadiedAsync"/> instead, once its tree stands where the step
+    /// reads it: here it may still stand as the agent's last step left it.
     /// </summary>
     /// <param name="run">The step's run.</param>
     /// <param name="cancellationToken">Stops the sync, and the step with it.</param>
@@ -135,6 +165,44 @@ public sealed class FlowGraphSyncs(
         }
 
         await SyncAsync(run, place, context, run.WorksIn, $"{run.Instance}:start", Whole, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The tree of <paramref name="agent"/>, an agent that only reads, stands where <paramref name="run"/>'s step reads it
+    /// (<see cref="ViewsOwnTree"/>) - brought to the main checkout's HEAD or to the commit the step names, or as the attempt
+    /// an answer goes on with left it: that tree's own view is synced by a whole
+    /// listing, held against the base as every agent's view is - each file whose extract the base or an earlier sync of the
+    /// view made read again by none, and the view linked from the base's link, so the sync costs what the tree holds
+    /// otherwise than the base - where the run has a graph: what the step is served is the tree it reads, as it stands.
+    /// Nothing where the step views no tree of its own.
+    /// </summary>
+    /// <param name="run">The step's run, its templates filled.</param>
+    /// <param name="agent">The agent it works as.</param>
+    /// <param name="cancellationToken">Stops the sync, and the step with it.</param>
+    public async Task ReadiedAsync(FlowStepRun run, string agent, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        ArgumentException.ThrowIfNullOrWhiteSpace(agent);
+
+        if (run.Place is not { } given)
+        {
+            return;
+        }
+
+        FlowRunPlace place;
+        HarnessContext context;
+
+        try
+        {
+            (place, context) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Said(run, given.Run, layout: null, agent, $"{run.Instance}:start", ex, "synced", ViewAgain);
+            return;
+        }
+
+        await SyncAsync(run, place, context, agent, $"{run.Instance}:start", Whole, cancellationToken, readied: true).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -346,10 +414,23 @@ public sealed class FlowGraphSyncs(
     }
 
     /// <summary>
-    /// One sync of the view of <paramref name="agent"/>'s worktree - the base where it names none, or its agent reads only -
-    /// where the run has a graph and the agent is live, after the views of agents no longer live are dropped; one that
-    /// fails is said, and never fails the step.
+    /// One sync of the view of <paramref name="agent"/>'s worktree - the base where it names none, or its agent reads only
+    /// on a step that does not view the reader's own tree (<see cref="ViewsOwnTree"/>) - where the run has a graph and the
+    /// agent is live, after the views of agents no longer live are dropped; one that fails is said, and never fails the step.
     /// </summary>
+    /// <param name="run">The step's run.</param>
+    /// <param name="place">The run's place.</param>
+    /// <param name="context">The repository's context.</param>
+    /// <param name="agent">The agent whose view is synced; null for the base.</param>
+    /// <param name="why">What asked for it, as the graph's sync log says it.</param>
+    /// <param name="sync">Makes the sync of the request built.</param>
+    /// <param name="cancellationToken">Stops the sync.</param>
+    /// <param name="again">What a sync that failed is taken up by, as its warning says.</param>
+    /// <param name="readied">
+    /// Whether the reader's tree was just found standing where its step reads it - brought to the main checkout's HEAD or
+    /// the commit its step names, or as the attempt an answer goes on with left it (<see cref="ReadiedAsync"/>): that tree's
+    /// own view is synced then, and only then - before it, the tree may stand as the agent's last step left it.
+    /// </param>
     /// <returns>
     /// Whether the sync was made and went through: a sync by paths of a graph whose manifest does not read takes nothing,
     /// said with why, and what it was given stays owed until the whole sync that builds the graph again.
@@ -362,7 +443,8 @@ public sealed class FlowGraphSyncs(
         string why,
         Func<CodebaseGraphSync, CancellationToken, Task<bool>> sync,
         CancellationToken cancellationToken,
-        string again = ViewAgain)
+        string again = ViewAgain,
+        bool readied = false)
     {
         var layout = OrchestratorLayout.Of(context.Layout, place.Run);
 
@@ -382,10 +464,14 @@ public sealed class FlowGraphSyncs(
         {
             if (agent is not null)
             {
-                // An agent that reads has no worktree: it reads the main tree, and its view is the base.
+                // An agent that only reads is served its own tree's view on the step that readies it, synced once its
+                // runner found the tree where the step reads it, and only then; on any other step its view is the base.
                 switch (store.ReadAgent(layout, agent))
                 {
-                    case { State: AgentStates.Live } record when WorktreeOf(agent, record, context.Layout) is { } worktree:
+                    case { State: AgentStates.Live } record when ViewsOwnTree(record, run.Step) != readied:
+                        return false;
+
+                    case { State: AgentStates.Live } record when WorktreeOf(agent, record, context.Layout, run.Step) is { } worktree:
                         request = request with { Worktree = worktree };
                         break;
 

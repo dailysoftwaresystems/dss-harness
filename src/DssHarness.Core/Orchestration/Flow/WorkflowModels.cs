@@ -113,16 +113,12 @@ public sealed record WorkflowDefinition(
 /// <summary>
 /// The workflow's <c>codebaseGraph</c>: what the run's one graph is made of, as the file says it - each key left out
 /// <see langword="null"/>, a list given empty kept empty for the check to refuse. Each key is optional where the run's
-/// frozen definition is read back, for one left out is left out of the record too.
+/// frozen definition is read back, for one left out is left out of the record too; the retired <c>maxFileBytes</c> a
+/// frozen definition of an earlier release holds is read there and ignored (<see cref="FrozenDefinition.Retired"/>).
 /// </summary>
 /// <param name="Include">Patterns only the paths one of which matches are graphed.</param>
 /// <param name="Exclude">Patterns the paths one of which matches are not graphed.</param>
 /// <param name="Languages">The implementations used, by name.</param>
-/// <param name="MaxFileBytes">
-/// The retired <c>maxFileBytes</c>, as a frozen definition of an earlier release holds it: read so that run's definition
-/// still reads back, and never applied - every file the graph claims is read whole - nor written, for no file gives it
-/// (<see cref="WorkflowFileParser.RetiredGraphKey"/>).
-/// </param>
 /// <param name="Generated">What becomes of generated code: <c>low</c> or <c>exclude</c>.</param>
 /// <param name="MapTokens">The cap, in tokens, of the run's repository map, made once and read as it is by every step after; 0 asks for none.</param>
 /// <param name="KeyNaming">The naming policies a configuration key's last segment is joined to a member's name by.</param>
@@ -131,7 +127,6 @@ public sealed record FlowCodebaseGraph(
     IReadOnlyList<string>? Include = null,
     IReadOnlyList<string>? Exclude = null,
     IReadOnlyList<string>? Languages = null,
-    int? MaxFileBytes = null,
     string? Generated = null,
     int? MapTokens = null,
     IReadOnlyList<string>? KeyNaming = null,
@@ -152,11 +147,12 @@ public sealed record FlowCodebaseGraph(
 /// failure of their own does <paramref name="OnFailure"/>'s - both written in the file, as a step's own wiring is.
 /// </summary>
 /// <param name="MaxVisits">
-/// How often the recovery may take the failures of one step in one scope, where the file says; past it the run asks
-/// (<c>recoveryBound</c>), with the advisor's recommendation of a fix and the choices. Within it - and where it says
-/// nothing, within the engine's bound of <see cref="MostVisits"/> visits of one step in one scope - a step that fails
-/// again after the recovery goes to it again, by its own <c>onFailure: recover</c>; the recovery never sends itself
-/// anything.
+/// How often the recovery may take one thing - the failures of one step in one scope, or one issue sent to fix - where
+/// the file says; past it the run asks (<c>recoveryBound</c>), with the advisor's recommendation of a fix and the
+/// choices. Within it - and where it says nothing, within <see cref="MostVisits"/> - a step that fails again after the
+/// recovery goes to it again, by its own <c>onFailure: recover</c>; the recovery never sends itself anything. It bounds
+/// that loop alone: the recovery takes the failures of any number of steps, and any number of issues, each counted on
+/// its own.
 /// </param>
 /// <param name="Steps">The recovery's own steps, which take every key the flow's steps take.</param>
 /// <param name="OnSuccess">Where the run goes once the recovery's steps are done: <see cref="FailedStep"/>.</param>
@@ -171,12 +167,16 @@ public sealed record FlowRecover(
     string OnSuccess,
     string OnFailure)
 {
-    /// <summary>The most a recovery may be given: the engine's bound on the visits of one step in one scope.</summary>
+    /// <summary>
+    /// The most visits <c>maxVisits</c> may give the recovery for one thing it takes, and what it is given where the file
+    /// names none: the bound of the recovery's own loop, never one on how many things it takes.
+    /// </summary>
     public const int MostVisits = 99;
 
     /// <summary>
-    /// How many visits the recovery may make for one step in one scope before the run asks: its <c>maxVisits</c>, else
-    /// <see cref="MostVisits"/> - the one bound the engine holds the recovery to and the facts of a run count by.
+    /// How many visits the recovery may make for one thing it takes - one step's failures in one scope, or one issue -
+    /// before the run asks: its <c>maxVisits</c>, else <see cref="MostVisits"/> - the one bound the engine holds the
+    /// recovery to and the facts of a run count by.
     /// </summary>
     [JsonIgnore]
     public int VisitsAllowed => MaxVisits ?? MostVisits;
@@ -221,22 +221,25 @@ public sealed record FlowRecover(
 /// </remarks>
 public sealed record FlowBudget(double? Usd = null, long? Tokens = null, double? Minutes = null, int? ReservePercent = null);
 
-/// <summary>The agent that recommends an answer to a question the engine raises itself.</summary>
+/// <summary>
+/// The agent that recommends an answer to every question the engine raises, before a person is asked it: a workflow a
+/// run is started of names one, and a used workflow's own recommends for its steps where its use governs itself. The
+/// retired <c>kinds</c> a frozen definition of an earlier release holds is read there and ignored
+/// (<see cref="FrozenDefinition.Retired"/>).
+/// </summary>
 /// <param name="Agent">The agent definition, as a file under the workflow's <c>agents</c> directory.</param>
 /// <param name="Prompt">The prompt file the recommendation is asked with.</param>
 /// <param name="Tier">A name for a class of model, resolved by the configuration's tiers.</param>
 /// <param name="Model">The model outright, whose provider, key and client follow from it.</param>
 /// <param name="Effort">The effort the model is asked for: one level, or <see langword="null"/> where <see cref="FlowAdvisor.EffortByModel"/> holds the map.</param>
 /// <param name="Client">The client, where the provider is reached two ways.</param>
-/// <param name="Kinds">The question kinds this advisor is asked about; every one, where the file says nothing.</param>
 public sealed record FlowAdvisor(
     string Agent,
     string Prompt,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Tier,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Model,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Effort,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Client,
-    IReadOnlyList<string> Kinds)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Client)
 {
     /// <summary>How often its agent is tried again where it failed, on each model it may use, where the file says.</summary>
     public int? Retries { get; init; } = null;
@@ -333,10 +336,15 @@ public sealed record FlowAnswer(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Then);
 
 /// <summary>One value a run of the workflow is started with, or a workflow used as a step is handed.</summary>
-/// <param name="Name">The input's name, as <c>--input name=value</c> spells it, or as a <c>with:</c> value spells it.</param>
+/// <param name="Name">
+/// The input's name, as <c>--input name=value</c> spells it, or as a <c>with:</c> value spells it: apart from every other
+/// input's in more than case, since a run keeps a file input's copy in a directory of its name (<see cref="OrchestratorLayout.InputCopy"/>).
+/// </param>
 /// <param name="Description">What the value is for, shown when it is missing.</param>
 /// <param name="Kind">
-/// <c>text</c>, or <c>file</c>: a path inside the repository, which must be a file when the run starts - and, of a
+/// <c>text</c>, or <c>file</c>: a file inside the repository by its path from the root or an absolute one inside it,
+/// committed or not, decided as an agent's read of it is, which the run copies as it starts and its steps read as that
+/// copy (<see cref="FlowInputs.AsRead"/>) - and, of a
 /// workflow another uses as a step, also <c>value</c>: any typed value, read as an expression, and <c>step</c>: a name
 /// its steps say in <c>onFailure</c> or <c>then</c> through <c>{input.&lt;name&gt;}</c>, resolved in the caller.
 /// </param>
@@ -354,7 +362,13 @@ public sealed record FlowInput(
     /// <summary>The kind a file that says nothing is read as.</summary>
     public const string TextKind = "text";
 
-    /// <summary>The kind a path inside the repository is: checked to be a file when the run starts.</summary>
+    /// <summary>
+    /// The kind a file inside the repository is, named by its path from the root or an absolute one inside it: of the run's
+    /// own workflow, held to a file there an agent may read as the run starts, committed or not, and copied into the run's
+    /// directory (<see cref="FlowInputs.OpenFiles"/>),
+    /// a step reading the copy's path for it in every session (<see cref="FlowInputs.AsRead"/>); of a workflow used as a
+    /// step, a path of that workflow's own directory, which the definition's check reads.
+    /// </summary>
     public const string FileKind = "file";
 
     /// <summary>The kind any typed value takes, read as an expression: a used workflow's alone.</summary>
@@ -503,8 +517,10 @@ public sealed record FlowUseOwn(
 
 /// <summary>
 /// The workflow a step that says <c>use:</c> is, as resolution found it: everything of its own the step needs to run it
-/// - its inputs, its declared outputs, its recovery - beside the fingerprint of what it says, which the run records so a
-/// resume is refused where that changed, and the run-level keys of its own that no step applies.
+/// - its inputs, its declared outputs, its recovery - beside the fingerprint of what it says, which the run records, and
+/// the run-level keys of its own that no step applies. A resume is refused where what it brings the run changed: it is
+/// compared whole, as every step of the run's definition is, and its fingerprint is left out of that
+/// (<see cref="FlowResume.Said"/>).
 /// </summary>
 /// <param name="Source">The path as written, <c>./pipeline/pipeline.yml</c> among the callers.</param>
 /// <param name="Name">
@@ -513,9 +529,9 @@ public sealed record FlowUseOwn(
 /// a relative use inside a remote one names, its cache place, <c>remote/&lt;host&gt;/&lt;owner&gt;/&lt;repo&gt;/&lt;commit&gt;/&lt;dir&gt;</c>.
 /// </param>
 /// <param name="Fingerprint">
-/// What the run records of the called workflow's resolution: for a local one the digest of its parsed definition, taken
-/// as the run's own definition's is, so a comment or line endings change nothing; for a remote one, or one inside it,
-/// the commit it was read at.
+/// What the run records of the called workflow's resolution, and <c>validate-workflow</c> says: for a local one the
+/// digest of its parsed definition, taken as the run's own definition's is, so a comment or line endings change nothing;
+/// for a remote one, or one inside it, the commit it was read at, which a resume resolves the use to again.
 /// </param>
 /// <param name="Inputs">The called workflow's declared inputs, which the step's <c>with:</c> values fill.</param>
 /// <param name="Params">The called workflow's own params, read as <c>param.&lt;name&gt;</c> inside it.</param>
@@ -817,15 +833,17 @@ public sealed record WorkflowStep
     /// <summary>The step the run goes back to once this handler is done.</summary>
     public string? Then { get; init; } = null;
 
-    /// <summary>How often this handler may be raised; past it the run asks.</summary>
+    /// <summary>How often this handler may be raised in the scope its loop goes round in; past it the run asks.</summary>
     public int? MaxVisits { get; init; } = null;
 
-    /// <summary>How often a handler may be raised in one scope where its file names no <c>maxVisits</c>.</summary>
+    /// <summary>How often a handler may be raised in the scope its loop goes round in where its file names no <c>maxVisits</c>.</summary>
     public const int DefaultMaxVisits = 3;
 
     /// <summary>
-    /// How often this handler may be raised in one scope before the run asks: its <c>maxVisits</c>, else
-    /// <see cref="DefaultMaxVisits"/> - the one bound the engine holds a handler to and the facts of a run count by.
+    /// How often this handler may be raised in the scope its loop goes round in before the run asks - its own, or, where
+    /// its <c>then</c> sends the run back over a group around it, the scope that <c>then</c> goes back to: its
+    /// <c>maxVisits</c>, else <see cref="DefaultMaxVisits"/> - the one bound the engine holds a handler to and the facts
+    /// of a run count by.
     /// </summary>
     [JsonIgnore]
     public int VisitsAllowed => MaxVisits ?? DefaultMaxVisits;
@@ -952,9 +970,11 @@ public sealed record WorkflowStep
     public const int MostBackoffSeconds = 900;
 
     /// <summary>
-    /// The step's use of the run's codebase graph: <c>off</c> (none), <c>map</c> (its context pack alone) or <c>tools</c>
-    /// (the pack and the one tool <c>graph</c>). Absent, <see cref="GraphOf"/> decides - <c>tools</c> where a graph is
-    /// made upstream and the step's agent reads, <c>map</c> where one is and its agent does not, <c>off</c> where none is.
+    /// The step's use of the run's codebase graph: <c>off</c> (none), <c>map</c> (the run's repository map and its context
+    /// pack pushed into its first message, its one way to see the graph) or <c>tools</c> (the one tool <c>graph</c>, whose
+    /// <c>map</c> and <c>pack</c> serve their pages when asked, nothing pushed unless the step says
+    /// <see cref="GraphPromptTokens"/>). Absent, <see cref="GraphOf"/> decides - <c>tools</c> where a graph is made
+    /// upstream and the step's agent reads, <c>map</c> where one is and its agent does not, <c>off</c> where none is.
     /// </summary>
     public string? Graph { get; init; } = null;
 
@@ -982,15 +1002,31 @@ public sealed record WorkflowStep
     public static readonly IReadOnlyList<string> GraphFromWords = [GraphFromTask, GraphFromChanges];
 
     /// <summary>
-    /// The size of the first page of the step's context pack - the page its prompt is given - in estimated tokens, from 0
-    /// to <see cref="MostGraphPromptTokens"/>: 0 asks for no pack; absent, <see cref="DefaultGraphPromptTokens"/>. What
-    /// the pack reaches past the first page is on the pages after it, never left out. A step that goes on with another's
-    /// work may say its own.
+    /// The size of page 1 of the step's context pack pushed into its first message, in estimated tokens, from 0 to
+    /// <see cref="MostGraphPromptTokens"/>: 0 pushes none. Absent, <see cref="GraphPromptTokensOf"/> decides by the step's
+    /// mode. What the pack reaches past page 1 is on the pages after it, never left out. A step that goes on with
+    /// another's work may say its own.
     /// </summary>
     public int? GraphPromptTokens { get; init; } = null;
 
-    /// <summary>The size of a context pack's first page where neither the step nor anything else says one.</summary>
-    public const int DefaultGraphPromptTokens = 3_000;
+    /// <summary>
+    /// The size of a context pack's pages where the step pushes none of its own size: page 1 pushed into the first message
+    /// of a step at <c>map</c> that says nothing, and every page of the pack a step at <c>tools</c> pushed none of asks of
+    /// the graph tool's <c>pack</c>.
+    /// </summary>
+    public const int DefaultGraphPromptTokens = Codebase.CodebaseContextPack.DefaultTokens;
+
+    /// <summary>
+    /// The size of page 1 of a step's context pack pushed into its first message - its <c>graphPromptTokens</c> with its
+    /// default resolved by its mode: what it says; absent, <see cref="DefaultGraphPromptTokens"/> for a step at
+    /// <c>map</c>, whose agent cannot read through the tool and so sees the graph only as it is pushed, and 0 for one at
+    /// <c>tools</c>, which asks the tool's <c>map</c> and <c>pack</c> for their pages, from page 1, where it needs them:
+    /// measured, a step that had the tool almost never used the map and the pack pushed to it, which only added to its
+    /// input.
+    /// </summary>
+    /// <param name="mode">The step's graph, its default resolved (<see cref="GraphOf"/>): <c>map</c> or <c>tools</c>.</param>
+    /// <param name="said">What the step - or, where it says none, the step its chain of work began with - says.</param>
+    public static int GraphPromptTokensOf(string mode, int? said) => said ?? (mode == "map" ? DefaultGraphPromptTokens : 0);
 
     /// <summary>The largest first page of its context pack a step may ask its prompt to be given.</summary>
     public const int MostGraphPromptTokens = 20_000;
@@ -1012,8 +1048,9 @@ public sealed record WorkflowStep
     /// <param name="step">The reason step - for one that goes on with another's work, the step its chain began with, whose <c>graph</c> its conversation holds.</param>
     /// <param name="agent">The agent the step works as, where its definition was read.</param>
     /// <param name="graphUpstream">
-    /// Whether the step has a graph to be given: a graphify step upstream of it - or, for a step of the recovery, one of the
-    /// run that ended done before it, as the run stands; the definition's check, which has no run, asks whether one is declared.
+    /// Whether the step has a graph to be given: a graphify step upstream of it - or, for a step of the recovery and a raised
+    /// step, which run wherever the run takes them, one of the run that ended done before it, as the run stands; the
+    /// definition's check, which has no run, asks whether one is declared.
     /// </param>
     public static string GraphOf(WorkflowStep step, AgentDefinition? agent, bool graphUpstream)
         => step.Graph ?? (graphUpstream ? agent?.May.Contains("read") == false ? "map" : "tools" : "off");
@@ -1027,7 +1064,8 @@ public sealed record WorkflowStep
     /// <summary>
     /// The test units a test step runs - each a value its legs' runner's filter option takes - written out, or an
     /// expression that yields them, read where the step starts: the tests any of them names run, and a filter that reads
-    /// none runs no test. Absent, every test of its legs runs.
+    /// none runs no test. Absent, every test of its legs runs. The one text a frozen definition of an earlier release
+    /// holds is read there as the expression that scalar is (<see cref="FrozenDefinition.Reshaped"/>).
     /// </summary>
     public FlowList? Filter { get; init; } = null;
 
@@ -1071,7 +1109,11 @@ public sealed record WorkflowStep
     /// <summary>The values a <c>run</c> step hands its runner's inputs, each a template.</summary>
     public IReadOnlyDictionary<string, string> Inputs { get; init; } = NoInputValues;
 
-    /// <summary>The arms a sweep runs, by id, written out or as an expression yielding them - the item's own, for its sweep; every arm where the file says nothing.</summary>
+    /// <summary>
+    /// The arms a sweep runs, by id, written out or as an expression yielding them - the item's own, for its sweep; every
+    /// arm where the file says nothing. The list of ids a frozen definition of an earlier release holds on every step is
+    /// read there as the arms it lists, and as none where it is empty (<see cref="FrozenDefinition.Reshaped"/>).
+    /// </summary>
     public FlowList? Arms { get; init; } = null;
 
     /// <summary>Whether a sweep drives only the arms with no recorded <c>passed</c> that still holds.</summary>
@@ -1161,7 +1203,10 @@ public sealed record WorkflowStep
     /// <summary>How many of a branch's runs a CI read looks at, where the file says.</summary>
     public int? Limit { get; init; } = null;
 
-    /// <summary>The commit whose checks a CI wait waits for, a template.</summary>
+    /// <summary>
+    /// The commit whose checks a CI wait waits for, or the commit the tree of a reason step that only reads starts at in
+    /// place of the main checkout's HEAD - both a template, read by the step's own type.
+    /// </summary>
     public string? Commit { get; init; } = null;
 
     /// <summary>How long a CI wait waits for the first check to appear.</summary>

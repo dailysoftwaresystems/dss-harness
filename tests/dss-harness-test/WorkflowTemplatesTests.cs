@@ -1,11 +1,14 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
+using DssHarness.Core.Agents;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Results;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
+using DssHarness.Core.Schemas;
 using NamedFiles = DssHarness.Core.Orchestration.Flow.WorkflowFiles;
 
 namespace DssHarness.Tests;
@@ -56,8 +59,8 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Equal(WorkflowTemplates.ShippedWorkflowName, definition.Name);
         Assert.Equal(99, Count(definition.Steps));
-        Assert.Equal(67, Count(definition.Recover!.Steps));
-        Assert.Equal(62, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
+        Assert.Equal(65, Count(definition.Recover!.Steps));
+        Assert.Equal(61, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
         Assert.Equal(6, definition.Inputs.Count);
         Assert.Contains(definition.Inputs, input => input.Name == "finalTests" && input.Default == "affected");
         Assert.Equal(["affected", "all"], definition.Inputs.Single(input => input.Name == "finalTests").Options);
@@ -123,13 +126,16 @@ public sealed class WorkflowTemplatesTests
     /// by the user's ruling: the graph stays where it costs equal or less, and where what it bought - correction
     /// rounds avoided, each worth more than the step's own overhead - outweighs its cost. The steps that work on code
     /// keep the tool - the implementer and everything that resumes it, the six reviewers, the self-audit, the
-    /// diagnosis, and the pre-existing-issue triage (it measured cheaper) - the reviewers, the self-audit, the
+    /// diagnosis, and the pre-existing-issue triage (which that measurement never served: raised outside every step's
+    /// waits, it is given the run's graph as the recovery is) - the reviewers, the self-audit, the
     /// diagnosis and the steps that verify and fix starting their packs from their changes (<c>graphFrom: changes</c>);
     /// the request triage, whose work is text the map does not light, asks none (measured costlier with no quality
     /// gained); the plan audit and the item audit - the plan audit's agent on a later round's items - are given the tool
-    /// and no pack (<c>graphPromptTokens: 0</c>): measured with none before the graph's <c>sites</c> was built, they search a
-    /// class's sites, which <c>sites</c> answers, beside their own text search, and a pack lights none of a plan's text
-    /// (spec 02, "Who may call it"); the prioritiser and a review's scope keep the map (the scope's whole overhead
+    /// (<c>graph: tools</c>): measured with none before the graph's <c>sites</c> was built, they search a class's sites,
+    /// which <c>sites</c> answers, beside their own text search (spec 02, "Who may call it"); no step says
+    /// <c>graphPromptTokens</c>, for a step with the tool is pushed no pack and no map by default - the measurement of the
+    /// graph arm against <c>graph: off</c> found what was pushed all but unused - and a step at <c>map</c> is pushed both at
+    /// their default sizes; the prioritiser and a review's scope keep the map (the scope's whole overhead
     /// is a fifth of a cent beside the review rounds it steers; the prioritiser is unmeasured, serving only a run with
     /// no request); the scribes ask none as before. The planner, which resumes itself and so may say a graph key of its
     /// own, keeps its default, the tool, as it was: the measurement found it costlier with the graph and did not move
@@ -211,11 +217,10 @@ public sealed class WorkflowTemplatesTests
             ("notes-cite", null, null),
             ("diagnose", null, "changes"),
             ("redirect", null, "changes"),
-            ("remedy-revise", null, "changes"),
             ("triage-pre-existing-issue", null, null),
         };
 
-        var seen = new List<(string Path, string? Graph, string? From)>();
+        var seen = new List<(string Path, string? Graph, string? From, int? Tokens)>();
 
         Walk(definition.Steps, parent: null);
         Walk(definition.Recover!.Steps, parent: "recover");
@@ -234,9 +239,12 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal(2, seen.Count(row => row.Path.EndsWith(".correctness", StringComparison.Ordinal)));
         Assert.Equal(2, seen.Count(row => row.Path.EndsWith(".review-scope", StringComparison.Ordinal)));
 
-        // The audits are given the tool and no pack: their sites searches are what it answers, and a pack lights no plan.
-        Assert.Equal(0, StepAt(definition.Steps, "planning", "plan-audit").GraphPromptTokens);
-        Assert.Equal(0, StepAt(definition.Steps, "rounds", "item-audit").GraphPromptTokens);
+        // No step of the flow says graphPromptTokens: a step with the tool is pushed no pack by default and asks the tool
+        // for one where it needs it - the audits among them, whose sites searches are what it answers - and a step at map
+        // is pushed its pack at the default size.
+        Assert.DoesNotContain(seen, row => row.Tokens is not null);
+        Assert.Equal(0, WorkflowStep.GraphPromptTokensOf("tools", StepAt(definition.Steps, "planning", "plan-audit").GraphPromptTokens));
+        Assert.Equal(0, WorkflowStep.GraphPromptTokensOf("tools", StepAt(definition.Steps, "rounds", "item-audit").GraphPromptTokens));
 
         return;
 
@@ -246,7 +254,7 @@ public sealed class WorkflowTemplatesTests
             {
                 if (step.Type == "reason")
                 {
-                    seen.Add((parent is null ? step.Name : $"{parent}.{step.Name}", step.Graph, step.GraphFrom));
+                    seen.Add((parent is null ? step.Name : $"{parent}.{step.Name}", step.Graph, step.GraphFrom, step.GraphPromptTokens));
                 }
 
                 Walk(step.Steps, parent is null ? step.Name : $"{parent}.{step.Name}");
@@ -572,10 +580,143 @@ public sealed class WorkflowTemplatesTests
         var triage = JsonNode.Parse(WorkflowTemplates.TextOf("schemas/pre-existing.schema.json")!)!.AsObject();
 
         Assert.Equal(
-            ["course", "title", "description", "where", "proof", "size", "blocks", "related", "critical", "why", "duplicates"],
+            ["course", "title", "description", "where", "proof", "size", "blocks", "related", "critical", "why", "duplicates", "joins"],
             triage["required"]!.AsArray().Select(member => member!.GetValue<string>()));
-        Assert.Equal(["fix", "next", "list", "duplicate", "unproven"], triage["properties"]!["course"]!["enum"]!.AsArray().Select(value => value!.GetValue<string>()));
+        Assert.Equal(["fix", "next", "list", "duplicate", "unproven", "join"], triage["properties"]!["course"]!["enum"]!.AsArray().Select(value => value!.GetValue<string>()));
     }
+
+    /// <summary>
+    /// The shipped triage agent says every course its schema lets it answer, each where it is chosen - read from the
+    /// schema's own list, so a course added there is never one the agent was not told of - and what becomes of each: a
+    /// fix built by the recovery, a join with the fix it joins, a next by a work item of the next round, sized. An issue
+    /// the run holds already is a duplicate whatever became of it, never only one listed, being fixed or fixed - what
+    /// becomes of that one settles it, as the engine settles it - save one whose fix was done before it was met, which did
+    /// not hold and is fixed again: the agent and the triage's prompt say both, as the engine tells the triage.
+    /// </summary>
+    [Fact]
+    public void TheTriageAgent_SaysEveryCourseItsSchemaHas()
+    {
+        var courses = Courses();
+        var agent = Prose.Words(WorkflowTemplates.TextOf("agents/pre-existing-triage.md")!);
+        var work = agent[agent.IndexOf("## How you work", StringComparison.Ordinal)..agent.IndexOf("## What you do not do", StringComparison.Ordinal)];
+
+        // Each course is said where the agent works out which to answer.
+        Assert.Equal([], courses.Where(course => !work.Contains($"course `{course}`", StringComparison.Ordinal) && !work.Contains($"course is `{course}`", StringComparison.Ordinal)));
+        Assert.Contains("description: Checks an issue a step met that was there before the run, and decides what the run does with it - fixes it now, joins it to a fix, sends it to the next round, or lists it for the person", agent, StringComparison.Ordinal);
+        Assert.Contains("Where the issues taken before yours hold it - the same cause at the same place, whatever became of it - the course is `duplicate`, with that issue's id: what becomes of that one settles yours, and a step yours stops runs again once its fix ends. Save where that one's fix was done before yours was met, as you are told: that fix did not hold, and the course is `fix`.", agent, StringComparison.Ordinal);
+        Assert.Contains("`duplicate` where the issues given hold it, whatever became of it - what becomes of that one settles yours, the step yours stops running again once its fix ends - save one whose fix was done before yours was met, which did not hold: yours is then `fix`;", Prose.Words(WorkflowTemplates.TextOf("prompts/pre-existing.md")!), StringComparison.Ordinal);
+        Assert.Contains(
+            "Where none holds and it is a defect in code this run's change does not touch, worth a round of its own, the course is `next`: it becomes a work item of the run's next round, listed and started first, built beside the rest, and nothing of this round waits for it. "
+                + "Size it - the files the fix touches, one at least, what must be built and what must be measured first - for its item is built to that size; for every other course the size is empty. Where none of these holds, the course is `list`.",
+            agent,
+            StringComparison.Ordinal);
+        Assert.Contains("You fix nothing. A `fix` is built by the run's recovery, as a failure's fix is, a `join` with the fix it joins, and a `next` by a work item of the run's next round; a listed issue is shown to the person at the end.", agent, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// What a step does with an issue that was there before the run is said once, the workflow's text
+    /// <c>issuesBefore</c>: report it in <c>preExisting</c>, never fix it, and the course a triage gives it - every
+    /// course the triage's schema has, read from its own list, so a course added there is one every reporting step is
+    /// told of. The prompt of every step that names a triage reads it, a step that goes on with earlier work among them -
+    /// a client handed no conversation is told it again - and no agent's file says it any more, so no copy is left to
+    /// drift from the courses a triage answers.
+    /// </summary>
+    [Fact]
+    public void WhatAStepDoesWithAnIssueThereBefore_IsOneText_ReadByEveryStepThatReportsOne()
+    {
+        var definition = WorkflowTemplates.ShippedDefinition();
+        var text = Prose.Words(Read("issues-before.md"));
+
+        Assert.Equal("issues-before.md", definition.Texts!["issuesBefore"]);
+        Assert.Equal([], Courses().Where(course => !text.Contains($"`{course}` - ", StringComparison.Ordinal)));
+        Assert.Contains("you report in `preExisting` and never fix yourself, even in a path you may write, unless your task is to fix that issue, which you then do and do not report", text, StringComparison.Ordinal);
+
+        var reporting = NamedFiles.Steps(definition)
+            .Where(entry => entry.Step.Type == "reason" && entry.Step.OnPreExisting is not null)
+            .SelectMany(entry => new[] { entry.Step.Prompt, entry.Step.ResumePrompt }.OfType<string>().Select(prompt => (entry, prompt)))
+            // The builder's prompt is the one its use hands it: the round's and the recovery's, both of the pipeline.
+            .SelectMany(pair => pair.prompt == "{input.implementPrompt}" ? new[] { "prompts/implement.md", "prompts/remedy.md" } : new[] { pair.prompt }, (pair, prompt) => pair.entry.Step.WorkflowOf is { } owner ? $"{owner[(WorkflowTemplates.ShippedWorkflowName.Length + 1)..]}/{prompt}" : prompt)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(28, reporting.Count);
+        Assert.Equal<IEnumerable<string>>(
+            reporting,
+            [.. WorkflowTemplates.Files.Where(file => WorkflowTemplates.TextOf(file)!.Contains("{text.issuesBefore}", StringComparison.Ordinal)).Order(StringComparer.Ordinal)]);
+
+        foreach (var prompt in reporting)
+        {
+            Assert.EndsWith("## Issues that were there before {text.issuesBefore}", Prose.Words(WorkflowTemplates.TextOf(prompt)!).TrimEnd(), StringComparison.Ordinal);
+        }
+
+        Assert.Equal(["issues-before.md"], WorkflowTemplates.Files.Where(file => Prose.Words(WorkflowTemplates.TextOf(file)!).Contains("never fix yourself", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// Every prompt that reads the issues the run has taken (<c>{run.preExisting}</c>) says each comes with what became
+    /// of it, never a part of the states the engine writes - listed, being fixed, fixed, fixed with another, next round,
+    /// fixed in a later round, duplicate, unproven, joined to another, being fixed with or after it - so no prompt reads as
+    /// though an issue in another state were none of those; and the pull request's body, which a person reads, says what
+    /// each mark means, every one of them.
+    /// </summary>
+    [Fact]
+    public void ThePromptsThatReadTheIssuesTaken_SayWhatBecameOfEach_NeverAPartOfItsStates()
+    {
+        string[] readers = ["prompts/handoff.md", "prompts/plan-update.md", "prompts/plan.md", "prompts/pr-body.md", "prompts/replan.md", "prompts/self-audit.md"];
+
+        Assert.Equal<IEnumerable<string>>(
+            readers,
+            [.. WorkflowTemplates.Files.Where(file => WorkflowTemplates.TextOf(file)!.Contains("{run.preExisting}", StringComparison.Ordinal)).Order(StringComparer.Ordinal)]);
+
+        foreach (var prompt in readers.Where(prompt => prompt != "prompts/pr-body.md"))
+        {
+            Assert.Contains("each with its id, what became of it, its title and where", Prose.Words(Read(prompt)), StringComparison.Ordinal);
+        }
+
+        var body = Prose.Words(Read("prompts/pr-body.md"));
+
+        foreach (var mark in new[] { "One marked fixed", "fixed with another", "one marked next round", "one marked fixed in a later round", "one marked listed", "one marked duplicate of another", "one marked unproven", "One marked being fixed, or joined to another" })
+        {
+            Assert.Contains(mark, body, StringComparison.Ordinal);
+        }
+
+        Assert.Equal([], WorkflowTemplates.Files.Where(file => Prose.Words(WorkflowTemplates.TextOf(file)!).Contains("listed, being fixed or fixed", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A class's pin is a test table over the axes a test can range over - its kinds, formats, entry points, tiers, forms
+    /// and directions, and each further axis a test can - never over the targets and the configurations, which no table
+    /// can hold: the pin covers those by running on each leg and in each configuration. The implementer, both builders'
+    /// prompts and the closure review say so alike, and the record's tableDriven means that.
+    /// </summary>
+    [Fact]
+    public void APinsTable_RangesOverTheAxesATestCanRangeOver_AndRunsOnEachLegAndConfiguration()
+    {
+        const string Table = "every value of each axis it says applies that a test can range over: its kinds, formats, entry points, tiers, forms and directions, and each further axis a test can - not over the reported case";
+        const string Runs = "The targets and the configurations it says apply are no rows of a table: the pin covers them by running on each leg and in each configuration, as the gate runs it on the legs and the measure tool on a leg in a variant.";
+
+        foreach (var builder in new[] { "item-pipeline/agents/implementer.md", "item-pipeline/prompts/implement.md", "item-pipeline/prompts/remedy.md" })
+        {
+            var words = Prose.Words(Read(builder));
+
+            Assert.Contains(Table, words, StringComparison.Ordinal);
+            Assert.Contains(Runs, words, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            "The pin's table ranges over every axis a test can range over; the targets and the configurations it covers by running on each leg and in each configuration, never as rows.",
+            Prose.Words(Read("item-pipeline/agents/reviewer-closure.md")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the targets and the configurations covered by the pin run on each leg and in each configuration",
+            JsonNode.Parse(Read("item-pipeline/schemas/implement.schema.json"))!["properties"]!["closure"]!["items"]!["properties"]!["pin"]!["properties"]!["tableDriven"]!["description"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>The courses the shipped triage's schema lets it answer, in its order.</summary>
+    private static List<string> Courses()
+        => [.. JsonNode.Parse(WorkflowTemplates.TextOf("schemas/pre-existing.schema.json")!)!["properties"]!["course"]!["enum"]!.AsArray().Select(value => value!.GetValue<string>())];
 
     /// <summary>
     /// No shipped agent file names a model, a tier or an effort: which model a step runs on is the step's to say, in the
@@ -606,7 +747,8 @@ public sealed class WorkflowTemplatesTests
     /// <summary>
     /// The method this build ships plans and reviews by (user, 2026-10-17): a plan's items are sized to one builder's
     /// cycle each, every item - a further round's and a recovery's too - and the plan itself carry a definition of
-    /// done, and the review loop stands while a critical, high or medium finding does: three rounds, three more while
+    /// done, an item's said in statements that hold whatever the run's other work does beside it, and the review loop
+    /// stands while a critical, high or medium finding does: three rounds, three more while
     /// one stands, and what is left then is carried to the end of the run, written down for the person who reads the
     /// pull request, rather than stopping the run. Held on the shipped files that say it, so a change of method is a
     /// change of those files and of this test together.
@@ -630,6 +772,16 @@ public sealed class WorkflowTemplatesTests
         Assert.Contains(item.GetProperty("required").EnumerateArray(), required => required.GetString() == "noClass");
         Assert.Equal("string", item.GetProperty("properties").GetProperty("done").GetProperty("type").GetString());
         Assert.Equal("#/$defs/closureClass", item.GetProperty("properties").GetProperty("classes").GetProperty("items").GetProperty("$ref").GetString());
+
+        // The one description of an item's done every writer of one reads - the planner's, the self-audit's and the
+        // diagnostician's, whose items refer to it - holds its statements to the one rule for a definition of done, which
+        // each of their prompts gives (the text done): a remedy pinned to a count of lines its round's own item changed
+        // could never be met (live, 2026-11-26).
+        Assert.Equal(
+            "The item's definition of done: what must hold for the item to be finished, as statements a person or a check can answer one by one - "
+                + "the behaviours built, the test that pins each, and what is true of the tree when the builder reports - each statement written by "
+                + "the rule for a definition of done your task gives. The builder works to it, the review weighs it and the run's final audit checks it.",
+            item.GetProperty("properties").GetProperty("done").GetProperty("description").GetString());
 
         var piece = schema.GetProperty("properties").GetProperty("scope").GetProperty("items").GetProperty("properties").GetProperty("item");
 
@@ -797,8 +949,10 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
-    /// The shipped flow declares its texts - the bar for recommendations and its closure, the universe a repository's
-    /// decisions range over - and <c>init</c> writes <c>closure.md</c> once and never over a repository's own, exactly
+    /// The shipped flow declares its texts - the bar for recommendations, the one saying of what an issue being fixed is
+    /// to the work items, its closure, the universe a repository's decisions range over, its rule for a definition of
+    /// done and what a step does with an issue that was there before the run - and <c>init</c> writes <c>closure.md</c>
+    /// once and never over a repository's own, exactly
     /// as it keeps <c>recommendations.md</c>: the file is the repository's from the day it is written.
     /// </summary>
     [Fact]
@@ -811,6 +965,9 @@ public sealed class WorkflowTemplatesTests
             {
                 ["recommendations"] = "recommendations.md",
                 ["closure"] = "closure.md",
+                ["done"] = "done.md",
+                ["issuesBefore"] = "issues-before.md",
+                ["fixes"] = "fixes.md",
             },
             definition.Texts);
         Assert.Null(definition.Recommendations);
@@ -891,11 +1048,11 @@ public sealed class WorkflowTemplatesTests
                 .Order(StringComparer.Ordinal)]);
         Assert.Contains(
             "graph's sites first: it joins every place that decides the data - what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal that holds it and every key it names - and its coverage lines say what it searched by text alone, for nothing is assumed of a language with no extractor. "
-                + "Its find, node and related beside it for the names and for what reads and calls them, and text search for what the graph does not see, each such text search said in notCovered.",
+                + "Its find, node and related beside it for the names and for what reads and calls them, its impact for everything a change of a node reaches, its around and its outline - of a file or a directory - to know where a node stands before reading any file whole, and text search for what the graph does not see, each such text search said in notCovered.",
             Prose.Words(WorkflowTemplates.TextOf("prompts/plan.md")!),
             StringComparison.Ordinal);
         Assert.Contains(
-            "the graph's sites first, which joins every place that decides the data and says by its coverage lines what it searched by text alone - its find, node and related beside it for the names and for what reads and calls them - and text search for what it does not see, each such search said in notCovered.",
+            "the graph's sites first, which joins every place that decides the data and says by its coverage lines what it searched by text alone - its find, node and related beside it for the names and for what reads and calls them, its impact for everything a change of a node reaches, its around and its outline to know where a node stands before reading a file whole - and text search for what it does not see, each such search said in notCovered.",
             WorkflowTemplates.TextOf("schemas/plan.schema.json")!,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -948,7 +1105,7 @@ public sealed class WorkflowTemplatesTests
 
         // The prompts that name the graph today, so a new one is held as it comes.
         Assert.Equal(
-            ["item-pipeline/prompts/home-audit.md", "item-pipeline/prompts/rework.md", "prompts/item-audit.md", "prompts/plan-audit.md", "prompts/plan.md"],
+            ["item-pipeline/prompts/home-audit.md", "item-pipeline/prompts/rework.md", "prompts/item-audit.md", "prompts/plan-audit.md", "prompts/plan.md", "prompts/pre-existing.md"],
             [.. naming.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]);
 
         // A file of a workflow the shipped one uses is named under that workflow's place, as the embedded set holds it.
@@ -1002,6 +1159,10 @@ public sealed class WorkflowTemplatesTests
                 text,
                 StringComparison.Ordinal);
             Assert.Contains("Nothing is folded without the record.", text, StringComparison.Ordinal);
+            Assert.Contains(
+                "That check reads your answer as you give it, over your tree as it then stands: what it finds wrong with the record is told you here, in this conversation, to put right in the answer you give again.",
+                text,
+                StringComparison.Ordinal);
             Assert.Contains("{input.item.classes}", text, StringComparison.Ordinal);
             Assert.Contains("{input.item.noClass}", text, StringComparison.Ordinal);
             Assert.Contains("{text.closure}", text, StringComparison.Ordinal);
@@ -1068,7 +1229,7 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal(FlowRecover.PauseOnFailure, recover.OnFailure);
         Assert.Equal(5, recover.MaxVisits);
         Assert.Equal("diagnose", recover.Steps[0].Resume);
-        Assert.Equal(["diagnose", "direction", "redirect", "remedy-check", "remedy-revise", "remedy-recheck", "remedies", "publish"], [.. recover.Steps.Select(step => step.Name)]);
+        Assert.Equal(["diagnose", "direction", "redirect", "remedy-check", "remedies", "publish"], [.. recover.Steps.Select(step => step.Name)]);
 
         var passedOver = new List<string>();
         var untried = new List<string>();
@@ -1112,11 +1273,12 @@ public sealed class WorkflowTemplatesTests
 
         // Every reasoning step - the recovery's among them - sends what it met that was there before the run to the one
         // triage step, which is raised by such an issue, never scheduled, and gives one it decides to fix to the recovery.
+        // It reproduces the issue on the commit the run began on, which its tree is, and only reads.
         Assert.Empty(untriaged);
         var triage = Assert.Single(definition.Steps, step => step.Raised is not null);
         Assert.Equal(
-            ("triage-pre-existing-issue", "reason", WorkflowStep.RaisedByPreExisting, WorkflowStep.Recover, (string?)null),
-            (triage.Name, triage.Type, triage.Raised, triage.OnAddress, triage.OnPreExisting));
+            ("triage-pre-existing-issue", "reason", WorkflowStep.RaisedByPreExisting, WorkflowStep.Recover, (string?)null, "{orient.startCommit}", (string?)null, (string?)null),
+            (triage.Name, triage.Type, triage.Raised, triage.OnAddress, triage.OnPreExisting, triage.Commit, triage.Access, triage.In));
 
         return;
 
@@ -1167,8 +1329,8 @@ public sealed class WorkflowTemplatesTests
     /// tree they are built on and the self-audit after the build reads what it found; the round is judged by that
     /// self-audit, so the item audit's go - said before the build that may settle it - is no term of the rounds' until.
     /// The recovery checks the diagnosis's items once the person's answer, where one was given, made its last word
-    /// (redirect); sends what the check refuses back to the diagnostician within the visit (remedy-revise); checks what
-    /// it gives again (remedy-recheck); and builds the items those checks read, never the diagnosis's own list.
+    /// (redirect) - the diagnostician told what the check finds within its own step, as it answers, so no step after the
+    /// check sends its problems back again - and builds the items that check read, never the diagnosis's own list.
     /// </summary>
     [Fact]
     public void WhatTheShippedFlowBuilds_IsWhatAPlanCheckRead_AfterTheLastWordOnIt()
@@ -1186,12 +1348,15 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal("(direction.answer ?? '') == 'continue'", StepAt(recover, "redirect").When);
         Assert.Equal(["redirect"], StepAt(recover, "remedy-check").DependsOn);
         Assert.Equal("diagnose.latest.items", StepAt(recover, "remedy-check").Items);
-        Assert.Equal(("diagnose", "!(remedy-check.ok ?? true)"), (StepAt(recover, "remedy-revise").Resume, StepAt(recover, "remedy-revise").When));
-        Assert.Equal(["remedy-check"], StepAt(recover, "remedy-revise").DependsOn);
-        Assert.Equal(["remedy-revise"], StepAt(recover, "remedy-recheck").DependsOn);
-        Assert.Equal("diagnose.latest.items", StepAt(recover, "remedy-recheck").Items);
-        Assert.Equal(["remedy-recheck"], StepAt(recover, "remedies").DependsOn);
-        Assert.Equal("remedy-recheck.items ?? remedy-check.items", StepAt(recover, "remedies").ForEach);
+        Assert.Equal(["remedy-check"], StepAt(recover, "remedies").DependsOn);
+        Assert.Equal("remedy-check.items", StepAt(recover, "remedies").ForEach);
+        Assert.Equal(["remedy-check"], [.. recover.Where(step => step.Type == "validate-plan").Select(step => step.Name)]);
+
+        // The diagnostician is told the check's problems within its own step, for the check reads the newest answer of
+        // the conversation the redirect goes on with - what it said first, or on the person's answer - and no other step
+        // goes on with it to say them again.
+        Assert.Equal(["diagnose", "redirect"], [.. recover.Where(step => step.Resume == "diagnose").Select(step => step.Name)]);
+        Assert.DoesNotContain("prompts/remedy-revise.md", WorkflowTemplates.Files);
     }
 
     /// <summary>
@@ -1222,6 +1387,260 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
+    /// The help, the README and the architecture say when the recovery takes an issue sent to fix - at once, beside any
+    /// other fix at work, save one a step of a visit reported or one a visit at work fixes already, which waits through
+    /// that visit's failure until it is answered, one defect one fix at a time - that a step two issues stop runs again
+    /// once, and what an issue being fixed holds: its triage's paths and its remedies', which a work item that has not
+    /// begun waits on, every other going on; and the orchestrators topic says such a wait among what a run waits for.
+    /// </summary>
+    [Fact]
+    public void TheHelpTheReadmeAndTheArchitecture_SayWhenTheRecoveryTakesAnIssue_AndWhatItsFixHolds()
+    {
+        var help = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "An issue sent to fix is the recovery's at once, its visit beside any other at work - save one a step of a visit of the recovery reported, which waits for that visit to end, for the recovery never calls itself, and one a visit at work fixes already for another step it stopped, which waits for that visit, or for the one it joined to - so one defect has one fix at a time: a visit that ended failed is at work until what its failure does is answered, and answered retry, the fix waits for its next visit; one a plan update ended, in a work item it brought to rest, is over, and the fix that waited for it is taken; a step two issues stop runs again once, after both are settled. "
+                + "From the moment it is sent to fix until its visit ends, the issue holds the files its triage's where names - each a path from the repository's root, never a command - and, once a check of its visit has read the remedy items its diagnosis gives, the paths those items own: an instance of the work-item group that has not begun and owns one of them, or whose item names the issue's id in its needs - the fix it builds on - starts once that visit has ended, building on the tree the fix leaves,",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "an instance waiting on another, on the resume, on room - a claim, the run to be quiet, a counter of its limits - or on the fix of an issue that holds a file its work item owns or that the item needs,",
+            Prose.Words(DssHarness.Core.Help.HelpTopics.Render("orchestrators")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "An issue sent to fix is the recovery's at once, its fix beside any other at work - save one that a step of the recovery itself reported, which waits for that visit to end, and one a fix at work already mends for another step, which waits for that fix, as one joined to that fix's issue does: one defect has one fix at a time, and a fix whose failure is put to a person is at work until it is answered - on retry, the waiting one waits for its next visit - and a visit a plan update ended, in a work item it brought to rest, is over, so the fix that waited for it is taken; a step two issues stop runs again once, after both are settled.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a work item that has not begun and owns one of them, or names the issue under `needs` - the fix it builds on - starts once that fix is done, building on the tree it leaves, and `ask-orchestrator-status` says what it waits for; every other item goes on at once.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "only one that a step of a visit reported waits, for that visit to end - the recovery never calls itself (V50) - and one a visit at work fixes already, for another step it stopped, waits for that visit,",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a waiting fix is taken in the pass that frees it - a step of every pass, read from the run's state and never from the event that ended a visit (`DrainPendingFixes`), held while the run pauses or stops - so it waits through a failure's question, is taken once that is answered otherwise than retry, and on retry waits for the issue's next visit: never two visits of one issue side by side.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"the issue holds the files its triage's `where` names, each entry a path from the repository's root and never the command it may name instead (`{nameof(FlowIssueHold)}.{nameof(FlowIssueHold.IsPath)}`), and, once a check of its visit has read the remedy items its diagnosis gives, every path those items own: `{nameof(FlowIssueHold)}`, the one owner of what an issue holds and which of it a work item owns,",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"its record's `waitsOn` names the fix, `{FlowWaits.Fix("<title>", "<visit>", ["<paths>"])}` (`{nameof(FlowWaits)}.{nameof(FlowWaits.Fix)}`), `{FlowWaits.Fix("<title>", "<visit>", [], needed: true)["the fix of '<title>' (<visit>), ".Length..]}` where the item names it, and `ask-orchestrator-status` says it among what the run waits for.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"its `needs`, read by `{nameof(FlowWorkItems)}.{nameof(FlowWorkItems.NeedsOf)}` alone and met by `{nameof(FlowIssueHold)}.{nameof(FlowIssueHold.NeededBy)}`, the issue's id (`{nameof(FlowIssueHold)}.{nameof(FlowIssueHold.Issue)}`) its triage's,",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"and `{nameof(PlanCheckRunner)}` refuses an item whose `needs` names another,",
+            architecture,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The plan's schema and the planner, the help, the README and the architecture say how a list of a tree's own paths
+    /// is read - a work item's owned and forbidden paths, what an issue being fixed holds, a step's writes, a fold's
+    /// within: from the root, a path naming what is beneath it only where it names a directory, a pattern anchored there
+    /// too - and the architecture names its one owner and every reader of it.
+    /// </summary>
+    [Fact]
+    public void TheDocuments_SayAListOfATreesOwnPaths_IsReadFromItsRoot()
+    {
+        var item = JsonDocument.Parse(Read("schemas/plan.schema.json")).RootElement.GetProperty("$defs").GetProperty("workItem").GetProperty("properties");
+        var workflows = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+
+        Assert.StartsWith(
+            "The paths this item may write, each from the repository's root - a name with no slash is the root's own file, never one at any depth:",
+            item.GetProperty("ownedPaths").GetProperty("description").GetString(),
+            StringComparison.Ordinal);
+        Assert.Contains("A path names what is beneath it only where it names a directory, so the root's Makefile and calc.c meet nothing but themselves.", item.GetProperty("ownedPaths").GetProperty("description").GetString(), StringComparison.Ordinal);
+        Assert.StartsWith("Paths, written and read as ownedPaths are,", item.GetProperty("forbiddenPaths").GetProperty("description").GetString(), StringComparison.Ordinal);
+        Assert.Contains("each from the repository's root: a name with no slash is the root's own file and no other,", Prose.Words(Read("agents/planner.md")), StringComparison.Ordinal);
+        Assert.Contains(
+            "none an item owns that it must not touch - each entry read from the repository's root, as the item's agent's writes and its fold's within read it: a path names that one path, and what is beneath it only where it names a directory, one the tree holds or one ending in a separator, and a pattern is anchored there too, ** for any depth, so two entries meet only where some path a tree can hold matches both",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What it holds and what an item owns are read from the repository's root, as the plan's check reads an item's paths: a root-level file the fix holds keeps only the item owning that file waiting.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A step's writes are read from its worktree's root, as a work item's ownedPaths are ('help workflows'): a name with no separator is the root's own, and a path names what is beneath it only where it names a directory, one the run's start tree holds - the tree of the commit the run started from, which no fold changes - or one ending in a separator; a write refused beneath an entry that names a file says a directory to be made is written with a trailing separator, and one at a depth an entry of one name no longer reaches says '**/' reaches any depth; where the entry names a file because the start tree could not be read, the refusal says why.",
+            Prose.Words(DssHarness.Core.Help.HelpTopics.Render("agent-clients")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Both are read from the repository's root, as the plan's check reads every path a work item owns or must not touch, its agent's writes and its fold's within:",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains("Its entries are read from the worktree's root, as a work item's owned paths are:", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            $"A list of a tree's own paths has one reading, `{nameof(GlobPattern)}.{nameof(GlobPattern.FromRoot)}`: a work item's `ownedPaths` and `forbiddenPaths` (`{nameof(PlanValidator)}`), "
+                + $"the files an issue being fixed holds (`{nameof(FlowIssueHold)}`), a reason step's `writes` (`{nameof(DssHarness.Core.Agents.Policy.AgentPolicy)}`, in its worktree) "
+                + $"and a fold's `within` (`{nameof(FoldWithin)}`, in the main tree)",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "That tree is asked by every reader alike for the whole run - the tree of the commit the run started from (`orient`'s `startCommit`), its directories listed once a session through git "
+                + $"(`{nameof(TreeDirectories)}`, `{nameof(DssHarness.Core.Git.IGitClient)}.{nameof(DssHarness.Core.Git.IGitClient.ListDirectoriesAtCommitAsync)}`: every tree and every submodule's entry, never a link, which git keeps as a file) "
+                + $"and handed to every step in the run's place (`{nameof(FlowRunPlace)}.{nameof(FlowRunPlace.Directories)}`) - never a working tree the run's own folds rewrite",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"where it is whether two entries meet (the check's overlaps, the holds; `{nameof(TreeDirectories)}.{nameof(TreeDirectories.Meeting)}`) every path counts as a directory, the wide reading; "
+                + $"where it is what a step may write or a fold carry (`{nameof(TreeDirectories)}.{nameof(TreeDirectories.Writing)}`), and what an item owns, none does, the narrow one. "
+                + $"An entry whose meaning the reading changed - one name that once matched at any depth, a path that once named a directory still to be made - is told how to write what it meant at every refusal the reading causes, by its one owner (`{nameof(GlobPattern)}.{nameof(GlobPattern.WrittenFor)}`)",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The workflows help, the README and the architecture say how issues of one root cause take one fix: the ids every
+    /// step told the issues reads, a triage told only those taken before its own, the join a triage answers - to one being
+    /// triaged, being fixed or fixed - refused where it names an issue taken after its own; the joined issue going with the
+    /// fix it joined, read by its visit, settled by its end and said fixed with it; one that joined while a visit was
+    /// diagnosing, or to one fixed already, taking its own; and one whose joined fix ended without it triaged again.
+    /// </summary>
+    [Fact]
+    public void TheHelpTheReadmeAndTheArchitecture_SayHowIssuesOfOneRootCauseTakeOneFix()
+    {
+        var help = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "The triage is told those taken before its own, with the ids of those it may join - being triaged, being fixed or fixed - and names by its id the one its issue repeats (duplicate, in duplicates) or whose root cause it shares (join, in joins) - only one taken before its own, or the step fails, so no two issues ever name each other, and of two raised together the later names the earlier.",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "An issue joined to another, being triaged or being fixed, takes no visit of its own: it goes with that issue's fix - waiting for its triage, where it is still triaged - and a visit whose diagnosis began after the join reads every issue joined to it as source.joined, each with its id, its end settling all of them, run.preExisting saying each 'fixed with <id>' and a step one of them stopped running again. "
+                + "One that joined while a visit of that fix was diagnosing takes a visit of its own once that visit has fixed it, and one joined to an issue fixed already takes one at once, each reading what that fix did as source.joinedTo; and where the issue it joined ends without a fix, it is triaged again on its own - as a duplicate is where the triage of the issue it repeats ends without a decision, its failure passed over, so neither is lost.",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Issues of one root cause take one fix: a triage that finds its issue's cause is that of an issue taken before it, being triaged, being fixed or fixed, answers `join` with that issue's id. Joined to one being triaged or being fixed, its issue takes no visit of its own:",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the triage is told those taken before its own, and names by its id the issue its own repeats or whose root cause it shares - never one taken after it, which is triaged after it and names it where it repeats it, so of two raised together the later names the earlier, and neither is lost.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "One that joins while a visit of that fix is already diagnosing takes a visit of its own once that visit has fixed it, told what it fixed, and one that joins an issue fixed already takes one at once, told the same; and where the issue it joined ends without a fix, it is triaged again on its own - as a duplicate is where the triage of the issue it repeats ends without a decision, failed with its failure passed over, so neither is lost.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "each `<id>: <what became of it> - <title> (<where>)`, the id a listed issue's `pe-<n>`, one owed the next round's `nx-<n>`, and every other's its triage instance's (`FlowCoordinator.Said`)",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "An issue whose triage answers `join` takes no visit of its own: it goes with the fix of the issue it joined, read from the run's state alone (`FlowCoordinator.JoiningOf`,",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "over the joins the run's records hold, in the order they ended: `Joins`, each triage ended done with the course `join` by its `endedIn`, kept in no list of its own, so a resume reads every join before it counts a visit of the recovery - whose key reads what each visit fixed - and no rebuild has an order to keep),",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A triage is told, where it starts, only those it may name - each taken before its own (`TakenBefore`), the tally's whose triage was and those being triaged - with the ids of those it may join (`JoinableBy`: of those, each whose issue had not ended without a fix as it began, `NamedEndedBefore` - being triaged, being fixed or fixed) and of those whose fix did not hold for its issue (`FixedBeforeMet`, over `FixDidNotHold`), all read from the rules its answer is refused by,",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A duplicate is settled by what becomes of the issue it repeats - a step it stops runs again once that issue is settled, as a join's does - save where that issue's fix was done before the duplicate's issue was met: it did not hold, the triage is told so, and an answer naming it a duplicate fails the step, for the issue is fixed again.",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the joined issue is triaged again on its own: `SettleNamedIssues` raises a triage of the same step for it, as its reporter's report raised the first, the records saying why,",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A duplicate is treated so too where the issue it repeats ends without a decision - its triage failed, its failure passed over, was skipped or never ran - for no issue is lost with the one it named: one owner, `NamedEnd`, says what a name of another's issue leads to and where that issue ended without what the name needs - a fix for a join (`NotFixedIn`), a decision for a duplicate (`UndecidedIn`),",
+            architecture,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The planner's prompts and the self-audit leave an issue the recovery is fixing to the recovery: each reads
+    /// <c>{run.preExisting}</c> and, right after it, the workflow's text <c>fixes</c> - the one file that says that no work
+    /// item fixes an issue the list says is being fixed or rewrites its lines, and that an item needing its fix names it
+    /// under <c>needs</c> and is held until that fix has ended - a plan that folded the fix into an item of its own would
+    /// build the fix's lines beside the recovery's remedy. No other shipped file says it, so the promise of a wait is made
+    /// once, where the engine keeps it (<see cref="FlowIssueHold.NeededBy"/>).
+    /// </summary>
+    [Fact]
+    public void ThePlannersPromptsAndTheSelfAudit_LeaveAnIssueBeingFixedToTheRecovery()
+    {
+        const string Rule = "An issue the list says is being fixed is the recovery's: no work item fixes it or rewrites its lines. An item that needs its fix names the issue under needs, by its id as the list gives it, and the run holds the item until that fix has ended, so it builds on the tree the fix leaves; an item that owns a file the fix holds waits for it alike.";
+        string[] told = ["prompts/plan-update.md", "prompts/plan.md", "prompts/replan.md", "prompts/self-audit.md"];
+
+        Assert.Equal("fixes.md", WorkflowTemplates.ShippedDefinition().Texts!["fixes"]);
+        Assert.Equal<IEnumerable<string>>(
+            ["fixes.md"],
+            [.. WorkflowTemplates.Files.Where(file => Prose.Words(WorkflowTemplates.TextOf(file)!).Contains("is the recovery's: no work item fixes it", StringComparison.Ordinal))]);
+        Assert.StartsWith(Rule, Prose.Words(WorkflowTemplates.TextOf("fixes.md")!), StringComparison.Ordinal);
+        Assert.Equal<IEnumerable<string>>(
+            told,
+            [.. WorkflowTemplates.Files.Where(file => WorkflowTemplates.TextOf(file)!.Contains("{text.fixes}", StringComparison.Ordinal)).Order(StringComparer.Ordinal)]);
+
+        foreach (var prompt in told)
+        {
+            var words = Prose.Words(WorkflowTemplates.TextOf(prompt)!);
+
+            // The list the text names is the one the prompt reads, right before it, and the text is read once.
+            Assert.Contains("its title and where; empty where none is: {run.preExisting} {text.fixes}", words, StringComparison.Ordinal);
+            Assert.Equal(words.IndexOf("{text.fixes}", StringComparison.Ordinal), words.LastIndexOf("{text.fixes}", StringComparison.Ordinal));
+        }
+
+        // The member the text names is the work item's, and its description says what it holds, not the rule again.
+        var needs = JsonNode.Parse(WorkflowTemplates.TextOf("schemas/plan.schema.json")!)!["$defs"]!["workItem"]!["properties"]!["needs"]!;
+
+        Assert.Equal("array", needs["type"]!.GetValue<string>());
+        Assert.DoesNotContain("waits", needs["description"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The recovery's reasoning prompts give the issues joined to the one a visit fixes, which its fix settles too - the
+    /// diagnosis, its second word after a failure and the redirect on a person's answer, each reading
+    /// <c>{source.joined}</c> once - and the diagnosis, beside it, what the fix an issue waited for
+    /// did (<c>{source.joinedTo}</c>); the triage's prompt reads no list of its own, for the engine tells it the issues it
+    /// may name at its end, and asks for the id it joins.
+    /// </summary>
+    [Fact]
+    public void TheRecoverysPrompts_GiveTheIssuesJoinedToTheOneItFixes_AndTheTriagesAsksWhichItJoins()
+    {
+        string[] told = ["prompts/diagnose.md", "prompts/rediagnose.md", "prompts/redirect.md"];
+
+        Assert.Equal<IEnumerable<string>>(
+            told,
+            [.. WorkflowTemplates.Files.Where(file => WorkflowTemplates.TextOf(file)!.Contains("{source.joined}", StringComparison.Ordinal)).Order(StringComparer.Ordinal)]);
+
+        foreach (var prompt in told)
+        {
+            var text = WorkflowTemplates.TextOf(prompt)!;
+            Assert.Equal(text.IndexOf("{source.joined}", StringComparison.Ordinal), text.LastIndexOf("{source.joined}", StringComparison.Ordinal));
+        }
+
+        var diagnose = Prose.Words(WorkflowTemplates.TextOf("prompts/diagnose.md")!);
+        Assert.Contains("which this visit's fix settles too - each with its id, title, description, where and proof; empty where none is: {source.joined}", diagnose, StringComparison.Ordinal);
+        Assert.Contains("Where its own triage joined it to another issue whose fix was already being diagnosed, or was done, that fix is done:", diagnose, StringComparison.Ordinal);
+        Assert.Contains("start from the tree they left; empty otherwise: {source.joinedTo}", diagnose, StringComparison.Ordinal);
+        Assert.Contains("that the proof no longer shows the issue - nor the proof of any issue joined to it.", diagnose, StringComparison.Ordinal);
+
+        var triage = Prose.Words(WorkflowTemplates.TextOf("prompts/pre-existing.md")!);
+        Assert.DoesNotContain("{run.preExisting}", triage, StringComparison.Ordinal);
+        Assert.Contains("Every issue the run took before yours - those still being triaged among them - is given at the end of this prompt, each with its id, what became of it, its title and where, with the ids of those yours may join", triage, StringComparison.Ordinal);
+        Assert.Contains("An issue taken after yours is not among them: it is triaged after yours, and names yours where it repeats it.", triage, StringComparison.Ordinal);
+        Assert.Contains("is that of an issue taken before yours that is being triaged, being fixed or fixed, so that one fix settles both: its fix is that issue's, and the run fixes it there - or, where that fix is done already, gives yours a fix of its own, told what that one did;", triage, StringComparison.Ordinal);
+        Assert.Contains("the id it duplicates, where it does; and the id it joins, where it does.", triage, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The README and the architecture say how a failure reaches the recovery and where the run goes after it, as the
     /// grammar has it: a step says onFailure: recover, the recovery says onSuccess and onFailure, and a reasoning step is
     /// never recovered.
@@ -1238,6 +1657,400 @@ public sealed class WorkflowTemplatesTests
         Assert.Contains($"`onSuccess` says - `{FlowRecover.FailedStep}`, the step that gave the recovery its failure, which runs again from where it stopped", architecture, StringComparison.Ordinal);
         Assert.Contains($"`onFailure` says once its steps' retries are spent: `{FlowRecover.PauseOnFailure}` or `{FlowRecover.StopOnFailure}` - never the recovery again", architecture, StringComparison.Ordinal);
         Assert.Contains("A reasoning step is never recovered, by its own word or a group's", architecture, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The planner is told the issues the run owes its next round wherever it writes the plan - planning it, revising it
+    /// and updating it - as the self-audit is, each to be a work item naming its id in <c>settles</c>: the round's check
+    /// refuses a round that leaves one unsettled, and a plan update the check raises for one adds the item that settles it.
+    /// </summary>
+    [Fact]
+    public void ThePlannersPrompts_ListTheIssuesOwedTheNextRound_EachAWorkItemThatSettlesIt()
+    {
+        const string Listed = "The issues this run owes its next round, each with its id and its size - the files its fix touches, what must be built, and what must be measured first: {run.nextRound}";
+
+        foreach (var prompt in new[] { "prompts/plan.md", "prompts/replan.md", "prompts/plan-update.md", "prompts/self-audit.md" })
+        {
+            Assert.Contains(Listed, Prose.Words(Read(prompt)), StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            "Each issue listed becomes a work item of the plan's first round, listed and started first, built beside the rest - no other item may need its result. Make it one built to the issue's size - the files its fix touches among the paths it owns, what must be built and measured first in its instructions - with its class, for it is a defect too and the rules of a class below apply to it, or, where its fix decides nothing, why in noClass; and name the issue it settles in `settles`, by its id exactly. The round's check refuses a round whose items leave one unsettled.",
+            Prose.Words(Read("prompts/plan.md")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Each issue listed is a work item of the plan's first round, listed and started first, built beside the rest - no other item may need its result - naming the issue it settles in `settles` by its id exactly: keep the one the plan has, or, where it has none, make one built to the issue's size, with its class or, where its fix decides nothing, why in noClass.",
+            Prose.Words(Read("prompts/replan.md")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "an issue the check says is owed the next round and settled by no work item is an `added` item that settles it, as below.",
+            Prose.Words(Read("prompts/plan-update.md")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Each issue listed becomes a work item of the round, listed and started first, built beside the rest - no other item may need its result - naming the issue it settles in `settles` by its id exactly: where no item of the round's list settles it yet - the list the round opens with, in the work below, and the plan's items while no round has opened - add one as an `added` piece, built to the issue's size, with its class or, where its fix decides nothing, why in noClass.",
+            Prose.Words(Read("prompts/plan-update.md")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Each issue the run owes its next round, listed above, becomes a work item of that round, listed and started first, built beside the rest - no other item may need its result. Make it one built to the issue's size",
+            Prose.Words(Read("prompts/self-audit.md")),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An item that settles an issue the run owes is listed and started first, and built beside the rest - the check
+    /// orders it first, and a round builds its items side by side - so every shipped file that says where it stands says
+    /// that, and none says it is built first or before the rest, which would have a planner plan another item on its
+    /// result. Its work item has no size of its own - it is built to the issue's, its files among the paths it owns - and
+    /// one whose fix decides nothing says why in noClass, so no shipped file asks for one "with its size and a class".
+    /// </summary>
+    [Fact]
+    public void AnItemThatSettlesAnOwedIssue_IsListedAndStartedFirst_AndBuiltBesideTheRest()
+    {
+        string[] said = ["agents/pre-existing-triage.md", "prompts/plan-update.md", "prompts/plan.md", "prompts/pre-existing.md", "prompts/replan.md", "prompts/self-audit.md", "schemas/plan.schema.json", "schemas/pre-existing.schema.json"];
+
+        Assert.Equal<IEnumerable<string>>(
+            said,
+            [.. WorkflowTemplates.Files.Where(file => Prose.Words(WorkflowTemplates.TextOf(file)!).Contains("listed and started first, built beside the rest", StringComparison.Ordinal)).Order(StringComparer.Ordinal)]);
+
+        foreach (var wrong in new[] { "built before the rest", "builds before the rest", "it is built first", "the first work item", "with its size and a class" })
+        {
+            Assert.Equal([], WorkflowTemplates.Files.Where(file => Prose.Words(WorkflowTemplates.TextOf(file)!).Contains(wrong, StringComparison.Ordinal)));
+        }
+    }
+
+    /// <summary>
+    /// The <c>texts</c> key's help names every text the shipped flow declares, each with its file, in the order of their
+    /// names - read from the shipped definition itself, so a text added there is one help names and none it no longer
+    /// declares is named - and <c>help workflows</c> says it so.
+    /// </summary>
+    [Fact]
+    public void TheTextsKeysHelp_NamesEveryTextTheShippedFlowDeclares()
+    {
+        var texts = WorkflowTemplates.ShippedDefinition().Texts!;
+        var meaning = Assert.Single(WorkflowKeys.File, key => key.Name == "texts").Meaning;
+        const string Said = "the workflow's texts: each name a markdown file in this directory, read in a prompt as {text.<name>}; the shipped flow declares closure (closure.md), done (done.md), fixes (fixes.md), issuesBefore (issues-before.md) and recommendations (recommendations.md) here";
+
+        Assert.Equal(5, texts.Count);
+        Assert.Equal([], texts.Where(text => !meaning.Contains($" {text.Key} ({text.Value})", StringComparison.Ordinal)));
+        Assert.Equal<IEnumerable<(string, string)>>([.. texts.OrderBy(text => text.Key, StringComparer.Ordinal).Select(text => (text.Key, text.Value))], WorkflowTemplates.ShippedTexts);
+        Assert.Equal(Said, meaning);
+        Assert.Contains(Said, Prose.Words(DssHarness.Core.Help.HelpTopics.Render("workflows")), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The rule a definition of done is written by is said once, the workflow's text <c>done</c>: each statement holds
+    /// whatever the run's other work - the items built beside it, the recovery's fixes - does to the same files, so it is
+    /// never a count of lines, a line number, a whole output or a whole file or tree compared with the base, and a
+    /// comparison of the work's own lines names the base commit, never a branch, which names nothing in a builder's
+    /// repository. Every prompt that writes a definition of done reads it - the prompt and the resume prompt of each
+    /// reasoning step whose answer's schema holds a <c>done</c> written by the rule a task gives, read from the schemas
+    /// themselves through every <c>$ref</c>, so a continuation, which begins a new conversation that never saw the first
+    /// prompt, is told the rule again - and so does the plan audit, which judges one; each gives the base commit; the
+    /// plan's and a work item's <c>done</c> point to it; and no other shipped file says the rule, nor invites what it
+    /// refuses.
+    /// </summary>
+    [Fact]
+    public void TheRuleForADefinitionOfDone_IsSaidOnce_AndReadWhereOneIsWrittenOrJudged()
+    {
+        const string Refused = "never a count of lines, a line number, a whole output, a count over a whole file or the tree, or a comparison of a whole file or the whole tree with the base";
+        const string NoBranch = "A statement that compares the work's own lines with the tree before the work names the run's base commit, never a branch: a builder works in a repository of its own that holds no branch, so `main` names nothing there.";
+        var definition = WorkflowTemplates.ShippedDefinition();
+
+        // A file of a used workflow is read under that workflow's place in the shipped set.
+        string Shipped(WorkflowStep step, string file)
+            => step.WorkflowOf is { } owner ? $"{owner[(WorkflowTemplates.ShippedWorkflowName.Length + 1)..]}/{file}" : file;
+
+        var writers = NamedFiles.Steps(definition)
+            .Where(entry => entry.Step.Type == "reason" && entry.Step.Outputs is { } outputs && WritesADefinitionOfDone(Shipped(entry.Step, outputs)))
+            .SelectMany(entry => new[] { entry.Step.Prompt, entry.Step.ResumePrompt }.OfType<string>().Select(prompt => Shipped(entry.Step, prompt)))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        // The plan audit judges the plan's definitions of done by the rule, and writes none.
+        string[] readers = [.. writers.Append("prompts/plan-audit.md").Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+
+        Assert.Equal(7, writers.Count);
+        Assert.Equal("done.md", definition.Texts!["done"]);
+        Assert.Contains(Refused, Prose.Words(Read("done.md")), StringComparison.Ordinal);
+        Assert.Contains(NoBranch, Prose.Words(Read("done.md")), StringComparison.Ordinal);
+        Assert.Equal<IEnumerable<string>>(
+            readers,
+            [.. WorkflowTemplates.Files.Where(file => WorkflowTemplates.TextOf(file)!.Contains("{text.done}", StringComparison.Ordinal)).Order(StringComparer.Ordinal)]);
+
+        foreach (var reader in readers)
+        {
+            var words = Prose.Words(Read(reader));
+
+            Assert.Contains("## A definition of done {text.done}", words, StringComparison.Ordinal);
+            Assert.Contains("the rule for a definition of done below", words, StringComparison.Ordinal);
+            Assert.Contains("the run's base commit being `{orient.startCommit}`", words, StringComparison.Ordinal);
+            Assert.Equal(words.IndexOf("{text.done}", StringComparison.Ordinal), words.LastIndexOf("{text.done}", StringComparison.Ordinal));
+        }
+
+        var plan = JsonNode.Parse(Read("schemas/plan.schema.json"))!;
+
+        Assert.Contains("each by the rule for a definition of done your task gives", plan["properties"]!["done"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Contains("each statement written by the rule for a definition of done your task gives", plan["$defs"]!["workItem"]!["properties"]!["done"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
+
+        // The rule's words are the text's alone, and what it refuses no prompt invites.
+        foreach (var said in new[] { "a line number, a whole output", "so `main` names nothing there", "a count over a whole file or the tree - checked there first", "a statement that compares with the tree before the work naming" })
+        {
+            Assert.Equal(
+                said is "a line number, a whole output" or "so `main` names nothing there" ? ["done.md"] : [],
+                WorkflowTemplates.Files.Where(file => Prose.Words(WorkflowTemplates.TextOf(file)!).Contains(said, StringComparison.Ordinal)));
+        }
+    }
+
+    /// <summary>
+    /// The planner writes each axis of a universe whole, from a search of the tree for every cell of its kind - the
+    /// targets' from every service that builds or checks the repository, the references and the optimised forms read as
+    /// no axes, as the closure text says; the auditor names every cell an axis leaves out in one finding, and the replan
+    /// closes the axis whole - so a plan converges, never held back round after round for the next cell of the same axis
+    /// - and rewrites a statement of a definition of done that breaks its rule by the rule it reads.
+    /// </summary>
+    [Fact]
+    public void ThePlannerAndItsAuditor_CloseAnAxisWhole_AndTheReplanRewritesADefinitionOfDoneByItsRule()
+    {
+        var plan = Prose.Words(Read("prompts/plan.md"));
+
+        Assert.Contains(
+            "The references and the optimised forms it names are no axes: the universe answers neither, for every cell is measured on each of them. An axis the decision ranges over gives its values whole, from a search of the tree for every cell of its kind - for the targets, every file of every service that builds, tests, lints or checks the repository, never only the CI it names first - recorded as a class's searches are,",
+            plan,
+            StringComparison.Ordinal);
+        Assert.Contains("the references and the optimised forms below are no axes", Prose.Words(Read("closure.md")), StringComparison.Ordinal);
+        Assert.DoesNotContain("the legs and the references", plan, StringComparison.Ordinal);
+        Assert.Contains(
+            "Where it names a statement of a definition of done that breaks the rule for a definition of done below - one the run's other work would change, or one the base commit already fails for what the work does not touch - write it again by that rule, held to what the work makes true; and write every statement you add or change by it, the run's base commit being `{orient.startCommit}`.",
+            Prose.Words(Read("prompts/replan.md")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "an axis\n    that leaves out a cell searched whole by you too, every cell of it the universe leaves out named in the one\n    finding,",
+            Read("prompts/plan-audit.md").ReplaceLineEndings("\n"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the axis was not searched whole: search the tree for every cell of that\naxis, as a class's searches are made, and hold every one you find, never only the one it named",
+            Read("prompts/replan.md").ReplaceLineEndings("\n"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A class's universe answers every axis the repository's closure text lists by its structure, so an omission is the
+    /// plan step's own to correct and never costs an audit or another planning iteration: the plan's schema holds a
+    /// member for each, in the one shape of an axis - its values, where they are declared and why it does not apply, all
+    /// three required - and the further axes beside them, and the gate every client's answer passes sends back, within
+    /// the step, a universe that leaves an axis unanswered, an answer short of a member of the shape and a further axis
+    /// with no name; a universe that answers each reads. Which way an answer goes - values, or why - is no shape's to
+    /// choose: an answer of the shape that is neither way passes the gate, and the plan's check, held within the same step,
+    /// sends it back (P-C7, <see cref="PlanValidatorTests"/>).
+    /// </summary>
+    [Fact]
+    public void APlanWhoseUniverseLeavesAnAxisUnanswered_IsSentBackWithinThePlanStep()
+    {
+        var gate = new StructuredOutputGate(new AgentOutput("plan", Read("schemas/plan.schema.json")), new Masking());
+        const string At = "$.output.items[0].classes[0].universe";
+
+        Assert.Empty(gate.Problems(Envelopes.Of(PlanAnswer(Universes.Of(("formats", ["cs", "md"]), ("region", ["eu", "us"]))))));
+
+        var unanswered = Universes.Of(("formats", ["cs", "md"]));
+        unanswered.Remove("configurations");
+        var shapeless = Universes.Of(("formats", ["cs", "md"]));
+        shapeless["forms"] = new JsonObject { ["why"] = "the decision has one form" };
+        var unnamed = Universes.Of(("formats", ["cs", "md"]));
+        unnamed["further"] = new JsonArray(new JsonObject { ["name"] = "", ["answer"] = Universes.Applies("eu") });
+        var neither = Universes.Of(("formats", ["cs", "md"]));
+        neither["tiers"] = Universes.Answer([], string.Empty, string.Empty);
+
+        Assert.Equal([$"{At}: 'configurations' is required and missing"], gate.Problems(Envelopes.Of(PlanAnswer(unanswered))));
+        Assert.Equal(
+            [$"{At}.forms: 'values' is required and missing", $"{At}.forms: 'declaredIn' is required and missing"],
+            gate.Problems(Envelopes.Of(PlanAnswer(shapeless))));
+        Assert.Equal([$"{At}.further[0].name: \"\" does not match its pattern"], gate.Problems(Envelopes.Of(PlanAnswer(unnamed))));
+        Assert.Empty(gate.Problems(Envelopes.Of(PlanAnswer(neither))));
+    }
+
+    /// <summary>
+    /// The universe is defined once: a self-audit's and a diagnosis's items take the plan's work item whole, the class,
+    /// its universe and the one shape of an axis among it, never a second definition; every axis - each of the eight the
+    /// closure text lists, and each further one - is answered in that shape, so the schema holds no union but the scope's
+    /// item: a planner chooses no shape for an axis, and no API counts eight unions for every class. The axes it answers
+    /// are the eight the closure text lists, and the closure text names each by its member, and no other.
+    /// </summary>
+    [Fact]
+    public void TheUniverse_IsDefinedOnce_AndTheClosureTextNamesEachOfItsAxes()
+    {
+        var plan = JsonNode.Parse(Read("schemas/plan.schema.json"))!;
+
+        foreach (var sharing in new[] { "schemas/self-audit.schema.json", "schemas/diagnosis.schema.json" })
+        {
+            var whole = JsonSchemaSubset.Whole(Read(sharing), beside => NamedFiles.RootOf(WorkflowTemplates.TextOf(NamedFiles.Beside(sharing, beside))));
+
+            Assert.Empty(whole.Problems);
+
+            foreach (var definition in new[] { "closureClass", "axis" })
+            {
+                Assert.True(JsonNode.DeepEquals(plan["$defs"]![definition], whole.Schema!["$defs"]![definition]), $"{sharing} holds the plan's {definition}");
+            }
+        }
+
+        var universe = Universes.Schema();
+
+        Assert.Equal(["values", "declaredIn", "why"], plan["$defs"]!["axis"]!["required"]!.AsArray().Select(member => member!.GetValue<string>()));
+        Assert.Equal(Universes.Axis, universe["properties"]!["further"]!["items"]!["properties"]!["answer"]!["$ref"]!.GetValue<string>());
+        Assert.Single(Regex.Matches(Read("schemas/plan.schema.json"), "\"anyOf\""));
+        Assert.Equal(["kinds", "targets", "configurations", "formats", "entryPoints", "tiers", "forms", "directions"], Universes.Shipped);
+
+        var closure = Read("closure.md").ReplaceLineEndings("\n");
+        var axes = closure[closure.IndexOf("## The axes", StringComparison.Ordinal)..closure.IndexOf("## The references", StringComparison.Ordinal)];
+
+        Assert.Equal(Universes.Shipped, [.. Regex.Matches(axes, @"\(`([A-Za-z]+)`\)").Select(match => match.Groups[1].Value)]);
+    }
+
+    /// <summary>
+    /// A further axis is one the closure text's heading "This repository" names, and no other heading: its references and
+    /// its optimised forms are no axes - every cell is measured on each of them - so neither a planner nor an auditor makes
+    /// one of them an axis, which no claim then names. The closure text and the plan's schema say so, the schema's universe
+    /// and its further axes naming that heading; and the heading's placeholder names the axes by the members a universe
+    /// answers them by, and nothing that is none.
+    /// </summary>
+    [Fact]
+    public void AFurtherAxis_IsOneTheHeadingThisRepositoryNames_AndNeitherTheReferencesNorTheOptimisedForms()
+    {
+        var closure = Prose.Words(Read("closure.md"));
+        var universe = Universes.Schema();
+
+        Assert.Contains(
+            "and answers each further axis the heading \"This repository\" names among its further axes, by the name it has there. No other heading names an axis: the references and the optimised forms below are no axes, for every cell is measured on each of them, and a universe never answers one.",
+            closure,
+            StringComparison.Ordinal);
+        Assert.Contains("for each further axis it names under its heading \"This repository\"", universe["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Contains(
+            "Each further axis the repository's closure text names under its heading \"This repository\", answered as the axes above are. The references and the optimised forms the text names are no axes - every cell is measured on each of them - and are answered neither here nor above.",
+            universe["properties"]!["further"]!["description"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+
+        var placeholder = closure[closure.IndexOf("## This repository", StringComparison.Ordinal)..];
+
+        Assert.Contains($"the values of its {string.Join(", ", Universes.Shipped.SkipLast(1))} and {Universes.Shipped[^1]}, with its references and its optimised forms named", placeholder, StringComparison.Ordinal);
+        Assert.DoesNotContain("pipelines", placeholder, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The audits judge each answer of a universe - an axis said not to apply that the code shows the decision ranges
+    /// over, an axis whose values leave out a cell - and never look for an axis left out, which the plan's schema holds:
+    /// an audit that holds a plan back for an omission a machine sees costs a whole planning iteration.
+    /// </summary>
+    [Fact]
+    public void TheAudits_JudgeEachAnswerOfAUniverse_NeverAnAxisLeftOut()
+    {
+        var planAudit = Prose.Words(Read("prompts/plan-audit.md"));
+        var itemAudit = Prose.Words(Read("prompts/item-audit.md"));
+
+        Assert.Contains(
+            "its schema has it answer every axis the text lists, so what you judge is each answer: an axis said not to apply that the code shows the decision ranges over, with what shows it, and an axis that leaves out a cell",
+            planAudit,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "its schema has it answer every axis the text lists: an axis it says does not apply that the code shows the decision ranges over is a finding, with what shows it, and so is an axis whose values leave out a cell",
+            itemAudit,
+            StringComparison.Ordinal);
+
+        foreach (var audit in new[] { planAudit, itemAudit, Prose.Words(Read("schemas/plan-audit.schema.json")) })
+        {
+            Assert.DoesNotContain("without a reason", audit, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>A plan as the planner answers it: one work item, deciding one class over <paramref name="universe"/>.</summary>
+    private static JsonObject PlanAnswer(JsonObject universe)
+        => new()
+        {
+            ["summary"] = "One item closes the rate.",
+            ["done"] = "the rate is decided in one place",
+            ["source"] = "made",
+            ["departures"] = new JsonArray(),
+            ["items"] = new JsonArray(new JsonObject
+            {
+                ["name"] = "one",
+                ["title"] = "The rate is decided in one place",
+                ["instructions"] = "Decide the rate at its home.",
+                ["done"] = "the rate is decided at its home",
+                ["ownedPaths"] = new JsonArray("src/**"),
+                ["forbiddenPaths"] = new JsonArray(),
+                ["reuses"] = new JsonArray(new JsonObject { ["path"] = "src/Home.cs", ["what"] = "the rate's home" }),
+                ["creates"] = new JsonArray(),
+                ["replaces"] = new JsonArray(),
+                ["tests"] = new JsonArray("HomeTests"),
+                ["noTests"] = "",
+                ["classes"] = new JsonArray(new JsonObject
+                {
+                    ["id"] = "C1",
+                    ["invariant"] = "The rate is decided by the home for every format",
+                    ["home"] = new JsonObject { ["path"] = "src/Home.cs", ["symbol"] = "Home", ["exists"] = true },
+                    ["sites"] = new JsonArray(new JsonObject { ["path"] = "src/Home.cs", ["symbol"] = "Home", ["decides"] = "the rate", ["then"] = "home" }),
+                    ["searches"] = new JsonArray(new JsonObject { ["data"] = "the rate", ["via"] = "graph", ["query"] = "rate:", ["hits"] = 1 }),
+                    ["universe"] = universe.DeepClone(),
+                    ["action"] = "fix-at-home",
+                    ["notCovered"] = "",
+                }),
+                ["noClass"] = "",
+            }),
+            ["scope"] = new JsonArray(),
+            ["preExisting"] = new JsonArray(),
+        };
+
+    /// <summary>
+    /// Whether the shipped schema <paramref name="schema"/> holds a <c>done</c> written by the rule for a definition of
+    /// done its task gives - anywhere its answer reaches, a <c>$ref</c> followed into its own <c>$defs</c> or another of
+    /// the shipped schemas, each place a reference leads to walked once, so references that lead round end.
+    /// </summary>
+    /// <param name="schema">The schema's path in the shipped set.</param>
+    private static bool WritesADefinitionOfDone(string schema)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal) { $"{schema}#" };
+
+        return Holds(schema, JsonNode.Parse(WorkflowTemplates.TextOf(schema)!));
+
+        bool Holds(string file, JsonNode? node)
+        {
+            switch (node)
+            {
+                case JsonArray list:
+                    return list.Any(item => Holds(file, item));
+                case JsonObject held:
+                    if (held["properties"]?["done"]?["description"] is JsonValue said
+                        && said.GetValue<string>().Contains("by the rule for a definition of done your task gives", StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+
+                    if (held["$ref"] is JsonValue reference && reference.GetValue<string>() is var to)
+                    {
+                        var hash = to.IndexOf('#', StringComparison.Ordinal);
+                        var target = hash == 0 ? file : $"{file[..(file.LastIndexOf('/') + 1)]}{(hash < 0 ? to : to[..hash])}";
+                        var pointer = hash < 0 ? string.Empty : to[(hash + 1)..];
+
+                        if (seen.Add($"{target}#{pointer}"))
+                        {
+                            JsonNode? at = JsonNode.Parse(WorkflowTemplates.TextOf(target)!);
+
+                            foreach (var key in pointer.Split('/', StringSplitOptions.RemoveEmptyEntries))
+                            {
+                                at = at?[key];
+                            }
+
+                            if (Holds(target, at))
+                            {
+                                return true;
+                            }
+                        }
+                    }
+
+                    // A definition is reached through a reference, never by being declared.
+                    return held.Where(member => member.Key != "$defs").Any(member => Holds(file, member.Value));
+                default:
+                    return false;
+            }
+        }
     }
 
     private static string Read(string below)

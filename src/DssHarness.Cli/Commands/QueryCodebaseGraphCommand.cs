@@ -41,8 +41,18 @@ internal static class QueryCodebaseGraphCommand
 
     private static readonly Option<string> OutlineOption = new("--outline")
     {
-        Description = "Outline a file or a type by its path or symbol, or the repository where none is given.",
+        Description = "Outline a directory - every file under it with its language, lines, whether it is a test and what it tests, and its top declarations - a file or a type, by its path or symbol, or the repository where none is given.",
         Arity = ArgumentArity.ZeroOrOne,
+    };
+
+    private static readonly Option<string> AroundOption = new("--around")
+    {
+        Description = "Give a node's place: what it is declared in, its siblings, its members, the declarations before and after it, its callers and callees.",
+    };
+
+    private static readonly Option<string> ImpactOption = new("--impact")
+    {
+        Description = "Give what a change of a node reaches: its callers at every distance, overrides both ways, implementations, dispatchers and derived types, and every test that reaches any of them, each with its path.",
     };
 
     private static readonly Option<string[]> BodyOption = new("--body")
@@ -76,7 +86,7 @@ internal static class QueryCodebaseGraphCommand
     {
         var command = new Command(
             Name,
-            "Read a run's codebase graph: one of the graph tool's read operations - find, node, related, outline, body or sites - on the base or an agent's view, printing the answer an agent would be given, in pages of whole entries with any page asked by --page. It reads only: no sync, nothing written.");
+            "Read a run's codebase graph: one of the graph tool's read operations - find, node, related, outline, around, impact, body or sites - on the base or an agent's view, printing the answer an agent would be given, in pages of whole entries with any page asked by --page. It reads only: no sync, nothing written.");
 
         command.Arguments.Add(RunArgument);
         command.Options.Add(FindOption);
@@ -85,6 +95,8 @@ internal static class QueryCodebaseGraphCommand
         command.Options.Add(RelationOption);
         command.Options.Add(DepthOption);
         command.Options.Add(OutlineOption);
+        command.Options.Add(AroundOption);
+        command.Options.Add(ImpactOption);
         command.Options.Add(BodyOption);
         command.Options.Add(SitesOption);
         command.Options.Add(PageOption);
@@ -111,6 +123,8 @@ internal static class QueryCodebaseGraphCommand
             Depth = parseResult.GetValue(DepthOption),
             Outline = parseResult.GetResult(OutlineOption) is { Implicit: false },
             OutlineOf = parseResult.GetValue(OutlineOption),
+            Around = parseResult.GetValue(AroundOption),
+            Impact = parseResult.GetValue(ImpactOption),
             Body = parseResult.GetResult(BodyOption) is { Implicit: false } ? parseResult.GetValue(BodyOption) : null,
             Sites = parseResult.GetValue(SitesOption),
             Page = parseResult.GetValue(PageOption),

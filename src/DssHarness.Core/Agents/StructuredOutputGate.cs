@@ -29,7 +29,12 @@ namespace DssHarness.Core.Agents;
 /// <para>
 /// An answer that reads ends the run: <see cref="AgentRunStatus.Asked"/> where it asks, with its questions, and
 /// <see cref="AgentRunStatus.Completed"/> otherwise, with its output; either way with its notes and what it assumed,
-/// every text masked.
+/// every text masked - save an output that reads and that a step which reads it finds wrong
+/// (<see cref="AgentOutput.Corrections"/>): that is handed back to be put right, said by an
+/// <see cref="OutputCorrection"/> and counted with no repair, until the agent answers with an output those steps find
+/// nothing wrong with, or with one it gave already in this run - its word that it cannot put right what is left - and
+/// the run then completes with that output as given, the step that reads it to record what is still wrong. Each output
+/// handed back is kept, so an agent that goes back to any of them, however it goes round, ends the run there.
 /// </para>
 /// </remarks>
 public sealed class StructuredOutputGate
@@ -61,6 +66,9 @@ public sealed class StructuredOutputGate
     private readonly ILineMask _mask;
     private int _repairs;
 
+    /// <summary>Each output handed back to be put right in this run, as it was given: one given again is the agent's word that it cannot put right what is left.</summary>
+    private readonly List<JsonNode> _handedBack = [];
+
     /// <summary>The gate of one run's answers.</summary>
     /// <param name="output">The output the run is to produce.</param>
     /// <param name="mask">The run's mask.</param>
@@ -87,6 +95,20 @@ public sealed class StructuredOutputGate
             + "Answer again, whole, as the schema says.";
     }
 
+    /// <summary>
+    /// The message that hands an output that reads back to be put right, naming each thing the step that reads it finds
+    /// wrong, and how the agent says it cannot put one right.
+    /// </summary>
+    /// <param name="problems">What the step that reads the output finds wrong with it, each as that step words it.</param>
+    public static string Correction(IReadOnlyList<string> problems)
+    {
+        ArgumentNullException.ThrowIfNull(problems);
+
+        return "Your answer reads against its schema, and the check that reads it next finds this wrong with it:\n"
+            + string.Concat(problems.Select(problem => $"- {problem}\n"))
+            + "Answer again, whole, with each put right. Where one cannot be put right in your answer, answer again with the output you gave, and say why in your notes: the check then records what is still wrong.";
+    }
+
     /// <summary>Why <paramref name="answer"/> does not read; empty where it does.</summary>
     /// <param name="answer">The answer, as the client received it; null where it gave none.</param>
     public IReadOnlyList<string> Problems(JsonNode? answer) => Read(answer, string.Empty).Problems;
@@ -95,12 +117,14 @@ public sealed class StructuredOutputGate
     /// The run's end on <paramref name="answer"/>: <see cref="AgentRunStatus.Completed"/> or
     /// <see cref="AgentRunStatus.Asked"/> where it reads - the person asked said by a <see cref="PersonAsked"/> - and
     /// <see cref="AgentRunStatus.InvalidOutput"/> where it does not and its repairs are spent; else null, the answer sent
-    /// back with its problems by <paramref name="sendBack"/>, the repair said by an <see cref="OutputRepair"/>.
+    /// back with its problems by <paramref name="sendBack"/>, the repair said by an <see cref="OutputRepair"/> - or, where
+    /// it reads and a step that reads it finds it wrong (<see cref="AgentOutput.Corrections"/>), handed back to be put
+    /// right, said by an <see cref="OutputCorrection"/>, unless the output is one this run handed back already.
     /// </summary>
     /// <param name="answer">The answer, as the client received it; null where it gave none.</param>
     /// <param name="text">The answer's text.</param>
     /// <param name="events">Where the run's events go.</param>
-    /// <param name="sendBack">Sends the agent the message a repair is, in the same conversation.</param>
+    /// <param name="sendBack">Sends the agent the message a repair or a correction is, in the same conversation.</param>
     public async Task<AgentRunResult?> CheckedAsync(JsonNode? answer, string text, IAgentEventSink events, Func<string, Task> sendBack)
     {
         ArgumentNullException.ThrowIfNull(events);
@@ -113,6 +137,21 @@ public sealed class StructuredOutputGate
             if (ended.Status == AgentRunStatus.Asked)
             {
                 await events.EmitAsync(new PersonAsked(ended.Questions)).ConfigureAwait(false);
+            }
+            else if (_output.Corrections is { } corrections
+                && ended.StructuredOutput is { } written
+                && DssHarness.Core.Json.JsonDepth.ParseNode(written) is { } output
+                && !_handedBack.Any(given => DssHarness.Core.Json.JsonWalk.Same(given, output))
+                && await corrections(output).ConfigureAwait(false) is [_, ..] wrong)
+            {
+                // An output a step that reads it finds wrong - read as the step's record will hold it, and the step that
+                // reads it will - is the agent's to put right, in its own conversation and counted with no repair; one it
+                // gave already ends the run as given, for that is its word that it cannot.
+                _handedBack.Add(output);
+                await events.EmitAsync(new OutputCorrection(_handedBack.Count, [.. wrong.Select(_mask.Redact)])).ConfigureAwait(false);
+                await sendBack(Correction(wrong)).ConfigureAwait(false);
+
+                return null;
             }
 
             return ended;

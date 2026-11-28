@@ -432,7 +432,7 @@ public sealed class WorkflowExportServiceTests
         var export = await Service(repository.Harness).ExportAsync(repository.Path, new WorkflowExportRequest("flow", repository.Tree.Combine("out"), Shipped: false), Token);
         var destination = repository.Tree.Combine("out", "flow");
 
-        Assert.Equal([".shared/shared.yml", ".shared/note.md", "a/a.yml", "b/b.yml", "b/note.md", "flow.yml"], export.Files);
+        Assert.Equal(["agents/advisor.md", "prompts/recommend.md", ".shared/shared.yml", ".shared/note.md", "a/a.yml", "b/b.yml", "b/note.md", "flow.yml"], export.Files);
         Assert.Equal(export.Files.Order(StringComparer.Ordinal), FilesUnder(destination));
     }
 
@@ -597,10 +597,20 @@ public sealed class WorkflowExportServiceTests
         var harness = new HarnessFactory();
 
         temp.WriteFile("file.txt", "content\n");
-        await harness.InitializeHarnessAsync(temp.Path, Token, new HarnessConfig { Workflows = ["flow"] });
+        await harness.InitializeHarnessAsync(temp.Path, Token, TestAdvice.Config("flow"));
         await harness.CommitAllAsync(temp.Path, "initial", Token);
 
-        foreach (var (path, text) in files)
+        // The run's own workflow names an advisor, as every workflow a run is started of does: the test's, with its
+        // files, where the test's names none.
+        var own = files["flow/flow.yml"];
+        var written = new Dictionary<string, string>(files, StringComparer.Ordinal) { ["flow/flow.yml"] = TestAdvice.Named(own) };
+
+        foreach (var (path, text) in TestAdvice.FilesOf(own))
+        {
+            written[$"flow/{path}"] = text;
+        }
+
+        foreach (var (path, text) in written)
         {
             var file = Path.Combine([temp.Path, ".harness-config", "workflows", .. path.Split('/')]);
 

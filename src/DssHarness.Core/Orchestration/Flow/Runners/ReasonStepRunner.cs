@@ -20,8 +20,10 @@ using DssHarness.Core.Secrets;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
-/// The <c>reason</c> step: the agent a reason step is given, made where the step names none (a read-only agent, with no
-/// worktree - <see cref="CreateAgentRunner.MakeAsync"/> over the one verb that makes agents), and its step worked
+/// The <c>reason</c> step: the agent a reason step is given, made where the step names none (a read-only agent, its tree
+/// made by the one making of every agent's - <see cref="CreateAgentRunner.MakeAsync"/> over the one verb that makes agents -
+/// and brought to the main checkout's HEAD, or to the commit the step names, as each step that works as it starts,
+/// <see cref="CreateAgentRunner.ReadyAsync"/>), and its step worked
 /// through <see cref="IAgentRunner"/> - the definition it works by read where the chain of work it goes on with began
 /// (<see cref="ResumeChain.Root"/>), the step's model resolved with that definition below its own, its order, workspace,
 /// ground and mask built as every launch builds them (<see cref="ReasonLaunch"/>), its prompt as the engine filled it
@@ -31,18 +33,26 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the agent's record, and guards the repository's key-spend record across runs.</param>
-/// <param name="create">Makes the read-only agent a step that names none is given.</param>
+/// <param name="create">Makes the read-only agent a step that names none is given, and brings its tree to the main checkout's HEAD, or to the commit the step names, as each step that works as it starts.</param>
 /// <param name="runner">Works the step, whatever the client is.</param>
 /// <param name="fileSystem">The file system the step's files are read on.</param>
 /// <param name="keys">The slot the entry's keys are read from.</param>
 /// <param name="gh">Runs <c>gh</c>, for a web-search source the machine's login reads.</param>
 /// <param name="harnessOutput">Writes output the copies of a continuation record name, and says a write of a measure call's ledger the file system refused as its legs' run went.</param>
-/// <param name="clock">Tells the week a balanced key's spend is counted for.</param>
+/// <param name="clock">Tells the week a balanced key's spend is counted for, and when the machine's gh login's expiry has come.</param>
 /// <param name="isolation">Decides the operating system's isolation the step's agent runs under.</param>
-/// <param name="gitClient">Asks git, for the paths an agent's worktree holds that no fold has taken.</param>
+/// <param name="gitClient">
+/// Asks git, for the paths an agent's worktree holds that no fold has taken, and for what it holds untracked as a step whose
+/// writes narrow it first starts (<see cref="AgentStepStart"/>).
+/// </param>
 /// <param name="updates">Makes the Claude Code a run needs ready, where the step's order holds the client that starts one.</param>
 /// <param name="graphService">The one graph service every graph is read and written by, for the step's serving of the run's graph; null where none is given, and no step is served.</param>
 /// <param name="graphClock">Times the graph tool's searches; the machine's clock where none is given.</param>
+/// <param name="graphSyncs">
+/// The engine's own syncs of a run's graph, for the view of a reader's own tree once it is brought to the main checkout's
+/// HEAD or the commit its step names, or found as the attempt an answer goes on with left it
+/// (<see cref="FlowGraphSyncs.ReadiedAsync"/>); null where none is given, and no such view is synced.
+/// </param>
 /// <param name="tests">Tests the legs, for the measure tool the step's agent is given where the repository declares legs and the agent runs commands.</param>
 /// <param name="children">Records in the step's directory the group of what a measure call's legs start bound, while anything is in it.</param>
 public sealed class ReasonStepRunner(
@@ -59,10 +69,11 @@ public sealed class ReasonStepRunner(
     Agents.Isolation.IAgentIsolation isolation,
     Application.Legs.ITestLegs tests,
     ChildSessions children,
-    Git.IGitClient? gitClient = null,
+    Git.IGitClient gitClient,
     ClaudeCodeUpdateService? updates = null,
     Codebase.ICodebaseGraphService? graphService = null,
-    TimeProvider? graphClock = null) : IFlowStepTypeRunner, IFlowHandoffRunner
+    TimeProvider? graphClock = null,
+    FlowGraphSyncs? graphSyncs = null) : IFlowStepTypeRunner, IFlowHandoffRunner
 {
     /// <inheritdoc/>
     public string Type => "reason";
@@ -99,7 +110,7 @@ public sealed class ReasonStepRunner(
 
         if (run.Made is { } own && (working is null || string.Equals(working, own.Name, StringComparison.Ordinal)))
         {
-            var making = await create.MakeAsync(run, noWorktree: true, cancellationToken).ConfigureAwait(false);
+            var making = await create.MakeAsync(run, readsOnly: true, cancellationToken).ConfigureAwait(false);
 
             if (!making.Passed)
             {
@@ -119,6 +130,43 @@ public sealed class ReasonStepRunner(
         if (store.ReadAgent(layout, agent) is not { State: AgentStates.Live } agentRecord)
         {
             return FlowStepResult.Ended(passed: false, HarnessExit.Refused, $"agent '{agent}' of '{place.Run}' is not live, and the step cannot work as it");
+        }
+
+        // An agent that only reads works in a tree of its own that is exactly what the main checkout committed as the step
+        // starts - or the commit the step's commit names - each attempt of its first step and of every one that goes on with
+        // its work: brought to the main checkout's HEAD, or to that commit, now, whatever it wrote there before discarded,
+        // and made where it is not there, before anything of the step reads it. An attempt that goes on with an answer in
+        // its own conversation - a person's, a limit's more or compact - is the same start going on, and finds the tree as
+        // its attempt left it: save where the agent's record names another attempt as the one its tree was last brought
+        // for - another step working as the agent started while this one waited, for a step that waits on its answer holds
+        // no tree - or names none, as a record an older tool wrote does. Then the tree is brought there again, as the start
+        // brings it, and the agent is told so in the message it goes on with: what it wrote there is gone. A start whose
+        // record names this very attempt finds its tree made for it a moment ago, at the main checkout's HEAD, by the making
+        // above (CreateAgentRunner.MakeAsync) - an attempt starts once - and brings it nowhere again.
+        var goingOn = GoingOnOf(run);
+        string? broughtAgain = null;
+
+        if (agentRecord.Reads && agentRecord.ReadiedFor != CreateAgentRunner.ReadiedFor(run))
+        {
+            if (await create.ReadyAsync(run, agent, cancellationToken).ConfigureAwait(false) is { } unready)
+            {
+                return unready;
+            }
+
+            agentRecord = store.ReadAgent(layout, agent)!;
+
+            if (goingOn is not null)
+            {
+                broughtAgain = TreeBroughtAgain(run.Step.Commit, agentRecord.Base!);
+            }
+        }
+
+        // A reader's tree holds what the commit it was brought to holds, not what the main checkout does - and, for an attempt
+        // an answer goes on with, what that attempt wrote there since: its own view is the one the step is served, synced now
+        // that the tree stands where the step reads it - the step's start came before.
+        if (graphSyncs is not null && FlowGraphSyncs.ViewsOwnTree(agentRecord, run.Step))
+        {
+            await graphSyncs.ReadiedAsync(run, agent, cancellationToken).ConfigureAwait(false);
         }
 
         if (AgentProviders.Resolve(context.Config) is not { Providers: { } providers })
@@ -177,7 +225,7 @@ public sealed class ReasonStepRunner(
             return FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, string.Join("; ", noLongerReads));
         }
 
-        var (webSearch, webMask) = await WebSearchOf(context, providers, sources, root, cancellationToken).ConfigureAwait(false);
+        var (webSearch, webMask, logins) = await WebSearchOf(context, providers, sources, root, cancellationToken).ConfigureAwait(false);
 
         // What the step's agent is handed to read - its skills, its continuation record's copies - the tool writes in the
         // launch's own directory, which no command of the agent's writes, and the agent reads as a root of its own.
@@ -191,6 +239,35 @@ public sealed class ReasonStepRunner(
             launch.ClaudeDirectories(context.Config, context.Layout),
             launch.CredentialPlaces(context.Config),
             handed: handed);
+
+        // A step's writes are read against the run's start tree, as the plan's check, the holds and the folds read theirs:
+        // never the worktree, which the run's own folds rewrite.
+        if (ground.Writes is not null)
+        {
+            ground = ground with { WritesTree = place.Directories };
+        }
+
+        // What the step's worktree held untracked as the step first started, where its writes narrow what it writes there:
+        // read from the step's directory where its first start wrote it, else taken now, before its agent is started - so a
+        // path its own commands made since, and only such a path, is one it may take back whatever its writes say.
+        try
+        {
+            ground = ground with
+            {
+                StepStart = await AgentStepStart.OfAsync(
+                    fileSystem,
+                    gitClient,
+                    ground,
+                    workspace.Worktree,
+                    StepDirectoryOf(layout, run.Instance, agent),
+                    platform.PathComparison,
+                    cancellationToken).ConfigureAwait(false),
+            };
+        }
+        catch (HarnessException untold)
+        {
+            return FlowStepResult.Ended(passed: false, untold.ExitCode, $"'{run.Instance}' does not start: what its worktree held untracked as the step began cannot be told, so nothing its commands make could be told apart: {untold.Message}");
+        }
 
         // The operating system's isolation the agent's commands run under, decided before anything of the step is handed
         // over: where agentPolicy.isolation is required and this machine has none, the step does not start, saying why and
@@ -213,7 +290,6 @@ public sealed class ReasonStepRunner(
         // step goes on with earlier work and names one, in its place. An attempt that goes on with an answer - a
         // person's answer to what its agent asked, a limit's `more` or `compact` - sends the answer as its message in
         // the attempt's own conversation instead, and no skill is handed again.
-        var goingOn = GoingOnOf(run);
 
         // The prompt the attempt sends: an answer that goes on with this attempt sends its own message - the person's
         // words, or what a granted bound tells the agent - in the attempt's own conversation; a compaction sends the
@@ -236,6 +312,7 @@ public sealed class ReasonStepRunner(
         string filled;
         string? session = null;
         IReadOnlyList<AgentSkill> skills = [];
+        var prompted = goingOn is { Compact: true } || resume is null ? "prompt" : "resumePrompt";
 
         if (goingOn is { Prompt: { } message })
         {
@@ -245,7 +322,7 @@ public sealed class ReasonStepRunner(
         {
             session = Guid.NewGuid().ToString("D");
 
-            var given = SkillBlocks(goingOn is { Compact: true } || resume is null ? readPrompt : resume, run, root.Agent ?? agent, ground.Capabilities, workspace, handed, resolution, session);
+            var given = SkillBlocks(resume is null || prompted == "prompt" ? readPrompt : resume, run, root.Agent ?? agent, ground.Capabilities, workspace, handed, resolution, session);
 
             if (given.Refused is { } refusedSkill)
             {
@@ -255,15 +332,41 @@ public sealed class ReasonStepRunner(
             (filled, skills) = (given.Prompt!, given.Skills);
         }
 
+        // An attempt that goes on in a tree brought there again since it waited is told so first, before what it goes on
+        // with: whatever it remembers writing there is gone.
+        if (broughtAgain is not null)
+        {
+            filled = $"{broughtAgain}\n\n{filled}";
+        }
+
         // The handoff the attempt is given - a stop wrote it, or a limit the attempt before this one reached - stands
         // at the head of its prompt, and is spent once the prompt holds it.
         filled = WithHandoff(run.Handoff, filled);
 
-        // The step's serving of the run's codebase graph: its pack made from the filled prompt and given as the
-        // <codebase> part of the first message of each launch that begins a conversation of its own, the graph tool
-        // offered where its step says tools, its view the one the engine syncs at the step's start. A step whose mode is
-        // off is served nothing, and one whose graph cannot be served goes on without it.
-        var mask = launch.Mask(context.Layout, providers, webMask);
+        // The step's serving of the run's codebase graph: its pack made from what the run handed the prompt, the graph tool
+        // offered where its step says tools - which asks the tool's map and pack for their pages, pushed neither unless its
+        // graphPromptTokens says a size for its pack - and a step at map, which has no tool, pushed the map and the pack as
+        // the <repository-map> and <codebase> parts of the first message of each launch that begins a conversation of its
+        // own; its view the one the engine syncs at the step's start - or, for a reader's tree brought to the commit its
+        // step names, the one synced above once it stood there. A step whose mode is off is served nothing, and one
+        // whose graph cannot be served goes on without it. The pack is seeded from the
+        // values the prompt was filled with - the request, the work item, the upstream outputs it reads - with the
+        // handoff, or from the words an answer sends, never from the template's own words: every run of the workflow is
+        // given those alike, and a graph of a repository that holds a workflow's text would match them first.
+        var seeds = goingOn is { Prompt: { } answered }
+            ? answered
+            : string.Join("\n\n", (run.Handoff is { Length: > 0 } handoff ? [handoff] : Array.Empty<string>()).Concat(run.PromptValues?.GetValueOrDefault(prompted) ?? []));
+        var began = launch.Mask(context.Layout, providers, webMask);
+        Execution.ILineMask? mask = began;
+
+        // A step whose search sends the machine's gh login keeps its mask open to the login read again while it runs: a
+        // token read for a host that refused the one the step began with, or for an expiry that came, is held by the mask
+        // every record of the step is kept through before it is sent.
+        if (webSearch is not null && logins is not null)
+        {
+            (webSearch, mask) = webSearch.Renewing(began, logins, context.Layout);
+        }
+
         var stepGraph = graphService is null
             ? null
             : await FlowStepGraph.OfAsync(
@@ -282,7 +385,7 @@ public sealed class ReasonStepRunner(
                 agent,
                 agentRecord,
                 ground,
-                filled,
+                seeds,
                 mask,
                 cancellationToken).ConfigureAwait(false);
 
@@ -361,9 +464,9 @@ public sealed class ReasonStepRunner(
 
             // The step's codebase graph, all of it carried: whether a launch's conversation is handed is decided entry by
             // entry, so a launch that goes on with the stored conversation is told what changed and one that begins its own
-            // - another client's, another provider's - is given the map ahead of the pack (AgentPromptParts.CodebaseOf),
-            // each launch's line written as it is given its first message; the graph tool offered with the operations and
-            // the narrowing of reads its step says.
+            // - another client's, another provider's - is pushed what its step pushes, the map ahead of the pack
+            // (AgentPromptParts.CodebaseOf), each launch's line written as it is given its first message; the graph tool
+            // offered with the operations and the narrowing of reads its step says.
             Codebase = stepGraph?.Section,
             CodebaseChanges = codebaseChanges,
             Map = stepGraph?.Map,
@@ -448,8 +551,11 @@ public sealed class ReasonStepRunner(
     /// <summary>
     /// One measure call answered: the leg it names, built as the variant it names - the build configuration the leg's
     /// own configuration declares, the only one a measurement of the leg runs - tested with the filter it names through
-    /// the test service, in the tree the agent works in where it has a worktree of its own, else in a local copy of the
-    /// main tree the leg makes as a leg's local copy is, so no fold in flight changes what it measures; run as every step
+    /// the test service, in the tree the agent works in where it has one of its own - an agent that only reads has its tree
+    /// at the main checkout's HEAD, or at the commit its step names, which the start of its next step takes back with
+    /// whatever the measurement built - else
+    /// in a local copy of the main tree the leg makes as a leg's local copy is, so no fold in flight changes what it
+    /// measures; run as every step
     /// of the engine runs legs (<see cref="FlowStepLegs"/>) - the isolation decided first, under the step's process scope,
     /// the ledger kept in the call's own records. What it showed is read by the one owner of what a leg's verdict means
     /// (<see cref="FlowLegVerdicts.ClassOf"/>): a red leg - its build or its tests failed - is measured and failed, a leg
@@ -758,6 +864,17 @@ public sealed class ReasonStepRunner(
     public const string HandoffTag = "handoff";
 
     /// <summary>
+    /// What an agent that only reads is told as its attempt goes on after an answer in a tree brought there again - another
+    /// step worked as the agent while the attempt waited, or nothing told who the tree was last brought for: where the tree
+    /// now stands, and that what the agent wrote there is gone.
+    /// </summary>
+    /// <param name="named">The commit the step's <c>commit</c> names, as the engine filled it; null where it names none, and the tree stands on the main checkout's HEAD.</param>
+    /// <param name="commit">The commit the tree was brought to, exactly as committed.</param>
+    public static string TreeBroughtAgain(string? named, string commit)
+        => $"While this step waited for its answer, your tree was brought to {(named is null ? "the main checkout's HEAD" : "the commit your step names")} "
+            + $"({commit}) again, for another step may have worked in it meanwhile: whatever you wrote there is gone, and the tree holds exactly what that commit holds.";
+
+    /// <summary>
     /// What this attempt goes on with, where its answers gave it something to: the last answer of this attempt's
     /// questions - a person's answer to what its agent asked, read as the attempt's next message; a limit answered
     /// <c>more</c>, which hands the attempt its own conversation and grants the bound once again; a full context
@@ -843,10 +960,11 @@ public sealed class ReasonStepRunner(
     /// references share with the schema files beside it taken in (<see cref="Schemas.JsonSchemaSubset.Shared"/>), so
     /// the schema the client is sent and the schema the answer is held to are one and hold - the step's own name the
     /// name its output is read by, and - where the step may ask - the rounds it may ask in one attempt, less what its
-    /// answers already spent: after the last the agent is offered no questions and told so; and what a step of the flow
-    /// that reads its answer holds it to beyond the schema (<see cref="FlowStepRun.AnswerHolds"/>). A schema no answer could
-    /// be held to is refused (13) naming why: the definition's check said its problems when the run began, and this
-    /// says where they are again.
+    /// answers already spent: after the last the agent is offered no questions and told so; what a step of the flow
+    /// that reads its answer holds it to beyond the schema (<see cref="FlowStepRun.AnswerHolds"/>); and what the checks that
+    /// read its answer find wrong with it, for the agent to put right in its own conversation
+    /// (<see cref="FlowStepRun.AnswerCorrections"/>). A schema no answer could be held to is refused (13) naming why: the
+    /// definition's check said its problems when the run began, and this says where they are again.
     /// </summary>
     /// <param name="files">Reads the files the workflow names.</param>
     /// <param name="layout">The repository's layout.</param>
@@ -862,6 +980,7 @@ public sealed class ReasonStepRunner(
                 AskRounds: step.Ask == true ? Math.Max(0, (step.AskRounds ?? 2) - run.Answers.Count(given => given.Kind == "ask" && given.Attempt == run.Attempt)) : null)
             {
                 Holds = run.AnswerHolds,
+                Corrections = run.AnswerCorrections,
             }
             : null;
 
@@ -905,16 +1024,20 @@ public sealed class ReasonStepRunner(
     /// <param name="sources">The configuration's web search, already read and held to V55's names by the caller.</param>
     /// <param name="step">The step at the root of the step's chain of work (<see cref="ResumeChain.Root"/>), whose <c>search</c> picks its sources.</param>
     /// <param name="cancellationToken">Stops the reading of keys.</param>
-    private async Task<(AgentWebSearch? Search, Runners.ActionValues? Mask)> WebSearchOf(HarnessContext context, AgentProviders providers, Web.Search.WebSearchSources sources, WorkflowStep step, CancellationToken cancellationToken)
+    private async Task<(AgentWebSearch? Search, Runners.ActionValues? Mask, Ci.GhLogins? Logins)> WebSearchOf(HarnessContext context, AgentProviders providers, Web.Search.WebSearchSources sources, WorkflowStep step, CancellationToken cancellationToken)
     {
         if (sources.Chosen(step.Search) is not [_, ..] chosen)
         {
-            return (null, null);
+            return (null, null, null);
         }
 
-        var read = await new Web.Search.WebSearchKeys(keys, gh).ReadAsync(context.Layout, providers.Appointed(), chosen, cancellationToken).ConfigureAwait(false);
+        // The machine's gh logins as the session holds them, read once in it: the keys are read of them, and the step's
+        // search renews by them.
+        var reader = new Web.Search.WebSearchKeys(keys, gh, clock);
+        var logins = reader.Logins();
+        var read = await reader.ReadAsync(context.Layout, providers.Appointed(), chosen, cancellationToken, logins).ConfigureAwait(false);
 
-        return (AgentWebSearch.Of(sources, step.Search, read), Web.Search.WebSearchKeys.Mask(chosen, read));
+        return (AgentWebSearch.Of(sources, step.Search, read), Web.Search.WebSearchKeys.Mask(chosen, read), logins);
     }
 
     /// <summary>
@@ -1070,7 +1193,8 @@ public sealed class ReasonStepRunner(
     /// <summary>
     /// The paths this agent changed, as the continuation record lists them: the paths its folds wrote into the main
     /// tree (the run's ledger of its folds) and the paths its worktree holds that no fold has taken - what a fold of
-    /// the agent would weigh, by the fold's own rule - an agent with no worktree having changed none beyond its folds.
+    /// the agent would weigh, by the fold's own rule - an agent that only reads having changed none: nothing of its tree
+    /// is ever folded, and what it wrote there is discarded as each of its steps starts.
     /// </summary>
     /// <param name="layout">The run's own paths.</param>
     /// <param name="agent">The agent the step works as.</param>
@@ -1083,7 +1207,7 @@ public sealed class ReasonStepRunner(
 
         // The worktree as the repository holds it, resolved from the record's path under the worktrees root: the paths
         // it holds that no fold has taken are what a fold of the agent would weigh.
-        if (store.ReadAgent(layout, agent) is not { } record || record.WorktreePath(context.Layout) is not { } worktree || gitClient is null)
+        if (store.ReadAgent(layout, agent) is not { Reads: false } record || record.WorktreePath(context.Layout) is not { } worktree)
         {
             return folded;
         }

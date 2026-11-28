@@ -45,6 +45,20 @@ holds to it.
 
 Where a line says that a step left no output, that thing was not read or did not run in this run: it is unknown, and never a pass.
 
+## What this run owes its next round
+
+The issues this run owes its next round, each with its id and its size - the files its fix touches, what must be
+built, and what must be measured first:
+
+{run.nextRound}
+
+An empty list means none is owed. Each issue listed becomes a work item of the plan's first round, listed and started
+first, built beside the rest - no other item may need its result. Make it one built to the issue's size - the files its
+fix touches among the paths it owns, what must be built and measured first in its instructions - with its class, for
+it is a defect too and the rules of a class below apply to it, or, where its fix decides nothing, why in noClass; and
+name the issue it settles in `settles`, by its id exactly. The round's check refuses a round whose items leave one
+unsettled.
+
 ## How the tests are run
 
 Each item names the tests its change affects, in tests, one unit to an entry: the test classes that test what the
@@ -65,6 +79,15 @@ for that runner. The units are given to every leg the item is tested on, so each
 leg. A unit may name only tests that are there or that the item writes. One that a leg's own exclusions leave nothing
 of is refused before anything is built, and a person is asked.
 
+## What the recovery is fixing
+
+Every issue that was there before the run that the run has taken, each with its id, what became of it, its title and
+where; empty where none is:
+
+{run.preExisting}
+
+{text.fixes}
+
 ## How recommendations are made in this repository
 
 {recommendations}
@@ -73,9 +96,9 @@ of is refused before anything is built, and a person is asked.
 
 {text.closure}
 
-Where the file above says a heading is empty, the repository has not declared its universe yet: take the axes from what
-the repository builds and tests - its kinds, targets, configurations, formats, entry points, tiers and forms, both
-directions - and name each in the universe of the class it belongs to.
+Where the file above says a heading is empty, the repository has not declared its universe yet: take the values of each
+axis from what the repository builds and tests - its kinds, targets, configurations, formats, entry points, tiers and
+forms, both directions.
 
 ## Close the class, at its one home
 
@@ -87,11 +110,20 @@ For every defect the plan fixes and every behaviour it changes, write the class 
    literal - across every tier, format, target and file kind, never the file the defect was seen in alone. The
    graph's sites first: it joins every place that decides the data - what defines, calls, uses, makes, references,
    inherits, implements or overrides it, every literal that holds it and every key it names - and its coverage lines
-   say what it searched by text alone, for nothing is assumed of a language with no extractor. Its find, node and related beside it for
-   the names and for what reads and calls them, and text search for what the graph does not see, each such text
-   search said in notCovered.
+   say what it searched by text alone, for nothing is assumed of a language with no extractor. Its find, node and
+   related beside it for the names and for what reads and calls them, its impact for everything a change of a node
+   reaches, its around and its outline - of a file or a directory - to know where a node stands before reading any
+   file whole, and text search for what the graph does not see, each such text search said in notCovered.
 4. Record each search: what was searched, how, the query as it was made, and how many places it found.
-5. Write the universe from the axes the repository declares, and the count of their product.
+5. Write the universe: an answer for every axis the closure text lists - your answer's schema refuses a universe that
+   leaves one out - and for each further one it names. The references and the optimised forms it names are no axes:
+   the universe answers neither, for every cell is measured on each of them. An axis the decision ranges over gives
+   its values whole, from a search of the tree for every cell of its kind - for the targets, every file of every
+   service that builds, tests, lints or checks the repository, never only the CI it names first - recorded as a class's
+   searches are, and where the repository declares them; one it does not range over says why, as something an auditor
+   can check in the code. Its cells are the product of the counts of the values of the axes that apply. An axis
+   written from the cells you happened on leaves one out, and an auditor holds the plan back for it, as it does an axis
+   said not to apply that the code shows the decision ranges over.
 6. Where more than one site decides, the action is consolidate: the home decides, every other site reads it, and the
    item owns every path that changes. Patching some of a class's sites is never done; a class with one site names the
    home itself, and its searches prove it is the only one. The site at the home's path and symbol is marked home, and
@@ -119,17 +151,22 @@ and says why in noClass.
    built at the same time: none may need another's result. Leave nothing inside an item that you already know only a
    person can give: ask it now, or, where you may not, leave it out and name it in the summary. A builder that finds
    part of its item cannot be done says so, and a person is asked before anything of the item is folded.
-6. For each item write: instructions a builder with none of this conversation can follow; its definition of done, as
-   statements a check can answer one by one - each behaviour, the test that pins it, and what is true of the tree
-   when the builder reports; the paths it owns and the paths it must not touch; its tests, or why it affects none; what it reuses, by
-   path and for what; what it creates, with why nothing that exists serves and where you searched; and what it
-   replaces because the request asked, by path, with what becomes of the old one.
+6. For each item write: instructions a builder with none of this conversation can follow; its definition of done -
+   each behaviour, the test that pins it, and what is true of the tree when the builder reports - by the rule for a
+   definition of done below, the run's base commit being `{orient.startCommit}`; the paths it owns and the paths it
+   must not touch; its tests, or why it affects none; what it reuses, by path and for what; what it creates, with why
+   nothing that exists serves and where you searched; and what it replaces because the request asked, by path, with
+   what becomes of the old one.
+
+## A definition of done
+
+{text.done}
 
 ## What to return
 
 A summary of the plan, naming each part of the request no item covers, with the reason; the plan's definition of
-done - what holds when the whole plan is built, as statements a check can answer one by one, which the run's final
-audit holds every round against; whether it was built on a plan a person gave or made here; each departure from a
+done - what holds when the whole plan is built, as statements a check can answer one by one, by the same rule, which
+the run's final audit holds every round against; whether it was built on a plan a person gave or made here; each departure from a
 given plan, with its reason; the items, each with its classes or its noClass; and under `scope` an empty list, since
 nothing is being updated.
 
@@ -137,7 +174,13 @@ A machine checks the items before anyone builds them: every name valid, no file 
 every path an item reuses or replaces there in the tree, every item saying what it reuses, creates or replaces, each
 home and site a path inside the tree, each class's home among the item's own paths and there in the tree, a site marked
 home only where it is the home, every other site the item's too, more than one site consolidated at the home, each
-class searched by data its queries name again, the universe holding the axes the repository declares, one class id
-used once, and one home belonging to one item. An independent auditor then checks
+class searched by data its queries name again, each axis of a universe answered one way or the other - values with where
+they are declared, or no value with why - each universe counting the cells its axes that apply make, one class id used
+once, and one home belonging to one item. It reads your answer as you give it: what it finds wrong is told you
+here, in this conversation, to put right in the answer you give again. An independent auditor then checks
 the plan against the code, searching for itself what you say does not exist - the classes above all. Then
 a person approves it, unless they approved it beforehand in what they gave this run.
+
+## Issues that were there before
+
+{text.issuesBefore}

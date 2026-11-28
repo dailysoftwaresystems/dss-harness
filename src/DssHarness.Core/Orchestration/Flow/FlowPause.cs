@@ -45,9 +45,10 @@ public sealed record FlowHandoff(string Text, string By, string? Why = null)
 /// What a run's reasoning has spent against its budget: what the clients reported in tokens and dollars, and the time
 /// reason steps ran - each counted for reason steps alone, an advice among them. Its dollars are the one fold of what
 /// the engine's agents spend (<see cref="FlowDollars"/>): a part whose cost could not be counted leaves them not known
-/// past what was, never charged as nothing. Its tokens and dollars are the sum of the run's instances' measures, charged
-/// with each part where the part is charged to its instance and summed from them again at a resume - with what a build
-/// that kept no measures recorded before them (<see cref="Unmeasured"/>) - never a count of their own.
+/// past what was, never charged as nothing. Its tokens and dollars are the sum of the run's instances' measures and the
+/// run's own (<see cref="RunsOwn"/>), charged with each part where the part is charged to its instance or the run and
+/// summed from them again at a resume - with what a build that kept no measures recorded before them
+/// (<see cref="Unmeasured"/>) - never a count of their own.
 /// </summary>
 public sealed class FlowBudgetSpent
 {
@@ -56,6 +57,13 @@ public sealed class FlowBudgetSpent
     /// no instance's measure holds and the run's total carries whole; null where every part was measured.
     /// </summary>
     public FlowUnmeasuredSpend? Unmeasured { get; internal set; }
+
+    /// <summary>
+    /// The run's own measure: what the advisor spent recommending on the run's own question - its budget's - which no
+    /// step asked, so no instance's measure holds it; its <see cref="FlowStepMeasure.Advice"/> alone is ever set, and
+    /// <c>flow.json</c> keeps it beside the steps' (<see cref="FlowBudgetRecord.Advice"/>). Null where none was spent.
+    /// </summary>
+    public FlowStepMeasure? RunsOwn { get; internal set; }
 
     /// <summary>What the reason steps cost, as far as each part's cost could be counted, and why the rest is not known where it is not.</summary>
     public FlowDollars Dollars { get; internal set; }
@@ -83,7 +91,7 @@ public sealed class FlowBudgetSpent
     /// What was spent as it stands now, as <c>flow.json</c> holds it: a value, so a snapshot taken now and written later -
     /// held while a session's start is - says the run as it stood when it was taken, never what was spent since.
     /// </summary>
-    public FlowBudgetRecord Recorded() => new(Usd, Tokens, Minutes, Uncounted, ReserveMetAt, Unmeasured);
+    public FlowBudgetRecord Recorded() => new(Usd, Tokens, Minutes, Uncounted, ReserveMetAt, Unmeasured, RunsOwn?.Advice);
 
     /// <summary>Charges one part of the run's reasoning - a turn of a reason step, an advice - by the one fold of its dollars.</summary>
     /// <param name="tokens">The tokens it used.</param>
@@ -96,9 +104,10 @@ public sealed class FlowBudgetSpent
 }
 
 /// <summary>
-/// The bound in dollars an agent of the run is held to: its own, or what is left of the run's budget before its reserve
-/// where that is less - the one place the two meet, for a reason step's agent and the advisor's alike - so one long
-/// launch cannot spend through the reserve, which is what the handoffs are written in.
+/// The bound in dollars a reason step's agent is held to: its own, or what is left of the run's budget before its
+/// reserve where that is less - the one place the two meet - so one long launch cannot spend through the reserve, which
+/// is what the handoffs are written in. The advisor is never held to it: an advice is bounded by its own definition
+/// alone, so a question raised past the reserve is recommended as any other is (<see cref="AdvisorRunner"/>).
 /// </summary>
 public static class FlowRunBudget
 {

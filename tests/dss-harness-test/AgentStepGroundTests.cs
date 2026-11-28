@@ -9,13 +9,21 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// The policy's ground of one reason step (<see cref="AgentStepGround"/>): where it works and what it may write - a
-/// worktree agent writes its worktree, a read-only one its work directory alone and reads the main tree - and every
-/// restriction that applies to it, from the configuration, its definition and its step together.
+/// worktree agent writes its worktree, a read-only one its own tree and its work directory and reads the main checkout
+/// too - and every restriction that applies to it, from the configuration, its definition and its step together.
 /// </summary>
 public sealed class AgentStepGroundTests
 {
+    /// <summary>The run's inputs, in the run's directory every workspace here names: a root every agent of the run reads.</summary>
+    private static readonly string Inputs = Path.Combine("C:/source/repo/.orchestrators/r1", "inputs");
+
+    /// <summary>
+    /// An agent whose work is folded writes its worktree and its work directory and reads them, the main checkout unread -
+    /// and reads the run's inputs besides, the copies of the files the run's own file inputs named as it started, which
+    /// its worktree, cut from the run's start commit, does not hold where they were never committed.
+    /// </summary>
     [Fact]
-    public void AnAgentWithAWorktreeWritesIt_AndItsWorkDirectory_TheMainTreeUnread()
+    public void AnAgentWithAWorktreeWritesIt_AndItsWorkDirectory_ReadsTheRunsInputs_TheMainTreeUnread()
     {
         var ground = AgentStepGround.Of(
             new HarnessConfig(),
@@ -26,12 +34,81 @@ public sealed class AgentStepGroundTests
             claudeDirectories: [], credentialPlaces: []);
 
         Assert.Equal("C:/trees/w1", ground.WorkingDirectory);
-        Assert.Equal(["C:/trees/w1", "C:/runs/r1/agents/a1/work"], ground.ReadRoots);
+        Assert.Equal(["C:/trees/w1", "C:/runs/r1/agents/a1/work", Inputs], ground.ReadRoots);
         Assert.Equal(["C:/trees/w1", "C:/runs/r1/agents/a1/work"], ground.WritableRoots);
     }
 
+    /// <summary>
+    /// A run's own file input is decided on an agent's read of the main checkout, built by the one builder of an agent's
+    /// ground: the main checkout its one root and its working directory, nothing written, and every place no agent's read
+    /// reaches as on every agent's ground - the main checkout's credential slots, the Claude Code directories, the places
+    /// the user keeps credentials in - and the configuration's restrictions, so a file input names nothing an agent of the
+    /// run could not read, yet every agent reads its copy.
+    /// </summary>
     [Fact]
-    public void AReadOnlyAgentReadsTheMainTree_AndWritesItsWorkDirectoryAlone()
+    public void AFileInputsGround_IsAnAgentsReadOfTheMainCheckout_WithEveryPlaceNoAgentsReadReaches()
+    {
+        var config = new HarnessConfig { AgentPolicy = new AgentPolicyConfig { Restrictions = ["Read(private/**)"] } };
+        IReadOnlyList<string> claude = ["C:/home/.claude"];
+        IReadOnlyList<DssHarness.Core.Agents.Isolation.HiddenPlace> credentials = [new("C:/source/repo/deploy/keys", Directory: true)];
+
+        var ground = AgentStepGround.OfFileInputs(config, "C:/source/repo", claude, credentials);
+        var agents = AgentStepGround.Of(
+            config,
+            definition: null,
+            Step(),
+            new AgentWorkspace(null, "C:/source/repo/.orchestrators/r1/work/a1", "C:/source/repo", [], "C:/source/repo/.orchestrators/r1/work/a1", "C:/source/repo/.orchestrators/r1"),
+            webSearchGiven: false,
+            claude,
+            credentials,
+            readsOnly: true);
+
+        Assert.Equal("C:/source/repo", ground.WorkingDirectory);
+        Assert.Equal((0, 0), (ground.ReadRoots.Count, ground.WritableRoots.Count));
+        Assert.Null(ground.RunDirectory);
+        Assert.Equal(agents.SlotDirectories, ground.SlotDirectories);
+        Assert.Equal(agents.ClaudeCodeDirectories, ground.ClaudeCodeDirectories);
+        Assert.Equal(agents.CredentialPlaces, ground.CredentialPlaces);
+        Assert.Equal(agents.Restrictions, ground.Restrictions);
+        Assert.Equal([new AgentRestriction("Read(private/**)", AgentPolicySource.Config)], ground.Restrictions);
+        Assert.Contains(AgentCapability.Read, ground.Capabilities);
+    }
+
+    /// <summary>
+    /// A read-only agent works in a tree of its own: it starts there and writes it and its work directory - whatever its
+    /// definition's <c>writes</c> says, for its tree is scratch nothing folds, where it builds and tests - and reads the
+    /// main checkout beside it, whose run records and logs it is pointed at, and the run's inputs; its trees are its own and
+    /// the main checkout, as a builder's are. The advisor working in that tree, a run that only reads, writes its work
+    /// directory alone.
+    /// </summary>
+    [Fact]
+    public void AReadOnlyAgentWorksInItsOwnTree_WritesItAndItsWorkDirectory_AndReadsTheMainCheckout()
+    {
+        var tree = new AgentWorkspace("C:/trees/o1/a1", "C:/runs/r1/agents/a1/work", "C:/source/repo", [], "C:/trees/o1/a1", "C:/source/repo/.orchestrators/r1") { OnlyReads = true };
+        var writesNothing = new AgentDefinition("reviewer", "what it is for", "the system prompt", Writes: false);
+
+        foreach (var definition in new[] { Definition(), writesNothing })
+        {
+            var ground = AgentStepGround.Of(new HarnessConfig(), definition, Step(), tree, webSearchGiven: false, claudeDirectories: [], credentialPlaces: []);
+
+            Assert.Equal("C:/trees/o1/a1", ground.WorkingDirectory);
+            Assert.Equal(["C:/trees/o1/a1", "C:/runs/r1/agents/a1/work", "C:/source/repo", Inputs], ground.ReadRoots);
+            Assert.Equal(["C:/trees/o1/a1", "C:/runs/r1/agents/a1/work"], ground.WritableRoots);
+            Assert.Equal(["C:/trees/o1/a1", "C:/source/repo"], ground.Trees);
+        }
+
+        var advice = AgentStepGround.Of(new HarnessConfig(), writesNothing, Step(), tree with { WorkDirectory = "C:/runs/r1/advice/1/work" }, webSearchGiven: false, claudeDirectories: [], credentialPlaces: [], readsOnly: true);
+
+        Assert.Equal(["C:/runs/r1/advice/1/work"], advice.WritableRoots);
+        Assert.Equal(["C:/trees/o1/a1", "C:/runs/r1/advice/1/work", "C:/source/repo", Inputs], advice.ReadRoots);
+    }
+
+    /// <summary>
+    /// A run with no tree - a read-only agent whose record an older tool wrote, naming none, until its step's start makes
+    /// one - reads the main checkout and the run's inputs, and writes its work directory alone.
+    /// </summary>
+    [Fact]
+    public void ARunWithNoTree_ReadsTheMainCheckout_AndWritesItsWorkDirectoryAlone()
     {
         var ground = AgentStepGround.Of(
             new HarnessConfig(),
@@ -41,7 +118,7 @@ public sealed class AgentStepGroundTests
             webSearchGiven: false,
             claudeDirectories: [], credentialPlaces: []);
 
-        Assert.Equal(["C:/runs/r1/agents/a1/work", "C:/source/repo"], ground.ReadRoots);
+        Assert.Equal(["C:/runs/r1/agents/a1/work", "C:/source/repo", Inputs], ground.ReadRoots);
         Assert.Equal(["C:/runs/r1/agents/a1/work"], ground.WritableRoots);
     }
 
@@ -109,7 +186,7 @@ public sealed class AgentStepGroundTests
         {
             Assert.Equal(["C:/runs/r1/agents/a1/work"], ground.WritableRoots);
             Assert.Equal("C:/trees/w1", ground.WorkingDirectory);
-            Assert.Equal(["C:/trees/w1", "C:/runs/r1/agents/a1/work"], ground.ReadRoots);
+            Assert.Equal(["C:/trees/w1", "C:/runs/r1/agents/a1/work", Inputs], ground.ReadRoots);
         }
     }
 
@@ -140,7 +217,7 @@ public sealed class AgentStepGroundTests
     /// The tool's own state a step's ground guards is each state path under the tree it works in - the configured
     /// worktrees root among them - and always under the main checkout, whose run records and other worktrees a command
     /// reaches from the worktree; never either tree itself. Both trees are the ones whose git's own files no command
-    /// writes; a read-only step's one tree is the main checkout.
+    /// writes; a run with no tree of its own has the main checkout as its one tree.
     /// </summary>
     [Fact]
     public void TheStateGuarded_IsEachStatePathUnderEachTree_TheMainCheckoutAlways_NeverATreeItself()
@@ -153,7 +230,7 @@ public sealed class AgentStepGroundTests
             ground.StateDirectories);
         Assert.Equal(["C:/trees/w1", "C:/source/repo"], ground.Trees);
 
-        var readOnly = AgentStepGround.Of(
+        var treeless = AgentStepGround.Of(
             new HarnessConfig(),
             Definition(),
             Step(),
@@ -161,8 +238,8 @@ public sealed class AgentStepGroundTests
             webSearchGiven: false,
             claudeDirectories: [], credentialPlaces: []);
 
-        Assert.Equal([.. statePaths.Select(path => Path.Combine("C:/source/repo", path))], readOnly.StateDirectories);
-        Assert.Equal(["C:/source/repo"], readOnly.Trees);
+        Assert.Equal([.. statePaths.Select(path => Path.Combine("C:/source/repo", path))], treeless.StateDirectories);
+        Assert.Equal(["C:/source/repo"], treeless.Trees);
     }
 
     /// <summary>

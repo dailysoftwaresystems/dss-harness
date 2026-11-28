@@ -111,7 +111,7 @@ public sealed class FlowStepStartTests
     }
 
     private static FlowCoordinator Coordinator(WorkflowDefinition definition, Runner runner, IFlowRecords? records = null, IReadOnlyDictionary<string, string>? models = null, IReadOnlyDictionary<string, string>? inputs = null, FlowRunPlace? place = null, HarnessConfig? config = null, Func<string?, string, string>? workflowFile = null)
-        => new(definition, runner, new ConfiguredRunnerFacts(config ?? new HarnessConfig()), new JumpingClock(), inputs, records, runName: "r1", place: place, agentModels: models, workflowFile: workflowFile);
+        => TestAdvice.Coordinator(definition, runner, new ConfiguredRunnerFacts(config ?? new HarnessConfig()), new JumpingClock(), inputs, records, runName: "r1", place: place, agentModels: models, workflowFile: workflowFile);
 
     /// <summary>
     /// A create-agent step is named a1 and given the model resolved for it, both written to its record before its runner
@@ -584,7 +584,7 @@ public sealed class FlowStepStartTests
             .On("broken", _ => Pushed(FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "rejected", output: JsonNode.Parse("""{"pushed": false, "sha": "999"}"""))))
             .On("unsure", _ => Pushed(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"pushed": false, "sha": null}"""))));
 
-        _ = await new FlowCoordinator(definition, runner, new ConfiguredRunnerFacts(new HarnessConfig()), clock, null, null, runName: "r1").RunAsync(Token);
+        _ = await TestAdvice.Coordinator(definition, runner, new ConfiguredRunnerFacts(new HarnessConfig()), clock, null, null, runName: "r1").RunAsync(Token);
 
         Assert.Equal("222", runner.Runs.Single(run => run.Instance == "wait").Read!["commit"].AsTemplateText());
 
@@ -608,7 +608,7 @@ public sealed class FlowStepStartTests
                 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "rejected", output: JsonNode.Parse("""{"pushed": false, "sha": "lost"}"""))
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"pushed": true, "sha": "early"}"""))))
             .On("late", _ => PushedLater(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"pushed": true, "sha": "late"}"""))));
-        var coordinator = new FlowCoordinator(again, pushes, new ConfiguredRunnerFacts(new HarnessConfig()), later, null, null, runName: "r1");
+        var coordinator = TestAdvice.Coordinator(again, pushes, new ConfiguredRunnerFacts(new HarnessConfig()), later, null, null, runName: "r1");
 
         _ = await coordinator.RunAsync(Token);
         Assert.True(coordinator.TryAnswer(Assert.Single(coordinator.OpenQuestions).Id, "retry", out _));
@@ -1237,5 +1237,109 @@ public sealed class FlowStepStartTests
         }
 
         Assert.Null(runner.Runs.Single(run => run.Instance == "other").AnswerHolds);
+    }
+
+    /// <summary>
+    /// A reason step whose answer a check declared beside it judges is handed that check where it starts, as the run would
+    /// start the check then: a class closure whose record reads the builder's latest closure - handed to the builder and to
+    /// the step that goes on with its work alike - its record and arms filled from the answer and its classes read now, the
+    /// agent its in names; and a plan check whose items and scope read the plan's latest output. A check declared in another
+    /// scope, which reads the answer only once that scope has ended, is handed to nobody; a reason step no check judges is
+    /// handed none.
+    /// </summary>
+    [Fact]
+    public async Task AReasonStepWhoseAnswerACheckBesideItJudges_IsHandedThatCheckWhereItStarts()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: made
+                type: create-agent
+                agent: worker.md
+              - name: orient
+                type: orient
+              - name: implement
+                type: reason
+                in: made
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [made, orient]
+              - name: closure
+                type: class-closure
+                in: made
+                classes: 'orient.classes'
+                record: 'implement.latest.closure'
+                arms: 'implement.latest.arms'
+                dependsOn: [implement]
+              - name: mend
+                type: reason
+                resume: implement
+                dependsOn: [closure]
+                prompt: work.md
+                outputs: work.json
+              - name: planning
+                dependsOn: [mend]
+                steps:
+                  - name: plan
+                    type: reason
+                    prompt: plan.md
+                    outputs: plan.json
+                  - name: check
+                    type: validate-plan
+                    dependsOn: [plan]
+                    items: 'plan.latest.items'
+                    scope: 'plan.latest.scope'
+              - name: late-check
+                type: validate-plan
+                items: 'planning.plan.latest.items'
+                dependsOn: [planning]
+              - name: other
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [late-check]
+            """);
+        var runner = new Runner()
+            .On("orient", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"classes":[{"id":"c-rate"}]}""")))
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"items":[],"scope":[]}""")))
+            .On("implement", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"closure":[],"arms":[]}""")))
+            .On("mend", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"closure":[],"arms":[]}""")));
+        var place = new FlowRunPlace("/repo", "r1", "abc", definition);
+        var coordinator = Coordinator(definition, runner, place: place);
+
+        _ = await coordinator.RunAsync(Token);
+
+        var made = coordinator.Instances["made"].Made;
+        Assert.NotNull(made);
+
+        // The builder and the step that goes on with its work are each handed the class closure, and nothing else.
+        foreach (var builder in new[] { "implement", "mend" })
+        {
+            var check = Assert.Single(runner.Runs.Single(run => run.Instance == builder).AnswerChecks);
+
+            Assert.Equal(("closure", "closure", made), (check.Run.Instance, check.Run.Path, check.Run.WorksIn));
+            Assert.Same(place, check.Run.Place);
+            Assert.Equal(["arms", "record"], check.Answered.Keys.Order(StringComparer.Ordinal));
+            Assert.Equal(["closure"], check.Answered["record"]);
+            Assert.Equal(["arms"], check.Answered["arms"]);
+            Assert.Equal(["classes"], check.Run.Read!.Keys);
+            Assert.Equal("""[{"id":"c-rate"}]""", check.Run.Read["classes"].ToNode()!.ToJsonString());
+
+            // What the check reads of an answer is the answer's own members, under the keys it reads them by.
+            var read = check.ReadOf(JsonNode.Parse("""{"closure":[{"class":"c-rate"}],"arms":["a-1"]}""")!);
+            Assert.Equal(("""[{"class":"c-rate"}]""", """["a-1"]""", """[{"id":"c-rate"}]"""), (read["record"].ToNode()!.ToJsonString(), read["arms"].ToNode()!.ToJsonString(), read["classes"].ToNode()!.ToJsonString()));
+        }
+
+        // The plan is handed the check beside it, which reads its items and its scope - and not the one after its group.
+        var planCheck = Assert.Single(runner.Runs.Single(run => run.Instance == "planning.plan").AnswerChecks);
+
+        Assert.Equal(("planning.check", "planning.check"), (planCheck.Run.Instance, planCheck.Run.Path));
+        Assert.Equal(["items", "scope"], planCheck.Answered.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["items"], planCheck.Answered["items"]);
+        Assert.Equal(["scope"], planCheck.Answered["scope"]);
+        Assert.Empty(planCheck.Run.Read!);
+        Assert.True(planCheck.ReadOf(JsonNode.Parse("""{"items":[{"name":"one"}]}""")!)["scope"].IsMissing);
+
+        Assert.Empty(runner.Runs.Single(run => run.Instance == "other").AnswerChecks);
     }
 }

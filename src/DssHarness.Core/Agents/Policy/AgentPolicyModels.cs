@@ -102,8 +102,8 @@ public sealed record AgentRestriction(string Text, AgentPolicySource Source);
 /// until then nothing builds one but a test.
 /// </summary>
 /// <param name="WorkingDirectory">
-/// Where the agent's commands and relative paths resolve: its worktree, its work directory, or the
-/// run's directory for the reporter.
+/// Where the agent's commands and relative paths resolve: its worktree - an agent that only reads
+/// has one of its own too - or its own work directory for the reporter.
 /// </param>
 /// <param name="ReadRoots">
 /// Every root the agent reads from, its working directory among them: a <c>Read</c> rule's pattern is
@@ -143,8 +143,8 @@ public sealed record AgentRestriction(string Text, AgentPolicySource Source);
 /// refuses one, and so does the ground.
 /// </param>
 /// <param name="Writes">
-/// The step's <c>writes</c>, its patterns relative to its worktree: the one source that narrows,
-/// for where a step has it, a write under its worktree to the paths its patterns name. Null where
+/// The step's <c>writes</c>, its entries read from its worktree's root (<see cref="Repository.GlobPattern.FromRoot"/>):
+/// the one source that narrows, for where a step has it, a write under its worktree to the paths its entries name. Null where
 /// the step narrows nothing; never empty, for an empty list would read as no narrowing - a flow
 /// refuses one, and so does the ground.
 /// </param>
@@ -225,6 +225,23 @@ public sealed record AgentPolicyGround(
     /// launches and their children use, held for the run's life: null for a side-task's ground, which belongs to no run.
     /// </summary>
     public string? RunDirectory { get; init; }
+
+    /// <summary>
+    /// What the step's worktree held untracked as the step's run began (<see cref="AgentStepStart"/>), where its
+    /// <see cref="Writes"/> narrow what it may write there: a delete outside them takes back what the step made itself - a
+    /// path of the worktree git does not track that this record does not hold - and nothing else
+    /// (<see cref="AgentPolicy.Delete"/>). Null for every other ground, and for a step whose start was not recorded: the
+    /// step's writes, where it has them, narrow its deletes as they narrow its writes.
+    /// </summary>
+    public AgentStepStart? StepStart { get; init; }
+
+    /// <summary>
+    /// The directories of the tree the step's <see cref="Writes"/> are read against: the run's start tree, the one every
+    /// reader of the run's lists of paths asks (<see cref="Orchestration.Flow.FlowRunPlace.Directories"/>), asked what the
+    /// step may write beneath an entry (<see cref="Repository.TreeDirectories.Writing"/>) - never the worktree, which the
+    /// run's own folds rewrite. Null for a ground that names no writes; a ground that names some names it too.
+    /// </summary>
+    public Repository.TreeDirectories? WritesTree { get; init; }
 
     /// <summary>Every capability, in the order a definition names them.</summary>
     public static IReadOnlyList<AgentCapability> EveryCapability { get; } = [AgentCapability.Read, AgentCapability.Write, AgentCapability.Run, AgentCapability.Web];

@@ -14,8 +14,11 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// </summary>
 /// <remarks>
 /// <para>
-/// What is left counts at least the instances that exist and have not ended - a stopped one among them, which runs
-/// again at the resume - and at most those and everything the run may still make by the engine's own bounds and rules
+/// What is left counts at least what keeps the run from done, by the engine's own rule of it
+/// (<see cref="FlowInstance.IsUnended"/>): the instances that exist and have not ended - a stopped one among them, which
+/// runs again at the resume - and what an ending owes the session that goes on, each failure owed and each raise an ending
+/// still owes, named - a raise by the visit the resume raises (<see cref="FlowInstance.RaisesOwed"/>), never beside the
+/// visit it made; and at most those and everything the run may still make by the engine's own bounds and rules
 /// (<see cref="FlowComing"/>): each member of a scope still open not drawn yet, each loop's iterations, each handler's
 /// visits with the steps its <c>then</c> sends the run back over, and each visit the recovery can still make for a
 /// failure with the steps it sends the run back over - each bound widened by what the run's answers and plan updates
@@ -31,11 +34,13 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// them. Its lower end lays the instances that are left along what depends on what, as the engine orders them - so work
 /// that runs side by side is counted once - each at its step's shortest time, and a step in progress with what is left
 /// of that; its upper end sums every instance that is left and everything the run may still make, each at its longest,
-/// one after another. A step none of whose instances has ended <c>Done</c> has no time to go by:
-/// its instances are counted and named, and are in neither end. It leaves out, and says that it does, the time a person
-/// takes to answer and a wait for room - a claim, the run to be quiet, a counter of its limits - as the admission that
-/// wrote the wait classes it (<see cref="FlowWaits"/>). Where nothing has ended, or the run has ended - done or failed,
-/// for a stopped run goes on at its resume - there is no estimate, and the facts say which.
+/// one after another - a handler an ending owes a raise among them, as the instance the resume raises. A step none of
+/// whose instances has ended <c>Done</c> has no time to go by: its instances are counted and named, and are in neither
+/// end; so is a failure owed to the session that goes on, which its handlers, its policy or the recovery decide. It leaves
+/// out, and says that it does, the time a person takes to answer and a wait for room - a claim, the run to be quiet, a
+/// counter of its limits - as the admission that wrote the wait classes it (<see cref="FlowWaits"/>). Where nothing has
+/// ended, where nothing is left - nothing keeps the run from done - or where the run has ended - done or failed, for a
+/// stopped run goes on at its resume - there is no estimate, and the facts say which.
 /// </para>
 /// </remarks>
 public static class FlowStatus
@@ -68,7 +73,7 @@ public static class FlowStatus
         var rows = new List<(string Label, IReadOnlyList<string> Lines)>
         {
             ("running", Running(flow, asOf)),
-            ("waits", Waits(flow, questions, updates)),
+            ("waits", Waits(flow, questions, updates, engine)),
             ("done", Done(definition, flow)),
             ("left", Left(definition, flow, questions, updates)),
             ("estimate", Estimate(definition, flow, questions, updates, asOf)),
@@ -103,18 +108,21 @@ public static class FlowStatus
     }
 
     /// <summary>
-    /// What the run waits for: each open question with since when and the command that answers it, a plan update under
-    /// way or queued, each instance that waits on another or on a claim or room, and a <c>ci-wait</c> with the commit it
-    /// watches.
+    /// What the run waits for: each open question with since when and the next step it takes, by the one rule of it over
+    /// what the engine is doing (<see cref="FlowAnswerRules.NextStepOf"/>), in the one wording of it - its answer; its
+    /// answer taken now, ending the asking, while a live engine's advisor seeks its recommendation; or, where it still owes
+    /// the recommendation it is answered with, who seeks it - the pause once complete, the resume, or the resume once a
+    /// stopping engine has gone - with <c>abort</c> taken now - a plan update under way or queued, each instance that waits
+    /// on another or on a claim or room, and a <c>ci-wait</c> with the commit it watches.
     /// </summary>
-    private static IReadOnlyList<string> Waits(FlowFile flow, FlowQuestionsFile? questions, FlowUpdatesFile? updates)
+    private static IReadOnlyList<string> Waits(FlowFile flow, FlowQuestionsFile? questions, FlowUpdatesFile? updates, FlowEngineState engine)
     {
         var waits = new List<string>();
 
         foreach (var question in questions?.Open ?? [])
         {
             waits.Add($"question {question.Id} ({question.Kind}) since {Clock(question.RaisedAt)}: "
-                + OrchestrationReports.Line(FlowService.AnswerCommand, flow.Run, "<answer>", "--question", question.Id));
+                + FlowAnswerRules.NextStepSaid(FlowAnswerRules.NextStepOf(question, engine), flow.Run, question.Id, OrchestrationReports.Line));
         }
 
         foreach (var update in updates?.Updates ?? [])
@@ -165,23 +173,29 @@ public static class FlowStatus
     }
 
     /// <summary>
-    /// What is left, at least and at most, with the bound that gave the most - and what may still come named: what no
-    /// numeric bound holds, a question open at a bound, whose answer can grant more past it, a piece of a plan update not
-    /// carried out to an end, and an iteration an update owes its loop and has not been given.
+    /// What is left, at least and at most, with the bound that gave the most - at least what keeps the run from done, a
+    /// failure owed to the session that goes on and a handler an ending owes a raise named among it - and what may still
+    /// come named: what no numeric bound holds, a question open at a bound, whose answer can grant more past it, a piece of
+    /// a plan update not carried out to an end, and an iteration an update owes its loop and has not been given.
     /// </summary>
     private static IReadOnlyList<string> Left(WorkflowDefinition definition, FlowFile flow, FlowQuestionsFile? questions, FlowUpdatesFile? updates)
     {
         var left = flow.Steps.Where(IsLeft).ToList();
+        var (failures, raises) = Owed(definition, flow);
         var coming = new FlowComing(definition, flow, left, questions, updates);
         var numeric = coming.Count;
         var unbounded = coming.Unbounded.Count > 0;
         var bound = definition.MaxInstances ?? WorkflowDefinition.DefaultMaxInstances;
         var room = (long)Math.Max(0, bound - flow.Steps.Count);
 
+        // What is left at least is what keeps the run from done, by the engine's own rule of it: each instance left, and
+        // what an ending owes the session that goes on - a failure owed, and each handler owed its raise.
+        var least = left.Count + failures.Count + raises.Count;
+
         // What no numeric bound holds is bounded only by the run's own bound of instances: where any is, the run's bound
         // is what caps the most. A question open at a bound is a person's to answer, and its more grants past the bound,
         // which no record holds yet.
-        var most = left.Count + (unbounded || numeric > room ? room : numeric);
+        var most = least + (unbounded || numeric > room ? room : numeric);
         var asking = (questions?.Open ?? []).Where(question => FlowGrants.Granting.Contains(question.Kind, StringComparer.Ordinal)).ToList();
         var said = numeric == 0 && !unbounded && asking.Count == 0
             ? "nothing more can come"
@@ -189,7 +203,18 @@ public static class FlowStatus
                 ? $"the engine's bounds and the run's own bound of at most {bound.ToString(CultureInfo.InvariantCulture)} instances"
                 : "the engine's bounds";
 
-        var line = $"at least {Count(left.Count, "step instance")}, at most {Count(most, "step instance")} ({said})";
+        var line = $"at least {Count(least, "step instance")}, at most {Count(most, "step instance")} ({said})";
+
+        if (failures.Count > 0)
+        {
+            line += $"; {FailuresOwed(failures.Count)}{Named([.. failures.Select(step => step.Instance)])}";
+        }
+
+        if (raises.Count > 0)
+        {
+            // Each named by the visit the resume raises, never beside the visit a raise made, which is among what is left.
+            line += $"; {Count(raises.Count, "handler")} an ending owes a raise{Named([.. raises.Select(step => step.Instance)])}";
+        }
 
         foreach (var why in coming.Unbounded)
         {
@@ -211,9 +236,9 @@ public static class FlowStatus
             line += $"; {Count(pieces.Count, "piece")} of plan updates not carried out to an end yet";
         }
 
-        foreach (var owed in (updates?.Updates ?? []).Where(update => update.AddedIteration is { } added && flow.Steps.All(step => !string.Equals(step.Instance, added, StringComparison.Ordinal))))
+        foreach (var owed in (updates?.Updates ?? []).Where(update => update.StandingIteration is { } added && flow.Steps.All(step => !string.Equals(step.Instance, added, StringComparison.Ordinal))))
         {
-            line += $"; update {owed.Id} added {FlowReports.IterationSaidOf(owed.AddedIteration!)}, and it is not made yet";
+            line += $"; update {owed.Id} added {FlowReports.IterationSaidOf(owed.StandingIteration!)}, and it is not made yet";
         }
 
         return [line];
@@ -231,8 +256,11 @@ public static class FlowStatus
         }
 
         var left = flow.Steps.Where(IsLeft).ToList();
+        var (failures, raises) = Owed(definition, flow);
 
-        if (left.Count == 0)
+        // Nothing is left only where nothing keeps the run from done, by the engine's own rule of it: a failure owed to the
+        // session that goes on, or a handler owed its raise, is left as an instance that has not ended is.
+        if (left.Count == 0 && failures.Count == 0 && raises.Count == 0)
         {
             return ["none: nothing is left"];
         }
@@ -245,12 +273,20 @@ public static class FlowStatus
         }
 
         // A step none of whose instances has ended Done has no time to go by: its instances are counted and named, and
-        // are in neither end.
-        var working = left.Where(step => !step.Group).ToList();
+        // are in neither end. A handler owed its raise is the instance the session that goes on raises, timed by its step.
+        var working = left.Where(step => !step.Group).Concat(raises).ToList();
         // A step that ended an instance Done is measured whatever its time: the records keep times to the second, so one
         // that ended within the second it began took no time they can tell, and still ended Done.
         var named = working.Select(step => step.Step).Where(path => !times.ContainsKey(path)).Distinct(StringComparer.Ordinal).ToList();
         var measured = working.Where(step => times.ContainsKey(step.Step)).ToList();
+
+        // A failure owed is decided by its handlers, its policy or the recovery as the session that goes on begins, and no
+        // time of this run says what that makes: it is named, and in neither end.
+        if (measured.Count == 0 && failures.Count > 0)
+        {
+            return [$"none: what is left has no time of this run to go by - {FailuresOwed(failures.Count)}{Named([.. failures.Select(step => step.Instance)])}"
+                + (named.Count > 0 ? $"; and step instances of steps that have ended no instance Done in this run{Named(named)}" : string.Empty)];
+        }
 
         if (measured.Count == 0 && named.Count > 0)
         {
@@ -266,6 +302,11 @@ public static class FlowStatus
         if (coming.Unbounded.Count > 0)
         {
             line += "; what no numeric bound holds is not in the estimate";
+        }
+
+        if (failures.Count > 0)
+        {
+            line += $"; {FailuresOwed(failures.Count)}, {(failures.Count == 1 ? "is" : "are")} not in the estimate{Named([.. failures.Select(step => step.Instance)])}";
         }
 
         if (named.Count > 0)
@@ -448,29 +489,89 @@ public static class FlowStatus
     internal static bool HasEnded(string status)
         => status is nameof(FlowRunStatus.Done) or nameof(FlowRunStatus.Failed);
 
-    /// <summary>The states an instance has not ended in: a stopped one among them, which runs again at the resume.</summary>
-    private static readonly IReadOnlyList<string> LeftStates =
-        [nameof(FlowInstanceState.NotStarted), nameof(FlowInstanceState.Running), nameof(FlowInstanceState.Paused), nameof(FlowInstanceState.Stopped)];
-
-    /// <summary>The states an instance has ended in.</summary>
-    private static readonly IReadOnlyList<string> EndedStates =
-        [nameof(FlowInstanceState.Done), nameof(FlowInstanceState.Failed), nameof(FlowInstanceState.Skipped), nameof(FlowInstanceState.NotRun)];
-
     /// <summary>
-    /// Whether <paramref name="step"/> has not ended: one in a state an instance has not ended in, save a visit a plan
-    /// update ended - stopped for the update, its work done again or taken back in the instance visited in its place -
-    /// which no session runs again, and which has ended. The one rule what is left, what waits and what is done read.
+    /// Whether <paramref name="step"/> has not ended - not started, in flight, paused, or stopped by a pause or a stop, which
+    /// runs it again at the resume; never a visit a plan update ended, its work done again or taken back in the instance
+    /// visited in its place - by the engine's own rule of what is left of a run (<see cref="FlowInstance.IsLeft"/>), read of
+    /// the step's record. The one rule what is left, what waits and what is done read.
     /// </summary>
     private static bool IsLeft(FlowStepRecord step)
-        => LeftStates.Contains(step.State) && !EndedForAnUpdate(step);
+        => StateOf(step) is { } state && FlowInstance.IsLeft(state, step.EndedFor);
 
-    /// <summary>Whether <paramref name="step"/> has ended: in a state an instance has ended in, or a visit a plan update ended.</summary>
+    /// <summary>
+    /// What an ending owes the session that goes on, as the run's records hold it, by the engine's own rule of what keeps a
+    /// run from done (<see cref="FlowInstance.IsUnended"/>, <see cref="FlowInstance.RaisesOwed"/>) - the rest of it,
+    /// each instance left, is <see cref="IsLeft"/>'s: each instance that ended with its failure owed, which its handlers,
+    /// its policy or the recovery decide, in the order the records hold them; and each raise an ending still owes, as the
+    /// instance the resume raises - its id the next visit of the handler beside its source, its step the handler's
+    /// declaration, not started - never one whose visit the ending raised is in the records, which is counted as itself.
+    /// </summary>
+    private static (IReadOnlyList<FlowStepRecord> Failures, IReadOnlyList<FlowStepRecord> Raises) Owed(WorkflowDefinition definition, FlowFile flow)
+    {
+        var failures = new List<FlowStepRecord>();
+        var raises = new List<FlowStepRecord>();
+
+        // The records of each scope's members by name, as the engine holds a scope's visits: which visit of a handler an
+        // ending raised, and how many visits of it the scope holds.
+        var members = flow.Steps.ToLookup(step => MemberKey(step.Instance));
+
+        foreach (var step in flow.Steps)
+        {
+            if (StateOf(step) is { } state && !FlowInstance.IsLeft(state, step.EndedFor) && FlowInstance.IsUnended(state, step.EndedFor, step.FailureOf()))
+            {
+                failures.Add(step);
+            }
+
+            if (step.Handlers is not { Count: > 0 } handlers || FlowScope.At(step.Step, definition) is null)
+            {
+                continue;
+            }
+
+            var beside = MemberKey(step.Instance).Scope;
+            var standing = StateOf(step) ?? FlowInstanceState.NotStarted;
+
+            // A visit raised for this ending is one raised for the attempt the source is in, read by the engine's own rule
+            // of which attempt a raise answered - the attempt a resume wrote into the raise's record once it read it.
+            foreach (var (handler, id) in FlowInstance.RaisesOwed(
+                step.Instance,
+                standing,
+                handlers,
+                handler => members[(beside, handler)].Any(visit => string.Equals(visit.RaisedBy, step.Instance, StringComparison.Ordinal)
+                    && FlowInstance.AttemptRaisedFor(visit.RaisedByAttempt, standing, step.Attempt, step.EndedFor, step.FailureOf(), step.EndedByQuestion) == step.Attempt),
+                handler => members[(beside, handler)].Select(visit => FlowInstanceId.VisitOf(visit.Instance)).DefaultIfEmpty(0).Max()))
+            {
+                raises.Add(new FlowStepRecord(
+                    id,
+                    FlowInstanceId.SiblingOf(step.Step, handler),
+                    Group: false,
+                    nameof(FlowInstanceState.NotStarted),
+                    Attempt: 1,
+                    Visit: FlowInstanceId.VisitOf(id),
+                    Answers: [],
+                    WaitsOn: []));
+            }
+        }
+
+        return (failures, raises);
+
+        static (string Scope, string Name) MemberKey(string instance)
+        {
+            var (scope, name, _) = FlowInstanceId.MemberOf(instance);
+            return (scope, name);
+        }
+    }
+
+    /// <summary>The failures owed to the session that goes on, counted, as the facts say them.</summary>
+    private static string FailuresOwed(int count)
+        => $"{Count(count, "failure")} owed to the session that goes on, which {(count == 1 ? "its" : "their")} handlers, {(count == 1 ? "its" : "their")} policy or the recovery decide";
+
+    /// <summary>Whether <paramref name="step"/> has ended: done, failed, skipped, never run, or a visit a plan update ended - every state that is not left (<see cref="IsLeft"/>).</summary>
     private static bool IsEnded(FlowStepRecord step)
-        => EndedStates.Contains(step.State) || EndedForAnUpdate(step);
+        => StateOf(step) is { } state && !FlowInstance.IsLeft(state, step.EndedFor);
 
-    /// <summary>Whether <paramref name="step"/> is a visit a plan update ended: stopped for the update, never run again - the engine's own rule (<see cref="FlowInstance.IsStoppedForAnUpdate"/>), read of the step's record.</summary>
-    private static bool EndedForAnUpdate(FlowStepRecord step)
-        => Enum.TryParse<FlowInstanceState>(step.State, out var state) && FlowInstance.IsStoppedForAnUpdate(state, step.EndedFor);
+    /// <summary>The state <paramref name="step"/>'s record names, by the one strict reader of the engine's names (<see cref="FlowRecordNames"/>); null where it names none.</summary>
+    private static FlowInstanceState? StateOf(FlowStepRecord step)
+        => FlowRecordNames.Is<FlowInstanceState>(step.State) ? FlowRecordNames.Of<FlowInstanceState>(step.State) : null;
 
     /// <summary>The rows under the header: each label once, its lines under it, the rest indented to the label's width.</summary>
     private static IReadOnlyList<string> Rows(IReadOnlyList<(string Label, IReadOnlyList<string> Lines)> rows)

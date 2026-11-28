@@ -229,7 +229,8 @@ public sealed class AgentIsolationTests
             ],
             commands.Hidden);
         Assert.Equal(writes.OrderBy(write => write.Path, StringComparer.Ordinal), commands.Writes.OrderBy(write => write.Path, StringComparer.Ordinal));
-        Assert.Equal([worktree, kit.Main, work], commands.Reads);
+        // The run's inputs, the copies of the files its own file inputs named, are read as the agent's roots are.
+        Assert.Equal([worktree, kit.Main, work, kit.Layout.InputsDirectory], commands.Reads);
         Assert.Equal([Path.Combine(claude, AgentIsolation.ShellSnapshots)], commands.Reopened);
         Assert.Equal(kit.Layout.TempDirectory, Path.GetDirectoryName(commands.Temp));
         Assert.Equal([new("TMPDIR", commands.Temp!), .. IsolationCaches.Environment(caches)], commands.Environment);
@@ -1109,6 +1110,17 @@ public sealed class AgentIsolationTests
             (preferred.Refused, preferred.Refusal("'think'"), preferred.Notice));
         Assert.Equal(new AgentIsolationRecord(AgentIsolationMode.Preferred) { None = "bubblewrap is not here" }, preferred.Record);
         Assert.Null(preferred.ForCommands);
+
+        // Under preferred the notice never tells the person to set what is set: the configuration's own way past is left
+        // out of the remedies, and where it was the only one the notice names none.
+        var preferredConfig = new HarnessConfig { AgentPolicy = new AgentPolicyConfig { Isolation = AgentIsolationMode.Preferred } };
+        var both = await new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.None("MXC does not run sh", "update Windows, or " + IsolationPlatform.PreferredRemedy)), new HarnessFactory().GitClient, new HarnessFactory().FileSystem, new HomedPlatform(temp.Path), _ => null)
+            .ForLaunchAsync(preferredConfig, ground, temp.Path, temp.Path, Token);
+        var alone = await new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.None("no sandbox here", IsolationPlatform.PreferredRemedy)), new HarnessFactory().GitClient, new HarnessFactory().FileSystem, new HomedPlatform(temp.Path), _ => null)
+            .ForLaunchAsync(preferredConfig, ground, temp.Path, temp.Path, Token);
+
+        Assert.Equal("agentPolicy.isolation is \"preferred\" and MXC does not run sh, so the agent's commands run on the words policy alone, with no isolation of the operating system's; update Windows", both.Notice);
+        Assert.Equal("agentPolicy.isolation is \"preferred\" and no sandbox here, so the agent's commands run on the words policy alone, with no isolation of the operating system's", alone.Notice);
         Assert.True(new LaunchIsolation("Preferred", null, null, "none here", "install one").Refused);
     }
 

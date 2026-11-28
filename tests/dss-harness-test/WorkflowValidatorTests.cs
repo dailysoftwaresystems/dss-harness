@@ -12,8 +12,15 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class WorkflowValidatorTests
 {
-    /// <summary>Parses a definition, refusing a file that does not read: these tests are of the rules over one that does.</summary>
+    /// <summary>
+    /// Parses a definition, refusing a file that does not read: these tests are of the rules over one that does - given
+    /// the test's advisor where it names none, as a run's definition names one (V43), unless a test reads it bare.
+    /// </summary>
     private static WorkflowDefinition Parse(string text)
+        => TestAdvice.Named(Bare(text));
+
+    /// <summary>Parses a definition as its file says it, an advisor left out where it names none.</summary>
+    private static WorkflowDefinition Bare(string text)
         => WorkflowFileParser.Parse("workflows/implementation/implementation.yml", text);
 
     /// <summary>Every problem of a definition read under a configuration that declares no commit template, as most are.</summary>
@@ -558,7 +565,7 @@ public sealed class WorkflowValidatorTests
 
         Assert.Equal(
             [
-                "step 'reads-but-names-in' reads and names 'in'; a reading step has no worktree to work in, and reads the main tree",
+                "step 'reads-but-names-in' reads and names 'in'; a reading step works as an agent of its own that only reads, never in a worktree a create-agent step made",
                 "step 'resumes' resumes 'implement' and names agent; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, client, tier, model, access, in or writes",
                 "step 'resumes' is independent and resumes 'implement'; independence is never being given the author's work, and resuming is going on with exactly that",
                 "step 'makes-no-agent' names no agent and resumes no step; a reason step runs an agent of its own, or goes on with the agent of the step it resumes",
@@ -570,6 +577,87 @@ public sealed class WorkflowValidatorTests
                 "step 'off-an-agent' resumes 'make', which is a create-agent step; only a reason step leaves a conversation to go on with",
                 "step 'early' resumes 'thought-later', which is declared after it; work cannot be gone on with before it is begun",
                 "step 'quiet' says askRounds without ask; how often a step may ask is a step that asks's own bound",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// A reason step names the commit its tree starts at only where it only reads: one that writes, one that names a
+    /// create-agent step's worktree with in, and one that goes on with the work of a step that writes each work where their
+    /// work is folded from, which nothing brings to a commit, and naming one is refused. A reading step's commit - its own,
+    /// or one going on with a reading step's work - holds, read as the template it is: one that reads a name no step
+    /// declares is refused as any template's is.
+    /// </summary>
+    [Fact]
+    public void TheCommitATreeStartsAt_IsAReadingStepsAlone()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: orient
+                type: orient
+              - name: make
+                type: create-agent
+                agent: implementer
+                dependsOn: [orient]
+              - name: build
+                type: reason
+                agent: implementer
+                access: write
+                in: make
+                dependsOn: [make]
+                commit: '{orient.startCommit}'
+                prompt: prompts/build.md
+                outputs: schemas/build.json
+              - name: peeks
+                type: reason
+                agent: reader
+                in: make
+                dependsOn: [make]
+                commit: '{orient.startCommit}'
+                prompt: prompts/read.md
+                outputs: schemas/read.json
+              - name: goes-on
+                type: reason
+                resume: build
+                dependsOn: [build]
+                commit: '{orient.startCommit}'
+                prompt: prompts/build.md
+                outputs: schemas/build.json
+              - name: reads
+                type: reason
+                agent: reader
+                dependsOn: [orient]
+                commit: '{orient.startCommit}'
+                prompt: prompts/read.md
+                outputs: schemas/read.json
+              - name: reads-on
+                type: reason
+                resume: reads
+                dependsOn: [reads]
+                commit: '{orient.startCommit}'
+                prompt: prompts/read.md
+                outputs: schemas/read.json
+              - name: misreads
+                type: reason
+                agent: reader
+                dependsOn: [orient]
+                commit: '{nowhere.sha}'
+                prompt: prompts/read.md
+                outputs: schemas/read.json
+            """);
+
+        const string OnlyReads = "a tree starts at a commit only where its step only reads - the engine's own read-only agent's, brought there as the step starts - "
+            + "and a worktree a create-agent step made holds work that is folded, which no step brings to a commit";
+
+        Assert.Equal(
+            [
+                $"step 'build' writes and names commit; {OnlyReads}",
+                "step 'peeks' reads and names 'in'; a reading step works as an agent of its own that only reads, never in a worktree a create-agent step made",
+                $"step 'peeks' works in 'make' and names commit; {OnlyReads}",
+                $"step 'goes-on' goes on with the work of 'build', which writes, and names commit; {OnlyReads}",
+                "'misreads.commit' reads 'nowhere.sha', which no step before 'misreads', no input and no param provides",
             ],
             problems);
     }
@@ -1495,31 +1583,24 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
-    /// V43: the advisor recommends on the questions the engine raises itself - never on an agent's own, which carries its
-    /// own recommendation, nor on the run's budget at its reserve, when nothing more is spent on reasoning.
+    /// V43: every question the engine raises is recommended by the advisor before a person is asked it, so a workflow a
+    /// run is started of names one: one that names none is refused, the refusal naming the block init writes as its fix -
+    /// and that block, written as the refusal gives it, is one the file reads and the definition holds with.
     /// </summary>
     [Fact]
-    public void TheAdvisor_RecommendsNeitherOnAnAgentsQuestionNorOnTheRunsBudget()
+    public void AWorkflowThatNamesNoAdvisor_IsRefused_NamingTheBlockInitWritesAsItsFix()
     {
-        const string Advised = """
-            name: default
-            advisor:
-              agent: advisor
-              prompt: prompts/recommend.md
-              tier: best
-              kinds: [ask, loopBound, runBudget]
-            steps:
-              - name: orient
-                type: orient
-            """;
+        const string Steps = "steps:\n  - name: orient\n    type: orient\n";
 
         Assert.Equal(
             [
-                "advisor is to recommend for 'ask': an agent that asks gives its own recommendation",
-                "advisor is to recommend for 'runBudget': a run at its budget's reserve spends nothing more on reasoning, and the advisor reasons",
+                "the workflow names no advisor; every question the engine raises is recommended by the advisor before a person is asked it, so a "
+                + "workflow a run is started of names one. Write the block init writes at the file's top level - advisor: {agent: advisor, tier: high, "
+                + "effort: high, prompt: prompts/recommend.md, retries: 3, backoffSeconds: 30} - with its agent's file and its prompt in the "
+                + "workflow's directory, as 'dssharness export-workflow implementation --shipped --to <dir>' writes them",
             ],
-            Problems(Advised));
-        Assert.Empty(Problems(Advised.Replace("[ask, loopBound, runBudget]", "[loopBound, failure]", StringComparison.Ordinal)));
+            [.. WorkflowValidator.Validate(Bare($"name: default\n{Steps}"), hasCommitTemplate: false)]);
+        Assert.Empty(WorkflowValidator.Validate(Bare($"name: default\n{WorkflowTemplates.ShippedAdvisor}\n{Steps}"), hasCommitTemplate: false));
     }
 
     /// <summary>
@@ -1711,11 +1792,16 @@ public sealed class WorkflowValidatorTests
                     outputs: schemas/think.json
                 """), hasCommitTemplate: false, files: null, providers));
 
-        // A step that names neither a tier nor a model, where the configuration names no default tier.
+        // A step that names neither a tier nor a model, where the configuration names no default tier - the advisor
+        // naming the tier it runs on, so the step alone is said.
         Assert.Equal(
             ["workflow 'default' step 'plan' names neither a tier nor a model, and the configuration names no defaults.agentTier; say one on the step, in its agent's definition, or under defaults.agentTier"],
             WorkflowValidator.Validate(Parse("""
                 name: default
+                advisor:
+                  agent: advisor
+                  prompt: prompts/recommend.md
+                  tier: balanced
                 steps:
                   - name: plan
                     type: reason
@@ -1725,7 +1811,8 @@ public sealed class WorkflowValidatorTests
                 """), hasCommitTemplate: false, files: null, Providers(agentTier: null)));
 
         // Where the config declares no providers at all, the sentence says what to paste - whatever the step names: a
-        // tier, a model, or neither, the default tier then naming a tier no configuration defines.
+        // tier, a model, or neither, the default tier then naming a tier no configuration defines - and the advisor, an
+        // agent the run starts as its steps are, is said as they are.
         var none = AgentProviders.Resolve(new HarnessConfig { Defaults = new HarnessDefaults { AgentTier = "balanced" } }).Providers!;
 
         Assert.Equal(
@@ -1733,6 +1820,7 @@ public sealed class WorkflowValidatorTests
                 "workflow 'default' step 'plan' names tier 'balanced' and the config declares no providers and no tierConfig: dssharness list-agent-providers --template prints them as init writes them into a new config, to paste",
                 "workflow 'default' step 'draft' names model 'glm-5.3' and the config declares no providers and no tierConfig: dssharness list-agent-providers --template prints them as init writes them into a new config, to paste",
                 "workflow 'default' step 'write' names neither a tier nor a model and the config declares no providers and no tierConfig: dssharness list-agent-providers --template prints them as init writes them into a new config, to paste",
+                "advisor names neither a tier nor a model and the config declares no providers and no tierConfig: dssharness list-agent-providers --template prints them as init writes them into a new config, to paste",
             ],
             WorkflowValidator.Validate(Parse("""
                 name: default
@@ -1982,8 +2070,14 @@ public sealed class WorkflowValidatorTests
             ],
             TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["best"] = ["claude-fable-5-1"] },
         };
+        // The advisor signs in as the chain does, so what the steps read is all the check can find.
         var definition = Parse("""
             name: default
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+              client: claude-code
             steps:
               - name: plan
                 type: reason
@@ -2287,6 +2381,10 @@ public sealed class WorkflowValidatorTests
             ["workflow 'flow' step 'idle' makes an agent no reason step works in, which is made for the first model of the default tier, and the configuration names no defaults.agentTier; name the tier there"],
             WorkflowValidator.Validate(Parse("""
                 name: flow
+                advisor:
+                  agent: advisor
+                  prompt: prompts/recommend.md
+                  tier: balanced
                 steps:
                   - name: idle
                     type: create-agent
@@ -2309,6 +2407,10 @@ public sealed class WorkflowValidatorTests
             ],
             WorkflowValidator.Validate(Parse("""
                 name: flow
+                advisor:
+                  agent: advisor
+                  prompt: prompts/recommend.md
+                  tier: balanced
                 steps:
                   - name: think
                     type: reason
@@ -2338,8 +2440,12 @@ public sealed class WorkflowValidatorTests
                 outputs: schemas/think.json
             """;
 
+        // The advisor runs on the same model, and is charged to the budget as the step is: it is said as the step is.
         Assert.Equal(
-            ["workflow 'flow' step 'think' runs under a budget in dollars through client 'glm', and no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss, priceInputHit, priceOutput), and a budget is charged with the cost counted from them"],
+            [
+                "workflow 'flow' step 'think' runs under a budget in dollars through client 'glm', and no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss, priceInputHit, priceOutput), and a budget is charged with the cost counted from them",
+                "advisor runs under a budget in dollars through client 'glm', and no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss, priceInputHit, priceOutput), and a budget is charged with the cost counted from them",
+            ],
             WorkflowValidator.Validate(Parse($"name: flow\nbudget:\n  usd: 5\n{Steps}"), hasCommitTemplate: false, files: null, providers: Providers()));
         Assert.Empty(WorkflowValidator.Validate(Parse($"name: flow\nbudget:\n  tokens: 5000\n{Steps}"), hasCommitTemplate: false, files: null, providers: Providers()));
         Assert.Empty(WorkflowValidator.Validate(Parse($"name: flow\n{Steps}"), hasCommitTemplate: false, files: null, providers: Providers()));
@@ -2354,7 +2460,8 @@ public sealed class WorkflowValidatorTests
     [Fact]
     public void AStepUnderABudgetInDollars_NeedsThePricesItsOwnClientIsBilledBy()
     {
-        const string Budgeted = "name: flow\nbudget:\n  usd: 5\nsteps:\n  - name: think\n    type: reason\n    agent: agents/worker.md\n    prompt: prompts/think.md\n    outputs: schemas/think.json\n";
+        // The advisor runs on GLM's model, priced for a budget, so the step's own prices are all the check can find.
+        const string Budgeted = "name: flow\nadvisor:\n  agent: advisor\n  prompt: prompts/recommend.md\n  model: glm-5.3\nbudget:\n  usd: 5\nsteps:\n  - name: think\n    type: reason\n    agent: agents/worker.md\n    prompt: prompts/think.md\n    outputs: schemas/think.json\n";
         const string Tail = "and a budget is charged with the cost counted from them";
 
         IReadOnlyList<string> Checked(string client, string? cacheTtl = null, string flow = Budgeted)
@@ -3895,8 +4002,7 @@ public sealed class WorkflowValidatorTests
 
     /// <summary>
     /// What the workflow declares is named as everything reads it, and each declaration holds: an input lists each of its
-    /// options once, a param a default supplies is never also required, an output is named as an input is, and the
-    /// advisor is asked only about kinds there are.
+    /// options once, a param a default supplies is never also required, and an output is named as an input is.
     /// </summary>
     [Fact]
     public void TheWorkflowsDeclarations_AreNamedAsReadAndEachHolds()
@@ -3907,7 +4013,6 @@ public sealed class WorkflowValidatorTests
             advisor:
               agent: advisor
               prompt: prompts/recommend.md
-              kinds: [loopBound, unboundLoop]
             inputs:
               - name: request
                 options: [yes, 'no', yes]
@@ -3933,8 +4038,45 @@ public sealed class WorkflowValidatorTests
                 "the input 'Upper' is not a word with a lower-case letter first: letters, digits and dashes within",
                 "param 'rounds' is required and declares a default: a default always supplies the value, so required would never refuse. Give the default, or require the value.",
                 "the param 'os' is named with a word a definition reads for its own; name it another way",
-                "advisor.kinds names 'unboundLoop', which is no question kind. Known: 'loopBound', 'visitBound', 'recoveryBound', 'openAgents', 'foldNewRows', 'foldLostRows', 'foldOverCells', 'foldTwoChanges', 'foldConflicts', 'foldOutside', 'turnLimit', 'truncated', 'stepBudget', 'contextLimit', 'runBudget', 'noChecks', 'checksUnsettled', 'checksPending', 'failure', 'pause', 'ask'.",
                 "the output 'Title' is not a word with a lower-case letter first: letters, digits and dashes within",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// Two inputs whose names differ by case alone are refused, each group named whole, on every system alike - a run keeps
+    /// a file input's copy in a directory named for the input, and a file system that folds case holds one for both - while
+    /// names apart in more than case, and a param or an output named as an input is, are not.
+    /// </summary>
+    [Fact]
+    public void InputsWhoseNamesDifferByCaseAlone_AreRefused_EachGroupNamedWhole()
+    {
+        var problems = Problems(
+            """
+            name: default
+            inputs:
+              - name: plan
+                kind: file
+              - name: pLan
+                kind: file
+              - name: spec
+              - name: sPec
+              - name: spEC
+              - name: draft
+            params:
+              - name: spec
+            outputs:
+              - name: plan
+                from: 'orient.branch'
+            steps:
+              - name: orient
+                type: orient
+            """);
+
+        Assert.Equal(
+            [
+                "the inputs 'plan' and 'pLan' differ by case alone, and a run keeps a file input's copy in a directory named for the input, which a file system that folds case - Windows', macOS's - holds once for both; name them apart",
+                "the inputs 'spec' and 'sPec' and 'spEC' differ by case alone, and a run keeps a file input's copy in a directory named for the input, which a file system that folds case - Windows', macOS's - holds once for both; name them apart",
             ],
             problems);
     }
@@ -5422,7 +5564,7 @@ public sealed class WorkflowValidatorTests
 
     /// <summary>
     /// V53 and V54: the graph a reason step asks is the run's own, made by a graphify-codebase step upstream of it - or,
-    /// in the recovery, ended before it - and a step that goes on with another's work asks the graph that step's
+    /// in the recovery and in a raised step, ended before it - and a step that goes on with another's work asks the graph that step's
     /// conversation holds, saying none of its own while it may say graphFrom and graphPromptTokens for its own pack;
     /// each key only where it does something, the tool only where its agent reads, the narrowing of reads only under it.
     /// </summary>
@@ -5446,7 +5588,7 @@ public sealed class WorkflowValidatorTests
 
         // With no graph made upstream, no step asks one.
         Assert.Equal(
-            ["step 'look' says graph: tools, and no graphify-codebase step is upstream of it; the graph a step asks is the run's own, made upstream of it - or, in the recovery, ended before it"],
+            ["step 'look' says graph: tools, and no graphify-codebase step is upstream of it; the graph a step asks is the run's own, made upstream of it - or, in the recovery and in a raised step, ended before it"],
             Checked(reason.Replace("prompt:", "graph: tools\n  prompt:")));
 
         // A graphify step upstream - however far - serves every step that waits for it, directly or through another.
@@ -5973,8 +6115,9 @@ public sealed class WorkflowValidatorTests
 
     /// <summary>
     /// V66: the settings a use that governs itself applies to its steps are held to every rule the run's own key of that
-    /// name is - its limits, its maxInstances, its advisor's kinds and tier, its answers and its graph's languages - each
-    /// said naming the used workflow and the step; and its advisor is one of the run's agents, whose keys the run needs.
+    /// name is - its limits, its maxInstances, its advisor's tier, its answers and its graph's languages - each said
+    /// naming the used workflow and the step; and its advisor is one of the run's agents, whose keys the run needs beside
+    /// the run's own advisor's.
     /// </summary>
     [Fact]
     public void AGoverningUsesSettings_AreHeldToTheRunsOwnRules()
@@ -5995,7 +6138,6 @@ public sealed class WorkflowValidatorTests
                   agent: advisor
                   prompt: prompts/recommend.md
                   tier: missing
-                  kinds: [bogus]
                 answers:
                   bogus: accept
                 codebaseGraph:
@@ -6013,7 +6155,6 @@ public sealed class WorkflowValidatorTests
             [
                 $"{Lead}: maxReasoningAgents must be from 1 to 32, found 0",
                 $"{Lead}: maxInstances must be from 100 to 100,000, found 5",
-                $"{Lead}: advisor.kinds names 'bogus', which is no question kind. Known: {known}.",
                 $"{Lead} answers the kind 'bogus', which is no question kind. Known: {known}.",
                 $"{Lead}: codebaseGraph extracts 'klingon', which this tool has no extractor for; it extracts: go, python",
                 $"{Lead}: advisor names tier 'missing', which tierConfig does not define. Defined: balanced",
@@ -6039,7 +6180,7 @@ public sealed class WorkflowValidatorTests
                     type: orient
                 """));
 
-        Assert.Equal([$"{Lead}: advisor"], Assert.Single(WorkflowValidator.MissingKeys(governed, Providers()!, held: [])).ReadBy);
+        Assert.Equal(["advisor", $"{Lead}: advisor"], Assert.Single(WorkflowValidator.MissingKeys(governed, Providers()!, held: [])).ReadBy);
     }
 
     /// <summary>
@@ -6397,11 +6538,14 @@ public sealed class WorkflowValidatorTests
                 ("flow/part/part.yml", "name: part\ninputs:\n  - name: target\n    default: main\nsteps:\n  - name: pr\n    type: pull-request\n    title: 'the work'\n    body: prompts/pr-body.md\n    base: '{input.target}'\n")));
     }
 
-    /// <summary>A caller's definition resolved over the workflows it uses, by their paths under the workflows directory; the resolution refuses nothing.</summary>
+    /// <summary>
+    /// A caller's definition resolved over the workflows it uses, by their paths under the workflows directory - the caller
+    /// given the test's advisor where it names none, as a run's definition names one; the resolution refuses nothing.
+    /// </summary>
     private static WorkflowDefinition Resolved(string caller, params (string Path, string Text)[] used)
     {
         var files = used.ToDictionary(file => file.Path, file => file.Text.ReplaceLineEndings("\n"), StringComparer.Ordinal);
-        var (definition, problems) = WorkflowResolver.Resolve(WorkflowFileParser.Parse("workflows/flow/flow.yml", caller), "flow", path => files.GetValueOrDefault(path));
+        var (definition, problems) = WorkflowResolver.Resolve(TestAdvice.Named(WorkflowFileParser.Parse("workflows/flow/flow.yml", caller)), "flow", path => files.GetValueOrDefault(path));
 
         Assert.Empty(problems);
         return definition;

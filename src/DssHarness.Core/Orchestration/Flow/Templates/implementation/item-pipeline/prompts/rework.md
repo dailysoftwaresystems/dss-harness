@@ -57,3 +57,7 @@ still stand among them, each with its aspect, its place, what it said and why yo
 finding you have since acted on. Leave what you cannot do empty: here, it is a declined finding.
 
 When you report, the engine tests your work, folds it, and the review reads it again.
+
+## Issues that were there before
+
+{text.issuesBefore}

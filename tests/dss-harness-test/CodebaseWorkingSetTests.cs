@@ -193,6 +193,65 @@ public sealed class CodebaseWorkingSetTests
         Assert.Null(set.Problem());
     }
 
+    /// <summary>
+    /// A node a <c>pack</c> page listed is no use of it - a line of it, never its lines - so the working set counts none a
+    /// call only listed, neither found nor served; a node the step asked about is one whether or not a page listed it. How
+    /// many of a pack's nodes the step then used is the one rule <see cref="CodebaseWorkingSet.Used"/>: its nodes the view
+    /// still holds that the pack lists, each once however often listed - a gone node, and a node listed and never touched,
+    /// none. Red with a listed node counted as found, or a gone one as used.
+    /// </summary>
+    [Fact]
+    public async Task ANodeAPackPageListed_IsNoUse_AndTheNodesUsedAreTheHeldOnesTheWorkingSetTouched()
+    {
+        using var tree = await CodebaseContextPackTests.ShopAsync();
+        var view = await ViewAsync(tree);
+        var total = Id(view, "Shop.Orders.Order.Total");
+        var price = Id(view, "Shop.Pricing.PriceCalculator.Price");
+        var apply = Id(view, "Shop.Pricing.LoyaltyDiscount.Apply");
+        GraphStepLine[] graph =
+        [
+            new GraphCallLine("pack", GraphToolOutcome.Answered, [], [], [], Tokens: 40, Listed: [total, price, "gone:listed"]),
+            new GraphCallLine("node", GraphToolOutcome.Answered, [total], [], []),
+            new GraphCallLine("node", GraphToolOutcome.Answered, [apply, "gone:listed"], [], []),
+        ];
+
+        var set = CodebaseWorkingSet.Make(view, [], graph, tree.Harness.FileSystem, tree.Harness.Platform.PathComparison);
+
+        // Price was only listed: no use. Total and Apply were asked about, the gone node too, each once.
+        Assert.Equal(
+            [(total, new[] { WorkingSetUses.Found }, 1, false), (apply, [WorkingSetUses.Found], 1, false), ("gone:listed", [WorkingSetUses.Found], 1, true)],
+            set.Nodes.Select(node => (node.Id, node.Uses.ToArray(), node.Times, node.Gone)));
+
+        // Of the nodes listed, Total alone was used and is held: Price never touched, the gone node not counted.
+        Assert.Equal(1, set.Used([total, price, "gone:listed", total]));
+        Assert.Equal(2, set.Used([total, apply]));
+        Assert.Equal(0, set.Used([]));
+    }
+
+    /// <summary>
+    /// A call line keeps the nodes a <c>pack</c> page listed and reads them back, a line written without them - as every
+    /// build before them wrote one - still reads, with none, and a listed node is named by its id like any other. Red with
+    /// the list required, or not written.
+    /// </summary>
+    [Fact]
+    public async Task ACallLinesListedNodes_AreKeptAndReadBack_AndALineWithoutThemStillReads()
+    {
+        using var tree = await CodebaseContextPackTests.ShopAsync();
+        var directory = tree.Run.InstanceDirectory("implement", "a1");
+        var file = Path.Combine(directory, OrchestratorLayout.StepGraphFileName);
+
+        tree.Store.AppendGraphStepLine(directory, new GraphCallLine("pack", GraphToolOutcome.Answered, [], [], [], Tokens: 40, Listed: ["n1", "n2"]));
+        await File.AppendAllTextAsync(file, "{\"kind\":\"call\",\"op\":\"find\",\"outcome\":\"Answered\",\"asked\":[],\"served\":[],\"edited\":[],\"tokens\":3}\n", _token);
+
+        var lines = tree.Store.ReadGraphStepLines(directory);
+
+        Assert.Equal(2, lines.Count);
+        Assert.Equal(["n1", "n2"], Assert.IsType<GraphCallLine>(lines[0]).Listed);
+        Assert.Null(Assert.IsType<GraphCallLine>(lines[1]).Listed);
+        Assert.Equal(3, ((GraphCallLine)lines[1]).Tokens);
+        Assert.Equal("a node is named by its id", new GraphCallLine("pack", GraphToolOutcome.Answered, [], [], [], Listed: [" "]).Problem());
+    }
+
     [Fact]
     public async Task AGraphEdit_IsMatchedByTheLinesItWrote_TheNodeItNamedKeptWhereTheyDeclareItNoLonger()
     {

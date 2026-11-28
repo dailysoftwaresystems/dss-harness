@@ -23,6 +23,27 @@ public sealed class FlowStepGraphTests
         Assert.Null(FlowStepGraph.ReadsOf(Ground("Run(npm publish *)")));
     }
 
+    /// <summary>
+    /// Why a launch was given no pack is said by what the step was offered: a pack that held nothing is said so first - a
+    /// step at tools that pushes none is then offered no pack to ask, and its line never says it asks the tool for pages
+    /// there are none of - a pack that holds pages and is not pushed is asked of the tool, a step that made none asked for
+    /// none, and a pushed pack that holds pages is given. Red with "pushed none" decided before "held nothing".
+    /// </summary>
+    [Fact]
+    public void WhyALaunchWasGivenNoPack_SaysAPackThatHeldNothingFirst()
+    {
+        Assert.Equal(
+            [FlowStepGraph.NoPackHeld, FlowStepGraph.NoPackHeld, FlowStepGraph.NoPackPushed, FlowStepGraph.NoPackAsked, FlowStepGraph.NoPackAsked, null],
+            [
+                FlowStepGraph.NoPackOf(tokens: 3000, pushed: 0, held: false),
+                FlowStepGraph.NoPackOf(tokens: 3000, pushed: 3000, held: false),
+                FlowStepGraph.NoPackOf(tokens: 3000, pushed: 0, held: true),
+                FlowStepGraph.NoPackOf(tokens: 0, pushed: 0, held: false),
+                FlowStepGraph.NoPackOf(tokens: 0, pushed: 0, held: true),
+                FlowStepGraph.NoPackOf(tokens: 3000, pushed: 3000, held: true),
+            ]);
+    }
+
     /// <summary>A ground whose restrictions are <paramref name="rules"/>, each the configuration's.</summary>
     private static AgentPolicyGround Ground(params string[] rules)
     {

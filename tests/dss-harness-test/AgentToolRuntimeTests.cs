@@ -22,7 +22,7 @@ namespace DssHarness.Tests;
 /// those given, its input held to the schema, each path held to the roots and asked of the policy - then run, its answer
 /// masked and paged, and recorded.
 /// </summary>
-public sealed class AgentToolRuntimeTests : IDisposable
+public sealed partial class AgentToolRuntimeTests : IDisposable
 {
     private readonly TempDirectory _temp = new();
     private readonly HarnessFactory _harness = new();
@@ -810,7 +810,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_worktree, "linking", "a.txt")));
 
         var guarded = await Call(runtime, AgentTools.DeleteDirectory, ("path", "guarded"), ("recursive", true));
-        Assert.StartsWith($"'{Path.Combine(_worktree, "guarded")}' holds '{Path.Combine(_worktree, "guarded", "keep.txt")}', which may not be written: ", guarded.Text, StringComparison.Ordinal);
+        Assert.StartsWith($"'{Path.Combine(_worktree, "guarded")}' holds '{Path.Combine(_worktree, "guarded", "keep.txt")}', which may not be taken away: ", guarded.Text, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(_worktree, "guarded", "other.txt")));
 
         var many = await Call(runtime, AgentTools.DeleteDirectory, ("path", "many"), ("recursive", true));
@@ -820,6 +820,68 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Equal(
             [ConfinedPaths.RootsRule, ConfinedPaths.LinksRule, "Write(guarded/keep.txt)", AgentToolRuntime.MostEntriesRule],
             _events.All.OfType<PermissionDenied>().Select(denial => denial.Rule));
+    }
+
+    /// <summary>
+    /// A step whose writes narrow it takes back what its own commands made: a file a command wrote in its worktree - one
+    /// git does not track, that the worktree did not hold as the step's run began - is deleted outside its writes, and a
+    /// directory holding only such files with them, on an API client's call and on a call the engine's tool server serves
+    /// Claude Code alike, and moved away from where it was made; an untracked file that was there as the step began, and a
+    /// file git tracks, are refused, each refusal saying what may be taken back. A write over what the step made leaves a
+    /// path standing outside its writes, and stays narrowed. Without the rule a build check's outputs outside the step's
+    /// writes stop its item at the fold, asking a person to delete what the agent itself made.
+    /// </summary>
+    [Fact]
+    public async Task AStepWhoseWritesNarrowIt_TakesBackWhatItsOwnCommandsMade_AndNothingElse()
+    {
+        await _harness.InitializeGitRepositoryAsync(_worktree, Token);
+        Write("Makefile", "all:\n");
+        Write("notes.txt", "kept\n");
+        await _harness.CommitAllAsync(_worktree, "the tracked files", Token);
+        Write("old.o", "there before the step");
+
+        var start = await AgentStepStart.OfAsync(
+            _harness.FileSystem,
+            _harness.GitClient,
+            PolicyGrounds.Of(_worktree, [_main], [_worktree], [], [], [], writes: ["Makefile"]),
+            _worktree,
+            _step,
+            _harness.Platform.PathComparison,
+            Token);
+
+        Assert.Equal(["old.o"], start!.Untracked);
+
+        var runtime = Open(writes: ["Makefile"], stepStart: start);
+        var (program, arguments) = OperatingSystem.IsWindows()
+            ? ("powershell", new[] { "-NoProfile", "-Command", "Set-Content -Path calc.o -Value made; Set-Content -Path str.o -Value made; New-Item -ItemType Directory -Path obj | Out-Null; Set-Content -Path obj/deps.o -Value made" })
+            : ("sh", new[] { "-c", "echo made > calc.o && echo made > str.o && mkdir obj && echo made > obj/deps.o" });
+
+        var made = await Call(runtime, AgentTools.RunCommand, ("program", program), ("args", arguments));
+        Assert.True(made.Ok, made.Text);
+
+        // A write over what the step made would leave it standing outside the step's writes: refused in a write's words.
+        var overwritten = await Call(runtime, AgentTools.CreateFile, ("path", "calc.o"), ("content", "x"), ("overwrite", true));
+        Assert.Equal($"'{Path.Combine(_worktree, "calc.o")}' is outside the paths this step may write: Makefile", overwritten.Text);
+
+        Assert.Equal("deleted 'calc.o'", (await Call(runtime, AgentTools.DeleteFile, ("path", "calc.o"))).Text);
+        Assert.Equal("deleted 'obj' and the 1 entry(ies) it held", (await runtime.ServeAsync(Request("call_2", AgentTools.DeleteDirectory, ("path", "obj"), ("recursive", true)), Token)).Text);
+        Assert.Equal("moved 'str.o' to 'Makefile'", (await Call(runtime, AgentTools.MovePath, ("from", "str.o"), ("to", "Makefile"), ("overwrite", true))).Text);
+        Assert.Equal(["Makefile", "README.md", "notes.txt", "old.o"], Directory.EnumerateFileSystemEntries(_worktree).Select(Path.GetFileName).Where(name => name != ".git").Order(StringComparer.Ordinal));
+        Assert.Equal("made", Read("Makefile").TrimEnd());
+
+        var before = await Call(runtime, AgentTools.DeleteFile, ("path", "old.o"));
+        Assert.Equal(
+            $"'{Path.Combine(_worktree, "old.o")}' is outside the paths this step may write: Makefile; {AgentPolicy.OwnMakingSaid} - and this one, or a path in it, was there untracked when the step's run began",
+            before.Text);
+
+        var tracked = await Call(runtime, AgentTools.DeleteFile, ("path", "notes.txt"));
+        Assert.Equal(
+            $"'{Path.Combine(_worktree, "notes.txt")}' is outside the paths this step may write: Makefile; {AgentPolicy.OwnMakingSaid} - and git tracks this one, or ignores it",
+            tracked.Text);
+
+        Assert.Equal("there before the step", Read("old.o"));
+        Assert.Equal("kept\n", Read("notes.txt"));
+        Assert.Equal(["the step's writes", "the step's writes", "the step's writes"], _events.All.OfType<PermissionDenied>().Select(denial => denial.Rule));
     }
 
     /// <summary>A file or a directory is moved, the directories on the way made; a file at the end is replaced only when asked, a directory never.</summary>
@@ -934,6 +996,29 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Write("ignored/x.cs", "x");
 
         Assert.Equal("src/a.cs\nsrc/deep/b.cs\n[1 file(s) you may not read were left out]", (await Call(runtime, AgentTools.FindFiles, ("pattern", "*.cs"))).Text);
+    }
+
+    /// <summary>
+    /// A find and a search over a directory that holds a credential slot - the main checkout, which an agent that only
+    /// reads reads beside its own tree, holds the tool's own - give every file beneath it the agent may read, the slot's
+    /// left out and counted, never read: each file
+    /// is decided as its own read, so the search is never refused whole for what lies beneath it; the slot itself is
+    /// still never searched.
+    /// </summary>
+    [Fact]
+    public async Task AFindAndASearchOverADirectoryHoldingASlot_LeaveTheSlotOut_AndGiveTheRest()
+    {
+        Write("src/a.cs", "beta\n");
+        Write("slot/keys.env", "beta=secret\n");
+        var slot = Path.Combine(_worktree, "slot");
+        var runtime = Open(slots: [slot]);
+
+        Assert.Equal("src/a.cs\n[1 file(s) you may not read were left out]", (await Call(runtime, AgentTools.FindFiles, ("pattern", "*"))).Text);
+        Assert.Equal("src/a.cs:1: beta\n[1 file(s) you may not read were left out]", (await Call(runtime, AgentTools.SearchFiles, ("pattern", "beta"))).Text);
+
+        var inside = await Call(runtime, AgentTools.SearchFiles, ("pattern", "beta"), ("path", "slot"));
+        Assert.False(inside.Ok);
+        Assert.DoesNotContain("secret", inside.Text, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1340,7 +1425,10 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Equal(5, _events.All.OfType<ToolCallFinished>().Count());
     }
 
-    /// <summary>Calls that read run together, at most the bound at once, each read of a file still under way while the others start.</summary>
+    /// <summary>
+    /// Calls that read run together, at most the bound at once: the first reads are held until the bound of them are under
+    /// way together - however long each call takes to reach its read - and none beyond it is ever under way beside them.
+    /// </summary>
     [Fact]
     public async Task ATurnsReads_RunAtMostTheBoundAtOnce()
     {
@@ -1351,7 +1439,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
             Write($"f{at}.txt", $"{at}");
         }
 
-        var reads = new SlowReads(_harness.FileSystem, _worktree);
+        var reads = new GatedReads(_harness.FileSystem, _worktree, AgentToolRuntime.MostTogether);
         var runtime = Open(fileSystem: reads);
 
         var results = await runtime.RunTurnAsync([.. Enumerable.Range(0, count).Select(at => Request($"{at}", AgentTools.ViewFile, ("path", $"f{at}.txt")))], Token);
@@ -2293,13 +2381,15 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
-    /// A step whose reads are narrowed (<c>graphReads: narrow</c>) is denied a whole <c>view_file</c> of a file the view
-    /// holds as parsed over <see cref="CodebaseGraphTool.NarrowLines"/> lines, with the way to the graph, recorded as
-    /// every denial is and as a line of its graph's; a range passes; a file the graph is not sure of passes as an escape
-    /// <c>lowConfidence</c>; a <c>wholeFile</c> is an escape <c>stated</c> and lifts the narrowing for its file.
+    /// A step whose reads are narrowed (<c>graphReads: narrow</c>) is answered a whole <c>view_file</c> of a file the view
+    /// holds as parsed over <see cref="CodebaseGraphTool.NarrowLines"/> lines with the file's outline in its place - the line
+    /// saying how to read its lines, then every declaration with its span and its hash - recorded as a line of its graph's
+    /// with what reading it whole would have cost and what the outline cost, and no denial among the run's; a range passes;
+    /// a file the graph is not sure of passes as an escape <c>lowConfidence</c>; a <c>wholeFile</c> is an escape
+    /// <c>stated</c> and lifts the narrowing for its file.
     /// </summary>
     [Fact]
-    public async Task AWholeViewOfAAFileOverNarrowLines_IsDeniedWithTheWayToTheGraph_WhileRangesPassAndEscapesAreLines()
+    public async Task AWholeViewOfAFileOverNarrowLines_IsAnsweredWithItsOutline_WhileRangesPassAndEscapesAreLines()
     {
         var big = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the big file")]) + "\n";
         var generated = "// <auto-generated/>\n" + string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the generated file")]) + "\n";
@@ -2307,32 +2397,26 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var queries = await CodebaseGraphToolTests.QueriesAsync(tree);
         var tool = CodebaseGraphToolTests.Tool(tree, queries);
         var lines = new List<GraphStepLine>();
-        var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
-        var host = new AgentToolHost(
-            tree.Harness.FileSystem,
-            tree.Harness.Platform,
-            tree.Harness.GitClient,
-            new PhaseRunner(tree.Harness.ProcessRunner, tree.Harness.FileSystem, tree.Harness.Output),
-            tree.Harness.ChildSessions,
-            fetch,
-            new RunningToolDouble("1.2.3"),
-            TimeProvider.System);
-        var ground = PolicyGrounds.Of(tree.Tree, [tree.Tree], [tree.Tree], [], [], [], [AgentCapability.Read, AgentCapability.Write]);
-        var runtime = host.Open(AgentRuns.Of(_step, tree.Tree, ground: ground) with
-        {
-            Graph = new AgentGraphSupport(tool, line => lines.Add(line), Operations: CodebaseGraphTool.Operations(write: true, narrow: true), Narrow: true),
-        }, _events);
+        var runtime = Narrowing(tree, tool, lines);
+        var declared = queries.OutlineFile("src/Big.cs")!;
 
-        var denied = await View(runtime, "src/Big.cs");
+        var outlined = await View(runtime, "src/Big.cs");
 
-        Assert.False(denied.Ok);
-        Assert.Equal("'src/Big.cs' is 222 lines and in the codebase graph: ask graph for its outline and the bodies you need, read a range of it, or, if you need it whole, say why with graph's wholeFile", denied.Text);
-        Assert.Equal((1, 1), (runtime.Tally.Calls, runtime.Tally.Denials));
+        Assert.True(outlined.Ok, outlined.Text);
+        Assert.NotEmpty(declared);
+        Assert.Equal(
+            string.Join('\n', [
+                "'src/Big.cs' is 222 lines and in the codebase graph, so its outline is given in place of the whole file: read the lines you need with start_line and end_line, or the file a page at a time with page, ask graph's body for a declaration by its handle, or, if you need the file whole, say why with graph's wholeFile",
+                $"outline of src/Big.cs ({ReportText.Counted(declared.Count, "declaration")}):",
+                .. declared.Select(GraphLines.Of)]),
+            outlined.Text);
+        Assert.Equal((1, 0), (runtime.Tally.Calls, runtime.Tally.Denials));
+        Assert.Empty(_events.All.OfType<PermissionDenied>());
 
-        var deniedLine = Assert.IsType<GraphDeniedLine>(Assert.Single(lines));
-        Assert.Equal(("src/Big.cs", 222), (deniedLine.Path, deniedLine.Lines));
-        Assert.True(deniedLine.Tokens > 0);
-        Assert.Single(_events.All.OfType<PermissionDenied>(), denied => denied.Rule == "graphReads: narrow");
+        // What the whole read would have cost and what the outline given in its place cost: the two the step's figures weigh.
+        Assert.Equal(
+            new GraphOutlinedLine("src/Big.cs", 222, EstimatedTokens.OfBytes(big.Length), EstimatedTokens.Of(outlined.Text)),
+            Assert.IsType<GraphOutlinedLine>(Assert.Single(lines)));
 
         // A range of the same file passes, narrowed by nothing.
         var ranged = await Call(runtime, AgentTools.ViewFile, ("path", "src/Big.cs"), ("start_line", 1), ("end_line", 4));
@@ -2352,11 +2436,10 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         var lifted = await View(runtime, "src/Big.cs");
         Assert.True(lifted.Ok, lifted.Text);
-        Assert.Single(lines.OfType<GraphDeniedLine>());
+        Assert.StartsWith("1\tnamespace Demo;\n", lifted.Text, StringComparison.Ordinal);
+        Assert.Single(lines.OfType<GraphOutlinedLine>());
         Assert.Equal(2, lines.OfType<GraphEscapeLine>().Count());
-
-        runtime.Dispose();
-        fetch.Dispose();
+        Assert.Empty(lines.OfType<GraphDeniedLine>());
     }
 
     /// <summary>
@@ -2577,16 +2660,18 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
-    /// A whole view the narrowing denies shows the agent nothing: it is no view an edit may follow and no read of the run's,
-    /// while a range of the same file is both.
+    /// A whole view the narrowing answers with the file's outline shows the agent the file's declarations and none of its
+    /// lines: it is no view an edit may follow and no read of the run's, while a range of the same file is both.
     /// </summary>
     [Fact]
-    public async Task AWholeViewTheNarrowingDenies_IsNoViewAnEditMayFollow_NorARead()
+    public async Task AWholeViewAnsweredWithTheOutline_IsNoViewAnEditMayFollow_NorARead()
     {
         using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Big.cs", BigFile));
         var runtime = Narrowing(tree, CodebaseGraphToolTests.Tool(tree, await CodebaseGraphToolTests.QueriesAsync(tree)), []);
+        var outlined = await View(runtime, "src/Big.cs");
 
-        Assert.False((await View(runtime, "src/Big.cs")).Ok);
+        Assert.True(outlined.Ok, outlined.Text);
+        Assert.StartsWith("'src/Big.cs' is 222 lines and in the codebase graph, so its outline is given in place of the whole file: ", outlined.Text, StringComparison.Ordinal);
         Assert.Empty(runtime.Tally.Files);
 
         var unseen = await Replace(runtime, "src/Big.cs", "// line 1 of the big file", "// the first line of the big file");
@@ -2639,6 +2724,14 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
     /// <summary>A step's runtime over <paramref name="tree"/> whose whole reads are narrowed by <paramref name="tool"/>, its graph lines kept in <paramref name="lines"/>.</summary>
     private AgentToolRuntime Narrowing(CodebaseGraphTree tree, CodebaseGraphTool tool, List<GraphStepLine> lines, IFileSystem? files = null)
+        => OverTree(tree, new AgentGraphSupport(tool, line => lines.Add(line), Operations: CodebaseGraphTool.Operations(write: true, narrow: true), Narrow: true), files);
+
+    /// <summary>
+    /// A step's runtime over <paramref name="tree"/>, reading and writing it, given <paramref name="graph"/> - none where it
+    /// is null - or, where <paramref name="workingIn"/> is given, working in that tree instead, reading it and the graph's tree
+    /// and writing only its own.
+    /// </summary>
+    private AgentToolRuntime OverTree(CodebaseGraphTree tree, AgentGraphSupport? graph, IFileSystem? files = null, string? workingIn = null)
     {
         var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
         var host = new AgentToolHost(
@@ -2650,11 +2743,9 @@ public sealed class AgentToolRuntimeTests : IDisposable
             fetch,
             new RunningToolDouble("1.2.3"),
             TimeProvider.System);
-        var ground = PolicyGrounds.Of(tree.Tree, [tree.Tree], [tree.Tree], [], [], [], [AgentCapability.Read, AgentCapability.Write]);
-        var runtime = host.Open(AgentRuns.Of(_step, tree.Tree, ground: ground) with
-        {
-            Graph = new AgentGraphSupport(tool, line => lines.Add(line), Operations: CodebaseGraphTool.Operations(write: true, narrow: true), Narrow: true),
-        }, _events);
+        var working = workingIn ?? tree.Tree;
+        var ground = PolicyGrounds.Of(working, workingIn is null ? [tree.Tree] : [working, tree.Tree], [working], [], [], [], [AgentCapability.Read, AgentCapability.Write]);
+        var runtime = host.Open(AgentRuns.Of(_step, working, ground: ground) with { Graph = graph }, _events);
 
         _opened.Add(fetch);
         _opened.Add(runtime);
@@ -2705,19 +2796,21 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Func<string?>? liveRun = null,
         AgentGraphSupport? graph = null,
         AgentMeasureSupport? measure = null,
-        Func<string, CancellationToken, Task<DssHarness.Core.Platform.MachineWideHold?>>? treeLock = null)
+        Func<string, CancellationToken, Task<DssHarness.Core.Platform.MachineWideHold?>>? treeLock = null,
+        IReadOnlyList<string>? slots = null,
+        AgentStepStart? stepStart = null)
     {
         var ground = PolicyGrounds.Of(
             _worktree,
             [_main],
             writable ?? [_worktree],
-            [],
+            slots ?? [],
             claudeCodeDirectories ?? [],
             restrictions ?? [],
             capabilities,
             webDomains,
             writes,
-            reporterRoot);
+            reporterRoot) with { StepStart = stepStart };
 
         if (sideTask)
         {
@@ -2905,36 +2998,19 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
-    /// A file system that makes <paramref name="directory"/> a real link to <paramref name="target"/> - the directory moved
-    /// aside - the moment a file under it is opened to be read or written, after its path was decided.
+    /// A file system whose reads of files under a directory are held until <paramref name="gathered"/> of them are under
+    /// way at once - the gate opens as the last of them opens its file, and stays open - which counts the most under way
+    /// at once. Held by the gate and not by a time, the reads that run together are all under way together however fast
+    /// or slow each call is to reach its read; a runtime that never has as many under way finds the gate shut, and the
+    /// first read to have waited <see cref="GivenUp"/> opens it for every read - the most counted then says how many it
+    /// ran at once.
     /// </summary>
-    private sealed class LinkedAtOpen(IFileSystem inner, string directory, string target) : PassThroughFileSystem(inner)
+    private sealed class GatedReads(IFileSystem inner, string under, int gathered) : PassThroughFileSystem(inner)
     {
-        public override Stream OpenRead(string path)
-        {
-            Link(path);
-            return base.OpenRead(path);
-        }
+        /// <summary>How long a read waits on a gate that has not opened before it goes on without it.</summary>
+        private static readonly TimeSpan GivenUp = TimeSpan.FromSeconds(30);
 
-        public override HeldDirectory Hold(string anchor, string held, bool make, string? asked = null)
-        {
-            Link(asked ?? held);
-            return base.Hold(anchor, held, make, asked);
-        }
-
-        private void Link(string path)
-        {
-            if (path.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.Ordinal) && !IsLink(directory))
-            {
-                Directory.Move(directory, directory + "-was");
-                TestLinks.DirectoryLink(directory, target);
-            }
-        }
-    }
-
-    /// <summary>A file system whose reads of files under a directory take a while, which counts how many are under way at once.</summary>
-    private sealed class SlowReads(IFileSystem inner, string under) : PassThroughFileSystem(inner)
-    {
+        private readonly TaskCompletionSource _gathered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _open;
         private int _most;
 
@@ -2955,16 +3031,23 @@ public sealed class AgentToolRuntimeTests : IDisposable
                 Interlocked.CompareExchange(ref _most, open, most);
             }
 
-            return new Slow(base.OpenRead(path), () => Interlocked.Decrement(ref _open));
+            var stream = new Gated(base.OpenRead(path), _gathered, () => Interlocked.Decrement(ref _open));
+
+            if (open >= gathered)
+            {
+                _ = _gathered.TrySetResult();
+            }
+
+            return stream;
         }
 
-        /// <summary>Where the file a slowed stream wraps stands, as the file system names the stream it opened.</summary>
-        public override string FinalPathOf(Stream opened) => base.FinalPathOf(opened is Slow slow ? slow.Inner : opened);
+        /// <summary>Where the file a gated stream wraps stands, as the file system names the stream it opened.</summary>
+        public override string FinalPathOf(Stream opened) => base.FinalPathOf(opened is Gated gated ? gated.Inner : opened);
 
-        /// <summary>A stream each read of which waits a little first, and says when it is closed.</summary>
-        private sealed class Slow(Stream inner, Action closed) : Stream
+        /// <summary>A stream each read of which waits on the gate first, and says when it is closed.</summary>
+        private sealed class Gated(Stream inner, TaskCompletionSource gate, Action closed) : Stream
         {
-            /// <summary>The stream the file system opened, which this one slows.</summary>
+            /// <summary>The stream the file system opened, which this one holds at the gate.</summary>
             public Stream Inner => inner;
 
             public override bool CanRead => true;
@@ -2979,7 +3062,9 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
             public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
             {
-                await Task.Delay(50, cancellationToken);
+                _ = await Task.WhenAny(gate.Task, Task.Delay(GivenUp, cancellationToken));
+                cancellationToken.ThrowIfCancellationRequested();
+                _ = gate.TrySetResult();
                 return await inner.ReadAsync(buffer, cancellationToken);
             }
 

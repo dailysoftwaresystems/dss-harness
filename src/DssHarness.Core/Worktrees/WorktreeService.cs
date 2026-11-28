@@ -351,6 +351,23 @@ public sealed class WorktreeService(
         return await CreateAtCoreAsync(context, WorktreeAddress.Plain(worktreeName), cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// What <paramref name="work"/> - the making or the removing of the tree at <paramref name="path"/> - answers, the
+    /// engine session's knowledge of where a tree there is dropped however it ends (<see cref="SessionTrees.Forget"/>): a tree
+    /// made, made again or gone is found anew by the next asking. Every making and removing of a tree passes through here.
+    /// </summary>
+    private async Task<WorktreeOutcome> ForgettingAsync(string path, Func<Task<WorktreeOutcome>> work)
+    {
+        try
+        {
+            return await work().ConfigureAwait(false);
+        }
+        finally
+        {
+            SessionTrees.Forget(path, _platform.PathComparison);
+        }
+    }
+
     public async Task<WorktreeOutcome> CreateAtAsync(
         string startDirectory,
         WorktreeAddress address,
@@ -372,7 +389,16 @@ public sealed class WorktreeService(
     }
 
     /// <summary>Creates the worktree at <paramref name="address"/>, whose names were checked already.</summary>
-    private async Task<WorktreeOutcome> CreateAtCoreAsync(
+    private Task<WorktreeOutcome> CreateAtCoreAsync(
+        HarnessContext context,
+        WorktreeAddress address,
+        CancellationToken cancellationToken)
+        => ForgettingAsync(
+            address.PathUnder(context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root)),
+            () => MakeAtAsync(context, address, cancellationToken));
+
+    /// <summary>Makes the worktree at <paramref name="address"/> (<see cref="CreateAtCoreAsync"/>).</summary>
+    private async Task<WorktreeOutcome> MakeAtAsync(
         HarnessContext context,
         WorktreeAddress address,
         CancellationToken cancellationToken)
@@ -404,12 +430,20 @@ public sealed class WorktreeService(
         // where every worktree is made, and the build a leg of this machine makes in it - reckoned by the one owner a
         // run's start check asks too, so a run that passed its start never fails here on a worktree it needs. Where no
         // limit holds a path, nothing is listed for one.
+        //
+        // The main checkout's HEAD is read once, for the room its files take and for the making of an agent's tree at it:
+        // nothing between the two moves it, and the tree is made at the very commit whose files were counted.
         int files;
+        string? head = null;
 
         try
         {
-            files = _pathBudget.Bounds(settings.PathLimit)
-                && await _gitClient.ResolveCommitAsync(layout.MainCheckoutRoot, "HEAD", cancellationToken).ConfigureAwait(false) is { } head
+            if (_pathBudget.Bounds(settings.PathLimit))
+            {
+                head = await _gitClient.ResolveCommitAsync(layout.MainCheckoutRoot, "HEAD", cancellationToken).ConfigureAwait(false);
+            }
+
+            files = head is not null
                 ? await WorktreeRoom.ForFilesAsync(_gitClient, layout.MainCheckoutRoot, head, cancellationToken).ConfigureAwait(false)
                 : 0;
         }
@@ -439,7 +473,7 @@ public sealed class WorktreeService(
             // worktrees, which share the main checkout's refs and objects with whatever runs in them. Its making keeps the
             // commit it is made at alive first, and takes back whatever it made where it fails.
             var made = await new AgentRepositories(_gitClient, _fileSystem, _platform)
-                .MakeAsync(layout.MainCheckoutRoot, address, path, cancellationToken)
+                .MakeAsync(layout.MainCheckoutRoot, address, path, cancellationToken, head)
                 .ConfigureAwait(false);
 
             if (made.Failure is { } failure)
@@ -642,6 +676,9 @@ public sealed class WorktreeService(
 
         if (!_fileSystem.DirectoryExists(path))
         {
+            // Gone already - deleted by hand, or by a deletion before - and so no tree the session knows.
+            SessionTrees.Forget(path, _platform.PathComparison);
+
             var cleared = await ClearRecordAsync(layout, worktreeName, path, force, inspector, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -831,11 +868,13 @@ public sealed class WorktreeService(
 
             outcome = await FinishedAsync(
                     worktreeName,
-                    () => identity.Membership == WorktreeMembership.AgentRepository
-                        ? RemoveRepositoryAsync(removal, checksRan: !force)
-                        : force
-                        ? RemoveForcedAsync(layout.MainCheckoutRoot, worktreeName, path, identity.AdministrativeDirectory, inspector, $"run '{ToolPackage.Command} {DeleteCommand} {worktreeName} --force'")
-                        : RemoveCheckedAsync(removal))
+                    () => ForgettingAsync(
+                        path,
+                        () => identity.Membership == WorktreeMembership.AgentRepository
+                            ? RemoveRepositoryAsync(removal, checksRan: !force)
+                            : force
+                            ? RemoveForcedAsync(layout.MainCheckoutRoot, worktreeName, path, identity.AdministrativeDirectory, inspector, $"run '{ToolPackage.Command} {DeleteCommand} {worktreeName} --force'")
+                            : RemoveCheckedAsync(removal)))
                 .ConfigureAwait(false);
         }
 
@@ -1231,7 +1270,7 @@ public sealed class WorktreeService(
                 + "put its record right, or pass --force to delete the worktree anyway.");
         }
 
-        return record is { State: Orchestration.AgentStates.Live, Reads: false } && record.WorktreePath(layout) is { } at && PathsEqual(at, path)
+        return record is { State: Orchestration.AgentStates.Live } && record.WorktreePath(layout) is { } at && PathsEqual(at, path)
             ? Refused(
                 $"Worktree '{address.Name}' is the worktree of agent '{agent}' of orchestrator '{orchestrator}', which is live, and is deleted with the agent: "
                 + $"{Orchestration.OrchestrationReports.DeleteAgentLine(orchestrator, agent, string.Empty)} says what deleting it keeps and removes, and with --apply "
@@ -1725,12 +1764,18 @@ public sealed class WorktreeService(
             : Verified(name, path, administrativeDirectory, clearingFailure);
     }
 
-    public async Task<WorktreeOutcome> CreateCopyAsync(string mainCheckoutRoot, string path, string commit, CancellationToken cancellationToken = default)
+    public Task<WorktreeOutcome> CreateCopyAsync(string mainCheckoutRoot, string path, string commit, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(mainCheckoutRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentException.ThrowIfNullOrWhiteSpace(commit);
 
+        return ForgettingAsync(path, () => MakeCopyAsync(mainCheckoutRoot, path, commit, cancellationToken));
+    }
+
+    /// <summary>Makes the copy <see cref="CreateCopyAsync"/> is asked for.</summary>
+    private async Task<WorktreeOutcome> MakeCopyAsync(string mainCheckoutRoot, string path, string commit, CancellationToken cancellationToken)
+    {
         var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
         var inspector = new WorktreeInspector(_gitClient, _fileSystem, _platform, _output);
 
@@ -1784,13 +1829,15 @@ public sealed class WorktreeService(
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
         // Never interrupted, as a worktree's forced removal is not: a copy taken away part way is one the next making meets.
-        return RemoveForcedAsync(
-            mainCheckoutRoot,
-            Path.GetFileName(Path.TrimEndingDirectorySeparator(path)),
+        return ForgettingAsync(
             path,
-            administrativeDirectory: null,
-            new WorktreeInspector(_gitClient, _fileSystem, _platform, _output),
-            $"make the copy again, which takes it away first, or delete '{ReportText.Printable(path)}' and run 'git worktree prune'");
+            () => RemoveForcedAsync(
+                mainCheckoutRoot,
+                Path.GetFileName(Path.TrimEndingDirectorySeparator(path)),
+                path,
+                administrativeDirectory: null,
+                new WorktreeInspector(_gitClient, _fileSystem, _platform, _output),
+                $"make the copy again, which takes it away first, or delete '{ReportText.Printable(path)}' and run 'git worktree prune'"));
     }
 
     public async Task<IReadOnlyList<string>> RemoveCopiesUnderAsync(string mainCheckoutRoot, string directory)

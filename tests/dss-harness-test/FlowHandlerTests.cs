@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -100,7 +101,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner()
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)", output: Output("""{"passed": false}""")))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -129,7 +130,7 @@ public sealed class FlowHandlerTests
                 dependsOn: [fix]
             """);
         var runner = new FakeRunner().On("build", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -159,7 +160,7 @@ public sealed class FlowHandlerTests
                 on: {step: build, outcome: failure}
             """);
         var runner = new FakeRunner().On("build", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -186,7 +187,7 @@ public sealed class FlowHandlerTests
                 on: {step: build, outcome: end}
             """);
         var runner = new FakeRunner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -209,7 +210,7 @@ public sealed class FlowHandlerTests
                 type: orient
             """);
         var runner = new FakeRunner();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -235,7 +236,7 @@ public sealed class FlowHandlerTests
                 dependsOn: [fix]
             """);
         var runner = new FakeRunner();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -274,7 +275,7 @@ public sealed class FlowHandlerTests
                     ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
                     : FlowStepResult.Ended(passed: true, HarnessExit.Success);
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -312,7 +313,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner()
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var waiting = coordinator.RunAsync(TestContext.Current.CancellationToken);
         var first = await waiting;
@@ -357,7 +358,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner()
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
         var asked = AssertSingle(coordinator.OpenQuestions, question => question.Kind == "visitBound");
@@ -389,7 +390,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner()
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("fix", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -420,7 +421,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner()
             .On("check", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("cite", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -452,7 +453,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner()
             .On("work", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("agent", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"agent": "a1"}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -490,7 +491,7 @@ public sealed class FlowHandlerTests
             .On("worker", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"agent": "a1"}""")))
             .On("check", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var first = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -540,7 +541,7 @@ public sealed class FlowHandlerTests
             """);
         var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -564,7 +565,7 @@ public sealed class FlowHandlerTests
         Assert.DoesNotContain(coordinator.Instances.Values, instance => instance.HandledBy is not null);
         Assert.Equal(["build", "tell", "note", "build+2", "note+2"], runner.Started);
 
-        var failing = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
+        var failing = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
         _ = await failing.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
         var bound = AssertSingle(failing.OpenQuestions, question => question.Kind == "visitBound");
         Assert.True(failing.TryAnswer(bound.Id, "fail", out _));
@@ -612,7 +613,7 @@ public sealed class FlowHandlerTests
                 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed", output: Output("""{"ok": false}"""))
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": true}""")))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"skip": true}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -645,7 +646,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner().On("verify", run => run.Visit == 1
             ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed")
             : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -674,7 +675,7 @@ public sealed class FlowHandlerTests
             """);
         var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner();
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -723,7 +724,7 @@ public sealed class FlowHandlerTests
             .On("verify", run => run.Visit == 1
                 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed")
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(cancel);
         await heldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -779,7 +780,7 @@ public sealed class FlowHandlerTests
             .On("check", run => run.Visit == 1
                 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed")
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -839,7 +840,7 @@ public sealed class FlowHandlerTests
             .On("check", run => run.Visit == 1
                 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed")
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -906,7 +907,7 @@ public sealed class FlowHandlerTests
                 started.TrySetResult();
                 return early.Task;
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(cancel);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -983,7 +984,7 @@ public sealed class FlowHandlerTests
         var harness = new HarnessFactory();
         var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
         using var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
 
         var session = coordinator.RunAsync(cancel);
         await verifying.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1070,7 +1071,7 @@ public sealed class FlowHandlerTests
 
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             var session = coordinator.RunAsync(cancel);
             await verifying.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
             await coordinator.SettledAsync(cancel);
@@ -1092,11 +1093,11 @@ public sealed class FlowHandlerTests
             [new FlowHandlerState("log", "raised"), new FlowHandlerState("mend", "left")],
             harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "round.check").Handlers!.OrderBy(handler => handler.Handler, StringComparer.Ordinal));
 
-        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
 
         using (var again = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: again, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: again, resume: taken);
 
             Assert.True(resumed.TryAnswer(Assert.Single(resumed.OpenQuestions).Id, "ship", out _));
 
@@ -1160,7 +1161,7 @@ public sealed class FlowHandlerTests
                 heldStarted.TrySetResult();
                 return held.Task;
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(cancel);
         await heldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -1204,7 +1205,7 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner().On("check", run => run.Visit == 1
             ? FlowStepResult.Ended(passed: true, HarnessExit.Success)
             : FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -1215,9 +1216,9 @@ public sealed class FlowHandlerTests
     }
 
     /// <summary>
-    /// The engine's bound on the visits of one step in one scope has one owner, <see cref="FlowRecover.MostVisits"/>, which
-    /// the recovery's maxVisits is held to as well: no file of the engine spells the number itself, so the bound a redirect
-    /// meets and the one the recovery is held to cannot drift apart.
+    /// The most visits the recovery's maxVisits may give, and what it gives where the file names none, has one owner,
+    /// <see cref="FlowRecover.MostVisits"/>: no file of the engine spells the number itself, so the range the definition's
+    /// check holds the key to and the default the engine counts by cannot drift apart.
     /// </summary>
     [Fact]
     public void TheRecoverVisitBound_HasOneOwner()
@@ -1248,9 +1249,47 @@ public sealed class FlowHandlerTests
         Assert.Equal([("WorkflowModels.cs", $"public const int MostVisits = {spelt};")], spelling);
     }
 
-    /// <summary>A step that a redirect would visit a hundredth time fails, saying so.</summary>
+    /// <summary>
+    /// The help, the README and the architecture say that a loop is held to its own bound alone - no engine-wide bound on
+    /// a step's visits beside it - that the recovery's maxVisits is counted for each step's failures and each issue on its
+    /// own, and that a handler whose then sends the run back over its group is counted where its loop goes round.
+    /// </summary>
     [Fact]
-    public async Task ARedirectThatWouldVisitAStepMoreThan99Times_FailsItSayingSo()
+    public void TheHelpTheReadmeAndTheArchitecture_SayALoopIsHeldToItsOwnBoundAlone()
+    {
+        var workflows = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "how often this handler may be raised in the scope its loop goes round in - its own, or, where its then sends the run back over a group around it, the scope that then goes back to - from 1 to 20; absent, 3; past it the run asks",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"how often the recovery may take one thing - the failures of one step in one scope, or one issue sent to fix - from 1 to {FlowRecover.MostVisits}; absent, {FlowRecover.MostVisits}; past it the run asks (recoveryBound), with the advisor's recommended fix. It bounds that loop alone: the recovery takes any number of steps' failures and issues, each counted on its own",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A loop stops at its own bound alone - a repeat's, a handler's `maxVisits`, the recovery's - and a step visited again for what is no loop, a triage for each issue reported among them, is never refused for how often.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "No engine-wide bound on the visits of a step stands beside the loops' own: a step visited again for what is not a loop - a triage for each issue reported, a pause's changed answer, the always steps once per session, the planning step for each plan update - is never refused, and each loop stops at the bound it declares - a repeat's, a handler's `maxVisits`, the recovery's - or where a person answers its question.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "save where its `then` sends the run back over a group around it, which each turn makes anew, holding the handler again; there they are counted, and its `more` answers granted, in the scope that `then` goes back to, so that loop too ends at the handler's own bound.",
+            architecture,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A loop is held to its own bound and to nothing else: a handler at its maxVisits asks, and each more a person gives
+    /// is one more turn of it - past a hundred visits of the step it sends the run back to, none of them refused - until
+    /// the answer that ends it, after which the step's own onFailure decides.
+    /// </summary>
+    [Fact]
+    public async Task AHandlersLoop_GoesOnForEveryMoreAPersonGives_PastAHundredVisits()
     {
         var definition = Parse("""
             name: flow
@@ -1267,33 +1306,85 @@ public sealed class FlowHandlerTests
         var runner = new FakeRunner()
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        const int more = 120;
 
-        // The run asks at the handler's bound once for each of the target's failures, and each more grants one more
-        // visit, until the run would visit build a hundredth time.
-        while (true)
+        // The run asks at the handler's bound once for each of the target's failures past it, and each more grants one
+        // more visit of fix, and so one more of build.
+        for (var given = 0; given <= more; given++)
         {
             var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
-            if (end.Status is FlowRunStatus.Failed)
-            {
-                var bound = coordinator.Instances.Values.Last(instance => instance.Step.Name == "build");
-
-                // Ninety-nine visits ran; the hundredth was refused before it ran.
-                Assert.Equal(100, bound.Visit);
-                Assert.Equal(99, runner.Started.Count(started => started == "build" || started.StartsWith("build+", StringComparison.Ordinal)));
-                Assert.Equal(13, bound.Exit);
-                Assert.Equal($"'build' was visited {FlowRecover.MostVisits} times in its scope; at most {FlowRecover.MostVisits} visits of one step in one scope are allowed", bound.Error);
-                return;
-            }
-
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
             var asked = AssertSingle(coordinator.OpenQuestions, question => question.Kind == "visitBound");
+            Assert.Equal($"'fix' has answered 'build' {(given + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)} times, and 'build' failed again (20)", asked.Problem);
 
-            if (!coordinator.TryAnswer(asked.Id, "more", out _))
+            if (!coordinator.TryAnswer(asked.Id, given < more ? "more" : "fail", out _))
             {
-                Assert.Fail("the bound's more was refused");
+                Assert.Fail("the bound's answer was refused");
             }
         }
+
+        var ended = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        // The first visit of build and one for each visit of fix: the one its bound gave, and one for each more.
+        var builds = coordinator.Instances.Values.Where(instance => instance.Step.Name == "build").ToList();
+        Assert.Equal(more + 2, builds.Count);
+        Assert.Equal(more + 1, coordinator.Instances.Values.Count(instance => instance.Step.Name == "fix"));
+        Assert.All(builds, build => Assert.Equal("leg 'windows' ended Red (20)", build.Error));
+        Assert.Equal(FlowRunStatus.Failed, ended.Status);
+    }
+
+    /// <summary>
+    /// A handler whose then sends the run back over the group it is in - each turn a new visit of that group, the
+    /// handler in it again with none of its visits there - is held to its own maxVisits all the same: its visits are
+    /// counted in the scope its loop goes round in, and at its bound the run asks, as at any handler's.
+    /// </summary>
+    [Fact]
+    public async Task AHandlerWhoseThenSendsTheRunBackOverItsGroup_StopsAtItsOwnBound()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: prepare
+                type: orient
+              - name: stage
+                dependsOn: [prepare]
+                steps:
+                  - name: test
+                    type: orient
+                    onFailure: stop
+                  - name: fix
+                    type: orient
+                    on: {step: test, outcome: failure, codes: [20]}
+                    then: prepare
+                    maxVisits: 2
+            """);
+        // test fails at every visit the bound lets the loop make, and passes past them: a loop its bound did not stop
+        // ends there, done, rather than going round for ever.
+        var runner = new FakeRunner()
+            .On("test", (int asked) => asked <= 10
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // Two turns, each a new visit of prepare and of stage; test's third failure meets fix at its bound.
+        Assert.Equal(["prepare", "stage.test", "stage.fix", "prepare+2", "stage+2.test", "stage+2.fix", "prepare+3", "stage+3.test"], runner.Started);
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var asked = AssertSingle(coordinator.OpenQuestions, question => question.Kind == "visitBound");
+        Assert.Equal("'fix' has answered 'test' 2 times, and 'test' failed again (20)", asked.Problem);
+        Assert.Equal("stage+3.test", asked.Instance);
+
+        // A more is one more turn of the same loop, counted where it goes round: one more visit of fix, then the question again.
+        Assert.True(coordinator.TryAnswer(asked.Id, "more", out _));
+        var again = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(["prepare", "stage.test", "stage.fix", "prepare+2", "stage+2.test", "stage+2.fix", "prepare+3", "stage+3.test", "stage+3.fix", "prepare+4", "stage+4.test"], runner.Started);
+        Assert.Equal(FlowRunStatus.Paused, again.Status);
+        Assert.Equal("'fix' has answered 'test' 3 times, and 'test' failed again (20)", AssertSingle(coordinator.OpenQuestions, question => question.Kind == "visitBound").Problem);
     }
 
     /// <summary>A leftover that cannot be read fails its repeat as an unreadable until does: what a loop left is never dropped unsaid.</summary>
@@ -1318,7 +1409,7 @@ public sealed class FlowHandlerTests
             passed: true,
             HarnessExit.Success,
             output: Output("""{"passed": false, "blocking": false}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -1358,7 +1449,7 @@ public sealed class FlowHandlerTests
             passed: true,
             HarnessExit.Success,
             output: Output("""{"passed": false, "blocking": false, "left": "one function and one test"}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1394,7 +1485,7 @@ public sealed class FlowHandlerTests
             passed: true,
             HarnessExit.Success,
             output: Output("""{"passed": false, "blocking": true}""")));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1408,6 +1499,355 @@ public sealed class FlowHandlerTests
 
         Assert.Equal(FlowRunStatus.Done, settled.Status);
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["loop"].State);
+    }
+
+    /// <summary>
+    /// A handler that is a group, answered retry within the session, is raised again for the ending it answers - a new
+    /// visit naming the same source, for the schedule never draws a handler - and the ending waits on that visit in the
+    /// place of the one it replaced: what depends on the source starts once the new visit has ended, never while the
+    /// failed one waits on its question, and never left waiting for ever once the failed one stands settled by the answer.
+    /// </summary>
+    [Fact]
+    public async Task AGroupHandlerAnsweredRetry_IsRaisedAgainForItsEnding_WhichWaitsOnTheNewVisit()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                on: {step: build, outcome: failure}
+                onFailure: pause
+                steps:
+                  - name: attempt
+                    type: orient
+              - name: other
+                type: orient
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var other = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        FlowCoordinator? coordinator = null;
+        FlowInstanceState? fixAgainAtAfter = null;
+        var runner = new FakeRunner()
+            .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("attempt", (int asked) => asked == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .OnAsync("other", async _ =>
+            {
+                await other.Task;
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            })
+            .On("after", (FlowStepRun _) =>
+            {
+                fixAgainAtAfter = coordinator!.Instances.TryGetValue("fix+2", out var again) ? again.State : null;
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        var advisor = new Asked();
+        coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), advisor: advisor);
+
+        // The session goes on while other runs: the answer is taken within it, where no session's start reads the ending
+        // again.
+        var session = coordinator.RunAsync(cancel);
+        await advisor.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var asked = Assert.Single(coordinator.OpenQuestions);
+        Assert.Equal("fix", asked.Instance);
+        Assert.Null(coordinator.Instances["build"].HandledBy);
+        Assert.DoesNotContain("after", runner.Started);
+
+        Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAnswerAsync(asked.Id, "retry").WaitAsync(TimeSpan.FromSeconds(30), cancel)).How);
+        other.SetResult();
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal("done; 1 failure was handled: build, by fix", end.Summary);
+        Assert.Equal(["fix.attempt", "fix+2.attempt", "after"], runner.Started.Where(started => started is not "build" and not "other"));
+        Assert.Equal(FlowInstanceState.Done, fixAgainAtAfter);
+        var fixAgain = coordinator.Instances["fix+2"];
+        Assert.Equal((FlowInstanceState.Done, 2), (fixAgain.State, fixAgain.Visit));
+        Assert.Same(coordinator.Instances["build"], fixAgain.RaisedBy);
+        Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["fix"].State);
+        Assert.Equal("fix", coordinator.Instances["build"].HandledBy);
+    }
+
+    /// <summary>
+    /// A handler that ended failed has not ended for the ending it answers until its failure is decided: its policy
+    /// asking a person holds what depends on the source, and retry runs the handler again, the ending settled by that
+    /// run's end - never settled at the failed end, before the person was heard.
+    /// </summary>
+    [Fact]
+    public async Task AHandlerThatFailedAndAsks_HoldsWhatDependsOnItsSource_UntilItsRetryHasEnded()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+                onFailure: pause
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var runner = new FakeRunner()
+            .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("fix", (int asked) => asked == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var cancel = TestContext.Current.CancellationToken;
+
+        var paused = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, paused.Status);
+        Assert.Equal(["build", "fix"], runner.Started);
+        Assert.Null(coordinator.Instances["build"].HandledBy);
+        var asked = Assert.Single(coordinator.OpenQuestions);
+        Assert.Equal(("fix", "failure"), (asked.Instance, asked.Kind));
+
+        Assert.True(coordinator.TryAnswer(asked.Id, "retry", out _));
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal("done; 1 failure was handled: build, by fix", end.Summary);
+        Assert.Equal(["build", "fix", "fix", "after"], runner.Started);
+        Assert.Equal((FlowInstanceState.Done, 2), (coordinator.Instances["fix"].State, coordinator.Instances["fix"].Attempt));
+    }
+
+    /// <summary>
+    /// A handler whose failure its own handler takes ends for the ending it answers once that handler has ended and its
+    /// own ending is settled - the settling is the end, through the one owner of an ending's settling: what depends on the
+    /// first source starts then, never beside the second handler's run, and never left waiting for ever.
+    /// </summary>
+    [Fact]
+    public async Task AHandlerWhoseFailureItsOwnHandlerTakes_EndsForItsSourceOnceThatSettles()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+              - name: mend
+                type: orient
+                on: {step: fix, outcome: failure}
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        FlowCoordinator? coordinator = null;
+        FlowInstanceState? mendAtAfter = null;
+        var runner = new FakeRunner()
+            .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("fix", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed"))
+            .On("after", (FlowStepRun _) =>
+            {
+                mendAtAfter = coordinator!.Instances["mend"].State;
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["build", "fix", "mend", "after"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, mendAtAfter);
+        Assert.Equal(("fix", "mend"), (coordinator.Instances["build"].HandledBy, coordinator.Instances["fix"].HandledBy));
+        Assert.Equal("done; 2 failures were handled: build, by fix, fix, by mend", end.Summary);
+    }
+
+    /// <summary>
+    /// A handler's failure an answer decides settles the ending that handler answers through the one owner of a failure's
+    /// settling: the handler's own handler at its bound, answered accept, takes the handler's failure as handled - and the
+    /// ending of the step it answers, which waited on it alone, settles with it, so what depends on that step starts -
+    /// never left waiting on a handler whose failure is settled. The answer is taken within the session, where no session's
+    /// start reads the ending again.
+    /// </summary>
+    [Fact]
+    public async Task AnAcceptAtAHandlersOwnBound_SettlesTheEndingThatHandlerAnswers()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+              - name: mend
+                type: orient
+                on: {step: fix, outcome: failure}
+                maxVisits: 1
+                then: build
+              - name: other
+                type: orient
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var other = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("fix", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed"))
+            .OnAsync("other", async _ =>
+            {
+                await other.Task;
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        var advisor = new Asked();
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), advisor: advisor);
+
+        // mend answered fix once and sent the run back; fix's second failure meets mend at its bound, while other runs.
+        var session = coordinator.RunAsync(cancel);
+        await advisor.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var bound = Assert.Single(coordinator.OpenQuestions);
+        Assert.Equal(("visitBound", "fix+2"), (bound.Kind, bound.Instance));
+        Assert.Equal(["build", "fix", "mend", "build+2", "fix+2"], runner.Started.Where(started => started != "other"));
+
+        Assert.Equal(FlowHandedOver.Taken, (await coordinator.OfferAnswerAsync(bound.Id, "accept").WaitAsync(TimeSpan.FromSeconds(30), cancel)).How);
+        other.SetResult();
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["build", "fix", "mend", "build+2", "fix+2", "after"], runner.Started.Where(started => started != "other"));
+        Assert.Equal(bound.Id, coordinator.Instances["fix+2"].HandledBy);
+        Assert.Equal("fix", coordinator.Instances["build+2"].HandledBy);
+    }
+
+    /// <summary>
+    /// A source run again as a new attempt has an ending of its own, which raises its handlers anew: a handler an earlier
+    /// attempt's ending raised answers that ending alone, so the new attempt's failure reads the handler's when again and
+    /// raises its next visit - here one that runs, its when readable now - never taken as raised already and settled by the
+    /// visit the earlier attempt left. The way in: a handler at its bound answered fail, the source's own onFailure pausing,
+    /// and retry - the first attempt's ending had raised the handler whose when could not be read beside the bound's question.
+    /// </summary>
+    [Fact]
+    public async Task ASourceRunAgainAsANewAttempt_RaisesItsHandlersAnewForThatAttemptsEnding()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+                onFailure: pause
+              - name: note
+                type: orient
+                on: {step: build, outcome: failure}
+                when: build.go
+                onFailure: continue
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+                maxVisits: 1
+                then: build
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+
+        // build fails every time; only its third run writes the go its handler note reads.
+        var runner = new FakeRunner()
+            .On("build", (int asked) => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)", output: Output(asked == 3 ? """{"go": true}""" : "{}")))
+            .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var bound = AssertSingle(coordinator.OpenQuestions, question => question.Kind == "visitBound");
+        Assert.Equal("build+2", bound.Instance);
+        Assert.True(coordinator.TryAnswer(bound.Id, "fail", out _));
+
+        _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var failure = AssertSingle(coordinator.OpenQuestions, question => question.Kind == "failure");
+        Assert.True(coordinator.TryAnswer(failure.Id, "retry", out _));
+
+        _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var again = AssertSingle(coordinator.OpenQuestions, question => question.Kind == "visitBound");
+        Assert.True(coordinator.TryAnswer(again.Id, "accept", out _));
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The second attempt's ending raised note again - its when read anew, true now - and the visit ran; the one the
+        // first attempt's ending raised stands as it ended, the answer of that ending alone.
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["build", "fix", "build+2", "build+2", "note+3", "after"], runner.Started);
+        var first = coordinator.Instances["note+2"];
+        var raisedAgain = coordinator.Instances["note+3"];
+        Assert.Equal((FlowInstanceState.Failed, 1), (first.State, first.RaisedByAttempt));
+        Assert.Equal((FlowInstanceState.Done, 2), (raisedAgain.State, raisedAgain.RaisedByAttempt));
+        Assert.Same(coordinator.Instances["build+2"], raisedAgain.RaisedBy);
+        Assert.Equal((2, "note"), (coordinator.Instances["build+2"].Attempt, coordinator.Instances["build+2"].HandledBy));
+        Assert.DoesNotContain(coordinator.Instances.Keys, id => id == "note+4");
+    }
+
+    /// <summary>
+    /// The help, the README and the architecture say what the engine does with a handler's ending: what depends on a step
+    /// that failed waits for its handlers to end, their failures decided, what depends on one that ended done starts beside
+    /// them, a handler made again is a new visit that ending waits on, a source run again as a new attempt raises its
+    /// handlers anew, a fail answer at a handler's bound gives the ending up, the attempt an older raise answered is read
+    /// once, and what the recovery put right, a retry and a handler a stop left NotRun are made again once from the
+    /// records - the rules the tests above hold, in the words a reader meets.
+    /// </summary>
+    [Fact]
+    public void TheHelpTheReadmeAndTheArchitecture_SayAnEndingWaitsOnItsHandlersDecidedEnd_AndOnAVisitMadeAgain()
+    {
+        var workflows = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "the schedule never starts it. What depends on a step that failed waits for each handler its failure raised to end - one that failed once its failure is decided, never while it asks, the recovery works on it or the run it stopped is still to resume - while what depends on a step that ended done starts beside the handlers its success raised. A handler made again, a group answered retry or one the recovery put right, is a new visit raised by the same ending, which waits on it; and a step run again as a new attempt raises its handlers anew, for that attempt's own ending. A fail answer at a handler's bound after a failure gives that ending up: the failure stands, and the ending waits on none of its handlers any more.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "failed-step, the step that gave it its failure, which runs again from where it stopped, once: the visit's own record says what it sent the run back to, whatever became of that since, and nothing is sent back into a work item a plan update is bringing to rest -",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A step that says `on` is a handler, raised by another step's ending: what depends on a step that failed waits for every handler of that ending to end - one that failed once its failure is decided, never while it asks, the recovery works on it or a run it stopped is still to resume - while what depends on a step that ended done starts beside the handlers its success raised. A handler that is a group answered `retry` is a new visit raised by the same ending, which waits on it, and a step run again as a new attempt raises its handlers anew, for that attempt's own ending. A `fail` answer at a handler's bound after a failure gives that ending up: the failure stands, and the ending waits on none of its handlers any more.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "`failed-step`, the step that gave it its failure, which runs again from where it stopped, a handler (a step that says `on`) as a new visit raised by the ending it answers, which waits on it - once: the visit's own record says what it sent the run back to, whatever became of that since, and nothing is sent back into a work item a plan update is bringing to rest -",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"What depends on a step that failed waits until every handler raised for that ending has ended (`FlowCoordinator.Ended`): one that failed once its failure is decided - passed over, settled by its own handlers or by an answer - never while it is owed to what decides it, asks a person, is the recovery's, or stopped the run, which the next session runs again; a failure is unsettled from its end until then, as a resume reads one owed. What depends on a step that ended done starts beside the handlers its success raised, for a success is settled as it ends. Every way a handler's visit ends settles the ending through the one owner (`FlowCoordinator.MaybeSettle`) - a failure its handlers or an answer took as handled through `FlowCoordinator.Settle`, which says what took it and settles with it the ending its instance answers - and a handler made again - a group answered `retry`, or one the recovery put right going on as `failed-step` - is a new visit raised by the same ending, naming the same source and the same attempt of it, which the ending waits on in the place of the one it replaced (`FlowCoordinator.RaiseAgain`), as a resume rebuilds it. A step run again as a new attempt has an ending of its own, which raises its handlers anew: each handler's visit records the attempt whose ending raised it (`{JsonNamingPolicy.CamelCase.ConvertName(nameof(FlowStepRecord.RaisedByAttempt))}`), and a raise answers that attempt's ending alone (`FlowCoordinator.RaisedFor`, which `FlowCoordinator.EndingOf` and `FlowInstance.{nameof(FlowInstance.RaisesOwed)}` read), so the new attempt's failure raises the handler's next visit, its `when` read again; a new attempt keeps none of the handler states the attempt before it ended with, nor an ending of it still waiting on them, nor what took its failure (`FlowCoordinator.NewAttempt`), and only a step that stands as an ending - done or failed - owes a raise or has an ending rebuilt (`FlowInstance.{nameof(FlowInstance.StandsAsAnEnding)}`). A `fail` answer at a handler's bound after a failure gives that ending up in the source's record, in one write: a handler it still owed is `passed`, one it raised is `left`, and the ending waits on none of them, in the session and at every resume (`FlowCoordinator.GiveUpTheEnding`). A raise an older build recorded names no attempt and is read as the attempt its source's record holds where that attempt ended and its failure is not owed - as the build that wrote it read it, matching a raise by its source's visit alone - or where a `fail` answer at a success bound (`visitBound`) ended that same attempt failed, and otherwise as the attempt before it, never before the first, for an ending raises its handlers only as it is decided (`FlowInstance.{nameof(FlowInstance.AttemptRaisedFor)}`). It is read once: the first session that takes the run up writes it into the visit's own record, held with what its start writes and before anything rewrites the source, and every session after - and the run's status facts (`{nameof(FlowStatus)}`) - reads that record, never deriving it again from a source a new attempt has moved on (`FlowCoordinator.WriteTheAttemptsRead`).",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"What a visit of the recovery that ended done puts right runs again as decided from the records, once: the visit's done record starts the list of what it sent the run back to (`{JsonNamingPolicy.CamelCase.ConvertName(nameof(FlowStepRecord.Reruns))}`), and each redirect it decides puts the step in that list in the redirect's own write - with the question the redirect asks where it would leave an agent open, so no crash and no answer taken at once loses the question - and the rerun is owed until that record names it; for a handler, until a visit is raised again for the same ending in its place. A crash between the visit's done record and the rerun's leaves it to the resume, which makes it once; whatever becomes of the redirect after - made, given up by a `stay`, or dropped, its question withdrawn, with a work item a plan update brings to rest (`FlowCoordinator.DropWhatItOwes`) - no session decides it again, for that one fact is what is read. A visit an older build recorded names no list: that build decided its redirect in the write after the visit's done record and never again at a resume - and a handler's not at all, for no redirect resets a handler - so whether it decided is read from what that redirect left in the records: the redirect still owed, a question it asked of the agents it would leave open - which a `stay` that gave it up answered - or the step inside a work item a plan update is bringing or brought to rest, which dropped it; one made left the step, which no rerun goes back over. None of those is the crash between the two writes, which leaves the rerun undecided, and the resume sends the run back once. The visit's own record tells those shapes apart, never a question's state: that build wrote the question a redirect asks before the redirect, so a crash between the two leaves the question open naming the visit and no redirect owed, and the resume, withdrawing it as one that asks of nothing, starts the visit's list, empty - written at the session's start before the withdrawal (`FlowCoordinator.WriteTheListsStarted`) - so the rerun is decided again, asking anew, never read as decided by the question withdrawn; and a drop of such a visit's redirect starts its list in the drop's own write, naming what the redirect sent back. Nothing is sent back into a work item a plan update is bringing or brought to rest, whichever way the visit's record says what it decided. Whether a rerun is decided has that one owner, which the rerun of a failed step and of a reporter both ask (`FlowCoordinator.RerunDecided`). A reporter of an issue a visit fixed runs again by the same fact of the visit that fixed it last, once - a `stay` an older build's visit was given is never asked again when another triage of the reporter ends - and never into a work item a plan update is bringing or brought to rest, whose work is done again in the item visited in its place (`FlowCoordinator.RerunOwed`, `FlowCoordinator.RunTheReporterAgain`, `FlowCoordinator.GoOnFromTheRecovery`). An answer the records hold and the session never carried out - a `stay` or a `retry` written before a crash - finds its redirect's question restored with the redirect, and is carried out on it at the resume, for each redirect whose record names it - never through the one question its handler waits on, for a visit whose two redirects each ask waits on the newer, and an answer ends the wait on its own question alone - unless the handler had asked again for that redirect, which then waits on the question asked again. A redirect and the question it asks are one fact: a redirect dropped - with a work item a plan update brings to rest, or with a visit a redirect leaves, whose redirects still owed go with it, never left asking a question withdrawn (`FlowCoordinator.Leave`) - leaves the run's records in one write before its question is withdrawn (`FlowCoordinator.DropRedirectsOf`, the one owner of dropping a redirect), so a crash between the two leaves a question that asks of no owed redirect, which the resume withdraws; a redirect whose record names a question withdrawn - an older build withdrew the question before it wrote the drop, or left the redirect of a visit a redirect left owed - is never made; and one whose record names no question in play while the question its handler asked for it is open - the process ended between that question's write and the record that would name it: an older build's first ask, which it named only in the write after, or a question asked again after `retry` - waits on that question. A handler group made again for a retry is made before its failure stops standing - a crash between the two writes leaves that failure beside the new visit, which is the retry made - while a group the schedule draws says its retry in the very write that settles its failure (`{JsonNamingPolicy.CamelCase.ConvertName(nameof(FlowStepRecord.Retried))}`): the schedule, the one owner of drawing a group - its dependencies, its `when`, what holds it back - draws the new visit from that record, so a crash before the draw leaves the retry owed, which the resume's schedule draws, never a failure gone with no new visit owed for it; and a visit of the recovery answered `retry` is taken again only while it is still the newest taken for what it puts right (`FlowCoordinator.Retry`). A handler's visit a raise made that a failure's `stop` left NotRun before it started - the run ended before it - is put back by the resume that goes on with no failure standing to stop it, not started again under the same id and raised by the same ending, where that ending still waits on it: the schedule never draws a handler, and the visit never ran, held nothing and wrote nothing but its place in that ending (`FlowCoordinator.RedrawWhatTheStopLeft`).",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "An ending the records leave waiting - a handler's own among them, which the ending it answers waits on, and each raise it still owes made - is rebuilt as its raise made it, from its source's record: the visit of each handler that record holds `raised` - the newest raised for that ending, so a visit made again in a failed one's place is the one waited on - in the order the workflow declares them (`FlowCoordinator.EndingOf`)",
+            architecture,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>An advisor that recommends nothing, and tells the test a question was asked of it.</summary>
+    private sealed class Asked : IFlowAdvisorRunner
+    {
+        private readonly TaskCompletionSource _seen = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes once a question has been asked of the advisor: it is open.</summary>
+        public Task Seen => _seen.Task;
+
+        /// <inheritdoc/>
+        public Task<FlowAdvice> AdviseAsync(FlowAdvisorCall call, CancellationToken cancellationToken)
+        {
+            _ = _seen.TrySetResult();
+            return Task.FromResult(new FlowAdvice(Answer: null, Why: null, Text: null, NotObtained: "no advice in this test"));
+        }
     }
 
     /// <summary>Asserts exactly one open question fits, and answers with it.</summary>
@@ -1463,6 +1903,9 @@ public sealed class FlowHandlerRecordsTests
 
         public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
             => inner.AffectedTests(entries);
+
+        public void Flush()
+            => inner.Flush();
     }
 
     /// <summary>A runner that answers each step as its test scripted it, holding open the steps the test wants to time.</summary>
@@ -1498,6 +1941,13 @@ public sealed class FlowHandlerRecordsTests
         public Runner On(string step, Func<FlowStepRun, FlowStepResult> script)
         {
             _scripts[step] = run => Task.FromResult(script(run));
+            return this;
+        }
+
+        /// <summary>Answers <paramref name="step"/> by a script that may hold the step open, on the task it answers.</summary>
+        public Runner OnAsync(string step, Func<FlowStepRun, Task<FlowStepResult>> script)
+        {
+            _scripts[step] = script;
             return this;
         }
 
@@ -1574,7 +2024,7 @@ public sealed class FlowHandlerRecordsTests
 
         using (records)
         {
-            _ = await new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
             Assert.True(crashing.Ended);
         }
 
@@ -1582,12 +2032,12 @@ public sealed class FlowHandlerRecordsTests
         Assert.Equal(nameof(FlowInstanceState.Running), harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "mend").State);
         Assert.DoesNotContain(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Instance == "mend.fix");
 
-        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
         var again = new Runner().On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
 
         using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
             var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -1599,8 +2049,8 @@ public sealed class FlowHandlerRecordsTests
 
     /// <summary>
     /// A handler that is a group whose record says it never started - its block never begun, as one made in two writes
-    /// with a crash between them is left - is started by the resume that makes its raise again, and its block runs: the
-    /// ending it was raised for is never held open by a visit that cannot start.
+    /// with a crash between them is left - is started by the resume, which begins its block as its raise would have, and
+    /// its block runs: the ending it was raised for is never held open by a visit that cannot start.
     /// </summary>
     [Fact]
     public async Task AGroupHandlerItsRecordLeftUnstarted_IsStartedByTheResume_AndItsBlockRuns()
@@ -1628,7 +2078,7 @@ public sealed class FlowHandlerRecordsTests
 
         using (records)
         {
-            _ = await new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
         }
 
         // The records as a visit made in two writes, cut between them, leaves them: not started, in its own record and
@@ -1640,18 +2090,249 @@ public sealed class FlowHandlerRecordsTests
         });
         harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile("mend"), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("mend"))! with { State = nameof(FlowInstanceState.NotStarted) });
 
-        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
         var again = new Runner().On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
 
         using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
             var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
             Assert.Equal(["mend.fix", "after"], again.Started);
             Assert.Equal(FlowInstanceState.Done, resumed.Instances["mend"].State);
         }
+    }
+
+    /// <summary>
+    /// A raise is said in its source's own record before the handler's visit's first record is written, so a crash
+    /// between the two leaves the raise said and no visit of it - never a raise owed beside the visit it made: the run's
+    /// status reads the raise as still owed, named by the visit the resume raises, and the resume makes it once, the
+    /// handler run and the failure it was raised for handled.
+    /// </summary>
+    [Fact]
+    public async Task ARaiseIsSaidBeforeItsVisitIsRecorded_ACrashBetweenLeavesItOwed_AndTheResumeMakesItOnce()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var runner = new Runner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        // The process ends at the write that says the raise while no visit of it is made yet.
+        var crashing = new CrashingRecords(records, _ => false, picksRun: run =>
+            run.Steps.Any(step => step.Instance == "build" && step.Handlers?.Contains(new FlowHandlerState("fix", "raised")) == true)
+            && run.Steps.All(step => step.Instance != "fix"));
+
+        using (records)
+        {
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
+            Assert.True(crashing.Ended);
+        }
+
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+
+        Assert.Equal([new FlowHandlerState("fix", "raised")], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build"))!.Handlers);
+        Assert.DoesNotContain(flow.Steps, step => step.Instance == "fix");
+        Assert.Equal(
+            "left      at least 1 step instance, at most 2 step instances (the engine's bounds); 1 handler an ending owes a raise: fix",
+            FlowStatus.Facts(definition, flow, questions: null, updates: null, new FlowEngineState(FlowEngineState.None, null, []), clock.GetUtcNow())
+                .First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal("done; 1 failure was handled: build, by fix", end.Summary);
+            Assert.Equal(["fix", "after"], again.Started);
+        }
+
+        Assert.Equal([new FlowHandlerState("fix", "done")], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build"))!.Handlers);
+    }
+
+    /// <summary>
+    /// A record an older build left holding a raise owed beside the visit it made - it wrote the handler's visit before its
+    /// source's raise, and a crash came between the two - is read raised, as this build writes it: the visit is that
+    /// raise, run once and never raised again beside it, and the failure it was raised for is handled.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderRecordHoldingARaiseOwedBesideItsVisit_IsReadRaised_TheVisitRunOnce()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var runner = new Runner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+        var crashing = new CrashingRecords(records, _ => false, picksStep: (instance, _) => instance == "fix");
+
+        using (records)
+        {
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
+            Assert.True(crashing.Ended);
+        }
+
+        // The records as the older build left them, the raise owed, in the source's own record and in the run's state alike,
+        // and the handler's visit naming no attempt of its source: an ending decided, whose raise is read as the attempt the
+        // source's record holds (FlowInstance.AttemptRaisedFor).
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        harness.OrchestrationStore.WriteFlow(layout, flow with
+        {
+            Steps = [.. flow.Steps.Select(step => step.Instance switch
+            {
+                "build" => step with { Handlers = [new FlowHandlerState("fix", "owed")] },
+                "fix" => step with { RaisedByAttempt = null },
+                _ => step,
+            })],
+        });
+        harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile("build"), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build"))! with { Handlers = [new FlowHandlerState("fix", "owed")] });
+        harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile("fix"), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("fix"))! with { RaisedByAttempt = null });
+        Assert.Equal(nameof(FlowInstanceState.NotStarted), harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "fix").State);
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal("done; 1 failure was handled: build, by fix", end.Summary);
+            Assert.Equal(["fix", "after"], again.Started);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "fix+2");
+        }
+
+        Assert.Equal([new FlowHandlerState("fix", "done")], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build"))!.Handlers);
+    }
+
+    /// <summary>
+    /// No write of the run's state holds a raise owed beside the visit it raised, across a crash and the resume that goes on
+    /// from it: an ending with two handlers, cut off after the first one's visit was recorded, is taken up - the raise made
+    /// written raised in the first write the resume makes of its source, the other raised said before its visit is - and
+    /// both handlers run once, the failure handled.
+    /// </summary>
+    [Fact]
+    public async Task NoWriteHoldsARaiseOwedBesideTheVisitItRaised_AcrossACrashAndItsResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+              - name: note
+                type: orient
+                on: {step: build, outcome: failure}
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var runner = new Runner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+        var both = new List<string>();
+
+        // Each write is looked at whole: a source's handler written owed while a visit of it that source raised is in the
+        // same write.
+        void Look(FlowSnapshot run)
+        {
+            foreach (var source in run.Steps.Where(step => step.Handlers is not null))
+            {
+                both.AddRange(source.Handlers!
+                    .Where(handler => handler.State == "owed" && run.Steps.Any(visit => visit.RaisedBy == source.Instance && FlowInstanceId.PathOf(visit.Instance) == handler.Handler))
+                    .Select(handler => $"{source.Instance}: {handler.Handler}"));
+            }
+        }
+
+        var crashing = new CrashingRecords(new Inspected(records, Look), _ => false, picksStep: (instance, _) => instance == "fix");
+
+        using (records)
+        {
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
+            Assert.True(crashing.Ended);
+        }
+
+        Assert.Equal([new FlowHandlerState("note", "owed"), new FlowHandlerState("fix", "raised")], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build"))!.Handlers);
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: new Inspected(resumedRecords, Look), resume: taken);
+            var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["fix", "note", "after"], again.Started);
+        }
+
+        Assert.Empty(both);
+    }
+
+    /// <summary>The run's records, each write passed on after the test has looked at the run it writes whole.</summary>
+    private sealed class Inspected(IFlowRecords inner, Action<FlowSnapshot> look) : IFlowRecords
+    {
+        /// <inheritdoc/>
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+        {
+            look(snapshot);
+            inner.Write(kind, snapshot, instance, from, to, attempt, detail);
+        }
+
+        /// <inheritdoc/>
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+            => inner.Question(questions, refused);
+
+        /// <inheritdoc/>
+        public void Updates(FlowUpdatesFile updates)
+            => inner.Updates(updates);
+
+        /// <inheritdoc/>
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+            => inner.AffectedTests(entries);
+
+        /// <inheritdoc/>
+        public string NameAgent(IReadOnlyCollection<string> recorded)
+            => inner.NameAgent(recorded);
+
+        /// <inheritdoc/>
+        public void Flush()
+            => inner.Flush();
+
+        /// <inheritdoc/>
+        public void Stand(FlowStartsStanding standing, IReadOnlyCollection<string> leftSought)
+            => inner.Stand(standing, leftSought);
+
+        /// <inheritdoc/>
+        public void Unstand()
+            => inner.Unstand();
     }
 
     /// <summary>The run's records, made whole in <paramref name="directory"/> under run <paramref name="run"/>.</summary>
@@ -1686,7 +2367,7 @@ public sealed class FlowHandlerRecordsTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
             _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
@@ -1741,7 +2422,7 @@ public sealed class FlowHandlerRecordsTests
         using (records)
         {
             var watched = new Watched(records, snapshot => snapshot.Redirects is { Count: > 0 });
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             // The group is in flight when the handler ends done and names it: the redirect is owed, and nothing it
@@ -1799,7 +2480,7 @@ public sealed class FlowHandlerRecordsTests
         using (records)
         {
             var watched = new Watched(records, snapshot => snapshot.Redirects is { Count: > 0 });
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             // The redirect is owed once the handler has ended done and named the group in flight.
@@ -1812,11 +2493,11 @@ public sealed class FlowHandlerRecordsTests
             Assert.Single(harness.OrchestrationStore.ReadFlow(layout)?.Redirects ?? []);
         }
 
-        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
 
         using (var again = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), clock, records: again, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, records: again, resume: taken);
             var done = await resumed.RunAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, done.Status);
@@ -1861,7 +2542,7 @@ public sealed class FlowHandlerRecordsTests
         using (records)
         {
             var watched = new Watched(records, snapshot => snapshot.Redirects is { Count: > 0 });
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             // The redirect waits for slow, a member of its set in flight; the hard stop stops slow and makes nothing.
@@ -1873,13 +2554,13 @@ public sealed class FlowHandlerRecordsTests
             Assert.Equal("implement", Assert.Single(harness.OrchestrationStore.ReadFlow(layout)?.Redirects ?? []).Target);
         }
 
-        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
         var again = new Runner()
             .On("verify", run => FlowStepResult.Ended(passed: true, HarnessExit.Success));
 
         using (var records2 = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var resumed = new FlowCoordinator(definition, again, new RunnerFacts(), clock, records: records2, resume: taken);
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: records2, resume: taken);
             var done = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, done.Status);
@@ -1887,5 +2568,1792 @@ public sealed class FlowHandlerRecordsTests
             Assert.Equal(FlowInstanceState.Skipped, resumed.Instances["slow"].State);
             Assert.Null(harness.OrchestrationStore.ReadFlow(layout)?.Redirects);
         }
+    }
+
+    /// <summary>
+    /// A crash right after a handler's failed end is written - its failure owed, the recovery its policy - leaves records
+    /// the resume completes to the run the session would have made: the recovery takes the failure, the handler runs
+    /// again as a new visit raised by the ending it answers, and that ending settles as the new visit ends - never what
+    /// depends on the source failed as unable to start beside an ending that waits for ever. One outcome whether or not
+    /// a crash fell between the two writes.
+    /// </summary>
+    [Fact]
+    public async Task ACrashAfterAHandlersFailedEnd_TheResumeRecoversItAndRunsItAgain_AsTheSessionWould()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: fold
+                type: orient
+              - name: reconcile
+                type: orient
+                on: {step: fold, outcome: failure}
+                onFailure: recover
+              - name: after
+                type: orient
+                dependsOn: [fold]
+            """);
+        var runner = new Runner()
+            .On("fold", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("reconcile", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+        var crashing = new CrashingRecords(records, _ => false, picksStep: (instance, to) => instance == "reconcile" && to == nameof(FlowInstanceState.Failed));
+
+        using (records)
+        {
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            Assert.True(crashing.Ended);
+        }
+
+        // On disk: the handler's failure owed, and nothing after it.
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        Assert.Equal(FlowStepRecord.NameOf(FlowFailure.Owed), flow.Steps.Single(step => step.Instance == "reconcile").Failure);
+        Assert.DoesNotContain(flow.Steps, step => step.Instance is "recover" or "after");
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal("done; 1 failure was handled: fold, by reconcile", end.Summary);
+            Assert.Equal(["recover.mend", "reconcile+2", "after"], again.Started);
+            Assert.Same(resumed.Instances["fold"], resumed.Instances["reconcile+2"].RaisedBy);
+            Assert.Equal("reconcile", resumed.Instances["fold"].HandledBy);
+        }
+    }
+
+    /// <summary>
+    /// A handler that is a group whose failure stopped the run has not ended for the ending it answers - the resume runs
+    /// it again, as a group stands open over such a member - so the source is not counted handled when the run stops,
+    /// and the resume opens the handler again as a new visit raised by that ending, which the ending waits on: what
+    /// depends on the source starts once it has ended.
+    /// </summary>
+    [Fact]
+    public async Task AGroupHandlerWhoseFailureStoppedTheRun_IsRaisedAgainByTheResume_ItsEndingWaitingOnIt()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                on: {step: build, outcome: failure}
+                onFailure: stop
+                steps:
+                  - name: attempt
+                    type: orient
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var runner = new Runner()
+            .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("attempt", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var stopped = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Failed, stopped.Status);
+            Assert.Equal("failed; 1 step failed: fix", stopped.Summary);
+            Assert.Equal(["build", "fix.attempt"], runner.Started);
+            Assert.Null(coordinator.Instances["build"].HandledBy);
+        }
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal("done; 1 failure was handled: build, by fix", end.Summary);
+            Assert.Equal(["fix+2.attempt", "after"], again.Started);
+            Assert.Same(resumed.Instances["build"], resumed.Instances["fix+2"].RaisedBy);
+            Assert.Equal(FlowInstanceState.Failed, resumed.Instances["fix"].State);
+        }
+    }
+
+    /// <summary>
+    /// The ending of a handler is rebuilt by the resume as any ending is: a handler whose failure its own handler takes
+    /// has ended for its source only once that ending settles, so a stop while the second handler runs leaves both endings
+    /// waiting, and the resume rebuilds each from its source's record - the second handler runs again, the first's
+    /// failure is handled, and the first source settles with it - never what depends on the first source failed as unable
+    /// to start beside an ending nothing rebuilt.
+    /// </summary>
+    [Fact]
+    public async Task AHandlersOwnEnding_IsRebuiltByTheResume_AndSettlesTheEndingItAnswers()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+              - name: mend
+                type: orient
+                on: {step: fix, outcome: failure}
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var runner = new Runner()
+            .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("fix", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed"));
+        runner.HoldHearingTheStop("mend");
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var watched = new Watched(records, snapshot => snapshot.Steps.Any(step => step.Instance == "mend" && step.State == FlowInstanceState.Running));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+            var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+            await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            coordinator.RequestStop();
+            var stopped = await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Stopped, stopped.Status);
+            Assert.Equal(["build", "fix", "mend"], runner.Started);
+            Assert.Null(coordinator.Instances["build"].HandledBy);
+        }
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal("done; 2 failures were handled: build, by fix, fix, by mend", end.Summary);
+            Assert.Equal(["mend", "after"], again.Started);
+        }
+    }
+
+    /// <summary>
+    /// A raise a handler's own ending owes is made by the resume as any ending's is: a handler that ends done while a
+    /// pause records what it left running is written owing its own handler, raises nothing then, and the session that
+    /// goes on - another engine, from the records alone - raises it once, never leaving it unraised for ever.
+    /// </summary>
+    [Fact]
+    public async Task ARaiseAHandlersEndingOwesAtAPause_IsMadeByTheResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+              - name: note
+                type: orient
+                on: {step: fix, outcome: success}
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var runner = new Runner()
+            .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        runner.Hold("fix");
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var watched = new Watched(records, snapshot => snapshot.Steps.Any(step => step.Instance == "fix" && step.State == FlowInstanceState.Running));
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+            var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+            await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            coordinator.RequestPause("interrupt");
+            _ = runner.Release("fix");
+            var paused = await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            Assert.Equal(["build", "fix"], runner.Started);
+            Assert.Equal(
+                new FlowHandlerState("note", "owed"),
+                Assert.Single(harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "fix").Handlers ?? []));
+        }
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["after", "note"], again.Started.Order(StringComparer.Ordinal));
+            Assert.Same(resumed.Instances["fix"], resumed.Instances["note"].RaisedBy);
+            Assert.Equal(FlowInstanceState.Done, resumed.Instances["note"].State);
+        }
+    }
+
+    /// <summary>
+    /// A group handler answered retry between sessions has its new visit, raised by the ending it answers, in the run's
+    /// records; a resume that takes the run up from them rebuilds that ending waiting on the new visit - the one reading
+    /// of an ending's handlers, the newest visit raised for it - never on the failed one it replaced, which a resume reads
+    /// back unsettled and would hold the ending for ever.
+    /// </summary>
+    [Fact]
+    public async Task AGroupHandlersRetryInTheRecords_IsWhatTheResumesRebuiltEndingWaitsOn()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                on: {step: build, outcome: failure}
+                onFailure: pause
+                steps:
+                  - name: attempt
+                    type: orient
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var runner = new Runner()
+            .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("attempt", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var paused = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            Assert.True(coordinator.TryAnswer(Assert.Single(coordinator.OpenQuestions).Id, "retry", out var problem), problem);
+        }
+
+        // The new visit is in the records, raised by build, its block not begun running yet.
+        var written = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "fix+2");
+        Assert.Equal((nameof(FlowInstanceState.Running), "build"), (written.State, written.RaisedBy));
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal("done; 1 failure was handled: build, by fix", end.Summary);
+            Assert.Equal(["fix+2.attempt", "after"], again.Started);
+            Assert.Equal(FlowInstanceState.Failed, resumed.Instances["fix"].State);
+        }
+    }
+
+    /// <summary>
+    /// Which attempt's ending raised a handler's visit is in that visit's own record, so a resume reads the raise as the
+    /// session that made it held it: a source run again as a new attempt, its failure asking at the handler's bound when
+    /// the session ends, is taken up by another engine from the records alone, and the answer raises the handler anew for
+    /// the new attempt's ending - its next visit, which runs - never the visit the earlier attempt's ending raised.
+    /// </summary>
+    [Fact]
+    public async Task ARaisesAttemptIsInItsRecord_TheResumeRaisesTheHandlerAnewForANewAttemptsEnding()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+                onFailure: pause
+              - name: note
+                type: orient
+                on: {step: build, outcome: failure}
+                when: build.go
+                onFailure: continue
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+                maxVisits: 1
+                then: build
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var asked = 0;
+        var runner = new Runner()
+            .On("build", (FlowStepRun _) => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)", output: JsonNode.Parse(++asked == 3 ? """{"go": true}""" : "{}")));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
+
+            foreach (var (kind, answer) in new[] { ("visitBound", "fail"), ("failure", "retry") })
+            {
+                _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+                Assert.True(coordinator.TryAnswer(Assert.Single(coordinator.OpenQuestions, question => question.Kind == kind).Id, answer, out var problem), problem);
+            }
+
+            var paused = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            Assert.Equal(["build", "fix", "build+2", "build+2"], runner.Started);
+        }
+
+        // On disk: the visit the first attempt's ending raised says so, and the second attempt's ending asks at the bound.
+        Assert.Equal(("build+2", 1), (harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("note+2"))!.RaisedBy, harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("note+2"))!.RaisedByAttempt));
+        Assert.Equal(2, harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build+2"))!.Attempt);
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var bound = Assert.Single(resumed.OpenQuestions);
+            Assert.Equal(("visitBound", "build+2"), (bound.Kind, bound.Instance));
+            Assert.True(resumed.TryAnswer(bound.Id, "accept", out var problem), problem);
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["note+3", "after"], again.Started);
+            Assert.Equal((FlowInstanceState.Done, 2), (resumed.Instances["note+3"].State, resumed.Instances["note+3"].RaisedByAttempt));
+            Assert.Equal("note", resumed.Instances["build+2"].HandledBy);
+        }
+
+        Assert.Equal(2, harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("note+3"))!.RaisedByAttempt);
+    }
+
+    /// <summary>
+    /// The rerun a visit of the recovery that ended done owes the step it put right is decided from the records: a crash
+    /// right after the visit's done record leaves the rerun owed - no redirect of it in the records, the step still its
+    /// scope's visit - and the resume decides it, the step running again as a new visit and what depends on it after; a
+    /// crash right after the redirect's own record leaves the rerun made, and the resume makes it once - never a second
+    /// redirect beside the one the records hold.
+    /// </summary>
+    [Theory]
+    [InlineData("the visit's done record")]
+    [InlineData("the redirect's record")]
+    public async Task ARecoveryDonesRerunOfAStep_IsDecidedFromTheRecords_TheResumeMakingItOnce(string crashAfter)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: build
+                type: orient
+                onFailure: recover
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var runner = new Runner().On("build", (FlowStepRun run) => run.Visit == 1
+            ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
+            : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+        var crashing = crashAfter == "the redirect's record"
+            ? new CrashingRecords(records, _ => false, picksRun: run => run.Redirects?.Any(redirect => redirect.Handler == "recover") == true)
+            : new CrashingRecords(records, _ => false, picksStep: (instance, to) => instance == "recover" && to == nameof(FlowInstanceState.Done));
+        var cancel = TestContext.Current.CancellationToken;
+
+        using (records)
+        {
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(crashing.Ended);
+        }
+
+        // On disk: the visit done, the step it put right failed and its scope's visit still, and no new visit of it.
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        Assert.Equal(nameof(FlowInstanceState.Done), flow.Steps.Single(step => step.Instance == "recover").State);
+        Assert.Equal(crashAfter == "the redirect's record" ? new[] { "recover" } : [], (flow.Redirects ?? []).Select(redirect => redirect.Handler));
+        Assert.DoesNotContain(flow.Steps, step => step.Instance is "build+2" or "after");
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner().On("build", FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["build+2", "after"], again.Started);
+            Assert.Equal("recover", resumed.Instances["build"].LeftBy);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "build+3");
+        }
+
+        // One redirect decided over the whole run, by whichever session made it: none beside the one the records held.
+        Assert.Equal(
+            ["the run is sent to 'build' by 'recover'"],
+            FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Select(read => read.Detail).Where(detail => detail?.StartsWith("the run is sent to ", StringComparison.Ordinal) == true));
+    }
+
+    /// <summary>
+    /// A visit of the recovery an older build recorded keeps no list of what it sent the run back to - that build decided
+    /// the redirect as the visit ended, in the write after its done record, and never again at a resume - so the rerun is
+    /// read from what that redirect left in the records: the process ended between the two writes, the step still failed,
+    /// its failure counted handled by nothing, its scope's visit still and no redirect of it owed, leaves the rerun
+    /// undecided, and the resume sends the run back to the step, which runs again with what depends on it after - never a
+    /// failure taken as put right with nothing run again, what depends on it failed as unable to start; and a redirect that
+    /// build wrote is made once, as it stood, never a second beside it.
+    /// </summary>
+    [Theory]
+    [InlineData("the visit's done record")]
+    [InlineData("the redirect's record")]
+    public async Task AnOlderBuildsRecoveryVisitThatEndedDone_IsReadFromWhatItsRedirectLeft_TheResumeMakingTheRerunOnce(string crashAfter)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: build
+                type: orient
+                onFailure: recover
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var runner = new Runner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+        var crashing = crashAfter == "the redirect's record"
+            ? new CrashingRecords(records, _ => false, picksRun: run => run.Redirects?.Any(redirect => redirect.Handler == "recover") == true)
+            : new CrashingRecords(records, _ => false, picksStep: (instance, to) => instance == "recover" && to == nameof(FlowInstanceState.Done));
+        var cancel = TestContext.Current.CancellationToken;
+
+        using (records)
+        {
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(crashing.Ended);
+        }
+
+        // The records as the older build left them: the visit's record keeps no list of reruns.
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        harness.OrchestrationStore.WriteFlow(layout, flow with { Steps = [.. flow.Steps.Select(step => step with { Reruns = null })] });
+        harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile("recover"), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("recover"))! with { Reruns = null });
+        var build = flow.Steps.Single(step => step.Instance == "build");
+        Assert.Equal((nameof(FlowInstanceState.Failed), null), (build.State, build.HandledBy));
+        Assert.Equal(crashAfter == "the redirect's record" ? new[] { "recover" } : [], (flow.Redirects ?? []).Select(redirect => redirect.Handler));
+        Assert.DoesNotContain(flow.Steps, step => step.Instance is "build+2" or "after");
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+            Assert.Equal(["build+2", "after"], again.Started);
+            Assert.Equal("recover", resumed.Instances["build"].LeftBy);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "build+3");
+        }
+
+        // One redirect over the whole run, by whichever session made it; the visit's record starts its list with the one
+        // this build decided, and holds none where the older build's redirect was written.
+        Assert.Equal(
+            ["the run is sent to 'build' by 'recover'"],
+            FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Select(read => read.Detail).Where(detail => detail?.StartsWith("the run is sent to ", StringComparison.Ordinal) == true));
+        string[]? reruns = crashAfter == "the redirect's record" ? null : ["build"];
+        Assert.Equal(reruns, harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("recover"))!.Reruns);
+    }
+
+    /// <summary>
+    /// A redirect a visit of the recovery an older build recorded asked about and was given up by <c>stay</c> is decided:
+    /// the question it asked says so, though the visit's record keeps no list of reruns - so the session that takes the run
+    /// up asks nothing again and resets nothing, and what depends on the step runs on what the recovery left.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderBuildsRedirectGivenUpByStay_IsNeverDecidedAgain_AtTheResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: round
+                onFailure: recover
+                steps:
+                  - name: worker
+                    type: create-agent
+                    agent: maker
+                  - name: check
+                    type: orient
+                    dependsOn: [worker]
+              - name: after
+                type: orient
+                dependsOn: [round]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new Runner().On("check", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var paused = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            var asked = Assert.Single(coordinator.OpenQuestions);
+            Assert.Equal(("openAgents", "recover"), (asked.Kind, asked.Instance));
+            Assert.True(coordinator.TryAnswer(asked.Id, "stay", out var problem), problem);
+        }
+
+        // The records as the older build left them: the visit's record keeps no list of reruns.
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        harness.OrchestrationStore.WriteFlow(layout, flow with { Steps = [.. flow.Steps.Select(step => step with { Reruns = null })] });
+        harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile("recover"), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("recover"))! with { Reruns = null });
+        Assert.Equal("recover", flow.Steps.Single(step => step.Instance == "round").HandledBy);
+
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.True(FlowRunStatus.Done == end.Status, $"{end.Summary} | asked: {string.Join("; ", resumed.OpenQuestions.Select(question => $"{question.Kind}: {question.Problem}"))}");
+            Assert.Equal(["after"], again.Started);
+            Assert.Null(resumed.Instances["round"].LeftBy);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "round+2");
+        }
+
+        Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents");
+    }
+
+    /// <summary>
+    /// A redirect a visit of the recovery an older build recorded decided asks of the agent it would leave open, and that
+    /// build wrote the question before the redirect that names it: the process ended between the two leaves the visit done
+    /// keeping no list of reruns, the question open naming the visit, and no redirect owed. The question asks of nothing
+    /// the run owes and the resume withdraws it, and the visit's own record tells that shape apart, never the question's
+    /// state: the resume starts the visit's list, written before the withdrawal, so the rerun reads as undecided - never as
+    /// decided by the question it withdrew, the step left failed and what depends on it never run - and is decided again,
+    /// asking anew; a stay given to that question lets what depends on the step run. A crash between the list's write and
+    /// the withdrawal's leaves the next resume to read the same.
+    /// </summary>
+    /// <param name="crashAtTheWithdrawal">Whether the session that takes the run up ends at the write that withdraws the question, and another takes it up after.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnOlderBuildsRedirectWhoseQuestionWasWrittenFirst_IsDecidedAgain_NeverReadAsDecidedByTheQuestionWithdrawn(bool crashAtTheWithdrawal)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: round
+                onFailure: recover
+                steps:
+                  - name: worker
+                    type: create-agent
+                    agent: maker
+                  - name: check
+                    type: orient
+                    dependsOn: [worker]
+              - name: after
+                type: orient
+                dependsOn: [round]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new Runner().On("check", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            // The process ends at the write of the question, before the record of the redirect that asks it.
+            var crashing = new CrashingRecords(records, _ => false, picksQuestions: questions => questions.Any(question => question.Kind == "openAgents"));
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(crashing.Ended);
+        }
+
+        // The records as the older build left them: the visit's record keeps no list of reruns, the question is open, and
+        // no redirect is owed.
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        harness.OrchestrationStore.WriteFlow(layout, flow with { Steps = [.. flow.Steps.Select(step => step with { Reruns = null })] });
+        harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile("recover"), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("recover"))! with { Reruns = null });
+        Assert.True(flow.Redirects is null or []);
+        var first = Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents");
+        Assert.Equal("open", first.State);
+
+        if (crashAtTheWithdrawal)
+        {
+            using var crashed = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock);
+            var crashing = new CrashingRecords(crashed, _ => false, picksQuestions: questions => questions.Any(question => question.Id == first.Id && question.State == "withdrawn"));
+            _ = await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, records: crashing, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition)).RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(crashing.Ended);
+
+            // The visit's list was written before the question's withdrawal, which the process ended at.
+            Assert.Empty(Assert.IsAssignableFrom<IReadOnlyList<string>>(harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("recover"))!.Reruns));
+        }
+
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+
+            // The rerun is decided again: the redirect back to the group asks anew, the question the process cut off withdrawn.
+            var paused = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            var asked = Assert.Single(resumed.OpenQuestions);
+            Assert.Equal(("openAgents", "recover"), (asked.Kind, asked.Instance));
+            Assert.NotEqual(first.Id, asked.Id);
+            Assert.True(resumed.TryAnswer(asked.Id, "stay", out var problem), problem);
+
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+            Assert.Equal(["after"], again.Started);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "round+2");
+        }
+
+        // The question cut off stands withdrawn beside the one the rerun asked, and the visit's list says the rerun decided.
+        Assert.Equal(
+            [(true, "withdrawn"), (false, "answered")],
+            harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions.Where(question => question.Kind == "openAgents").Select(question => (question.Id == first.Id, question.State)));
+        Assert.Equal<IEnumerable<string>>(["round"], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("recover"))!.Reruns!);
+    }
+
+    /// <summary>
+    /// A redirect whose handler an earlier redirect leaves goes with that visit, dropped with the question it asks: the
+    /// handler <c>fix</c>, in the group <c>work</c> another handler's redirect resets, ends while that redirect waits for
+    /// quiet, and its own redirect back to <c>make</c> - which would leave the agent that group made open - asks; the earlier
+    /// redirect is then made, and leaving <c>fix</c> drops its redirect and withdraws the question, in that order - never a
+    /// redirect left owed asking a question withdrawn, which would hold it and everything it holds back for ever in the
+    /// session, and be made from a visit the run left at a resume, resetting <c>make</c> and what depends on it. The new
+    /// visit of <c>work</c> runs and the run ends done, whether in the session, across a resume, or across a resume from the
+    /// records an older build left - its redirect still owed beside the question it withdrew, which the resume never makes.
+    /// </summary>
+    [Theory]
+    [InlineData("in the session")]
+    [InlineData("across a resume")]
+    [InlineData("across a resume from an older build's records")]
+    public async Task ARedirectWhoseHandlerAnEarlierRedirectLeaves_IsDroppedWithItsQuestion_AndNeverMade(string where)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: make
+                steps:
+                  - name: worker
+                    type: create-agent
+                    agent: maker
+              - name: work
+                dependsOn: [make]
+                steps:
+                  - name: check
+                    type: orient
+                  - name: fix
+                    type: orient
+                    on: {step: check, outcome: failure}
+                    then: make
+                  - name: slow
+                    type: orient
+                    dependsOn: [check]
+              - name: watch
+                type: orient
+                dependsOn: [make]
+              - name: back
+                type: orient
+                on: {step: watch, outcome: failure}
+                then: work
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new Runner()
+            .On("watch", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("check", run => run.Instance == "work.check"
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        runner.Hold("fix");
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        // Across a resume the process ends at the write that says back's redirect made: work left, the redirect gone.
+        IFlowRecords written = where == "in the session"
+            ? records
+            : new CrashingRecords(records, _ => false, picksRun: run => run.Steps.Any(step => step is { Instance: "work", LeftBy: "back" }) && run.Redirects?.Any(redirect => redirect.Handler == "back") != true);
+
+        using (records)
+        {
+            // fix ends once back's redirect to work is owed, waiting for fix to end.
+            var watched = new Watched(written, run => run.Redirects?.Any(redirect => redirect.Handler == "back") == true);
+            _ = watched.Seen.ContinueWith(_ => runner.Release("fix"), TaskScheduler.Default);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+            var ended = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.True(FlowRunStatus.Done == ended.Status, ended.Summary);
+            Assert.Equal("back", coordinator.Instances["work"].LeftBy);
+            Assert.Null(coordinator.Instances["make"].LeftBy);
+            Assert.True(written is not CrashingRecords crashing || crashing.Ended);
+        }
+
+        // On disk: fix's redirect was dropped and its question withdrawn - one fact, gone together.
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        Assert.True(flow.Redirects is null or []);
+        var asked = Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents");
+        Assert.Equal(("withdrawn", "work.fix"), (asked.State, asked.RaisedBy?.Step));
+
+        if (where == "across a resume from an older build's records")
+        {
+            // The records as an older build left them: fix's redirect owed still, as it was decided, naming the question it
+            // withdrew.
+            harness.OrchestrationStore.WriteFlow(layout, flow with { Redirects = [new FlowRedirectRecord("work.fix", "make", ["make", "work", "watch"], asked.Id)] });
+        }
+
+        if (where != "in the session")
+        {
+            var again = new Runner();
+
+            using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+            {
+                var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+                var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+                Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+                Assert.Equal(["work+2.check", "work+2.slow"], again.Started);
+                Assert.Null(resumed.Instances["make"].LeftBy);
+            }
+        }
+
+        // make was never reset: no redirect but back's was ever made.
+        Assert.Equal(
+            ["the run was sent to 'work', resetting 1 of its scope"],
+            FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Select(read => read.Detail).Where(detail => detail?.StartsWith("the run was sent to ", StringComparison.Ordinal) == true));
+    }
+
+    /// <summary>
+    /// The rerun a visit of the recovery that ended done owes a handler it put right is decided from the records too: a
+    /// crash right after the visit's done record leaves the handler's failed visit the newest raised for the ending it
+    /// answers, and the resume raises it again - a new visit naming the same source, which that ending waits on, the
+    /// failure it answers handled once it has ended; a crash right after the new visit's first record leaves the rerun
+    /// made, and the resume raises nothing more - the new visit runs, once.
+    /// </summary>
+    [Theory]
+    [InlineData("the visit's done record")]
+    [InlineData("the new visit's record")]
+    public async Task ARecoveryDonesRerunOfAHandler_IsDecidedFromTheRecords_TheResumeMakingItOnce(string crashAfter)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: fold
+                type: orient
+              - name: reconcile
+                type: orient
+                on: {step: fold, outcome: failure}
+                onFailure: recover
+              - name: after
+                type: orient
+                dependsOn: [fold]
+            """);
+        var runner = new Runner()
+            .On("fold", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("reconcile", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+        var crashing = crashAfter == "the new visit's record"
+            ? new CrashingRecords(records, _ => false, picksStep: (instance, _) => instance == "reconcile+2")
+            : new CrashingRecords(records, _ => false, picksStep: (instance, to) => instance == "recover" && to == nameof(FlowInstanceState.Done));
+        var cancel = TestContext.Current.CancellationToken;
+
+        using (records)
+        {
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(crashing.Ended);
+        }
+
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        Assert.Equal(nameof(FlowInstanceState.Done), flow.Steps.Single(step => step.Instance == "recover").State);
+        Assert.Equal(crashAfter == "the new visit's record" ? new[] { "reconcile+2" } : [], flow.Steps.Where(step => step.Instance == "reconcile+2").Select(step => step.Instance));
+        Assert.DoesNotContain(flow.Steps, step => step.Instance == "after");
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal("done; 1 failure was handled: fold, by reconcile", end.Summary);
+            Assert.Equal(["reconcile+2", "after"], again.Started);
+            Assert.Same(resumed.Instances["fold"], resumed.Instances["reconcile+2"].RaisedBy);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "reconcile+3");
+        }
+    }
+
+    /// <summary>
+    /// A handler raised for an ending that a failure's stop left NotRun - it never started, held nothing and wrote nothing
+    /// but its place in its source's ending - is put back by the resume that goes on with no failure standing to stop it,
+    /// under the same id and raised by the same ending, which already waits on it: it runs, the failure it answers is
+    /// handled, and what depends on that step starts - never an ending waiting for ever on a visit nothing makes again, and
+    /// what depends on its source failed as unable to start at every resume.
+    /// </summary>
+    [Fact]
+    public async Task AHandlerAStopLeftNotRun_IsPutBackByTheResume_AndTheEndingItAnswersSettles()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: lint
+                type: orient
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+        var watched = new Watched(records, snapshot => snapshot.Steps.Any(step => step is { Instance: "lint", State: FlowInstanceState.Failed }));
+
+        // lint's failure stops the run while build still runs: build's failure then raises fix, which the stop leaves NotRun.
+        var runner = new Runner()
+            .On("lint", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .OnAsync("build", async _ =>
+            {
+                await watched.Seen;
+                return FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)");
+            });
+
+        using (records)
+        {
+            var stopped = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched).RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.Equal(FlowRunStatus.Failed, stopped.Status);
+        }
+
+        var fix = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "fix");
+        Assert.Equal((nameof(FlowInstanceState.NotRun), nameof(FlowNotRunCause.RunEnded), "build"), (fix.State, fix.NotRunCause, fix.RaisedBy));
+        Assert.Equal([new FlowHandlerState("fix", "raised")], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build"))!.Handlers);
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal("done; 1 failure was handled: build, by fix", end.Summary);
+            Assert.Equal(["lint", "fix", "after"], again.Started);
+            var putBack = resumed.Instances["fix"];
+            Assert.Equal((FlowInstanceState.Done, 1, 1), (putBack.State, putBack.Visit, putBack.RaisedByAttempt));
+            Assert.Same(resumed.Instances["build"], putBack.RaisedBy);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "fix+2");
+        }
+    }
+
+    /// <summary>
+    /// A group handler whose failure stopped the run is raised again by the resume before its failure stops standing, each
+    /// in its own write: a crash between the two leaves the failure standing beside the new visit's record, which the next
+    /// resume reads as the retry made - the new visit runs once - and a crash right after the second leaves the new visit
+    /// made and the failure gone; either way the ending the handler answers waits on the new visit and settles with it,
+    /// never a failure gone with no new visit made for it.
+    /// </summary>
+    [Theory]
+    [InlineData("the new visit's record")]
+    [InlineData("the failure's clearing")]
+    public async Task AGroupHandlersRetryAtAResume_IsMadeOnce_WhereverACrashCutsItsWrites(string crashAfter)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                on: {step: build, outcome: failure}
+                onFailure: stop
+                steps:
+                  - name: attempt
+                    type: orient
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new Runner()
+            .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("attempt", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var stopped = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records).RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.Equal(FlowRunStatus.Failed, stopped.Status);
+        }
+
+        // The first resume ends at the write the test picks, the session going on in memory alone.
+        using (var cut = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var crashing = crashAfter == "the new visit's record"
+                ? new CrashingRecords(cut, _ => false, picksStep: (instance, _) => instance == "fix+2")
+                : new CrashingRecords(cut, _ => false, picksStep: (instance, to) => instance == "fix" && to == nameof(FlowInstanceState.Failed));
+            var first = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, records: crashing, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+            _ = await first.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(crashing.Ended);
+        }
+
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        Assert.Equal(
+            crashAfter == "the new visit's record" ? FlowStepRecord.NameOf(FlowFailure.EndedRun) : null,
+            harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("fix"))!.Failure);
+        Assert.Equal(nameof(FlowInstanceState.Running), flow.Steps.Single(step => step.Instance == "fix+2").State);
+
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal("done; 1 failure was handled: build, by fix", end.Summary);
+            Assert.Equal(["fix+2.attempt", "after"], again.Started);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "fix+3");
+        }
+    }
+
+    /// <summary>
+    /// A group the schedule draws, run again as a retry - at the resume after its failure stopped the run, or by a
+    /// <c>retry</c> answer to its failure's question - is opened again by the schedule, whose new visit is drawn after the
+    /// write that settles the visit that failed: that write says the retry (<see cref="FlowStepRecord.Retried"/>), so a
+    /// crash right after it leaves the new visit owed, and the next resume draws it - the group runs again once and what
+    /// depends on it starts after - never a failure gone, no question waiting and no new visit drawn, with what depends on
+    /// the group waiting for ever.
+    /// </summary>
+    [Theory]
+    [InlineData("stop")]
+    [InlineData("pause")]
+    public async Task APlainGroupsRetry_IsInTheRecordThatSettlesItsFailure_ACrashBeforeItsNewVisitIsDrawnLeavesItOwed(string onFailure)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse($"""
+            name: flow
+            steps:
+              - name: round
+                onFailure: {onFailure}
+                steps:
+                  - name: check
+                    type: orient
+              - name: after
+                type: orient
+                dependsOn: [round]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new Runner().On("check", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var ended = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records).RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.Equal(onFailure == "stop" ? FlowRunStatus.Failed : FlowRunStatus.Paused, ended.Status);
+        }
+
+        // The retry, carried out where the test picks it: the resume of the stopped run, or the answer to the question; the
+        // process ends at the first write of the visit that failed from there, which lands, and the session goes on in memory.
+        var settling = false;
+
+        using (var cut = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var cutting = new CrashingRecords(cut, _ => false, picksStep: (instance, _) => settling && instance == "round");
+            var first = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, records: cutting, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+            settling = true;
+
+            if (onFailure == "pause")
+            {
+                var asked = Assert.Single(first.OpenQuestions);
+                Assert.Equal(("failure", "round"), (asked.Kind, asked.Instance));
+                Assert.True(first.TryAnswer(asked.Id, "retry", out var problem), problem);
+            }
+            else
+            {
+                _ = await first.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            }
+
+            Assert.True(cutting.Ended);
+        }
+
+        // On disk: the visit that failed stands settled - no failure ending the run, no question waited on - and says its
+        // retry; its new visit was never drawn.
+        var failed = harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("round"))!;
+        Assert.Equal((nameof(FlowInstanceState.Failed), null, null, true), (failed.State, failed.Failure, failed.Question, failed.Retried));
+        Assert.DoesNotContain(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Instance == "round+2");
+
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["round+2.check", "after"], again.Started);
+            Assert.Equal(FlowInstanceState.Failed, resumed.Instances["round"].State);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "round+3");
+        }
+    }
+
+    /// <summary>
+    /// A visit of the recovery whose failure was answered retry is taken again once: the answer is written, then the next
+    /// visit, then the failed visit's record - a crash right after the next visit's first record leaves the failed visit
+    /// still waiting on its answered question, which the resume carries out again, and the next visit made in its place is
+    /// that retry: it runs, the step it puts right runs again, and no third visit is taken beside it.
+    /// </summary>
+    [Fact]
+    public async Task ARecoveryVisitsRetryCarriedOutAgainAtAResume_TakesTheRecoveryOnce()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: build
+                type: orient
+                onFailure: recover
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new Runner()
+            .On("build", (FlowStepRun run) => run.Visit == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("mend", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+        var crashing = new CrashingRecords(records, _ => false, picksStep: (instance, _) => instance == "recover+2");
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing);
+            var paused = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            var asked = Assert.Single(coordinator.OpenQuestions);
+            Assert.Equal(("failure", "recover"), (asked.Kind, asked.Instance));
+            Assert.True(coordinator.TryAnswer(asked.Id, "retry", out var problem), problem);
+            Assert.True(crashing.Ended);
+        }
+
+        Assert.NotNull(harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("recover"))!.Question);
+        Assert.Equal(nameof(FlowInstanceState.Running), harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "recover+2").State);
+
+        var again = new Runner().On("build", FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["recover+2.mend", "build+2", "after"], again.Started);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "recover+3");
+        }
+    }
+
+    /// <summary>
+    /// The one rule of which attempt of its source a handler's visit was raised for: the attempt its record names; for a
+    /// record that names none, the attempt its source's record holds where that attempt ended and its failure is not owed,
+    /// and the attempt before it beside one not ended - not started, running, paused, stopped - or whose failure is owed,
+    /// for an ending raises its handlers only as it is decided; save a failure owed that a fail answer at a handler's bound
+    /// gave an attempt that had ended done, whose raise is that attempt's own; and never below the first attempt.
+    /// </summary>
+    [Theory]
+    [InlineData(3, FlowInstanceState.Failed, 1, null, null, 3)]
+    [InlineData(null, FlowInstanceState.Failed, 2, null, null, 2)]
+    [InlineData(null, FlowInstanceState.Done, 2, null, null, 2)]
+    [InlineData(null, FlowInstanceState.Failed, 2, FlowFailure.PassedOver, null, 2)]
+    [InlineData(null, FlowInstanceState.Failed, 2, FlowFailure.Owed, null, 1)]
+    [InlineData(null, FlowInstanceState.Failed, 2, FlowFailure.Owed, "visitBound", 2)]
+    [InlineData(null, FlowInstanceState.Failed, 1, FlowFailure.Owed, "visitBound", 1)]
+    [InlineData(null, FlowInstanceState.Failed, 1, FlowFailure.Owed, null, 1)]
+    [InlineData(null, FlowInstanceState.Failed, 2, FlowFailure.Owed, "failure", 1)]
+    [InlineData(null, FlowInstanceState.Failed, 2, FlowFailure.PassedOver, "visitBound", 2)]
+    [InlineData(null, FlowInstanceState.NotStarted, 2, null, null, 1)]
+    [InlineData(null, FlowInstanceState.NotStarted, 1, null, null, 1)]
+    [InlineData(null, FlowInstanceState.Running, 2, null, null, 1)]
+    [InlineData(null, FlowInstanceState.Paused, 2, null, null, 1)]
+    [InlineData(null, FlowInstanceState.Stopped, 2, null, null, 1)]
+    public void TheAttemptARaiseAnswered_IsItsRecordsOrReadFromItsSourcesRecord(int? recorded, FlowInstanceState state, int attempt, FlowFailure? failure, string? endedByQuestion, int answered)
+        => Assert.Equal(answered, FlowInstance.AttemptRaisedFor(recorded, state, attempt, sourceEndedFor: null, failure, endedByQuestion));
+
+    /// <summary>
+    /// A raise an older build recorded names no attempt, and is read as the attempt it answered by the engine's one rule of
+    /// it (<see cref="FlowInstance.AttemptRaisedFor"/>): beside a source whose new attempt ended failed with its failure
+    /// still owed - a crash came between that end and what decides it - the raise can only be an earlier attempt's, for an
+    /// ending raises its handlers only as it is decided, so the resume decides the new attempt's failure and raises the
+    /// handler anew.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderRaiseBesideANewAttemptsOwedFailure_IsReadAsAnEarlierAttempts_AndTheHandlerIsRaisedAnew()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+                onFailure: pause
+              - name: note
+                type: orient
+                on: {step: build, outcome: failure}
+                when: build.go
+                onFailure: continue
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+                maxVisits: 1
+                then: build
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var asked = 0;
+        var runner = new Runner()
+            .On("build", (FlowStepRun _) => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)", output: JsonNode.Parse(++asked == 3 ? """{"go": true}""" : "{}")));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        // The process ends at the write of the second attempt's failed end, its failure owed.
+        var crashing = new CrashingRecords(records, _ => false, picksRun: run => run.Steps.Any(step => step is { Instance: "build+2", Attempt: 2, State: FlowInstanceState.Failed }));
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing);
+
+            foreach (var (kind, answer) in new[] { ("visitBound", "fail"), ("failure", "retry") })
+            {
+                _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+                Assert.True(coordinator.TryAnswer(Assert.Single(coordinator.OpenQuestions, question => question.Kind == kind).Id, answer, out var problem), problem);
+            }
+
+            _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(crashing.Ended);
+        }
+
+        // The records as an older build leaves them: the raise of the first attempt's ending names no attempt.
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        Assert.Equal(FlowStepRecord.NameOf(FlowFailure.Owed), flow.Steps.Single(step => step.Instance == "build+2").Failure);
+        harness.OrchestrationStore.WriteFlow(layout, flow with
+        {
+            Steps = [.. flow.Steps.Select(step => step.RaisedByAttempt is null ? step : step with { RaisedByAttempt = null })],
+        });
+
+        foreach (var raised in flow.Steps.Where(step => step.RaisedByAttempt is not null))
+        {
+            harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile(raised.Instance), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile(raised.Instance))! with { RaisedByAttempt = null });
+        }
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            Assert.Equal(1, resumed.Instances["note+2"].RaisedByAttempt);
+
+            var paused = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            // The owed failure was decided: note fits it, and fix at its bound asks.
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            var bound = Assert.Single(resumed.OpenQuestions);
+            Assert.True(resumed.TryAnswer(bound.Id, "accept", out var problem), problem);
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["note+3", "after"], again.Started);
+            Assert.Equal((FlowInstanceState.Done, 2), (resumed.Instances["note+3"].State, resumed.Instances["note+3"].RaisedByAttempt));
+            Assert.Equal("note", resumed.Instances["build+2"].HandledBy);
+        }
+    }
+
+    /// <summary>
+    /// The attempt an older raise answered is read once, by the first resume that reads its record, and written into that
+    /// visit's own record before anything rewrites its source's: the source's record changes as the session decides its
+    /// failure - here its owed failure decided, and the session ending on the bound's question - so a second resume that
+    /// read the attempt again from it would read the earlier attempt's raise as the new attempt's, take the handler as
+    /// raised already and settle the new failure on it. The second resume reads what the first wrote: the answer raises the
+    /// handler anew for the new attempt, its visit runs once, and the status a reader is shown names the same attempt.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderRaisesAttempt_IsReadOnceAndWritten_ASecondResumeReadsTheSameAttempt()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+                onFailure: pause
+              - name: note
+                type: orient
+                on: {step: build, outcome: failure}
+                when: build.go
+                onFailure: continue
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+                maxVisits: 1
+                then: build
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var asked = 0;
+        var runner = new Runner()
+            .On("build", (FlowStepRun _) => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)", output: JsonNode.Parse(++asked == 3 ? """{"go": true}""" : "{}")));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+        var crashing = new CrashingRecords(records, _ => false, picksRun: run => run.Steps.Any(step => step is { Instance: "build+2", Attempt: 2, State: FlowInstanceState.Failed }));
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing);
+
+            foreach (var (kind, answer) in new[] { ("visitBound", "fail"), ("failure", "retry") })
+            {
+                _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+                Assert.True(coordinator.TryAnswer(Assert.Single(coordinator.OpenQuestions, question => question.Kind == kind).Id, answer, out var problem), problem);
+            }
+
+            _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(crashing.Ended);
+        }
+
+        // The records as an older build leaves them: no raise names the attempt it answered.
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        harness.OrchestrationStore.WriteFlow(layout, flow with
+        {
+            Steps = [.. flow.Steps.Select(step => step.RaisedByAttempt is null ? step : step with { RaisedByAttempt = null })],
+        });
+
+        foreach (var raised in flow.Steps.Where(step => step.RaisedByAttempt is not null))
+        {
+            harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile(raised.Instance), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile(raised.Instance))! with { RaisedByAttempt = null });
+        }
+
+        // The first resume decides the owed failure, and the session ends on fix's bound question.
+        using (var firstRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var first = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, records: firstRecords, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+            var paused = await first.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            Assert.Equal(("visitBound", "build+2"), (Assert.Single(first.OpenQuestions).Kind, Assert.Single(first.OpenQuestions).Instance));
+        }
+
+        // The source's own record has changed since the attempt was read - its failure decided - and the raise's says it.
+        var source = harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build+2"))!;
+        Assert.Equal((2, null), (source.Attempt, source.Failure));
+        Assert.Equal(1, harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("note+2"))!.RaisedByAttempt);
+        Assert.Equal(1, harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "note+2").RaisedByAttempt);
+
+        var again = new Runner();
+
+        using (var secondRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var second = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: secondRecords, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+            Assert.Equal(1, second.Instances["note+2"].RaisedByAttempt);
+            Assert.True(second.TryAnswer(Assert.Single(second.OpenQuestions).Id, "accept", out var problem), problem);
+            var end = await second.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["note+3", "after"], again.Started);
+            Assert.Equal((FlowInstanceState.Done, 2), (second.Instances["note+3"].State, second.Instances["note+3"].RaisedByAttempt));
+            Assert.Equal("note", second.Instances["build+2"].HandledBy);
+            Assert.DoesNotContain(second.Instances.Keys, id => id == "note+4");
+        }
+    }
+
+    /// <summary>
+    /// A fail answer at a handler's bound, after a failure, decides that the failure stands unhandled: the ending no longer
+    /// waits on the handlers it raised before the bound was met - one whose <c>when</c> could not be read among them - and
+    /// the source's record says it (each such handler <c>left</c>), so a session that takes the run up rebuilds no ending
+    /// that never waited in the session and settles nothing on it: the failure its policy decided - here the stop that
+    /// ended the run, which a failure a person answered fail keeps standing - is never said to be one a handler took.
+    /// </summary>
+    [Fact]
+    public async Task AFailAnswerAtAHandlersBoundAfterAFailure_EndsTheEndingsWaitOnItsRaisedHandlers_InTheSourcesRecord()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+                onFailure: stop
+              - name: note
+                type: orient
+                on: {step: build, outcome: failure}
+                when: build.go
+                onFailure: continue
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+                maxVisits: 1
+                then: build
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new Runner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)", output: JsonNode.Parse("{}")));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        // build+2's failure meets fix's bound beside note+2, raised with its when unreadable; the answer fail leaves the
+        // failure to its policy, whose stop ends the run.
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            var bound = Assert.Single(coordinator.OpenQuestions);
+            Assert.Equal(("visitBound", "build+2"), (bound.Kind, bound.Instance));
+            Assert.True(coordinator.TryAnswer(bound.Id, "fail", out var problem), problem);
+            Assert.Null(coordinator.Instances["build+2"].HandledBy);
+        }
+
+        // On disk: the failure stands, the stop it ended the run with, and the ending says it waits on none of its handlers.
+        var failed = harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build+2"))!;
+        Assert.Equal((nameof(FlowInstanceState.Failed), FlowStepRecord.NameOf(FlowFailure.EndedRun)), (failed.State, failed.Failure));
+        Assert.Equal([new FlowHandlerState("fix", "passed"), new FlowHandlerState("note", "left")], failed.Handlers);
+        Assert.Equal((nameof(FlowInstanceState.Failed), FlowStepRecord.NameOf(FlowFailure.PassedOver)), (harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("note+2"))!.State, harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("note+2"))!.Failure));
+
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            // The run stays stopped on the failure the answer kept standing, and nothing took it.
+            Assert.Equal(FlowRunStatus.Failed, end.Status);
+            Assert.Empty(again.Started);
+            Assert.Null(resumed.Instances["build+2"].HandledBy);
+        }
+
+        var standing = harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build+2"))!;
+        Assert.Equal((null, FlowStepRecord.NameOf(FlowFailure.EndedRun)), (standing.HandledBy, standing.Failure));
+        Assert.Equal([new FlowHandlerState("fix", "passed"), new FlowHandlerState("note", "left")], standing.Handlers);
+    }
+
+    /// <summary>
+    /// A fail answer at the bound of a handler of a step that ended done ends that same attempt failed: its success ending
+    /// had raised what it raised before the bound was met - a handler whose <c>when</c> could not be read among it - so an
+    /// older raise beside a failure still owed that a fail answer at a visit's bound gave is that attempt's own, and its first
+    /// attempt is never read as attempt 0. A crash right after the failed end, the raise naming no attempt as an older build
+    /// wrote it: the resume decides the failure, takes the handler as raised already for this attempt, and raises it no
+    /// second time.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderRaiseBesideAFailureAFailAnswerAtASuccessBoundGave_IsThatAttemptsOwn_AndIsNeverRaisedTwice()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: note
+                type: orient
+                on: {step: build, outcome: end}
+                when: build.go
+                onFailure: continue
+              - name: fix
+                type: orient
+                on: {step: build, outcome: end}
+                maxVisits: 1
+                then: build
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new Runner().On("build", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("{}")));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        // build ends done twice - fix sends the run back once - and its second ending meets fix's bound, answered fail.
+        var crashing = new CrashingRecords(records, _ => false, picksRun: run => run.Steps.Any(step => step is { Instance: "build+2", State: FlowInstanceState.Failed }));
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing);
+            _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            var bound = Assert.Single(coordinator.OpenQuestions);
+            Assert.Equal(("visitBound", "build+2"), (bound.Kind, bound.Instance));
+            Assert.True(coordinator.TryAnswer(bound.Id, "fail", out var problem), problem);
+            Assert.True(crashing.Ended);
+        }
+
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        var failed = flow.Steps.Single(step => step.Instance == "build+2");
+        Assert.Equal((1, FlowStepRecord.NameOf(FlowFailure.Owed), "visitBound"), (failed.Attempt, failed.Failure, failed.EndedByQuestion));
+        Assert.Equal(nameof(FlowInstanceState.Failed), flow.Steps.Single(step => step.Instance == "note+2").State);
+        harness.OrchestrationStore.WriteFlow(layout, flow with
+        {
+            Steps = [.. flow.Steps.Select(step => step.RaisedByAttempt is null ? step : step with { RaisedByAttempt = null })],
+        });
+
+        foreach (var raised in flow.Steps.Where(step => step.RaisedByAttempt is not null))
+        {
+            harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile(raised.Instance), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile(raised.Instance))! with { RaisedByAttempt = null });
+        }
+
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+            Assert.Equal(1, resumed.Instances["note+2"].RaisedByAttempt);
+            var paused = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            // The failure's ending takes note as raised for this attempt already, and fix at its bound asks of it.
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            var bound = Assert.Single(resumed.OpenQuestions);
+            Assert.Equal(("visitBound", "build+2"), (bound.Kind, bound.Instance));
+            Assert.True(resumed.TryAnswer(bound.Id, "accept", out var problem), problem);
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["after+2"], again.Started);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "note+3");
+            Assert.Equal("note", resumed.Instances["build+2"].HandledBy);
+        }
+    }
+
+    /// <summary>
+    /// A redirect that asks before it goes names its question in the question's own write, and waits on the answer the
+    /// questions file holds: a <c>stay</c> written, and the process ended before the change it makes reached the step's
+    /// record, is carried out at the resume - the redirect is given up, the step put right counted handled by the recovery
+    /// - never a redirect made in its place, its group reset and run again over the answer a person gave.
+    /// </summary>
+    [Fact]
+    public async Task AStayWrittenAndNotCarriedOut_IsCarriedOutAtTheResume_AndTheRedirectIsNeverMade()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: round
+                onFailure: recover
+                steps:
+                  - name: worker
+                    type: create-agent
+                    agent: maker
+                  - name: check
+                    type: orient
+                    dependsOn: [worker]
+              - name: after
+                type: orient
+                dependsOn: [round]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new Runner().On("check", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+        var answering = false;
+        var crashing = new CrashingRecords(records, _ => false, lands: false, picksStep: (_, _) => answering);
+
+        // The recovery put the group right, and its redirect back to it - which would leave the group's agent open - asks.
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing);
+            var paused = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            var asked = Assert.Single(coordinator.OpenQuestions);
+            Assert.Equal(("openAgents", "recover"), (asked.Kind, asked.Instance));
+            Assert.Equal(asked.Id, Assert.Single(harness.OrchestrationStore.ReadFlow(layout)!.Redirects!).Question);
+
+            // The answer reaches the questions file; the process ends at the first write of the change it makes.
+            answering = true;
+            Assert.True(coordinator.TryAnswer(asked.Id, "stay", out var problem), problem);
+            Assert.True(crashing.Ended);
+        }
+
+        Assert.Equal("answered", Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions).State);
+        Assert.NotNull(harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("recover"))!.Question);
+
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["after"], again.Started);
+            Assert.Equal("recover", resumed.Instances["round"].HandledBy);
+            Assert.Null(resumed.Instances["round"].LeftBy);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "round+2");
+        }
+    }
+
+    /// <summary>
+    /// A redirect being made is never dropped as one the visits it leaves decided: a handler whose <c>then</c> sends the
+    /// run back over the group it is in leaves itself with that group, and its redirect - the one being made - goes on,
+    /// said made once and never said given up; the group's new visit runs, and the run ends done.
+    /// </summary>
+    [Fact]
+    public async Task AHandlersRedirectOverItsOwnGroup_IsMade_NeverDroppedAsTheRedirectOfAVisitItLeaves()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: round
+                steps:
+                  - name: check
+                    type: orient
+                  - name: fix
+                    type: orient
+                    on: {step: check, outcome: failure}
+                    then: round
+                  - name: slow
+                    type: orient
+                    dependsOn: [check]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new Runner().On("check", run => run.Instance == "round.check"
+            ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
+            : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+            Assert.Equal("round.fix", coordinator.Instances["round"].LeftBy);
+            Assert.Equal(["round.check", "round.fix", "round+2.check", "round+2.slow"], runner.Started);
+        }
+
+        Assert.Equal(
+            ["the run was sent to 'round', resetting 1 of its scope"],
+            FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Select(read => read.Detail).Where(detail => detail?.StartsWith("the run was ", StringComparison.Ordinal) == true));
+    }
+
+    /// <summary>
+    /// A redirect and the question it asks are one fact, though the process ended between the question's write and the
+    /// redirect's record that would name it: the redirect's record names no question, as an older build wrote it until the
+    /// write after its ask, or the one answered <c>retry</c> before the question asked again - and the resume has the
+    /// redirect wait on the question its handler asked, which is still open, never make it at once over a question nobody
+    /// answered. The answer <c>stay</c> then gives it up: the group is not reset, and what depends on it runs.
+    /// </summary>
+    [Theory]
+    [InlineData("an older build's first ask")]
+    [InlineData("a question asked again after retry")]
+    public async Task ARedirectWhoseRecordNamesNotTheQuestionItsHandlerJustAsked_WaitsOnThatQuestion_AtTheResume(string cut)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: round
+                onFailure: recover
+                steps:
+                  - name: worker
+                    type: create-agent
+                    agent: maker
+                  - name: check
+                    type: orient
+                    dependsOn: [worker]
+              - name: after
+                type: orient
+                dependsOn: [round]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new Runner().On("check", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        // Asked again, the process ends at the questions' write that holds the new question, before the redirect's record.
+        var crashing = new CrashingRecords(records, _ => false, picksQuestions: questions => cut == "a question asked again after retry" && questions.Count(question => question.Kind == "openAgents") == 2);
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing);
+            var paused = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            var asked = Assert.Single(coordinator.OpenQuestions);
+            Assert.Equal(("openAgents", "recover"), (asked.Kind, asked.Instance));
+
+            if (cut == "a question asked again after retry")
+            {
+                // The agent is still open, so the redirect asks again.
+                Assert.True(coordinator.TryAnswer(asked.Id, "retry", out var problem), problem);
+                Assert.True(crashing.Ended);
+            }
+        }
+
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        var questions = harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions.Where(question => question.Kind == "openAgents").ToList();
+
+        if (cut == "an older build's first ask")
+        {
+            // The records as an older build left them: the redirect names no question, and the visit keeps no reruns.
+            harness.OrchestrationStore.WriteFlow(layout, flow with
+            {
+                Steps = [.. flow.Steps.Select(step => step with { Reruns = null })],
+                Redirects = [Assert.Single(flow.Redirects!) with { Question = null }],
+            });
+            harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile("recover"), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("recover"))! with { Reruns = null });
+            Assert.Equal(["open"], questions.Select(question => question.State));
+        }
+        else
+        {
+            // On disk: the redirect still names the question answered retry; the one asked again is open.
+            Assert.Equal(questions[0].Id, Assert.Single(flow.Redirects!).Question);
+            Assert.Equal(["answered", "open"], questions.Select(question => question.State));
+        }
+
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+
+            if (cut == "a question asked again after retry")
+            {
+                // Asked again just before the process ended, the question owes its recommendation, which the session seeks:
+                // the redirect waits on the question meanwhile, and nothing is reset.
+                Assert.Equal(FlowRunStatus.Paused, (await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+                Assert.Empty(again.Started);
+            }
+
+            // The redirect waits on the question still open, which the answer stay gives up.
+            var open = Assert.Single(resumed.OpenQuestions);
+            Assert.Equal(questions[^1].Id, open.Id);
+            Assert.True(resumed.TryAnswer(open.Id, "stay", out var problem), problem);
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["after"], again.Started);
+            Assert.Equal("recover", resumed.Instances["round"].HandledBy);
+            Assert.Null(resumed.Instances["round"].LeftBy);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "round+2");
+        }
+    }
+
+    /// <summary>
+    /// A redirect that asks before it goes is the one its question asks of from the moment the question is made: an
+    /// answer the workflow configured for it, taken at once as the question is raised, finds the redirect and gives it up -
+    /// the run goes on as if the visit named no rerun, the step put right counted handled by the recovery - where a
+    /// redirect that named its question only once the ask returned would miss that answer and wait for ever on a question
+    /// already answered.
+    /// </summary>
+    [Fact]
+    public async Task AConfiguredOpenAgentsAnswerTakenAtOnce_FindsTheRedirectThatAsked()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            answers:
+              openAgents: stay
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: round
+                onFailure: recover
+                steps:
+                  - name: worker
+                    type: create-agent
+                    agent: maker
+                  - name: check
+                    type: orient
+                    dependsOn: [worker]
+              - name: after
+                type: orient
+                dependsOn: [round]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new Runner().On("check", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.True(FlowRunStatus.Done == end.Status, $"{end.Summary} | asked: {string.Join("; ", coordinator.OpenQuestions.Select(question => $"{question.Kind}: {question.Problem}"))}");
+            Assert.Equal(["round.worker", "round.check", "recover.mend", "after"], runner.Started);
+            Assert.Equal("recover", coordinator.Instances["round"].HandledBy);
+            Assert.DoesNotContain(coordinator.Instances.Keys, id => id == "round+2");
+        }
+
+        var answered = Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions);
+        Assert.Equal(("openAgents", "answered", "stay"), (answered.Kind, answered.State, answered.Answers[^1].Answer));
     }
 }

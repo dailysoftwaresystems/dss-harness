@@ -79,3 +79,7 @@ it be done: a person is asked about it before your work is tested or folded.
 
 When you report, the engine builds your worktree and runs the tests itself. A red result comes back to you with the
 output, so report what you saw.
+
+## Issues that were there before
+
+{text.issuesBefore}

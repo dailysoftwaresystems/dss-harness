@@ -15,21 +15,25 @@ using DssHarness.Core.Secrets;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
-/// The engine's advisor, the model behind a question the engine raises: one reason step that only reads, independent of every other conversation, worked wherever the run works - its records and its own
+/// The engine's advisor, the model behind every question the engine raises: one reason step that only reads, independent of every other conversation, worked wherever the run works - its records and its own
 /// conversations under <c>advice/&lt;n&gt;/</c> of the asking step's own directory, numbered after the advices already
-/// there, whatever agent the asking step names or none - and held to the engine's own schema for an advice, in the
+/// there, whatever agent the asking step names or none, and the run's own question's under the run's own name among the
+/// steps' (<see cref="FlowQuestions.RunsOwn"/>) - and held to the engine's own schema for an advice, in the
 /// subset every answer is held to, whose <c>answer</c> the schema itself refuses unless it is one of the question's and
-/// whose <c>text</c> it asks for exactly where the answer takes one.
+/// whose <c>text</c> it asks for exactly where the answer takes one - and bounded by its own definition alone
+/// (<c>maxTurns</c>, <c>maxBudgetUsd</c>, <c>maxMinutes</c>), never by the run's budget or its reserve.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
-/// <param name="store">Reads the asking agent's record, for the place the advice works in.</param>
+/// <param name="store">Reads the asking agent's record, for the place the advice works in, and the run's records, for its own question.</param>
 /// <param name="runner">Works the advice, whatever the client is.</param>
 /// <param name="fileSystem">The file system the workflow's files are read on.</param>
 /// <param name="keys">The slot the entry's keys are read from.</param>
 /// <param name="harnessOutput">Writes output the copies of a continuation record name.</param>
 /// <param name="isolation">Decides the operating system's isolation the advice's agent runs under.</param>
+/// <param name="owner">Tells the run's engine, as the run's own question's record - the run's facts - says it.</param>
 /// <param name="updates">Finds the Claude Code the advice's order starts, where it holds the client that starts one; null where nothing does.</param>
+/// <param name="clock">The moment the run's facts are read at; the system's where none is given.</param>
 public sealed class AdvisorRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -39,7 +43,9 @@ public sealed class AdvisorRunner(
     AgentKeyStore keys,
     Output.IHarnessOutput harnessOutput,
     Agents.Isolation.IAgentIsolation isolation,
-    Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null) : IFlowAdvisorRunner
+    FlowRunOwner owner,
+    Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null,
+    TimeProvider? clock = null) : IFlowAdvisorRunner
 {
     /// <summary>The directory under the asking step's own that holds its advices, one numbered directory for each.</summary>
     public const string AdviceDirectoryName = "advice";
@@ -143,15 +149,17 @@ public sealed class AdvisorRunner(
 
         order = program.Order;
 
-        // The asking step's agent decides where the advice works: its worktree where it has one - at the path its record
-        // resolves, as every launch's is - else the main tree; the advice only reads either way, its own work directory
-        // the one place it writes. Its records sit under the asking step's own directory, whichever agent it names, in
+        // The asking step's agent decides where the advice works: its tree - at the path its record resolves, as every
+        // launch's is, an agent that only reads having one of its own as every agent has - else the advice's own work
+        // directory; the advice only reads either way, the main checkout too, its own work directory the one place it
+        // writes. The tree is never brought to the main checkout's HEAD here, and no step's start brings it elsewhere while
+        // the advice runs: the engine holds read on it for the advice until its runner ends (FlowClaims.OfAdvice). Its records sit under the asking step's own directory, whichever agent it names, in
         // the next number after the advices that directory holds already: a session before this one may have left some.
         var working = call.Agent;
         var agentRecord = working is null ? null : store.ReadAgent(layout, working);
         var directory = NextAdviceDirectory(layout, call);
         made(directory);
-        var workspace = launch.Workspace(agentRecord, context.Layout, Path.Combine(directory, "work"), layout.Directory);
+        var workspace = launch.Workspace(agentRecord, context.Layout, Path.Combine(directory, OrchestratorLayout.WorkDirectoryName), layout.Directory);
         var ground = AgentStepGround.Of(
             context.Config,
             definition,
@@ -172,8 +180,14 @@ public sealed class AdvisorRunner(
         }
 
         // What the run stored of the asking step, rendered as a continuation record renders a step and within the
-        // same bounds - the question's own record, read by {question.record}.
-        call = call with { Record = call.Record ?? await RecordOfAsync(layout, call, directory, cancellationToken).ConfigureAwait(false) };
+        // same bounds - the question's own record, read by {question.record}; for the run's own question, which no step
+        // asked, the run's facts as its status gives them.
+        call = call with
+        {
+            Record = call.Record ?? (call.Instance == FlowQuestions.RunsOwn
+                ? FactsOf(layout)
+                : await RecordOfAsync(layout, call, directory, cancellationToken).ConfigureAwait(false)),
+        };
 
         var prompt = PromptOf(files, context.Layout, call);
 
@@ -198,9 +212,13 @@ public sealed class AdvisorRunner(
             workspace,
             OutputOf(call),
             Conversation: null,
+
+            // The advice is held to its own definition's bounds alone, never to what is left of the run's budget: a
+            // question raised once the run is past its reserve is recommended as any other is, and what the advice spends
+            // is counted in the run's spend all the same.
             new AgentLimits(
                 definition.MaxTurns,
-                FlowRunBudget.Bound(definition.MaxBudgetUsd, call.BudgetLeftUsd),
+                definition.MaxBudgetUsd,
                 definition.MaxMinutes is { } minutes ? TimeSpan.FromMinutes(minutes) : null,
                 definition.StallSeconds,
                 place.Definition.HandoffSeconds),
@@ -305,9 +323,35 @@ public sealed class AdvisorRunner(
 
         return await new AgentContinuation(fileSystem, harnessOutput).RenderAsync(
             work,
-            Path.Combine(directory, "work"),
+            Path.Combine(directory, OrchestratorLayout.WorkDirectoryName),
             directory,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The run's own question's record: the run's facts as <c>ask-orchestrator-status</c> gives them, from the records the
+    /// engine wrote as it raised the question - how the run stands, what is running and waits, what is done and what is
+    /// left, and when it may finish - for a question about the whole run's spending is weighed by what the run did and
+    /// has still to do. Said plainly where the run's records hold no state yet.
+    /// </summary>
+    /// <param name="layout">The run's own paths.</param>
+    private string FactsOf(OrchestratorLayout layout)
+    {
+        // The run's state is read with what its engine is doing, by the one path every reader of the two takes.
+        if (OrchestratorService.EngineOf(store, owner, layout) is not { } read || store.ReadDefinition(layout) is not { } definition)
+        {
+            return $"(the run's records hold no state yet: '{layout.FlowFile}' or '{layout.DefinitionFile}' is not there)";
+        }
+
+        var facts = FlowStatus.Facts(
+            definition,
+            read.Flow,
+            store.ReadFlowQuestions(layout),
+            store.ReadFlowUpdates(layout),
+            read.Engine,
+            (clock ?? TimeProvider.System).GetUtcNow());
+
+        return string.Join("\n", facts);
     }
 
     /// <summary>

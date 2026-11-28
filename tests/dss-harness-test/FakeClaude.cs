@@ -42,7 +42,10 @@ namespace DssHarness.Tests;
 /// said where <c>declinedBy</c> names, or everywhere), and can carry a <c>rateLimit</c> event's info first, a
 /// <c>controlRequest</c> of its own that it does not wait on, and take <c>slowMs</c> before it plays - or, told
 /// <c>slowUntilHeld</c>, end only once the next user line was read and held as one it never takes, so no load on the
-/// machine moves the one before the other. Each answer of the host's to a call is written back, as the CLI writes it. Its
+/// machine moves the one before the other. A turn's <c>answers</c> are responses of the model's it writes before its text,
+/// each one answer: a list of texts is one response, a line for each, every line naming the response's id, as Claude Code
+/// writes a response's blocks; a text alone is a line that names no id; and an object's <c>synthetic</c> is a message
+/// Claude Code writes itself. Each answer of the host's to a call is written back, as the CLI writes it. Its
 /// <c>ignoreEof</c> keeps the process running once its
 /// input is closed, as a launch that does not end by itself. A call of a tool of Claude Code's own the host allowed - a
 /// side-task's own web fetch - runs here, its result the call's <c>result</c>.
@@ -199,6 +202,19 @@ internal static class FakeClaude
             }
 
             Say(line);
+        }
+
+        // One text block of a response, as a line of its own naming the response's id - or none, where none is given.
+        void Block(string? response, string named, string text)
+        {
+            var message = new JsonObject { ["model"] = named, ["role"] = "assistant", ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }) };
+
+            if (response is not null)
+            {
+                message["id"] = response;
+            }
+
+            Say(new JsonObject { ["type"] = "assistant", ["message"] = message, ["session_id"] = session });
         }
 
         // An MCP message of the server's, sent to the host and waited on as what it is.
@@ -408,6 +424,30 @@ internal static class FakeClaude
                 Assistant(entry, [new JsonObject { ["type"] = "text", ["text"] = said }], error);
                 Result(entry, said, null, error: true, "success", "api_error", []);
                 return;
+            }
+
+            foreach (var given in entry["answers"] as JsonArray ?? [])
+            {
+                switch (given)
+                {
+                    case JsonArray blocks:
+                        // One response, a line for each of its blocks, every line naming the response's id.
+                        var response = Id("msg_");
+
+                        foreach (var block in blocks)
+                        {
+                            Block(response, Model(entry), Text(block) ?? string.Empty);
+                        }
+
+                        break;
+                    case JsonObject own:
+                        // A message Claude Code writes itself, under an id of its own.
+                        Block(Id("uuid-"), "<synthetic>", Text(own["synthetic"]) ?? string.Empty);
+                        break;
+                    default:
+                        Block(null, Model(entry), Text(given) ?? string.Empty);
+                        break;
+                }
             }
 
             var text = Text(entry["text"]) ?? "done";

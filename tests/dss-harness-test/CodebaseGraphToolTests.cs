@@ -503,7 +503,7 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Matches("^base at [0-9a-f]{40}: 6 file\\(s\\)$", repository[0]);
         Assert.Contains("directory src/ (3 file(s))", repository);
         Assert.Contains("namespace Demo (3 declaration(s))", repository);
-        Assert.Equal("the view holds no file at 'src/None.cs'", missing);
+        Assert.Equal("the view holds no file or directory at 'src/None.cs'", missing);
     }
 
     /// <summary>An outline past the answer's character bound pages before its own bound of entries, at whole entries, and the pages hold the whole answer.</summary>
@@ -582,6 +582,32 @@ public sealed partial class CodebaseGraphToolTests
         Assert.DoesNotContain("#aac0401c (", said[0], StringComparison.Ordinal);
         Assert.Equal("8257a8 Demo.Geometry.Twice src/Geometry.cs:18-21 #aac0401c", served[0]);
         Assert.Equal("20\t        return Total([shape, shape]);", served[3]);
+    }
+
+    /// <summary>
+    /// A body naming declarations of two files whose lines moved since the view was read has the graph check both files
+    /// again in one check - never a check a file, each of which costs a whole view - and serves each declaration as it is
+    /// now, from the view that check left. Red with each moved declaration's file checked again as it is met.
+    /// </summary>
+    [Fact]
+    public async Task ABodyOfDeclarationsInSeveralMovedFiles_ChecksThemAgainInOneCheck()
+    {
+        using var tree = await TreeAsync();
+        var queries = await QueriesAsync(tree);
+        var checks = new List<IReadOnlyList<string>>();
+        var tool = Tool(tree, queries, checks: checks);
+        var diameter = ((GraphResolve.Found)queries.Resolve("Demo.Circle.Diameter")).Card;
+
+        tree.Write("src/Geometry.cs", "// moved\n// down\n" + File.ReadAllText(Path.Combine(tree.Tree, "src", "Geometry.cs")));
+        tree.Write("src/Shapes.cs", "// moved\n" + File.ReadAllText(Path.Combine(tree.Tree, "src", "Shapes.cs")));
+
+        var served = (await AskAsync(tool, """{"op":"body","symbols":["Twice","Diameter"]}""")).Text.Split('\n');
+
+        Assert.Equal([["src/Geometry.cs", "src/Shapes.cs"]], checks);
+        Assert.Equal("8257a8 Demo.Geometry.Twice src/Geometry.cs:18-21 #aac0401c", served[0]);
+        Assert.Equal("20\t        return Total([shape, shape]);", served[3]);
+        Assert.Equal($"{diameter.Handle} Demo.Circle.Diameter src/Shapes.cs:18-21 #{diameter.Hash}", served[5]);
+        Assert.Equal("20\t        return radius * 2;", served[8]);
     }
 
     /// <summary>
@@ -685,10 +711,10 @@ public sealed partial class CodebaseGraphToolTests
     /// was not given is refused by the schema and by the tool.
     /// </summary>
     [Theory]
-    [InlineData(false, false, "find,node,related,outline,body,sites", "data")]
-    [InlineData(true, false, "find,node,related,outline,body,sites,edit", "data,hash,text")]
-    [InlineData(false, true, "find,node,related,outline,body,sites,wholeFile", "data,reason")]
-    [InlineData(true, true, "find,node,related,outline,body,sites,edit,wholeFile", "data,hash,text,reason")]
+    [InlineData(false, false, "find,node,related,outline,around,impact,body,sites", "data")]
+    [InlineData(true, false, "find,node,related,outline,around,impact,body,sites,edit", "data,hash,text")]
+    [InlineData(false, true, "find,node,related,outline,around,impact,body,sites,wholeFile", "data,reason")]
+    [InlineData(true, true, "find,node,related,outline,around,impact,body,sites,edit,wholeFile", "data,hash,text,reason")]
     public async Task TheSchemaMadeForAStep_HoldsOnlyTheOperationsItIsGiven(bool write, bool narrow, string ops, string extra)
     {
         var given = CodebaseGraphTool.Operations(write, narrow);
@@ -697,7 +723,7 @@ public sealed partial class CodebaseGraphToolTests
 
         // Written as every JSON an agent's call carries is: JSON's own escapes alone.
         Assert.DoesNotContain("\\u", written, StringComparison.Ordinal);
-        Assert.Contains("a file's path, relative to the tree with forward separators.", written, StringComparison.Ordinal);
+        Assert.Contains("a file's path - for outline a directory's too - relative to the tree with forward separators.", written, StringComparison.Ordinal);
         var members = schema["properties"]!.AsObject().Select(member => member.Key).ToHashSet(StringComparer.Ordinal);
 
         Assert.Empty(JsonSchemaSubset.SubsetProblems(schema));
@@ -717,12 +743,12 @@ public sealed partial class CodebaseGraphToolTests
 
     /// <summary>An operation given a member it does not read, missing one it needs, or one out of its bounds is refused with a usage line.</summary>
     [Theory]
-    [InlineData("""{}""", "op is required: one of find, node, related, outline, body, sites, edit, wholeFile")]
-    [InlineData("""{"op":"teleport"}""", "op 'teleport' is not one this step may use: find, node, related, outline, body, sites, edit, wholeFile")]
+    [InlineData("""{}""", "op is required: one of find, node, related, outline, around, impact, body, sites, edit, wholeFile")]
+    [InlineData("""{"op":"teleport"}""", "op 'teleport' is not one this step may use: find, node, related, outline, around, impact, body, sites, edit, wholeFile")]
     [InlineData("""{"op":"find"}""", "op 'find' needs query: the words to match, split at case changes, underscores, digits and dots as a name is.")]
     [InlineData("""{"op":"node","symbol":"Total","query":"x"}""", "op 'node' does not read query: it reads symbol, page")]
-    [InlineData("""{"op":"related","symbol":"Total"}""", "op 'related' needs relation: which edge to follow.")]
-    [InlineData("""{"op":"related","symbol":"Total","relation":"siblings"}""", "relation is 'siblings': give one of callers, callees, derived, implementations, references, tests, includedBy, styledBy, styles")]
+    [InlineData("""{"op":"related","symbol":"Total"}""", "op 'related' needs relation: which edge to follow: callers, what calls it; callees, what it calls; derived, the types built on it; implementations, what implements it or answers it for a type; references, what names or makes it; tests, the tests that exercise it; includedBy, what imports it; styledBy, the rules that style it; styles, what a rule styles; bases, the types it is built on; overrides, what it overrides; overriddenBy, what overrides it; dispatchers, the interface members it answers; users, what reads or writes it; uses, what it reads or writes; parts, the other parts of its declaration; tested, what a test exercises.")]
+    [InlineData("""{"op":"related","symbol":"Total","relation":"siblings"}""", "relation is 'siblings': give one of callers, callees, derived, implementations, references, tests, includedBy, styledBy, styles, bases, overrides, overriddenBy, dispatchers, users, uses, parts, tested")]
     [InlineData("""{"op":"related","symbol":"Total","relation":"callers","depth":0}""", "depth is 0: hops start at 1")]
     [InlineData("""{"op":"related","symbol":"Total","relation":"callers","depth":-4}""", "depth is -4: hops start at 1")]
     [InlineData("""{"op":"find","query":"x","offset":1}""", "op 'find' does not read offset: an answer's further pages are asked by page, from 1")]
@@ -736,7 +762,7 @@ public sealed partial class CodebaseGraphToolTests
     [InlineData("""{"op":"wholeFile","path":"src/Geometry.cs","reason":"r","page":1}""", "op 'wholeFile' does not read page: what it answers is one page, said once it is done")]
     [InlineData("""{"op":"find","query":"  "}""", "query is empty: the words to match, split at case changes, underscores, digits and dots as a name is.")]
     [InlineData("""{"op":"node","symbol":""}""", "symbol is empty: a node: its handle, its id, a path:line, or a qualified or simple name.")]
-    [InlineData("""{"op":"outline","path":" "}""", "path is empty: a file's path, relative to the tree with forward separators.")]
+    [InlineData("""{"op":"outline","path":" "}""", "path is empty: a file's path - for outline a directory's too - relative to the tree with forward separators.")]
     [InlineData("""{"op":"body","symbols":["Twice",""]}""", "op 'body' needs symbols: one or more handles, ids or names, none empty")]
     [InlineData("""{"op":"body","symbols":["Twice"," "]}""", "op 'body' needs symbols: one or more handles, ids or names, none empty")]
     public async Task AMisusedOperation_IsRefusedWithAUsageLine(string input, string usage)
@@ -766,6 +792,18 @@ public sealed partial class CodebaseGraphToolTests
         var type = (await AskAsync(tool, """{"op":"outline","symbol":"Demo.Tests.GeometryTests"}""")).Text;
         var repository = (await AskAsync(tool, """{"op":"outline"}""")).Text.Split('\n');
         var candidates = (await AskAsync(Tool(tree, await QueriesAsync(tree), mayRead: path => path != "src/Shapes.g.cs"), """{"op":"node","symbol":"Area"}""")).Text.Split('\n');
+        var directory = (await AskAsync(tool, """{"op":"outline","path":"tests"}""")).Text;
+        var around = (await AskAsync(tool, """{"op":"around","symbol":"Total"}""")).Text;
+        var impact = (await AskAsync(tool, """{"op":"impact","symbol":"Total"}""")).Text;
+
+        // A directory, a node's place and a change's reach hold nothing of a file the reads do not reach, and count it.
+        Assert.Equal("outline of tests/ (0 file(s)):\nno file under tests/ is one your reads reach\n1 file(s) left out: your reads do not reach them", directory);
+        Assert.Contains("\ncallers (1):\n  8257a8 member public static double Twice(IShape shape)", around, StringComparison.Ordinal);
+        Assert.Contains("\n1 node(s) left out: in files your reads do not reach", around, StringComparison.Ordinal);
+        Assert.Contains("\ncallers (1):\n  1: 8257a8 member public static double Twice(IShape shape)", impact, StringComparison.Ordinal);
+        Assert.Contains("\n1 node(s) left out: in files your reads do not reach", impact, StringComparison.Ordinal);
+        Assert.DoesNotContain("tests (", impact, StringComparison.Ordinal);
+        Assert.DoesNotContain("tests/", around + impact, StringComparison.Ordinal);
 
         Assert.DoesNotContain("tests/", found, StringComparison.Ordinal);
         Assert.EndsWith("\n1 node(s) left out: in files your reads do not reach", found, StringComparison.Ordinal);
@@ -908,8 +946,9 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
-    /// <c>pack</c> gives a page of the step's context pack as the pack laid it, whole, when it was made - page 1 the first
-    /// message's - a page past the last refused with how many there are; <c>changes</c> gives a page of
+    /// <c>pack</c> gives a page of the step's context pack as the pack laid it, whole, when it was made - page 1 the page a
+    /// step that pushes its pack holds in its first message - a page past the last refused with how many there are, and
+    /// the description says it gives the pack from page 1; <c>changes</c> gives a page of
     /// the codebase changes the step was told, and says where it was told none; each needs its page, and neither is given
     /// a step whose operations do not hold it.
     /// </summary>
@@ -938,16 +977,67 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal((GraphToolOutcome.Usage, "op 'pack' needs page: which page of the answer to give, from 1; the first where it is left out."), (unpaged.Outcome, unpaged.Text));
         Assert.Equal((GraphToolOutcome.Usage, "this step was given no codebase changes to page"), (untold.Outcome, untold.Text));
         Assert.Equal(GraphToolOutcome.Usage, ungiven.Outcome);
-        Assert.StartsWith("op 'pack' is not one this step may use: find, node, related, outline, body", ungiven.Text, StringComparison.Ordinal);
-        Assert.Contains("pack - a page of the context pack your first message began", CodebaseGraphTool.Description(ops), StringComparison.Ordinal);
+        Assert.StartsWith("op 'pack' is not one this step may use: find, node, related, outline, around, impact, body", ungiven.Text, StringComparison.Ordinal);
+        Assert.Contains("pack - a page of your task's context pack - the part of the graph your task and the work before it reach - best first, from page 1 (where your first message holds a codebase part, that is page 1), its last line saying how to ask for the next", CodebaseGraphTool.Description(ops), StringComparison.Ordinal);
         Assert.Contains("\"pack\"", CodebaseGraphTool.Schema(ops), StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// <c>map</c> gives a page of the repository map the run keeps, from where the store kept it: page 1 the message's,
-    /// each page after it the map's own; a page past the last refused with how many there are; a page the disk will not
+    /// A <c>pack</c> answer's facts list the nodes of the page it gave - every line's node, each once, in the page's order -
+    /// and no node as asked, served or edited, for a line of a node is no use of it; its call line carries them, so the
+    /// step's figures can weigh the pages it pulled. A page past the last, a <c>changes</c> page and every other answer
+    /// list none, and their lines carry none. Red with the pack's answer given no facts, or its nodes said as asked.
+    /// </summary>
+    [Fact]
+    public async Task APacksAnswer_ListsThePagesNodes_AsNoUseOfThem_AndNoOtherAnswerLists()
+    {
+        using var tree = await TreeAsync();
+        var queries = await QueriesAsync(tree);
+        var made = CodebaseContextPack.Make(queries, new ContextPackRequest("`Demo.Geometry.Total` and `Demo.Geometry.Twice`", _ => true) { Tokens = 150 });
+        var told = new GraphTextPages([new GraphTextLine(null, "member Demo.Geometry.Total moved", made.Nodes[0])], 150, number => $"codebase changes page {number}", _ => null);
+        var tool = Tool(tree, queries, pack: () => made.Paged, changes: () => told);
+        var ops = CodebaseGraphTool.Operations(write: false, narrow: false, pack: true, changes: true);
+
+        var first = await AskAsync(tool, """{"op":"pack","page":1}""", ops);
+        var second = await AskAsync(tool, """{"op":"pack","page":2}""", ops);
+        var past = await AskAsync(tool, $$"""{"op":"pack","page":{{made.Pages!.Value + 1}}}""", ops);
+        var changes = await AskAsync(tool, """{"op":"changes","page":1}""", ops);
+        var find = await AskAsync(tool, """{"op":"find","query":"Total"}""", ops);
+
+        // Each page's nodes, read off its own lines: a line that lists no node aside, a node listed once.
+        List<string> NodesOn(int page) => [.. made.Page(page)!.Lines.Select(line => line.Id).OfType<string>().Distinct(StringComparer.Ordinal)];
+
+        Assert.True(made.More, made.Text);
+        Assert.Equal(GraphToolOutcome.Answered, second.Outcome);
+        Assert.Equal(made.Nodes, first.Facts.Listed);
+        Assert.Equal(NodesOn(2), second.Facts.Listed);
+        Assert.NotEmpty(second.Facts.Listed);
+        Assert.All(second.Facts.Listed, id => Assert.Contains($"{queries.Card(id).Handle} ", second.Text, StringComparison.Ordinal));
+
+        // A pack lists each node once: no page lists one another page did.
+        Assert.Empty(first.Facts.Listed.Intersect(second.Facts.Listed, StringComparer.Ordinal));
+
+        // Listed is no use: nothing asked, served or edited, on the answer or its line.
+        Assert.Equal(GraphToolFacts.None with { Listed = second.Facts.Listed }, second.Facts);
+        var line = GraphCallLine.Of("pack", second);
+        Assert.Equal(second.Facts.Listed, line.Listed);
+        Assert.Empty(line.Asked);
+        Assert.Empty(line.Served);
+        Assert.Empty(line.Edited);
+
+        // None lists where no pack page was given: past the last, a changes page, any other answer.
+        Assert.Equal((GraphToolOutcome.Usage, GraphToolFacts.None), (past.Outcome, past.Facts));
+        Assert.Equal((GraphToolOutcome.Answered, GraphToolFacts.None), (changes.Outcome, changes.Facts));
+        Assert.Empty(find.Facts.Listed);
+        Assert.Null(GraphCallLine.Of("changes", changes).Listed);
+        Assert.Null(GraphCallLine.Of("find", find).Listed);
+    }
+
+    /// <summary>
+    /// <c>map</c> gives a page of the repository map the run keeps, from where the store kept it, from page 1 - the page a
+    /// step at map is pushed - each page after it the map's own; a page past the last refused with how many there are; a page the disk will not
     /// give back said with why; a run given no map said; and the operation is not given a step whose operations do not
-    /// hold it.
+    /// hold it - given wherever there is a map, one of a single page among them, and never where there is none.
     /// </summary>
     [Fact]
     public async Task TheMapOp_GivesTheRunsMapPages_AndRefusesAPagePastTheLast()
@@ -962,7 +1052,7 @@ public sealed partial class CodebaseGraphToolTests
         var (_, kept) = store.MapOnce(layout, reads: null, () => (pages, meta), TestContext.Current.CancellationToken);
         var tool = Tool(tree, await QueriesAsync(tree), map: page => store.MapPage(layout, reads: null, kept, page));
         var given = Tool(tree, await QueriesAsync(tree), map: null);
-        var ops = CodebaseGraphTool.Operations(write: false, narrow: false, map: true);
+        var ops = CodebaseGraphTool.Operations(write: false, narrow: false, mapPages: kept);
 
         var second = await AskAsync(tool, """{"op":"map","page":2}""", ops);
         var first = await AskAsync(tool, """{"op":"map","page":1}""", ops);
@@ -980,8 +1070,13 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal(GraphToolOutcome.Usage, lost.Outcome);
         Assert.StartsWith($"the repository map's page {pages.Count} could not be read: ", lost.Text, StringComparison.Ordinal);
         Assert.Equal(GraphToolOutcome.Usage, ungiven.Outcome);
-        Assert.StartsWith("op 'map' is not one this step may use: find, node, related, outline, body", ungiven.Text, StringComparison.Ordinal);
-        Assert.Contains("map - a page of the repository map your first message began", CodebaseGraphTool.Description(ops), StringComparison.Ordinal);
+        Assert.StartsWith("op 'map' is not one this step may use: find, node, related, outline, around, impact, body", ungiven.Text, StringComparison.Ordinal);
+
+        // Offered wherever there is a map, one of a single page too - nothing given the tool is pushed its page 1 - and
+        // never where there is none.
+        Assert.Contains(GraphOp.Map, CodebaseGraphTool.Operations(write: false, narrow: false, mapPages: 1));
+        Assert.DoesNotContain(GraphOp.Map, CodebaseGraphTool.Operations(write: false, narrow: false, mapPages: 0));
+        Assert.Contains("map - a page of the repository map - the tree at a glance: its projects and top directories, then its most central declarations - from page 1, its last line saying where the rest is", CodebaseGraphTool.Description(ops), StringComparison.Ordinal);
         Assert.Contains("\"map\"", CodebaseGraphTool.Schema(ops), StringComparison.Ordinal);
     }
 
@@ -992,15 +1087,20 @@ public sealed partial class CodebaseGraphToolTests
         var reading = CodebaseGraphTool.Description(CodebaseGraphTool.Operations(write: false, narrow: false));
         var writing = CodebaseGraphTool.Description(CodebaseGraphTool.Operations(write: true, narrow: true));
 
-        Assert.Contains("find - the nodes a query's words match, best first, 20 a page", reading, StringComparison.Ordinal);
+        Assert.Contains("find - which nodes carry these words? best first, 20 a page", reading, StringComparison.Ordinal);
         Assert.Contains("every answer of a read is pages of whole entries, a line wider than a page given in pieces marked …: one of more than one page starts with the line 'page k of n' and any page is asked for with page, from 1; an answer with no header holds all of it", reading, StringComparison.Ordinal);
         Assert.DoesNotContain("offset", reading, StringComparison.Ordinal);
         Assert.DoesNotContain("edit -", reading, StringComparison.Ordinal);
         Assert.DoesNotContain("wholeFile -", reading, StringComparison.Ordinal);
         Assert.Contains("edit - a node's lines replaced where the hash you give is its hash now; wholeFile", writing, StringComparison.Ordinal);
-        Assert.Contains("related - the nodes a relation reaches, as many hops as you ask, 60 a page", reading, StringComparison.Ordinal);
-        Assert.Contains("body - the lines of the nodes you name, read fresh and numbered, 600 lines a page", reading, StringComparison.Ordinal);
-        Assert.Contains("; sites - every place that decides data you name - a symbol (a handle, an id, a path:line or a name), a key path (dotted - a name holding a dot or a bracket quoted in brackets, A[\"B.C\"] or A['B.C'], or its dots as they are, A.B.C, asking of every key it may mean; or as .NET's configuration writes one: A:B, A__B), a rule's selector, a quoted literal or a diagnostic id: what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal that holds it, every key it names - each place one card saying every way it decides, an edge's other than exact with how sure it is, its lines beneath it on the page it stands on, the cards grouped by file kind and tier, 60 places a page; what the graph does not answer of it - files it does not hold, holds unread, no longer holds the extract of or is unsure of, files it outlines, files with a reference of its name it bound to nothing, and for a quoted literal every file - searched by text and said by the coverage lines that end every answer, with every limit of each language whose files it read - one some file shows the sign of in full, with how many show it, every other by its short name on one line a language, 'help codebase-graph-languages' saying each in full. Every node is named", reading, StringComparison.Ordinal);
+        Assert.Contains("related - what does one relation reach from it? as many hops as you ask, by distance, 60 a page", reading, StringComparison.Ordinal);
+        Assert.Contains("body - what are its lines? the lines of the nodes you name, read fresh and numbered, 600 lines a page", reading, StringComparison.Ordinal);
+
+        // Each navigation operation by the question it answers, and when it beats reading and searching files.
+        Assert.Contains("; outline - what does this directory, file or type hold? a directory's every file, its subdirectories' too, with its language, its lines, whether it is a test and what it tests, and its top declarations; a file's or a type's declarations; with neither, the repository's; 400 a page; around - where does this node stand? what it is declared in - file, namespace, type - its siblings, its members, the declarations just before and after it, its callers and callees, 15 of each a page; impact - what does changing it reach? its callers at every distance, what it overrides and what overrides it, its implementations, dispatchers and derived types, and every test that reaches any of them, each with the path it reaches by, 60 of each a page; body - ", reading, StringComparison.Ordinal);
+        Assert.EndsWith(". Where the graph is not sure, the answer adds text: lines that hold the name. Ask before view_file or search_files: one call of outline, around or impact answers what takes many file reads and searches, and you then read only the lines it names.", reading, StringComparison.Ordinal);
+        Assert.EndsWith(" Ask before view_file or search_files: one call of outline, around or impact answers what takes many file reads and searches, and you then read only the lines it names.", writing, StringComparison.Ordinal);
+        Assert.Contains("; sites - what decides this data? every place that decides data you name - a symbol (a handle, an id, a path:line or a name), a key path (dotted - a name holding a dot or a bracket quoted in brackets, A[\"B.C\"] or A['B.C'], or its dots as they are, A.B.C, asking of every key it may mean; or as .NET's configuration writes one: A:B, A__B), a rule's selector, a quoted literal or a diagnostic id: what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal that holds it, every key it names - each place one card saying every way it decides, an edge's other than exact with how sure it is, its lines beneath it on the page it stands on, the cards grouped by file kind and tier, 60 places a page; what the graph does not answer of it - files it does not hold, holds unread, no longer holds the extract of or is unsure of, files it outlines, files with a reference of its name it bound to nothing, and for a quoted literal every file - searched by text and said by the coverage lines that end every answer, with every limit of each language whose files it read - one some file shows the sign of in full, with how many show it, every other by its short name on one line a language, 'help codebase-graph-languages' saying each in full. Every node is named", reading, StringComparison.Ordinal);
         Assert.Contains("\"data\"", CodebaseGraphTool.Schema(CodebaseGraphTool.Operations(write: false, narrow: false)), StringComparison.Ordinal);
         Assert.Contains("wholeFile - lifts the narrowing of reads for one file", writing, StringComparison.Ordinal);
     }
@@ -1834,7 +1934,7 @@ public sealed partial class CodebaseGraphToolTests
         var first = await AskAsync(tool, """{"op":"outline","path":"src/None.cs","page":1}""");
         var past = await AskAsync(tool, """{"op":"outline","path":"src/None.cs","page":2}""");
 
-        Assert.Equal((GraphToolOutcome.Answered, "the view holds no file at 'src/None.cs'"), (first.Outcome, first.Text));
+        Assert.Equal((GraphToolOutcome.Answered, "the view holds no file or directory at 'src/None.cs'"), (first.Outcome, first.Text));
         Assert.Equal((GraphToolOutcome.Usage, "page 2 of 'outline src/None.cs': it has 1 page (1 to 1)"), (past.Outcome, past.Text));
     }
 
@@ -1891,8 +1991,12 @@ public sealed partial class CodebaseGraphToolTests
     private static string LongClass(string name, int lines)
         => $"namespace Demo;\n\npublic static class {name}\n{{\n" + string.Concat(Enumerable.Range(0, lines).Select(at => $"    // line {at}\n")) + "}\n";
 
-    /// <summary>The tool over <paramref name="queries"/>, reading what the graph lists where no rule is given, and syncing a file again where <paramref name="sync"/>.</summary>
-    internal static CodebaseGraphTool Tool(CodebaseGraphTree tree, CodebaseGraphQueries queries, Func<string, bool>? mayRead = null, Func<string, AgentPolicyAnswer>? mayWrite = null, bool sync = true, GraphNearness? near = null, GraphPageStore? pages = null, IFileSystem? files = null, Core.Execution.ILineMask? mask = null, Func<GraphTextPages?>? pack = null, Func<GraphTextPages?>? changes = null, Func<int, GraphMapPage>? map = null)
+    /// <summary>
+    /// The tool over <paramref name="queries"/>, reading what the graph lists where no rule is given, and syncing files again
+    /// where <paramref name="sync"/> - each check it makes, by the files it names, added to <paramref name="checks"/> where
+    /// one is given.
+    /// </summary>
+    internal static CodebaseGraphTool Tool(CodebaseGraphTree tree, CodebaseGraphQueries queries, Func<string, bool>? mayRead = null, Func<string, AgentPolicyAnswer>? mayWrite = null, bool sync = true, GraphNearness? near = null, GraphPageStore? pages = null, IFileSystem? files = null, Core.Execution.ILineMask? mask = null, Func<GraphTextPages?>? pack = null, Func<GraphTextPages?>? changes = null, Func<int, GraphMapPage>? map = null, List<IReadOnlyList<string>>? checks = null)
     {
         var never = CodebaseGraphService.NeverListed(tree.WorktreesRoot);
 
@@ -1903,7 +2007,12 @@ public sealed partial class CodebaseGraphToolTests
             ConfinedPaths.Within(tree.Harness.FileSystem, tree.Harness.Platform, queries.Tree),
             path =>!PathPatterns.Matches(never, path, tree.Harness.Platform.PathComparison) && (mayRead?.Invoke(path) ?? true),
             mayWrite ?? (_ => AgentPolicyAnswer.Allow),
-            sync ? async (path, _) => new CodebaseGraphQueries((await tree.CheckAsync(null, null, path)).Read) : null,
+            sync ? async (paths, _) =>
+                {
+                    checks?.Add([.. paths]);
+                    return new CodebaseGraphQueries((await tree.CheckAsync(null, null, [.. paths])).Read);
+                }
+                : null,
             near is null ? null : () => near,
             pages,
             mask,
@@ -1914,12 +2023,12 @@ public sealed partial class CodebaseGraphToolTests
 
     /// <summary>
     /// The narrowing of whole reads (<c>graphReads: narrow</c>): a file the view holds as parsed over
-    /// <see cref="CodebaseGraphTool.NarrowLines"/> lines is denied with the way to the graph, a shorter one or one the
-    /// view does not parse passes, a file the graph is not sure of passes as an escape <c>lowConfidence</c>, and a
-    /// <c>wholeFile</c> lifts the narrowing for its file for the rest of the step.
+    /// <see cref="CodebaseGraphTool.NarrowLines"/> lines is narrowed - answered with its outline, the line said first saying
+    /// how to read its lines - a shorter one or one the view does not parse passes, a file the graph is not sure of passes
+    /// as an escape <c>lowConfidence</c>, and a <c>wholeFile</c> lifts the narrowing for its file for the rest of the step.
     /// </summary>
     [Fact]
-    public async Task AWholeReadOfAParsedFileOverNarrowLines_IsDeniedWithTheWayToTheGraph_UnlessTheGraphIsUnsureOrAWholeFileLiftedIt()
+    public async Task AWholeReadOfAParsedFileOverNarrowLines_IsNarrowed_UnlessTheGraphIsUnsureOrAWholeFileLiftedIt()
     {
         var big = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the big file")]) + "\n";
         var small = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 20).Select(at => $"// line {at} of the small file")]) + "\n";
@@ -1929,7 +2038,7 @@ public sealed partial class CodebaseGraphToolTests
 
         Assert.True(tool.WholeRead("src/Big.cs", 224).Narrowed);
         Assert.Equal(
-            "'src/Big.cs' is 224 lines and in the codebase graph: ask graph for its outline and the bodies you need, read a range of it, or, if you need it whole, say why with graph's wholeFile",
+            "'src/Big.cs' is 224 lines and in the codebase graph, so its outline is given in place of the whole file: read the lines you need with start_line and end_line, or the file a page at a time with page, ask graph's body for a declaration by its handle, or, if you need the file whole, say why with graph's wholeFile",
             tool.WholeRead("src/Big.cs", 224).Text);
         Assert.False(tool.WholeRead("src/Small.cs", 23).Narrowed);
         Assert.Null(tool.WholeRead("src/Small.cs", 23).Escape);

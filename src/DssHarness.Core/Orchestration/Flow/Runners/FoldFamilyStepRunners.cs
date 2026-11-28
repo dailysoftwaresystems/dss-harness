@@ -48,26 +48,58 @@ public sealed record FoldCall(
 /// <summary>
 /// The paths a fold would write that a step's <c>within</c> leaves out: each path its plan writes or removes in the main
 /// tree, those it would merge were it asked among them (<see cref="AgentPlanned.WouldWrite"/>), matched against the
-/// patterns <c>within</c> names - never the registry files its rows change, nor a path handed to the agent.
+/// entries <c>within</c> names, read from the main tree's root as a work item's owned paths are
+/// (<see cref="GlobPattern.FromRoot"/>), whether an entry names a directory asked of the run's start tree
+/// (<see cref="FlowRunPlace.Directories"/>) - never the registry files its rows change, nor a path handed to the agent.
 /// </summary>
 public static class FoldWithin
 {
     /// <summary>The paths of <paramref name="paths"/> none of <paramref name="within"/> matches; none where the step names no <c>within</c>.</summary>
     /// <param name="paths">The paths it would write.</param>
-    /// <param name="within">The patterns the step's <c>within</c> names, already checked; null where it names none.</param>
+    /// <param name="within">The entries the step's <c>within</c> names, already checked; null where it names none.</param>
+    /// <param name="startTree">
+    /// The run's start tree, asked whether a path from the root names a directory where the question is what a fold may
+    /// carry (<see cref="TreeDirectories.ForWriting"/>): an entry that is a path carries what is beneath it only where it
+    /// does, as the plan's check read it.
+    /// </param>
     /// <param name="comparison">How this machine compares paths.</param>
-    public static IReadOnlyList<string> Outside(IReadOnlyList<string> paths, IReadOnlyList<string>? within, StringComparison comparison)
+    public static IReadOnlyList<string> Outside(IReadOnlyList<string> paths, IReadOnlyList<string>? within, TreeDirectories startTree, StringComparison comparison)
     {
         ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(startTree);
 
         if (within is null)
         {
             return [];
         }
 
-        var patterns = within.Select(GlobPattern.Parse).ToList();
+        var patterns = within.Select(startTree.ForWriting).ToList();
 
         return [.. paths.Where(path => !patterns.Any(pattern => pattern.Matches(path, comparison)))];
+    }
+
+    /// <summary>
+    /// What the entries of <paramref name="within"/> say of how to write what they once meant, where a path of
+    /// <paramref name="outside"/> - each one it leaves out (<see cref="Outside"/>) - lies where an entry would have reached
+    /// before the reading from the root (<see cref="GlobPattern.WrittenFor(IEnumerable{ValueTuple{GlobPattern, string}}, IEnumerable{string}, StringComparison)"/>),
+    /// each sentence once, and why the start tree could not be read where that made an entry name no directory; null where
+    /// they say nothing.
+    /// </summary>
+    /// <param name="outside">The paths it leaves out.</param>
+    /// <param name="within">The entries the step's <c>within</c> names; null where it names none.</param>
+    /// <param name="startTree">The run's start tree, as <see cref="Outside"/> was asked.</param>
+    /// <param name="comparison">How this machine compares paths.</param>
+    public static string? Said(IReadOnlyList<string> outside, IReadOnlyList<string>? within, TreeDirectories startTree, StringComparison comparison)
+    {
+        ArgumentNullException.ThrowIfNull(outside);
+        ArgumentNullException.ThrowIfNull(startTree);
+
+        if (within is null)
+        {
+            return null;
+        }
+
+        return GlobPattern.WrittenFor(within.Select(entry => (startTree.ForWriting(entry), entry)), outside, comparison);
     }
 }
 
@@ -328,7 +360,10 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
 
                 case FoldStanding.Asks:
                 {
-                    var dryRun = FlowDryRun.Of(dry.Facts!, outside, agent, run.Target);
+                    var dryRun = FlowDryRun.Of(dry.Facts!, outside, agent, run.Target) with
+                    {
+                        OutsideSaid = FoldWithin.Said(outside, WithinOf(call, folds).Patterns, call.Place.Directories, platform.PathComparison),
+                    };
 
                     if (FlowQuestions.FoldQuestionOf(dryRun) is { } question)
                     {
@@ -500,7 +535,9 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
 
     /// <summary>The paths a dry run would write that the step's <c>within</c> leaves out; none for a step that does not fold, and where nothing was planned.</summary>
     private IReadOnlyList<string> OutsideOf(AgentVerbFacts? facts, FoldCall call, bool folds)
-        => facts?.Planned is { } planned ? FoldWithin.Outside(planned.WouldWrite, WithinOf(call, folds).Patterns, platform.PathComparison) : [];
+        => facts?.Planned is { } planned
+            ? FoldWithin.Outside(planned.WouldWrite, WithinOf(call, folds).Patterns, call.Place.Directories, platform.PathComparison)
+            : [];
 
     /// <summary>What a question of <paramref name="kind"/> is about in a dry run: its paths outside <c>within</c>, or what its plan names for the consent.</summary>
     private static IReadOnlyList<string> NamesFor(string kind, AgentVerbFacts? facts, IReadOnlyList<string> outside)

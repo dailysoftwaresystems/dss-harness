@@ -1,3 +1,5 @@
+using DssHarness.Core.Git;
+
 namespace DssHarness.Core.Agents.Policy;
 
 public static partial class CommandAnalysis
@@ -249,7 +251,7 @@ public static partial class CommandAnalysis
                     moves.Add((moves.Count == 0 ? words[at + 1] : Path.Combine(moves[^1].Directory, words[at + 1]), at + 1));
                 }
 
-                at += words[at] is "-C" or "-c" || GitTakesValue(words[at]) ? 1 : 0;
+                at += GitGlobalOptions.TakesNextWord(words[at]) ? 1 : 0;
             }
 
             return moves;
@@ -278,19 +280,10 @@ public static partial class CommandAnalysis
 
     /// <summary>
     /// Where git's subcommand stands among <paramref name="words"/> (git's name first): past git's own options and their
-    /// values (<c>-C</c>, <c>-c</c> and the long ones that take the next word); the words' count where none stands.
+    /// values, read by their one grammar (<see cref="GitGlobalOptions.SubcommandAt"/>); the words' count where none stands.
     /// </summary>
     private static int GitSubcommandAt(IReadOnlyList<string> words)
-    {
-        var at = 1;
-
-        while (at < words.Count && words[at].StartsWith('-'))
-        {
-            at += words[at] is "-C" or "-c" || GitTakesValue(words[at]) ? 2 : 1;
-        }
-
-        return Math.Min(at, words.Count);
-    }
+        => GitGlobalOptions.SubcommandAt(words, from: 1) is >= 0 and var at ? at : words.Count;
 
     /// <summary>
     /// tar's words with an old style's first word - its letters with no dash, each that takes a value taking the next of

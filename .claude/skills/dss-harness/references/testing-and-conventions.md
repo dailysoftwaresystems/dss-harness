@@ -60,7 +60,7 @@ All in [`tests/dss-harness-test`](../../../../tests/dss-harness-test):
 | `HostTestDoubles` | Scripted hosts and copies (`ScriptedHostCommands`, `NoHosts`, `NoHostCopies`, `RecordingLauncher`) |
 | `QuietProcessRunner`, `QuietProcessTable` | A program that says one line, stays silent for a given life and exits 0 (for stall bounds); a machine running only this test process and any others given |
 | `OrchestrationKit`, `SyncKit`, `AdmissionKit`, `ActionKit` | Ready-made scenes for those areas |
-| `ManualClock`, `JumpingClock`, `SteppingClock`, `ClockWatch` | `TimeProvider` doubles; `ClockWatch` tells a test the wall clock stepped, and real-build tests skip on it |
+| `ManualClock`, `JumpingClock`, `SteppingClock`, `TimerClock`, `ClockWatch` | `TimeProvider` doubles; `TimerClock`'s timers fire only when the test moves it past them - every wait, or only the waits it is told to hold, the rest on the system's timer - so a test passes a bound (a handoff turn's, a drain's, a retry's) once it is armed and never waits it out; `ClockWatch` tells a test the wall clock stepped, and real-build tests skip on it |
 | `PathAssert`, `Prose`, `TestLinks`, `HeapWatch` | Path equality across platforms, prose matching and the repository's documents, links where the system allows them, memory measured |
 | `WorkflowFiles` | The embedded workflows, read as lines, jobs and steps — see [release-and-ci.md](release-and-ci.md) §7 |
 | `BuildTools` | Skip or fail a test that needs real build tools |
@@ -124,7 +124,13 @@ the real client and intercept one call.
 - **Retired markers are read forever and never written; retired keys are refused.** A renamed `.gitignore` marker
   is still recognised where users have it on disk, and only the new one is ever written (`GitIgnoreManager`). A
   retired `config.json` key is refused like any unknown key, with a message naming what took its place
-  (`MisplacedKeys`): a key that loads is a key that is read.
+  (`MisplacedKeys`): a key that loads is a key that is read. A key retired from a workflow file is refused by its
+  reader, and a run's frozen `definition.json` that holds it is read by `FrozenDefinition` - the member in its old
+  shape, then ignored (`FrozenDefinition.Retired`) - never by a member kept on the model. A member whose shape changes
+  is read there in the shape each earlier release wrote it in, as the parser reads the same words
+  (`FrozenDefinition.Reshaped`), and `EarlierRelease` in the tests writes a run's files in that shape; what a resume compares is
+  what each definition says as this build reads it (`FlowResume.RefuseAChangedDefinition`), never a digest an older
+  build made.
 
 ## 7. Don't
 

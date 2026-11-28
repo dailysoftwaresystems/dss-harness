@@ -36,3 +36,7 @@ The same report as before, brought up to date, every list in full; its rows incl
 
 When you report, the engine folds your work once more and runs the checks again; where your work has tests, it runs
 them first.
+
+## Issues that were there before
+
+{text.issuesBefore}

@@ -70,7 +70,9 @@ its pipeline. That is read from the core's own metadata, not its source's text: 
 type below the layers names in its signatures, its locals and its bodies' instructions, however
 its source spells it. The layer's contracts are its use cases with their requests and results,
 and the few points it is open to below it, each reviewed with its reason - the facts every
-document of an operation says (`IDocumentFacts`), which the service that did them fills. The
+document of an operation says (`IDocumentFacts`), which the service that did them fills, and
+what an operation writes at its end once its work has stopped (`IEndWrites`), which the service
+that writes it answers and a terminal's second interrupt says is still to come. The
 one scan of the core for a contract's implementations (`CoreImplementations<T>`) is the
 core's own, at its root, so the registries below the layer that read it never reach into the
 composition root that registers what it finds. The command line builds no container: the registrations are the core's own
@@ -98,7 +100,14 @@ console or `IHarnessOutput`; and nothing in them branches on the operating syste
   kept for the conversation's life and put away when it ends, the work it goes on from read nearest first, and an
   answer kept under another state - the graph moved, the file changed - never given for this one (`IKeptFreshness`). A
   text file's pages (`TextPages`) are laid by streaming the file once and keep only the byte offsets where pages begin;
-  a page is read by seeking to its own, so a two-gigabyte log costs a page's memory.
+  a page is read by seeking to its own, so a two-gigabyte log costs a page's memory. A text laid with the blocks its
+  writer kept beside it (`TextBlocks`: each block's head, the lines after it and its end by the bytes the file holds them
+  at, read a line at a time in the same pass, then the digest of the bytes they were written beside) gives a page that
+  begins inside a block the block's head again first, its mark naming where the file holds the head
+  (`TextPageMark.Head`), said as going on and counting nothing, by the one rule a page laid in memory gives a result's
+  block's head again by (`Paging.HoldsAgain`: only where the room left beside it holds the least piece of what follows,
+  `Pieces.Least`, so no page passes its room); blocks that are not the text's - another schema's, out of order, past its
+  end, or written beside bytes it no longer holds - give it none, and its pages are laid as its lines alone.
 - `Walks\`: a walk on an explicit stack or queue that keeps a set of what it met (`Walk`); a memo that answers each key
   once from its dependencies' answers, and a key met again while it is being answered by the cycle's own rule (`Memo`);
   answers made once where making one asks for others as it is made, through any store sharing its makings, a memo
@@ -230,7 +239,9 @@ Windows alone.
 
 A missing working directory is reported as exactly that. Linux and macOS report it
 with the same error number as a missing executable, which would otherwise surface as
-"git is not installed".
+"git is not installed". It is looked for before the start, and again where a start
+fails: one a deletion took away between the two is said as gone, in the same words,
+never as an interpreter or loader the program needs being missing.
 
 A caller's handler for the lines a child writes is handed no more once it fails, and the
 stream is still read to its end, what the handler raised being raised once the child has
@@ -643,11 +654,51 @@ directory behaves the same way.
 `--directory` is resolved to an absolute path, and confirmed to exist, once, before any
 command runs.
 
+An engine's session asks git where each of its trees is once (`EngineSession`, `SessionTrees`):
+the run's main checkout and each agent's tree cannot move while the engine holds the run, so a
+tree located from its own root - its top, the repository's worktrees, the main checkout's git
+directory, an agent's repository's mark, what every load of a context asks
+(`RepositoryLocator`) - is kept for the rest of the session and handed to every layer its work
+passes through, its step runners and the agent and worktree services they ask, rather than asked
+again at each. So are the directory the main checkout's repository keeps its objects in, however
+it was asked, and an agent's repository's mark where its main checkout lends it its objects -
+found by the locator or by the telling of an agent's repository (`AgentRepositories.IsAtAsync`),
+and taken by the other, so a tree a deletion tells and then loads is asked of once - and the
+files of each commit a tree is made at, by the commit's id (`WorktreeRoom.ForFilesAsync`). Its
+configuration is still read where it always is, for it is the tree's file. A
+tree the session makes, deletes or makes again is dropped by the one owner of the making and the
+deleting of trees (`WorktreeService`), and found anew by the next asking; what was kept of a tree
+is served only while its root still holds its own `.git`, looked at as it is served, so a `.git`
+taken away by anything else - a person, another command - leaves the directory asked of anew, as
+whatever repository encloses it answers for it, and the fact is dropped; a directory inside a
+tree is never kept, for it may become a tree of its own; and the session's scope flows with the
+work it starts alone, so no other command or session is answered from it, and it ends with the
+session.
+
 git's messages are matched in two places only: telling "not a repository" apart from
 "git could not look", and "not a gitdir" apart from the same when a directory among a
-worktree's submodule repositories is examined. Those read-only queries run with
-`LC_ALL=C`, so a translated git still answers in the words being matched. Every other git
-command, including those that run the user's hooks, keeps the user's locale.
+worktree's submodule repositories is examined - both questions - and a workflow source's fetch
+or listing telling "not there" from "not reached". Every git the tool starts runs with
+`LC_ALL=C` but one that runs a repository's hooks on purpose (a commit step's commit, a push) and
+one git runs them for, set at the one place for every git start (`GitOwnSettings.Untranslated`) -
+the client's (`GitOwnSettings.Apply`), the question that names the variables every git is started
+without (`GitLocalVariables`), and the isolation probe's `git --version` alike - never by a caller:
+a question is answered in the words being matched. Those commands keep the person's locale, the
+ones git runs hooks for whether a hook runs or not, so a hook
+behaves as in their shell - a JVM tool's file names, Ruby's default encoding, a shell's
+character classes and lengths, a server's hooks over ssh that `SendEnv LC_*` would forward to -
+and their messages reach the person in their language: each command `githooks(5)` names as
+running one (`GitHooks.Runners` - `am`, `commit`, `merge`, `pull`, `rebase`, `cherry-pick`,
+`revert`, `checkout`, `switch`, `clone`, `worktree add`, `push`, `receive-pack`, `send-email`,
+`gc`, `p4 submit`), by its subcommand after git's own options (`GitHooks.MayRun`), read by the one
+grammar of them the agents' policy reads too (`GitGlobalOptions.SubcommandAt`): each option that
+takes the next word as its value - `-C`, `-c`, `--config-env`, `--git-dir`, `--work-tree`,
+`--namespace` and the other long ones that name a place or a list - is passed over with it, so
+`git --git-dir /r/.git commit` is a commit, never a command named `/r/.git`. The two hooks
+it names no command for - reference-transaction, which any command that moves a ref runs, and
+post-index-change, which any that writes the index runs - make no command one of them: every
+command that writes would be, and no git of the tool's runs a hook but where it runs them on
+purpose.
 
 ### Reading config.json
 
@@ -1027,8 +1078,18 @@ repositories are its own contents, and do not make it such a directory.
 An agent's worktree is a repository of its own (`AgentRepositories`): one that git records
 nowhere, so the main checkout's `git worktree list` holds the main checkout alone, whose own `.git/config` carries the mark naming this main checkout and the agent's address
 (`harness.mainCheckout`, `harness.agent`, read by `AgentRepositoryMark` from that file alone, never
-through the main checkout's configuration it includes), and which borrows the main checkout's
+through the main checkout's configuration it includes, and asked of git only where the file holds a header
+that may open the `harness` section - every location of a main checkout looks, and a file whose values
+merely spell the word, a user's address or a remote's name, starts no git), and which borrows the main checkout's
 objects. It is taken for the agent's worktree only where all three hold at the address it sits at.
+A directory a deletion takes away while git is asked about it is none: another command's deletion,
+a person's, or the engine's own of an agent that only read once its work is over, which runs beside
+the run's next steps - the making of their agents and their legs' look at the trees here among them,
+each listing every tree below the root. Where git could not be started there or could not read it,
+and the directory holds no `.git` of its own any more, it is not listed and every listing goes on
+whole, delete-orchestrator's look below its directory too, which never says it as a directory git
+records nothing at. A failure in one that still holds its `.git` is git's, raised, never read as no
+tree.
 A command run inside one finds the main checkout its mark names, as from inside a linked worktree;
 one whose mark names a checkout that is not there, is bare, is no main checkout of its own, carries
 a mark itself or does not lend it its objects is refused, never taken for a main checkout.
@@ -1353,8 +1414,9 @@ A machine shared by several users is not seen whole: each user's queue is their 
 
 An orchestrator is a session that runs agents side by side, each in a worktree of its own. Everything it and its
 agents keep is in the main checkout under `.orchestrators/<orchestrator>/` - records, logs, plans, scratch, its
-runs' temp and artifacts (one directory of each with every run, `OrchestratorLayout.TempDirectory` and
-`ArtifactsDirectory`, made with the run and taken away with its directory), the rows an agent files, its kept
+runs' temp, artifacts and inputs (one directory of each with every run, `OrchestratorLayout.TempDirectory`,
+`ArtifactsDirectory` and `InputsDirectory`, made with the run and taken away with its directory - the last holding a
+copy of each file the run's own file inputs named, made as it starts), the rows an agent files, its kept
 evidence and transcripts - never in a worktree, and init keeps the directory in git by its
 placeholder and everything made in it out; sync withholds it from every host by name. A session taking the work
 over, on another account or after the last one ended, reads it there. `OrchestratorLayout` spells every path once;
@@ -1474,28 +1536,67 @@ stops part way (exit 21) leaves only records that read, and run again it finishe
 orchestrator's open agents as create-agent does (`OrchestrationRules.OpenAgents`), and says where each agent's
 worktree is from its own record, the worktrees root it was made under.
 
-An agent can also be made with no worktree (`create-agent --no-worktree`): a record and the two directories every
-agent gets outside a worktree - `work/<agent>/` and `plans/<agent>/` - and nothing in the tree. Its record says
-`"access": "read"` (`AgentRecord.Access`); a record that says nothing is an agent with a worktree, which is every
-record an older tool wrote and what the tool still writes for one, so those records read as they always did. The
-engine makes one for a read-only reason step, and nothing else does - the option's help says a person has no use for
-one by hand. It counts against no limit, the limit being a limit on worktrees: `OrchestrationRules.OpenAgents` leaves
-it out, and so do list-orchestrator's open agents and delete-orchestrator's way, since a live one holds nothing but
-records and goes with the orchestrator; what every agent's directory keeps of the steps that ran as it and of its
-sessions with an API client is counted with its evidence and transcripts, and goes only with `--delete-evidence`,
-whatever the agent's kind or state. It is never seeded, refreshed, rebased or folded - each refuses, exit 13, once the
-repository is found and before git is asked anything about the agent - and deleting it is one write, `live` to `deleted`, the path the states already have
-for an agent whose worktree was never made; its directory stays, as every deleted agent's does. It records no session:
-`--session` beside `--no-worktree` is a usage error, and such an agent's record that names one does not read
-(`AgentRecord.Problem`), so deleting it says no session is recorded and looks for no transcript, and keeps no evidence
-either, having no worktree. `--discard-uncommitted` and the allowances have nothing to act on there; delete-agent says
-so, line by line, and its dry run's line for `--apply` leaves them out.
+An agent can also be made to only read (`create-agent --reads-only`): a record, the two directories every agent gets
+outside its tree - `work/<agent>/` and `plans/<agent>/` - and a tree of its own, made by the one making of every
+agent's tree (`IWorktreeService.CreateAtAsync`, a repository of its own borrowing the main checkout's objects,
+detached at the main checkout's HEAD, its commit kept alive by `WorktreeKeepalive`), never a second way of making
+trees. Its record says `"access": "read"` (`AgentRecord.Access`) beside the tree's `worktree`, `tree` and
+`worktreesRoot` and the commit it stands on as `base`, and, once the engine has brought its tree for a step, the step
+attempt it was last brought for as `readiedFor` (`AgentRecord.ReadiedFor`: the instance and the attempt, which a record
+of an agent whose work is folded never names); a record that says no access is an agent whose work is folded,
+which is every record an older tool wrote of one and what the tool still writes for one, so those records read as they
+always did. The engine makes one for a read-only reason step, and nothing else does - the option's help says a person
+has no use for one by hand. As every step that works as it starts - each attempt of its first, and of each that goes
+on with its work - the engine brings its tree to the main checkout's HEAD then, or to the commit the step's `commit`
+names (`IAgentService.ReadyAsync`, asked by `CreateAgentRunner.ReadyAsync` before anything of the step reads the tree,
+with the step's `commit` as the engine filled it where the step started - `AgentReadyRequest.Commit`, which
+`AgentReady.Asked` says back): held as every agent's worktree is while it is written, its commit kept alive first, then
+a forced detached checkout of that commit and a clean of every file git does not track - ignored ones and repositories
+of their own included (`git clean -ffdx`) - proved after by its HEAD and by git listing nothing in it the commit does
+not hold as it is, so the tree is exactly what that commit holds - the main checkout's at the step's start where the
+step names none - whatever the agent wrote there before; the record then names that commit. A commit asked is read as
+git reads one in the main checkout before anything is held: one that names none the repository holds, blank among
+them, is refused with nothing changed and fails the step, never read as the main checkout's HEAD in its place. The key
+is a reading step's alone: the definition's check refuses it on a step that writes or works in an agent's worktree, by
+its own keys or by those of the step whose work it goes on with (`WorkflowValidator`). Before the bringing touches the
+tree the record names the attempt it is brought for (`AgentReadyRequest.For`, `CreateAgentRunner.ReadiedFor`), so one
+stopped part way never reads as the tree an earlier attempt left. The making of a reader's tree for a step whose
+`commit` names none records the attempt it is made for the same way (`AgentCreateRequest.ReadiedFor`): the tree it makes
+stands at the main checkout's HEAD as the attempt starts, and the attempt's start - an attempt starts once - finds its
+record naming it and brings the tree nowhere again. An attempt that goes on with an answer in its own
+conversation - a person's, a limit's `more` or `compact` - is the same start going on, and finds the tree as its attempt
+left it, save where the record names another attempt - another step working as the agent started while this one
+waited, for a step that waits on a question holds no claim - or none, as a record an older tool wrote does: the tree is
+then brought there again as a start brings it, and the agent is told so at the head of the message it goes on with,
+where the tree stands and that what it wrote there is gone (`ReasonStepRunner.TreeBroughtAgain`). A tree that is not there - a record an older tool wrote, saying `"access": "read"` and
+naming no tree, or a making that failed - is made at the step's start, at the main checkout's HEAD by the one making,
+and brought on to the commit asked where that is another, and the record given its three facts; anything else at its
+path is refused, nothing touched. The agent may write its tree, where it builds and tests, and its
+work directory - whatever its definition's `writes` says, since nothing it writes is ever folded, committed or pushed.
+It counts against no limit, the limit being a limit on the worktrees whose work is folded: `OrchestrationRules.OpenAgents`
+leaves it out, its tree listed or not, and so do list-orchestrator's open agents and delete-orchestrator's way, which
+removes a live one's tree as deleting it does and lets it go with the orchestrator, and a paused run holding one is not
+unfinished on its account (`FlowSessions`), its tree holding no work of the tree's; delete-worktree refuses its tree as
+any live agent's, naming delete-agent; what every agent's directory keeps
+of the steps that ran as it and of its sessions with an API client is counted with its evidence and transcripts, and
+goes only with `--delete-evidence`, whatever the agent's kind or state. It is never seeded, refreshed, rebased or folded -
+each refuses, exit 13, once the repository is found and before git is asked anything about the agent - and deleting it
+(`AgentService.RemoveReadingTreeAsync`, the one owner of how such a tree goes, which delete-agent, the engine's deletion
+of it once its work is over and delete-orchestrator all ask) removes its tree through delete-worktree as the agent's,
+never forced, its uncommitted changes and evidence roots going with it - every other check of a removal standing - and
+then marks it `deleted`, the path the states already have for an agent with nothing to close; its directory stays, as
+every deleted agent's does. It records no session: `--session` beside `--reads-only` is a usage error, and such an
+agent's record that names one does not read (`AgentRecord.Problem`), so deleting it says no session is recorded and
+looks for no transcript, and keeps no evidence either. `--discard-uncommitted` and the allowances have nothing to act on
+there; delete-agent says so, line by line, and its dry run's line for `--apply` leaves them out. `--no-worktree`, which
+made such an agent with no tree before every agent had one, is retired: it is refused, a usage error, naming
+`--reads-only` (`AgentService.RetiredNoWorktree`), and kept hidden from the command's help.
 
-A `dssharness` from before the agent with no worktree reads its record strictly, finds no worktree in it, and cannot
-tell what the agent is: its list-orchestrator prints the agent as one whose record does not read, and its
-delete-orchestrator refuses that orchestrator and changes nothing. As across the tool's rename, update while no
-`dssharness` is running, and do not go back. An agent with a worktree is not touched by this - the tool writes no
-`access` for one, so its record is what an older tool reads.
+A `dssharness` from before the agent that only reads reads its record strictly and cannot tell what the agent is: its
+list-orchestrator prints the agent as one whose record does not read, and its delete-orchestrator refuses that
+orchestrator and changes nothing. As across the tool's rename, update while no `dssharness` is running, and do not go
+back. An agent whose work is folded is not touched by this - the tool writes no `access` for one, so its record is what
+an older tool reads.
 
 ### Seeding and folding
 
@@ -1882,10 +1983,13 @@ A side-task may use the codebase graph beside all this, unlimited: a graph of it
 (`SideTaskGraph`), held in the one shape every graph's records take, seeded from the newest the repository holds - a
 run's or another side-task's - at its opening, then incremental and synced after each of its agent's writes and
 commands on either client (`AfterWrites`), the tool answering from what each sync leaves; the `graph` tool offered
-among its agent's own with every operation, `edit` among them, on every client, and no narrowing, what it reads and an edit writes asked of the side-task's own policy, the repository map
-(`CodebaseRepositoryMap`) given with its first message and the context pack made from each, a line posted to a launch
-Claude Code holds open for a chat among them (`SideTaskGraph.Front`, the one front either shape takes); `--no-graph`
-turns it off, and a graph that cannot be made takes nothing from the conversation: the side-task says once that it runs
+among its agent's own with every operation, `edit` among them, on every client, and no narrowing, what it reads and an edit writes asked of the side-task's own policy.
+Pull, not push, as for a step at `tools`: nothing of the graph is pushed - every message reaches the agent as the person
+typed it, on every client and in either shape, a line posted to a launch Claude Code holds open for a chat among them -
+and the repository map (`CodebaseRepositoryMap`), made once at its opening, and the context pack made from each message
+(`SideTaskGraph.MakePack`, which either shape calls before the message goes) are the pages the tool's `map` and `pack`
+give from page 1, offered by the steps' one rule (`CodebaseGraphTool.Operations`), the last message's pack's `Near`
+breaking `find`'s ties; `--no-graph` turns it off, and a graph that cannot be made takes nothing from the conversation: the side-task says once that it runs
 without one and why - the chat's first line, or a line beside a one shot's records - and its `graph.jsonl` holds the
 prompt line naming why no pack is given (`GraphPromptLine.Why`).
 
@@ -2049,7 +2153,9 @@ step, and init says so in a note naming the file read now. The shipped set is he
 is by this build's own tests, so a build whose own workflow does not hold fails before it ships.
 
 A definition declares `inputs` - the values a run is started with, each with a kind, a default and
-the options it takes - `params`, its own knobs defaulted in the file and read as `param.<name>`,
+the options it takes, two whose names differ by case alone refused on every system, since a run keeps a file input's
+copy in a directory of the input's name and a file system that folds case holds one for both - `params`, its own knobs
+defaulted in the file and read as `param.<name>`,
 and `outputs`, what the whole workflow produces, each from a step of the flow. Its steps are of
 one `type` - from `orient` and `reason` through the leg steps, the fold family, the checks, git
 and the forge, to `pause` - or groups holding steps of their own: a group runs its steps once for
@@ -2094,7 +2200,33 @@ review loop decides at its `route`, where the review's findings are routed, so t
 its bound is reviewed by the round after it and what it leaves is what its last routing left - its rework and its home
 audits alike. A step raised by another step's ending
 says `on` - by the outcome, a failure by exit code - and sends the run back with `then`; the
-schedule never starts it. Steps nest at most ten deep; every step's name is a lower-case word,
+schedule never starts it, and no redirect resets it (`FlowResets`). What depends on a step that failed waits until
+every handler raised for that ending has ended (`FlowCoordinator.Ended`): one that failed once its failure is decided -
+passed over, settled by its own handlers or by an answer - never while it is owed to what decides it, asks a person,
+is the recovery's, or stopped the run, which the next session runs again; a failure is unsettled from its end until
+then, as a resume reads one owed. What depends on a step that ended done starts beside the handlers its success raised,
+for a success is settled as it ends. Every way a handler's visit ends settles the ending through the one owner
+(`FlowCoordinator.MaybeSettle`) - a failure its handlers or an answer took as handled through `FlowCoordinator.Settle`,
+which says what took it and settles with it the ending its instance answers - and a handler made again - a group
+answered `retry`, or one the recovery put right going on as `failed-step` - is a new visit raised by the same ending,
+naming the same source and the same attempt of it, which the ending waits on in the place of the one it replaced
+(`FlowCoordinator.RaiseAgain`), as a resume rebuilds it. A step run again as a new attempt has an ending of its own,
+which raises its handlers anew: each handler's visit records the attempt whose ending raised it (`raisedByAttempt`), and
+a raise answers that attempt's ending alone (`FlowCoordinator.RaisedFor`, which `FlowCoordinator.EndingOf` and
+`FlowInstance.RaisesOwed` read), so the new attempt's failure raises the handler's next visit, its `when` read again; a
+new attempt keeps none of the handler states the attempt before it ended with, nor an ending of it still waiting on
+them, nor what took its failure (`FlowCoordinator.NewAttempt`), and only a step that stands as an ending - done or
+failed - owes a raise or has an ending rebuilt (`FlowInstance.StandsAsAnEnding`). A `fail` answer at a handler's bound
+after a failure gives that ending up in the source's record, in one write: a handler it still owed is `passed`, one it
+raised is `left`, and the ending waits on none of them, in the session and at every resume
+(`FlowCoordinator.GiveUpTheEnding`). A raise an older build recorded names no attempt and is read as the attempt its
+source's record holds where that attempt ended and its failure is not owed - as the build that wrote it read it,
+matching a raise by its source's visit alone - or where a `fail` answer at a success bound (`visitBound`) ended that
+same attempt failed, and otherwise as the attempt before it, never before the first, for an ending raises its handlers
+only as it is decided (`FlowInstance.AttemptRaisedFor`). It is read once: the first session that takes the run up
+writes it into the visit's own record, held with what its start writes and before anything rewrites the source, and
+every session after - and the run's status facts (`FlowStatus`) - reads that record, never deriving it again from a
+source a new attempt has moved on (`FlowCoordinator.WriteTheAttemptsRead`). Steps nest at most ten deep; every step's name is a lower-case word,
 unique among its siblings and never a word a definition reads for its own. The file writes no YAML alias - a
 definition writes each of its steps out, so that what it says is what it reads - and its values are read however deep
 they nest, by the one YAML reader (see "Layering").
@@ -2214,8 +2346,12 @@ others, so no definition that holds is deeper than the run's frozen `definition.
 written. A run records each use's resolution - the called workflow's name and its fingerprint, for
 a local one the digest of its parsed definition taken as the run's own definition's is, so a
 comment or line endings change nothing, and for a remote one, or one inside it, its commit - in the
-definition it freezes, and a resume is refused where what the called workflow says changed since
-the run began, as the run's own definition's would be. The shipped implementation workflow uses the
+definition it freezes, and a resume is refused where what the called workflow brings the run changed
+since the run began - its steps, inputs, params, outputs and recovery, the settings of its own it
+carries, its texts and the keys it declares unapplied, compared with the rest of the definition as
+the run's own steps are (`FlowResume.Said`); the fingerprint is left out of that, for a local one's is
+a digest the build that began the run made, which no frozen definition holds to make again, and a
+remote one's commit is in its name. The shipped implementation workflow uses the
 mechanism for itself: its item pipeline - written once in `item-pipeline/item-pipeline.yml` - is
 used by its rounds (`implementPrompt: prompts/implement.md`, `alternatives: 'true'`,
 `failTo: recover`) and by its recovery (`prompts/remedy.md`, `alternatives: 'false'`,
@@ -2387,19 +2523,39 @@ are done the run goes where `onSuccess` says - `failed-step`, the step that gave
 failure, which runs again from where it stopped - and a failure of the recovery's own work does what
 `onFailure` says once its steps' retries are spent: `pause` or `stop` - never the recovery again, which would be it calling itself. A step that fails again
 comes back by its own `onFailure`, until it passes or a person is asked; past `maxVisits` (from 1 to
-99; absent, the engine's bound of 99) the run asks `recoveryBound`, with the advisor's recommended
-fix. A reasoning step is never recovered, by its own word or a group's: its agent is tried again
+99; absent, 99 - `FlowRecover.MostVisits`) the run asks `recoveryBound`, with the advisor's recommended
+fix. That bounds the recovery's loop for one thing it takes - one step's failures in one scope, or one issue
+(`FlowCoordinator.RecoveryOf`) - and nothing else: the recovery takes the failures of any number of steps, and any
+number of issues, each counted on its own. No engine-wide bound on the visits of a step stands beside the loops' own:
+a step visited again for what is not a loop - a triage for each issue reported, a pause's changed answer, the always
+steps once per session, the planning step for each plan update - is never refused, and each loop stops at the bound it
+declares - a repeat's, a handler's `maxVisits`, the recovery's - or where a person answers its question. A handler's
+visits are counted in the scope its loop goes round in (`FlowCoordinator.LoopScopeOf`): its own - the item's, the
+iteration's, the group visit's - save where its `then` sends the run back over a group around it, which each turn
+makes anew, holding the handler again; there they are counted, and its `more` answers granted, in the scope that
+`then` goes back to, so that loop too ends at the handler's own bound. A reasoning step is never recovered, by its own word or a group's: its agent is tried again
 (`retries`, waiting `backoffSeconds`, twice as long each time, at most 900) and on each model of its
 fallback, an account at its limit or a provider that fails is a pause that resumes it, and what
 still fails is asked. The implementation workflow writes `onFailure: recover` on every step of its flow that tests, folds,
 checks, commits, pushes or waits - itself or through its group - and `onFailure: pause` on every
 reasoning step; its recovery diagnoses the failure (`diagnose`, which goes on with its own conversation across
-the visits), asks a person only for what only a person can give (`direction`), holds the remedy items its last word
+the visits for the same failure or issue - the thread of what a visit puts right: for an issue, the thread of the last
+visit made before it that ended done fixing the same issue in any words that visit fixed (`IssuesFixedBy`: its own,
+those joined to it and the duplicates of either), every reading of the same issue taking it alike, and the issue by its
+own title and where it is where none did - whichever step reported it and however often it was met again after a fix
+that did not hold, apart from where its bound counts it (`FlowCoordinator.ThreadOf`, which `FlowCheck.Work` reads too),
+decided as the visit is made over the visits, duplicates and joins that had ended then and kept in its record
+(`FlowStepRecord.Thread`, a `FlowRecoveryThread`), which a resume reads back - a duplicate that ends later naming an
+earlier visit's issue would otherwise move a visit made before it into that visit's thread and its diagnostician's
+agent; a visit an older build recorded without one is read from what had ended when it was made, by the run's own
+order (`FlowCoordinator.EndedWhenMade`), never from what came later - a visit for
+another issue diagnosing in a conversation and an agent of its own, beside it, `FlowCoordinator.SameRecoveryThread`),
+asks a person only for what only a person can give (`direction`), holds the remedy items its last word
 sets out - the diagnosis's, or the one it gives on the person's answer (`redirect`) - to the plan's own check
-(`remedy-check`), gives what the check refuses back to the diagnostician within the visit (`remedy-revise`) and checks
-what it gives again (`remedy-recheck`), and builds, tests, folds and reviews the items those checks read as a round's
-work items are (`remedies`, expanding from them), the revised ones as they stand where the check still refuses them, as
-a round's are. A later round's items are audited before any is built (`item-audit`, which the round's `items` wait
+(`remedy-check`), whose problems the diagnostician is told within its own step as it answers
+(`FlowCoordinator.AnswerChecksOf`), so no step after the check sends them back again, and builds, tests, folds and
+reviews the items that check read as a round's work items are (`remedies`, expanding from them), as they stand where
+the check still refuses them, as a round's are. A later round's items are audited before any is built (`item-audit`, which the round's `items` wait
 for), and the round is judged by the self-audit that read that audit: its until reads the self-audit and the machine's
 checks, never the audit's own go, given before the build that may settle it. The flow builds first: its baseline is split
 in two - a `build` step, which fails red and is taken by the recovery and built again - and the
@@ -2408,9 +2564,10 @@ beside the baseline's tests and the CI read (`onFailure: continue`, for a run go
 every reason step after it is served from the graph as the twenty-run measurement of 2026-11-11 set
 each type's value, its steps saying the graph keys only where a type is served otherwise than by
 default (`graph: off` on the request triage, whose work is text the map does not light, and on the scribe's;
-`graph: tools` with `graphPromptTokens: 0` on the plan audit and the item audit - the tool and no pack: the measurement ran
+`graph: tools` on the plan audit and the item audit - the tool: the measurement ran
 them with `graph: off` before the graph's `sites` was built, when their work was text the map does not light, and a class's
-sites, which they now search, are what `sites` answers, beside their own text search, while a pack still lights none of it;
+sites, which they now search, are what `sites` answers, beside their own text search - no step saying `graphPromptTokens`,
+for a step with the tool is pushed no map and no pack (`WorkflowStep.GraphPromptTokensOf`);
 `graph: map` on the prioritiser and a review's scope; `graphFrom: changes`
 on the reviewers, the self-audit, the diagnosis and the steps that verify and fix - a step that goes
 on with another's work starting its own pack where it says; the implementer, the planner and the
@@ -2428,10 +2585,11 @@ answered (a timer armed at `Start`, disarmed as its runner answers) - and never 
 on a question; a reason step's handoff turn at a pause is bounded by the workflow's top-level
 `handoffSeconds`, not by it, and its run at the resume counts anew, while a machine step a pause
 leaves running keeps its count. Past it
-the step is stopped as a stop stops one - its runner cancelled, a reason step's minutes counted -
-and, once its runner has answered, ends `Failed` with 21 whatever it answered, its error saying
-`passed its timeoutMinutes (<n>)`: a machine or leg step runs again by the retry table's row for
-21, a reasoning step goes to its handlers and its `onFailure`. A runner that does not end within
+the step is stopped as a stop stops one - its runner cancelled, a reason step's minutes counted, up to the
+moment the limit passed however late the loop comes to it (`CountMinutes`) - and, once its runner has
+answered, ends `Failed` with 21 whatever it answered, its error saying `passed its timeoutMinutes (<n>)`:
+a machine or leg step runs again by the retry table's row for 21, a reasoning step goes to its handlers
+and its `onFailure`. A runner that does not end within
 `PointOfNoReturn.SafePauseDrain` of that stop fails the step all the same, saying so; it goes to
 its handlers and its `onFailure` and is not retried - of a step of `others`, the target whose turn
 it was fails so, and the step goes on with the next. What that attempt claimed stays held until its
@@ -2447,7 +2605,9 @@ as it records every step in flight.
 A pre-existing issue - one a reasoning step meets that was there before the run - is reported in the
 step's answer (`preExisting`, a member of every shipped reasoning schema but the triage's) and triaged by the step its
 `onPreExisting` names: a reason step of the flow's top level that says `raised: preExisting`, which
-nothing schedules, and `onAddress: recover`. The validator holds the wiring (V51): the triage is at the top level, waits for nothing, nothing waits for it and no handler sends the run to it, it
+nothing schedules, and `onAddress: recover`. The shipped flow says what a step does with one - report it, never fix
+it, and each course its triage may give it - in one text, `issues-before.md`, read as `{text.issuesBefore}` by the
+prompt of every step that reports one, continuations among them, and in none of its agents' files. The validator holds the wiring (V51): the triage is at the top level, waits for nothing, nothing waits for it and no handler sends the run to it, it
 takes no `on`, `when` or `always`, sends
 a fix to a declared `recover`, and names no triage of its own, which would be it calling itself;
 where a workflow has one, every other reasoning step names it. Its agent reproduces the issue on the
@@ -2457,22 +2617,143 @@ change does not touch that blocks nothing: owed the run's next round, sized - it
 be built, what measured first, an answer whose size names no file refused - never holding the round
 it came from; see the routing paragraph below), `list` (added, proven, to the run's
 `pre-existing-issues.json`, shown in the pull request's body and the handoff, a quote or an output
-kept whole), `duplicate` (naming in `duplicates` the listed issue it
-repeats) or `unproven`; an answer whose course is none of the five, or whose issue to list or send
-to the next round does not read back, fails the triage step (12) before it ends. The engine raises it for each issue a reason
+kept whole), `duplicate` (naming in `duplicates` the issue it
+repeats), `unproven`, or `join` (naming in `joins` an issue taken before its own, being triaged, being fixed or fixed,
+whose root cause its own shares; see the paragraph on joins below); an answer whose course is none of the six, whose issue to
+list or send to the next round does not read back, or that names an issue it may not (`FlowCoordinator.NamedIssueRefusal`:
+for `duplicates` or `joins`, an issue not taken before its own - a triage instance, or the triage that took one the run
+listed or owes the next round, `TookUnder` - so no two issues ever name each other and both vanish (`TakenBefore`, the
+one owner of the rule); for `joins`, too, an id that names no triage instance; one whose issue had ended without
+what the name needs before this triage began - for `joins` a fix, for `duplicates` a decision, `NamedEndedBefore`);
+and, for `duplicates`, one whose fix was done before this triage's issue was met - a fix that did not hold, whose
+repeat is fixed again rather than settled by it (`FixDidNotHold`, the one owner `HolderOf` reads too)), fails the
+triage step (12) before it ends. The engine raises it for each issue a reason
 step's answer reports under `preExisting` (`FlowPreExistingReport.In`, as the shipped schemas spell
 one) - once for an issue: a repeat of the same title at the same place raises nothing while a triage
 of it holds the issue (`FlowCoordinator.HolderOf`: one waiting, running, paused, stopped or ended done,
 but not for a report met after its own fix was done), the run's records saying so, unless it stops the work of a
 step that triage will not run again, for only a triage's own reporter runs again once its fix is done;
 one met again after its fix - by an attempt begun after the fix ended, in the run's own order of
-attempts begun and instances ended that each step record keeps (`attemptBegan`, `endedIn`, and on a
+instances drawn, attempts begun and instances ended that each step record keeps (`drawnIn`, `attemptBegan`, `endedIn`, and on a
 triage `reportedIn`, the reporting attempt's; `MetAfter`) - is raised anew, its visits of
 the recovery counted against `maxVisits` by the issue, whichever triage sent it (`RecoveryOf`), and a
 configured answer to that bound counted there too, so a fix that never holds ends in `recoveryBound`;
-steps the one issue stopped side by side, each reporting it before its fix, each have it fixed with
-none spending another's bound - and keeps the list; `issue` is read only by the
-triage and the recovery, and `source` by them and by a handler.
+steps the one issue stopped side by side, each reporting it before its fix, each raise a triage of their own, told
+the first, which answers it a duplicate: what becomes of the issue it repeats settles it - its visits are that issue's
+(`FixesOf`), it may still be fixed while that one may (`MayStillFix`), through the chain of names it leads along
+(`RepeatSettledBy`, every one walked kept) - so the step it stops runs again once that fix ends, or once that issue's
+triage ends deciding no fix where another issue that stops the step was fixed, as a join's does (`RunTheReportersAgain`,
+over the triages a visit fixed, `TriagesFixedBy`, or the triage that ended, each with the duplicates it settles,
+`WithTheirDuplicates`, the one owner of what reaches a duplicate); one that answers fix all the same waits
+for that fix and has it fixed again with none spending another's bound - and keeps the list; `issue` is read only by the
+triage and the recovery, and `source` by them and by a handler. A reason step that names a triage is told, where it starts, every issue the
+run holds then (`FlowPreExistingReport.Known`, the part `<pre-existing>` wraps at the end of its prompt, read from
+`FlowCoordinator.IssuesHeld`): the tally's lines as `{run.preExisting}` words them - each `<id>: <what became of it> -
+<title> (<where>)`, the id a listed issue's `pe-<n>`, one owed the next round's `nx-<n>`, and every other's its triage
+instance's (`FlowCoordinator.Said`) - a duplicate left out, and each issue whose triage has not ended, being triaged,
+with its triage's id - so a repeat it would word its own way, which `HolderOf` cannot match, is reported again only
+where it stops its own work, and raises no triage only to be merged as a duplicate. A triage is told, where it starts,
+only those it may name - each taken before its own (`TakenBefore`), the tally's whose triage was and those being
+triaged - with the ids of those it may join (`JoinableBy`: of those, each whose issue had not ended without a fix as it
+began, `NamedEndedBefore` - being triaged, being fixed or fixed) and of those whose fix did not hold for its issue
+(`FixedBeforeMet`, over `FixDidNotHold`), all read from the rules its answer is refused by, so it names the issue it
+repeats, or the one whose root cause it shares, by the id the run gave it, is told that a duplicate is settled by what
+becomes of the issue it repeats and that the repeat of a fix that did not hold is fixed again, and is never offered
+one it would be refused for: of two raised together, the earlier is told nothing of the later, which is
+triaged after it and names it where it repeats it, and the pair resolves to the earlier.
+
+An issue a triage sends to fix is the recovery's at once, its visit beside any other at work (`FlowCoordinator.FixOf`):
+only one that a step of a visit reported waits, for that visit to end - the recovery never calls itself (V50) - and one
+a visit at work fixes already, for another step it stopped, waits for that visit, so one defect has one fix at a time and
+the next is diagnosed on the tree the first left (`FixWaitsFor`, the triage's record saying which it waits for). A visit
+is at work while it is left of the run by the one rule of it (`FlowInstance.IsLeft`) - not ended, or stopped by a pause
+or a stop, which runs it again at the resume, never stopped by a plan update, whose visit in the work item it brought to
+rest is over - and past a failed end while a person is asked what its failure does (`FlowInstance.IsAtWork`, which
+`FixAtWork` reads and by which the run's status shows the failure a visit works on `Recovering`); a triage holds its
+issue, and its issue is being triaged, by the same rule (`HoldsIssue`, `FateOf`, `MayStillFix`); a waiting
+fix is taken in the pass that frees it - a step of every pass, read from the run's state and never from the event that
+ended a visit (`DrainPendingFixes`), held while the run pauses or stops - so it waits through a failure's question, is
+taken once that is answered otherwise than retry, and on retry waits for the issue's next visit: never two visits of
+one issue side by side. A step
+two issues stop runs again once (`RunTheReporterAgain`): after every issue that stops it is settled - no triage of one
+still to answer, no fix of one waiting or at work - where a visit fixed one, sent back by the visit that ended last;
+never while a fix of another still works, and never twice. `{run.preExisting}` says each issue in the place it was taken,
+whichever visit ended first - the order its triage ended, which a resume rebuilds the tally in from each triage's
+recorded `endedIn`, a listed issue and one owed the next round under their files' own ids, so the words read after a
+resume as before it. An always step starts once no issue's triage or fix is at work beside it - one raised in the
+always phase by another always step's report, or let go on by an answer given while it ran (`FlowCoordinator.IssueWorkOf`,
+a hold of `HoldOf`, its record's `waitsOn` saying `an issue's triage or fix to end`, `FlowWaits.IssueWork`) - so what it
+is told of the run's issues is true when it is told; work that waits on a person, or on the session's end, is not waited
+for, and the issue is said as it stands. The phase itself begins only once nothing runs and nothing is due, so no work
+begun before it is still at work when it starts. From the moment it is sent to fix until its visit ends - a visit paused on a person, or
+asked whether its failure is tried again, included - the issue holds the files its triage's `where` names, each entry a
+path from the repository's root and never the command it may name instead (`FlowIssueHold.IsPath`), and, once a check of
+its visit has read the remedy items its diagnosis gives, every path those items own: `FlowIssueHold`, the one owner of
+what an issue holds and which of it a work item owns, over `FlowCoordinator.IssueHolds`, which reads the issues being
+fixed from the run's state - every path it holds, and each one an item owns, read from the repository's root as the
+plan's check reads an item's (`GlobPattern.FromRoot`, whether a path names a directory asked of the run's start tree,
+`TreeDirectories.Meeting`), so a
+root-level file a fix holds keeps only the item that owns that file waiting. A work item - an instance of the
+work-item group - that has not begun and owns any of those paths, or names the issue among those whose fix it needs -
+its `needs`, read by `FlowWorkItems.NeedsOf` alone and met by `FlowIssueHold.NeededBy`, the issue's id
+(`FlowIssueHold.Issue`) its triage's, as `{run.preExisting}` words it - starts once that visit has ended, so it builds
+on the tree the fix leaves (`FlowCoordinator.FixHoldOf`, a hold of
+`HoldOf`, which reserves no claim, so every other item goes on at once and none waits behind it); its record's `waitsOn`
+names the fix, `the fix of '<title>' (<visit>), which holds <paths>` (`FlowWaits.Fix`), `which it needs` where the item
+names it, and `ask-orchestrator-status` says it among what the run waits for. An item that has begun goes on - its fold
+and its reconcile meet the fix as any two changes meet. Every check whose items a round opens with is handed the ids of
+the issues the recovery takes (`fixes`, `FlowCoordinator.IssuesTheRecoveryTakes`: each sent to fix or joined to a fix,
+being fixed or fixed, or joined to one still being triaged - the one owner of which issues an item may need, which
+`IssueHolds` reads too, so an item is held for every issue its check let it name: one joined to an issue being triaged
+holds no file, and keeps an item that needs it waiting under that triage, then under the fix it goes with - and where
+that issue ends without a fix and the join is triaged again on its own, the id the item named is followed to the
+triage that holds the issue now, by the one walk a duplicate's settling makes too (`HolderNow`, over `HolderFrom`,
+every triage walked kept), the item waiting under that triage, then under the fix it sends or goes with, whose one
+hold the named id meets too, `FlowIssueHold.NeededAlsoBy`), and
+`PlanCheckRunner` refuses an item whose `needs` names another, for no fix of another is made to wait for; a recovery's
+check is handed none, and refuses every `needs` and every `settles` saying so - its remedies are never held for a fix
+and settle no issue. The planner's prompts and the self-audit read the rule once, the
+workflow's text `fixes` (`fixes.md`, `{text.fixes}`) beside `{run.preExisting}`: an issue it lists as being fixed is the
+recovery's, no work item fixes it or rewrites its lines, and an item that needs its fix names it under `needs` and
+waits for it.
+
+An issue whose triage answers `join` takes no visit of its own: it goes with the fix of the issue it joined, read from
+the run's state alone (`FlowCoordinator.JoiningOf`, over the joins the run's records hold, in the order they ended:
+`Joins`, each triage ended done with the course `join` by its `endedIn`, kept in no list of its own, so a resume reads
+every join before it counts a visit of the recovery - whose key reads what each visit fixed - and no rebuild has an
+order to keep), through
+that one's own join where it joined another in its turn and has no fix of its own (`RootOf`). Where the issue it joined
+is still being triaged it waits for that triage, and goes with its fix should it send one; with a visit of that fix
+whose diagnosis - its first step to begin - began after the join ended, in the run's own order, or has not begun
+(`IsWith`), the visit's steps read it in `{source.joined}` (each issue joined with its id, title, description, where
+and proof) and the visit's end settles it: fixed with that issue, a step it stopped run again as the issue it joined
+would be (`RunTheReporterAgain`, which reads the visits that fixed each issue, `FixesOf`, and sends a reporter no
+redirect the run owes resets already). A join that came while a visit of that fix was diagnosing waits for that visit
+to end and then, once it fixed the issue, takes a visit of its own (`SettleNamedIssues`, a step of every pass, `FixOf`) - as
+one to an issue fixed already does at once, a join its refusal takes (`Joining.Due`) - whose
+steps read in `{source.joinedTo}` what that visit did - the issue it joined, by its id, title and where, the visit, and
+the remedy items its checks read. Where the issue it joined ends without a fix - listed, owed the next round,
+unproven, a duplicate, a triage that failed, was skipped or never ran, or a fix given up - the joined issue is triaged
+again on its own: `SettleNamedIssues` raises a triage of the same step for it, as its reporter's report raised the first, the
+records saying why, and its join holds the issue no more (`HoldsIssue`); a triage that began after that issue had
+ended so is refused a join to it, so the same join is never made twice. A duplicate is treated so too where the issue
+it repeats ends without a decision - its triage failed, its failure passed over, was skipped or never ran - for no
+issue is lost with the one it named: one owner, `NamedEnd`, says what a name of another's issue leads to and where that
+issue ended without what the name needs - a fix for a join (`NotFixedIn`), a decision for a duplicate (`UndecidedIn`),
+each through the chain of names it leads along - and `OwesATriageOfItsOwn`, read by `SettleNamedIssues`, `HoldsIssue`,
+`MayStillFix` and `StateOf`, gives either its triage of its own; its words leave `{run.preExisting}` and the run's
+counts, which that triage's answer says, and a triage that began after the issue it would repeat had ended so is refused
+the duplicate (`NamedEndedBefore`). A visit fixes every issue that goes with it - the one it was sent for, each joined
+to it and gone with it, and each duplicate of one of those (`TriagesFixedBy`, `IssuesFixedBy`, over `WithTheirDuplicates`): a fix sent for one of
+them waits for it as for its own (`FixWaitsFor`), a report of one met after it ended counts against the issue's own
+bound (`MetAfterItsFix`), and its end runs again every step one of them stops (`RunTheReportersAgain`). Each visit is admitted against the run's own limits,
+as every step is. The tally keeps a joined issue in the place it was taken, its state read where the fix it joined
+stands (`StateOf`): `joined to <id>` while that issue is triaged, `being fixed with <id>`, `fixed with <id>`, `being
+fixed after <id>` while it waits for a visit it did not go with, then `being fixed` and `fixed` with a visit of its own,
+and left out once it is triaged again; the run's counts take `fixed with` as fixed. An issue joined to a fix at work
+holds its own `where` as an issue being fixed does, under the visit that fixes it or that it waits for (`IssueHolds`);
+one joined to an issue still being triaged holds no file, as that issue holds none before it is sent to fix, but keeps
+an item that needs it waiting under that triage (`Joining.Waits`).
 
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
 against the table that owns it (`WorkflowStepTypes`, which the parser reads exactly and `help
@@ -2636,7 +2917,9 @@ domain and every name under it, or `Web(*)` the web whole). Built in, not config
 actions (`sudo`, `su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `psexec`,
 PowerShell's `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command
 names one), writes outside an agent's writable roots, every read and write of a credential slot or a
-Claude Code directory of the run's and every search over one (`AgentPolicy.Search`), and any command
+Claude Code directory of the run's and every search over one (`AgentPolicy.Search`, which a client's own search
+tool is asked by; the tool runtime's `find_files` and `search_files` ask a read of the directory and decide each file
+beneath it as its own read, so a slot beneath is left out, counted, never read), and any command
 naming one - by `~` or `$HOME`, against every directory a `cd` of it reached, by every path a word
 may name to its program, read by one owner for the places no command reaches and the places a
 command writes alike (`CommandAnalysis.PathsNamed`: the word, the value after its `=` or a
@@ -3011,7 +3294,22 @@ into a file is the inside of that program, unseen as help says. The rule a refus
 that decided: a rule the command certainly is before one it may be, and of the may-bes the
 person's own restrictions first, then the worktree rules, then the tool's own refusals. The protected paths (`agentPolicy.protectedPaths`) are Claude Code's own list written out once
 as rules (`AgentPolicy.ProtectedPathRules`), pinned by a test and printed by `help agent-clients`,
-refused on every client; a step's `writes` is the one source that narrows, and the reporter's reads
+refused on every client; a step's `writes` is the one source that narrows - a write, and a delete
+but of what the step made itself (`AgentPolicy.Delete`): a path of its worktree git does not track
+that the record of the step's start does not hold (`AgentPolicyGround.StepStart`,
+`Agents\Policy\AgentStepStart`). That record is the worktree's untracked files as git lists them
+(`IGitClient.ListWorkingFilesAsync`), taken by `ReasonStepRunner` before the step's agent first starts
+and kept in the step's directory (`OrchestratorLayout.StepUntrackedFileName`), so every later
+attempt, answer and resume reads the one its first start took; held without regard to case, a
+directory held where a path in it is, for it only ever keeps a path from being taken back. The tool
+runtime asks git, as each call is decided, which of the files a call takes away - a file deleted,
+every file of a directory deleted, a move's source - git lists untracked now (neither tracked nor
+ignored), and hands that to the policy, which decides alone; a directory passes where nothing of the
+record lies at or beneath it, each path it holds decided on its own. So what a step's commands made
+anywhere in its worktree - a build's outputs, which a fold under `foldOutside: fail` would otherwise
+stop on - the step may take back on every client, by the one runtime both reach; a path git tracks
+or ignores, one the record holds, and a write over the step's own making stay narrowed, and the
+refusal says what may be taken back (`AgentPolicy.OwnMakingSaid`). The reporter's reads
 are narrowed to the run's directory alone (`AgentPolicyGround.ReporterRoot`: no command, no write,
 no web). For Claude Code the policy is rendered, never re-decided, into the launch's settings
 (`Agents\Policy\ClaudeSettings`): an ask rule for every tool the launch has, a read of each
@@ -3029,9 +3327,14 @@ allows - nothing runs while the host that would answer is silent or gone. The fi
 asks it is `Agents\ClaudeCode\ClaudeCodeClient`, the `IAgentClient` of `claude-code`: each
 launch a new session (`ClaudeLaunch` builds its one argument list and its environment - what
 every child of an agent has (`AgentChildEnvironment`), nothing of a Claude Code session the tool
-was started in but a name `agentPolicy.keepEnvironment` gives back, the names `ClaudeSettings.Launched` sets -
+was started in but a name `agentPolicy.keepEnvironment` gives back, every name `ClaudeSettings.LaunchedWith`
+sets, in its settings' `env` as in its environment: the names `ClaudeSettings.Launched` sets -
 `MAX_MCP_OUTPUT_TOKENS` among them (`ClaudeSettings.McpOutputTokens`, three times `PageRoom.ModelAnswer`),
-so Claude Code never cuts a page of the engine's tool server's answer - and the one credential an `AgentCredential` gives), streamed both ways and read line by line as
+so Claude Code never cuts a page of the engine's tool server's answer - the two cache lifetimes
+(`ClaudeSettings.CacheTtlVariables`) at `agentClients.claude-code.cacheTtl` (`ClaudeSettings.CacheTtlOf`),
+and every other name Claude Code caches by (`ClaudeSettings.CacheOverrideVariables`) off, so the
+configured lifetime is the one say on a launch's caching whatever the person's environment or settings
+hold - and the one credential an `AgentCredential` gives), streamed both ways and read line by line as
 `ClaudeLine`s (every kind the probe's recordings hold), each `can_use_tool` it asks decided by
 `ClaudeToolDecider` through the policy, the tools it is given - and what a call of each is of - from
 the one table `ClaudeCodeTools` holds; an answer held to a schema checked by `StructuredOutputGate`
@@ -3040,8 +3343,16 @@ turn (its prompt and its refusal `AgentHandoffSignal`'s, every client's; the age
 message the engine wrote was taken or dropped - each with an id of its own, by which the
 interrupt's receipt names those it dropped), the model each message names, and a key reported
 invalid moved past with a new launch, all in one launch's loop that the stored stream
-(`AgentRunner`) records as it runs. A step with the web takes the harness's own fetch and search
-from the engine's tool server, `Agents\Runtime\AgentToolServer`: one MCP server of type `sdk`
+(`AgentRunner`) records as it runs. The run's turns are the model's answers, as on the API clients
+and as Claude Code counts the turns its `--max-turns` holds: each response a launch writes, counted
+as its first line arrives over every launch of the run (`ClaudeLine.Assistant.Id`, which every line of
+one response names; a line that names none an answer of its own, a message Claude Code wrote itself
+none), so a launch cut before its turn's result still counts what it answered
+(`AgentRunResult.Turns`) - never the engine's own exchanges with the launch, which number the turns'
+events (`TurnStarted`, `TurnFinished`) and may each hold many answers, as each one's end says
+(`TurnFinished.Answers`). The run's end says the result's count (`RunFinished.Turns`), which a step's
+measure reads (`AgentRunSpend.TurnsTaken`), as a side-task's record reads each exchange's answers.
+A step with the web takes the harness's own fetch and search from the engine's tool server, `Agents\Runtime\AgentToolServer`: one MCP server of type `sdk`
 (`ClaudeLaunch.McpConfiguration`, the step's `claude-mcp.json`, which `--mcp-config` names beside
 `--strict-mcp-config`), whose every message Claude Code sends its host as an `mcp_message` control
 request - the probe found it does so for a host that is no SDK on every version taken, its
@@ -3116,7 +3427,12 @@ at a time: its pages laid by `Pages\TextPages` - the file streamed once, in cons
 a page given in pieces by the one rule `Pages\Paging` cuts a piece by - and only where each page begins kept, by
 `Pages\KeptAnswers` in the step's `graph-pages/` beside the graph's pages (`PageKey.OfCall`, a key the graph's
 never is), for the conversation's life; a file that changed since its pages were laid is laid again, the page
-saying so (`TextPages.Relaid`). `read_result` reads too a message a compaction gave by reference
+saying so (`TextPages.Relaid`). A writer of an answer says which of its lines head a block and which belong to one
+(`ResultLines.HeadAsync`, `ResultLines.BlockLineAsync`), and an answer past a page keeps its blocks beside its file in
+the same pass (`TextBlocks.FileOf`, ended by the digest of the file's bytes), so every page of a result - its first in
+the call's own answer and each `read_result` gives - is laid with them by the one path a result's pages are laid by
+(`KeptResults.ResultLaidAsync`), and a page that begins inside a block gives its head again; a file viewed is never laid
+with blocks, whatever is beside it. `read_result` reads too a message a compaction gave by reference
 (`StoredStream.MessageText`, by the id `StoredStream.MessageId` gives it) and the continuation
 record (`KeptResults.ContinuationId`), and a call's result file is named by `PageKey.OfCall` of its
 whole id.
@@ -3261,7 +3577,12 @@ recommendation among them - which `AgentRunResult.Problem` and the run's `questi
 output that reads against its schema held to the step's own rules where it has any (`AgentOutput.Holds`, each problem a
 path under `$.output`, sent back as a schema's is and counted with its repairs - the route's rules of a review's
 findings and the analyst's evidence alike, one hook), and the run's end - `Completed` or `Asked`, with `PersonAsked`, or
-a repair sent back, then `InvalidOutput`. Every JSON an agent reads or its call carries is written by one writer,
+a repair sent back, then `InvalidOutput`. An output that reads and holds is held last to the checks the engine says
+will read it next (`AgentOutput.Corrections`, from `FlowStepRun.AnswerCorrections`): each problem a check's own runner
+finds of it (`IFlowAnswerCheckRunner`, the one judgement the check's run makes) goes back in the same conversation in
+`StructuredOutputGate.Correction`'s words, an `OutputCorrection` event of the stream, no repair counted, for as long as
+each answer is new - one that gives again an output it was sent back with is the agent's word that it cannot put what is
+left right, and the run ends with it as given, for the check to record. Every JSON an agent reads or its call carries is written by one writer,
 `AgentEnvelope.Written`, JSON's own escapes alone and at any depth, so an apostrophe, an angle bracket, an ampersand
 or a letter past ASCII reads as it was written: the envelope, a value a problem quotes, a template's JSON value
 (`FlowValue.AsTemplateText`, `{run.closure}` among them), the engine's account of the work a piece starts from
@@ -3321,9 +3642,18 @@ said and counted the same way. What each client is sent: `--json-schema` the
 envelope as built; the loop's `ChatRequest.Schema`, which the Claude API sends as `output_config.format` in the copy
 `ClaudeApiRequest.Sent` makes - every array bound structured outputs do not take moved into its description, over
 `JsonSchemaSubset.SchemasIn` - and which, once the API refuses it as more than it compiles
-(`ClaudeApiFailures.RefusesTheFormat`, failed as `ChatFailureKind.SchemaRefused`), the loop sends the run's later requests
-none of, the envelope said in words in a message it appends to the conversation (`AgentMessageKind.EnvelopeInWords`) -
-never in the system prompt, which every stored turn's thinking was made under - and which a provider whose wire holds no answer to a schema (`IChatProvider.SendsSchema` false, Z.AI) is told in words
+(`ClaudeApiFailures.RefusesTheFormat`: its grammar too large, more optional or union-typed properties than it takes, or a
+schema too complex, each way the API says it held in the one list `ClaudeApiFailures.MoreThanItCompiles` and matched
+whatever its case, failed as `ChatFailureKind.SchemaRefused` - a conversation's first request's too, never read as a
+model the account is not given), the loop sends the run's later requests none of, the envelope said in words in a message
+it appends to the conversation (`AgentMessageKind.EnvelopeInWords`) - never in the system prompt, which every stored
+turn's thinking was made under. The refusal is remembered for the client's life - by the `ToolLoop` the client keeps, one
+for the process, as the registrations keep each client - by the provider's API address, the model and the envelope
+exactly as sent, safe under runs in parallel: every later run of that envelope on that model, in the same session, sends
+none from its first request and is told the envelope in words in a message of its own after its first, a notice saying it
+was refused earlier in this session with what the API said then, masked (`ToolLoop.SchemaRefusedEarlier`), and so is a
+run that moves to that model, or finds another run's refusal of it meanwhile, before its next request; the same envelope
+on another model, and another envelope, still send their format. A provider whose wire holds no answer to a schema (`IChatProvider.SendsSchema` false, Z.AI) is told the envelope in words
 in a message of the same kind after the step's first, in every conversation the run begins (`AgentEnvelope.InWords`),
 so the first message is exactly what `AgentPromptParts.FirstMessage` wrote and `AgentPromptParts.TaskOf` takes apart,
 and the attempt's items hold the envelope once (`AgentAttempt.Items`); an answer that read as no JSON asked again in JSON
@@ -3387,7 +3717,16 @@ asked by `web_search`'s `page` - counted against `maxPerStep`, each source's `pe
 asked one request at a time by a lease in that record that the process asking holds
 (`WebSearchPace.TurnAsync`, `Waits.WhileHeldAsync`), and a pause it asks for kept there
 (`WebSearchPace`), a key read by
-`WebSearchKeys` from the slot or `gh auth token --hostname` for the source's host - a slot's key sent to the scheme, host
+`WebSearchKeys` from the slot or `gh auth token --hostname` for the source's host - the gh login's token held by its one
+owner (`GhLogins`), in memory alone, never in a record: read once per engine session (`EngineSession`) and kept for its
+every step, read again before the expiry the host tells of it passes - `gh` says none, and GitHub's API names it on each
+answer to a request a token that expires signed (`github-authentication-token-expiration`), read again a minute ahead
+(`GhLogins.Ahead`), once for that expiry - and read again once where the host refuses a request it signed as unsigned
+(401), the request then sent once more with the token read where it is another and never a third time, a second
+refusal answered as the first would have been (`WebSearchRenewal`); a reading that gives no token - gh signed out, or not
+answering in time - is held nowhere, so the next step reads gh again, never takes the place of a token held, and leaves a
+step that began without one to be sent the token the session comes to hold, read by another of its steps; each token a
+step comes to send held by its mask before it is sent (`GrowingMask`) - a slot's key sent to the scheme, host
 and port the source's own address writes alone (`IWebSearchKind.KeyOrigin`, a source whose address takes its host from
 what discover finds refused one where the configuration is read), a gh login to that host or its API alone
 (`WebFetchKey.Origins`), never a host a document the source read names - and added by the fetch to what it sends the
@@ -3411,12 +3750,14 @@ step is given to the runner of its type
 (`FlowStepRunners`, over every `IFlowStepTypeRunner` the root registers - `FlowStepRunners.Served` lists them, and a test
 holds the two to each other); a step of a type none serves yet fails, saying no runner serves its type. Those served
 are machine steps, each a thin adapter over the owner of its rule: `OrientRunner` reads the main checkout by
-`FlowCheckout` - the one probe the run's start reads too, over `IGitClient` and `GitRemotes` - and each fact by its owner
+`FlowCheckout` - the one probe the run's start reads too, over `IGitClient` and `GitRemotes`, the remote's forge
+among what it reads - and each fact by its owner
 (`LegSelection`, `TestInvocationResolver`, `AnchorCitationService.RootsOf`, `CiSettings.Unset`, `MutationService.Declares`,
 `OrchestrationRules.OpenAgents`, `TreeHolders`); `GraphifyCodebaseRunner` checks the graph's longest path against the
 run's directory and syncs the run's one codebase graph through `ICodebaseGraphService` (`Core.Codebase`, below);
 `PlanCheckRunner` holds the items its `items` yields to `PlanValidator`, whose path budget is
-`FlowRunPaths`'s with the deepest file an item owns, and which also holds each item to its classes (P-C1 to P-C8)
+`FlowRunPaths`'s with the deepest file an item owns, which reads each path an item owns and must not touch from the
+repository's root (`GlobPattern.FromRoot`, below), and which also holds each item to its classes (P-C1 to P-C8)
 and its tests (P-C9: the units its change affects in `tests`, none blank, or why it affects none in `noTests`, exactly
 one of the two):
 an item declares the classes of the decisions it changes or says in `noClass` why it decides none; a class id names
@@ -3427,8 +3768,28 @@ paths and there in the tree where it exists; a site is the home exactly where it
 compares paths, and its symbol are the home's, and only that site is marked `home`; every other site changes -
 `reads-home` or `deleted` - and is the item's too, for patching some of a class's sites is never done; more than one
 site means consolidate, as one site that is not the home does; a class is searched by data its queries name again,
-and its universe holds the axes the repository declares; and one home belongs to one item - two classes of one item
-may share one, a place that decides more than one thing, which that item changes alone. The builder closes
+and its universe (P-C7, read by the one reading of a planned universe, `ClassClosureReading.PlannedAxes` and
+`CellsOf`, each axis a `UniverseAxis`) answers each axis in one of the two ways an axis is answered - applying exactly
+where it names values, with where the repository declares them and no why; not applying where it names none, with
+why and nothing declared - and counts the cells its axes that apply make - the product of the counts of their values,
+1 where none applies: the size of the decision as the plan states it, which its audits, its builder and its closing
+review are each given with the class, and no other rule reads - while that it answers every axis the closure text
+lists, by a member of its own (`kinds`, `targets`, `configurations`, `formats`, `entryPoints`, `tiers`, `forms`,
+`directions`, and `further` for the further axes the text's heading "This repository" names, never its references or
+its optimised forms), each in the one shape of an axis (`plan.schema.json`'s `axis`: `values`, `declaredIn` and `why`,
+all three required, no union), is `plan.schema.json`'s to hold, so the structured-output check sends an omission
+back within the plan step, as the check's own rules send back an answer that is neither way, and neither costs an
+audit or another planning iteration; and one home belongs to one item - two classes of one item
+may share one, a place that decides more than one thing, which that item changes alone. What the check finds reaches
+the agent that gave the items within its own step: the engine holds the answer of every reason step whose output the
+`items` of a check of its scope reads - the plan and a plan update through `plan.latest`, a round's self-audit through
+`previous`, the diagnosis and its redirect through `diagnose.latest` - to that check at the answer
+(`FlowCoordinator.AnswerChecksOf`, over the types that judge an answer, `WorkflowStepTypes.StepType.JudgesAnswer`: each
+key read as the check's start reads it, `StartReadsOf` and `ReadExpressions`, with a plan check's own, `CheckReads`, and
+the judged one from the answer, `FlowAnswerCheck.ReadOf`), judged by `PlanCheckRunner.AnswerProblemsAsync`, the one
+`Checked` its run makes, so a problem the planner can put right costs no audit and no planning iteration; a check of
+another scope, and one whose other reads or texts cannot be read yet, holds the answer at its own moment alone, and the
+check runs after it as before, the record and the gate. The builder closes
 the class (part 01's B and C): the implementer's definition and the implement and remedy prompts hold the
 class-closure paragraph, every prompt that goes on with an item - mend, rework, reconcile, anchors, unblock, redo and
 undo - reads the item's classes and the record so far (`{input.item.classes}`, `{implement.latest.closure}`) under
@@ -3441,7 +3802,10 @@ tools given `run` - that the engine gives it by, the tool runtime offers it by a
 so no launch is told to take a tool its server does not list; its every call - a leg, its variant, a filter, the cell
 measured - runs through `ITestLegs` as a leg step's legs are (`FlowStepLegs`, the one owner of a step's legs: the
 isolation decided first, the process scope over the step's directory, the ledger kept), in the agent's worktree where
-it has one and in a local copy of the main tree where it does not (`ReasonStepRunner.MeasuredAsync`), read by
+it has one - an agent that only reads measures its own tree, at the main checkout's HEAD or the commit its step names,
+which no fold moves and the
+start of its next step takes back - and in a local copy of the main tree where it does not
+(`ReasonStepRunner.MeasuredAsync`), read by
 `FlowLegVerdicts.ClassOf` - a red leg failed, a leg that passed passed, every other verdict unmeasured with the leg's
 words as why - and answered with the verdict as the ledger spells it, the run's directory and the call's own records,
 `measures/<call id>/` of the step's directory (`AgentMeasureSupport.RecordsOf`: the ledger, a red leg's log in an
@@ -3480,7 +3844,9 @@ stands, and for `failed-fixed` one whose record was written after the failing ca
 result - a failure and a pass written at the same moment read as the failure last; never the builder's word or the
 stream's capped text of the answer), or reasoned, the pin's tests declared, the arm one of the
 registry's and mutating the home's own file or a reason the class has nothing to mutate, the universe holding every
-planned axis and the claim naming each; a record without a home audit is refused where the home was touched by other
+axis the planned class's universe says applies (the record names each by the name the class's universe gives it,
+`ClassClosureReading.RecordedAxes`) and the claim naming each by its whole word, as the graph's searches hold a word
+(`GraphWord.Whole`), so `forms` is never named by "platforms"; a record without a home audit is refused where the home was touched by other
 work, and a home touched often enough is a hotspot in the check's answer. A class's paths - the plan's and the record's,
 read with either separator made forward (`ClassClosureReading.PathOf`, `PathPatterns.Normalize`), the paths changed, an
 arm's site and the touches - are compared by `ClassClosureProof.SamePath` under the machine's
@@ -3490,7 +3856,13 @@ weighing's own code: nothing it could not read is read as none (`ClassClosurePro
 reads as given). The record's problems (1) are repaired by `close-class` and a missing audit (2) by `home-audit`, reason
 steps that go on with the implementation and so change its code: each goes back through the item's tests - `then:
 item-blocked`, whose verify runs again, and `reverify` in the review loop's revise - before the check runs again and
-anything is folded. The same rules judge a manual lane's `closure.json` where `anchors.closure` says `required`
+anything is folded. The record's problems reach the builder sooner: the engine holds the answer of every reason step
+whose record a `class-closure` check of its scope reads - `implement` and each step that goes on with its work through
+`implement.latest`, `mend`, `close-class`, `rework` and `reclose-class` among them, a remedy's builder alike - to the
+same judgement at the answer (`ClassClosureStepRunner.AnswerProblemsAsync`, the one `JudgedAsync` its run makes, over
+the agent's tree, streams and dry-weighed fold as they stand then, the view synced first), so a problem the builder can
+see goes back within its step and no `close-class` is drawn for it; a missing home audit (2), which the run's history of
+the home asks for, and whatever only a later step's work shows - its tests, a fold - stay the check's. The same rules judge a manual lane's `closure.json` where `anchors.closure` says `required`
 (`AgentService.ClosureProblemsAsync`, a refusal of its own kind `RefusalKind.Closure` that no consent lifts, the searches
 and measurements read as given, a record naming no class refused, its arms against the registry its worktree holds); a
 run's own folds - its `fold` and `delete-agent` steps, the engine's own deleting of an agent and the check's weighing,
@@ -3530,11 +3902,29 @@ an item a person skipped, done with nothing landed, settles nothing - and the fi
 a resume finds), whatever the run takes plan updates by. The check that opens a round - a `validate-plan` the `forEach`
 declared beside it expands from (`FlowUpdateGates.OpeningCheckOf`), where that group runs in rounds: declared in an
 iteration of a `repeat`, or the group plan updates owe their work to, to which an update adds a round where no loop is
-around it - is decided by one owner (`FlowUpdateGates.RoundOpenedBy`), whichever opens the round: that check is handed
-the owed issues under `next` and, where its group is the one updates owe, their work (`owed`, `owedAlone`) and the plan
-update its problems raise; and `PlanCheckRunner` refuses a round whose items leave one unsettled, refuses an item that names an issue the run does not
-owe, and orders the settling items first; no other check - the plan's, a plan update's, a recovery's - is handed any,
-and an item of one that names an issue is refused. The rounds' `until` reads `empty(run.nextRound)`, so a clean
+around it - is decided by one owner (`FlowUpdateGates.RoundOpenedBy`), whichever opens the round: where its group is
+the one updates owe, that check is handed their work (`owed`, `owedAlone`, `withdrawn`) and raises the plan update its problems ask
+for. Which checks take an item that settles one is decided by one owner too
+(`FlowUpdateGates.ChecksTheItemsARoundOpensWith`, over `FlowUpdateGates.RoundsOpenedWith`, the groups whose rounds
+open with what a check checks): every check whose items a round opens with - the check that opens it, and each whose
+`items` read a step the items of such a check read: the plan's, whose plan a round opens with, and so the one a plan
+update sends the run back to. Each is handed the owed issues' ids under `settleable`, and `PlanCheckRunner` refuses an
+item whose `settles` names none of them, so an issue owed while the plan is made or updated becomes a work item of it
+that no check of the plan refuses; every other check - a recovery's, whose items the recovery builds and no round does
+- is handed none, and an item of one that names an issue is refused. Which of them hold the list they check to the
+owed issues is one gate (`FlowCoordinator.HoldsTheOwedIssues`): every check whose list the next round opens with - the
+check that opens a round, always; the plan's while no round of its group has opened, for its plan opens the first; and
+the plan's again where the plan update under way was raised by the check that opens one, its pieces joining that
+round's own list. Each is handed the issues under `next`, and `PlanCheckRunner` - the rule's one owner - refuses a
+list that leaves one unsettled, its own items or, where it names a scope and is handed the round its update joins, that
+round joined with the update's pieces - that round alone where the update answers none, for its work goes into that
+round whatever the plan's own items say - and orders the settling items first - listed and started first, they are built beside the rest, so no other item
+may need their result. The gate holds where the check runs and within the answer of the reason step whose items it
+reads (`FlowCoordinator.AnswerChecksOf`) alike, so the planner, its update and the self-audit - whose items the next
+round's check reads through `previous` - are told an owed issue they left unsettled in their own conversation, and no
+check that opens a round finds it unsettled and raises a plan update for it. The planner's prompts and the
+self-audit's list `{run.nextRound}`, each owed issue to be a work item of the round naming its id in `settles`. The
+rounds' `until` reads `empty(run.nextRound)`, so a clean
 self-audit does not end them while one is left; never holding the round the issue came from, for the triage never holds
 a loop. The value an issue is read as and the schema typing `run.nextRound` are made from one list of its members
 (`FlowNextIssue.Value`, `ValueSchema`).
@@ -3589,11 +3979,15 @@ written to `step.json` before `IAgentService.CreateAsync` is called; run again i
 drops a making cut part way - one whose hand-over of the main tree's uncommitted state stopped part way
 (`SeedRecord.HandOverStopped`) seeded again with the rest - and finishes the removal of one found closed
 (`FlowStepResult.NameSpent`); a refusal it meets keeps its cause (`FlowStepResult.Failed`), so a main tree another run
-holds is waited out as a held lock is; and `IAgentService.CreateAsync(new AgentCreateRequest(..., NoWorktree: true))`
-makes a read-only reason step's agent the same way. `ReasonStepRunner` works the reason step itself: the agent it is
-given - the one its `in` names, the work a `resume` goes on with (`FlowCoordinator.NamedAgentOf` walks the chain), or
-the engine's own read-only one, named with its model before its record (`FlowCoordinator.Start`) and made through
-`CreateAgentRunner.MakeAsync(noWorktree: true)` where the step names none - the definition it works by read where
+holds is waited out as a held lock is; and `IAgentService.CreateAsync(new AgentCreateRequest(..., ReadsOnly: true))`
+makes a read-only reason step's agent the same way, its tree by the same making. `ReasonStepRunner` works the reason
+step itself: the agent it is given - the one its `in` names, the work a `resume` goes on with
+(`FlowCoordinator.NamedAgentOf` walks the chain), or the engine's own read-only one, named with its model before its
+record (`FlowCoordinator.Start`) and made through `CreateAgentRunner.MakeAsync(readsOnly: true)` where the step names
+none, and its tree brought to the main checkout's HEAD - or to the commit the step's `commit` names - by
+`CreateAgentRunner.ReadyAsync` as every step that works as it
+starts, before the step's ground and its record of what the tree held untracked (`AgentStepStart`) are taken - the
+definition it works by read where
 the chain of work it goes on with began (`ResumeChain.Root`, the one owner the validator reads it by too: a step that
 goes on with another's work is the same agent going on, and works by that step's definition, client, tier, model,
 writes and web search - its system prompt sent, its limits held, its capabilities and `writes: false` on the ground,
@@ -3606,7 +4000,9 @@ as every launch builds them (`ReasonLaunch`, shared with the advisor and the rep
 path its record resolves, the run's work directory made before any client is handed it - the advisor's and the
 reporter's, which no agent of the run made, among them - the tool's own `~/.claude` always among the directories,
 every secret the slot answers in the mask), the policy's ground by `AgentStepGround.Of` (a
-read-only agent reading the main tree and writing its work directory alone; the tool's state guarded under each
+read-only agent working in its own tree, `AgentWorkspace.OnlyReads`, writing it and its work directory whatever its
+definition's `writes` says, and reading the main checkout beside it - its run records and logs are there - its
+`Trees` its tree and the main checkout as a builder's are; the tool's state guarded under each
 tree the agent touches - its worktree, and always the main checkout, whose run records and other worktrees a command
 reaches from the worktree - and git's own files beneath both, `AgentPolicyGround.Trees`), each skill its prompt names
 looked up
@@ -3620,12 +4016,76 @@ attempts as `FlowStepRecord.Skills`, `step.json`'s `skills[]`, and taken up agai
 pieces (`FlowStepRun.Prompts`, `FlowTemplate.FillAroundSkills`), so what was filled is never read as a template again
 and a value's braces stand - a skill that cannot be handed refusing the step (12), the work it goes on with rendered
 as its continuation record (`AgentContinuation.Render` over its `FlowStepRun.GoesOnWith` - the step it resumes, then its
-own earlier visits in the order they went, the newest last, whose stream gives the last iterations; never a step it only
-depends on), and the run answered
+own earlier visits in the order they went, the newest last, whose stream gives the last iterations - within the
+recovery, those of visits for the same failure or issue alone; never a step it only depends on), and the run answered
 through `IAgentRunner`, its ending mapped to the step's own (`FlowStepResult.AtLimit` for a limit of its own,
 incomplete for a stop, the schema-validated output the step's, with the issues it reports under `preExisting`). The
 step's stream is read by the store's one reader of it (`OrchestrationStore.ReadStepStream`): a whole line that does
 not read refuses the attempt that goes on with it.
+
+A list of a tree's own paths has one reading, `GlobPattern.FromRoot`: a work item's `ownedPaths` and `forbiddenPaths`
+(`PlanValidator`), the files an issue being fixed holds (`FlowIssueHold`), a reason step's `writes` (`AgentPolicy`,
+in its worktree) and a fold's `within` (`FoldWithin`, in the main tree) - the plan's `ownedPaths` flow into the last
+two. Every entry is anchored at the tree's root, so a name with no separator is the root's own, never one at any
+depth, as the rules' gitignore reading (`GlobPattern.Parse`) takes it. A path - an entry with no wildcard - names that
+one path, and what is beneath it only where it names a directory: one ending in a separator, which names what is
+beneath it alone, or one the run's start tree holds. That tree is asked by every reader alike for the whole run - the
+tree of the commit the run started from (`orient`'s `startCommit`), its directories listed once a session through git
+(`TreeDirectories`, `IGitClient.ListDirectoriesAtCommitAsync`: every tree and every submodule's entry, never a link,
+which git keeps as a file) and handed to every step in the run's place (`FlowRunPlace.Directories`) - never a working
+tree the run's own folds rewrite: so what the plan's check found no two items to share is exactly what each item's
+agent may write and its fold carry, whatever order the folds come in, for an entry that named no directory when the
+plan was checked names none when it is written or folded. A tree that cannot be read - a run that names no start
+commit, a commit git cannot list - answers by the question: where it is whether two entries meet (the check's
+overlaps, the holds; `TreeDirectories.Meeting`) every path counts as a directory, the wide reading; where it is what a
+step may write or a fold carry (`TreeDirectories.Writing`), and what an item owns, none does, the narrow one. An entry
+whose meaning the reading changed - one name that once matched at any depth, a path that once named a directory still
+to be made - is told how to write what it meant at every refusal the reading causes, by its one owner
+(`GlobPattern.WrittenFor`): a step's writes denied, a fold's `foldOutside`, and the plan's check of a class's home and
+sites (P-C3, P-C4) - `'docs/generated' names a file: a directory to be made is written 'docs/generated/'`, and
+`'*.md' names the root's own: '**/*.md' names any depth`. A later round's plan update, self-audit or diagnosis is
+written beside a main tree that holds what earlier rounds folded, so the plan's check refuses an entry an item owns,
+written with no trailing separator, that names a directory of the main tree the start tree does not hold - every reader
+would read it as that one path, and its builder's every write beneath it would be refused - in the same owner's words
+(`GlobPattern.WrittenForDirectory`): `'src/feature' names a file of the run's start tree, which the run's lists of paths
+are read against, and a directory of the main tree: write it 'src/feature/'`, at the answer within the step that gives
+it as at the check's own moment (`PlanValidator.DirectoryProblems`). An entry an item must not touch is never refused
+so, for nothing gates a write by one: the check weighs it for meeting the item's own owned paths, and its builder is
+told it. That rule, and every other that reads the main tree as it now is - a path an item reuses or replaces, a class's
+home and sites being there - holds every item still to be built, and passes over the items an opened round holds that
+nothing is to build again, and every removed piece's item, whatever round holds it or none, for an item taken back
+builds nothing (`PlanValidator.CheckedBefore`, handed to `PlanValidator.Check` as `checkedBefore`). The engine hands
+every `validate-plan` step of a run with an `amend` block the names of those items (`opened`, read where the check
+starts, `FlowCoordinator.CheckReads`): each an instance of the work-item group carries, over every round, but one an
+owed piece adds or changes (`FlowCoordinator.OwedPieces`), which the round it joins builds as the piece has it - never
+an item of the list the check that opens a round was opening it with (`FlowCoordinator.OpeningUnderWay`), which no
+instance carries and that check has just found wanting against the tree as it now is. An update's check - one whose
+`scope` is read, whether it yields pieces or none - passes them over, less those its added and changed pieces place, in
+the round the pieces join and in the plan's own list alike, for each was checked when its round opened, against the
+tree of that moment - a round's own item a fold since made a directory under, or took a path it reused from, would
+otherwise fail every update after it - while an update raised by the check that opens a round holds that round's items
+to the tree: that round has not opened, its list is handed to the update's checks (`opening`, read where each starts,
+`FlowCoordinator.CheckReads`), and the update is checked with that round's list whether or not the update answers a
+piece (`PlanCheckRunner`, `PlanValidator.CheckPieces` over no piece), the names an earlier round carries refused among
+its items as the check that opens it refuses them, less the names the updates owe or the pieces place - none where the
+round carries the owed work alone - so what leaves one of its items wanting is refused at once, within the planner's own
+step, not found again by the check it was to satisfy; the check that opens a round passes over the same - an owed
+removed piece's item, and the own items of a round that carries the owed work alone, which the round before built -
+drops each item an update took out of its list (`withdrawn`, below), and holds the rest; a plan's first check, before
+any round, holds every item to the tree.
+A start tree that cannot be read is never silent: the session
+warns once why (`TreeDirectories.UnreadWarning`, through the records' warner), and every refusal its reading causes
+says it too - the narrow reading's after how to write the entry (`TreeDirectories.UnreadForWriting`, carried by each
+entry read for what may be written beneath it, `TreeDirectories.ForWriting`), and an overlap of the check's that the wide
+reading alone made (`TreeDirectories.UnreadForMeeting`) - which the check names only where no pair of the two lists meets
+read narrowly, a pair that meets whatever the tree holds named first and without it, so a real conflict is never hidden
+behind one the unread tree made. A pattern keeps its meaning, anchored at the root: a
+directory it matches covers what is beneath it. Two entries
+meet (`GlobPattern.Overlaps`) only where some path a tree can hold matches both: a path naming no directory holds
+nothing beneath it, unless the other names only paths beneath it by its own names - `src/new` and `src/new/a.py` -
+which are real only where it is a directory. So the root's `Makefile`, `calc.c` and `pyproject.toml` meet no other
+root-level name and no nested file, where the gitignore reading had them meet through a `Makefile/calc.c` no tree can
+hold, refusing sound plans and holding every item that owned a root-level file behind every fix.
 
 Before its agent is launched, a step, the advisor, the reporter and a side-task each ask the operating system's
 isolation of the launch (`IAgentIsolation`, `AgentIsolation.ForLaunchAsync`, through `ReasonLaunch.IsolationAsync` for
@@ -3946,8 +4406,8 @@ What the step claimed is held through the turn and let go of after it by one rul
 in its place starts beside a runner still writing; else it is given back.
 The coordinator deletes the read-only agent once no step can go on with its work (`FlowCoordinator.ReadOnlyAgentsOver`,
 over the declarations that resume its maker and the instances drawn of them, each agent once - `_deletedAgents` - through
-the `deleteAgent` the service wires to `IAgentService.DeleteAsync`, which writes a refusal and a throw alike in the
-agent's log and takes an agent with no record as deleted already).
+the `deleteAgent` the service wires to `IAgentService.DeleteAsync`, which removes its tree and folds nothing, writes a
+refusal and a throw alike in the agent's log and takes an agent with no record as deleted already).
 The key a step starts on is chosen with the order (`balanceKeyUsage`): the resolution's entries built by
 `AgentStepOrder.Of` keep the list's order, or - where the configuration balances the keys - each model's keys run by
 least spent in the last seven days (a tie in the list's order, for `OrderBy` keeps it), the week read by
@@ -4004,7 +4464,11 @@ the reserve to meet it a second time - and a grant of more recorded since goes o
 
 Every step instance's work is measured as it runs, on its own record (`FlowStepMeasure`, `step.json`'s and
 `flow.json`'s `measure`, one owner in `Orchestration\Flow\FlowStepMeasure.cs`), null until the run draws it: when it was
-ready (`readyAt`, the first walk - the admission's or a record's - that found nothing holding it but room; what held it
+ready (`readyAt`, the moment the pass of the engine's decisions that left nothing holding it but room began - its last
+dependency's end, its making, its group's opening, a hold let go: `FlowCoordinator.DrawFreed`, every step one pass
+frees ready at the one moment and drawn in the one place of the run's own order, the step record's `drawnIn`, so a
+group's member, made a round of the pass after its group, never ranks after a step the same pass freed beside it; what
+held it
 before, the steps it depends on or the run's own holds, is theirs and never its wait; a group, which runs nothing of
 its own, holds none), how long it waited and on what (`waited[]`, by the words a record's `waitsOn` holds - the
 reasoning limit, a claim, a person's answer, the machine its legs run on holding every one of them still to run in its
@@ -4018,8 +4482,10 @@ it (`runs[]`: an asking closes one and its answer's continuation opens the next,
 letting one start does), what served it - the provider, the model, the effort, where a fallback moved it from and
 why - its tokens by kind and dollars, each part of them by the model that served it at the price copied as its cost was
 counted (`parts[]`: a price changed in the configuration later never changes what a past turn cost), the uncounted
-reason where a part could not be counted, how many usage reports it was charged (`reports`), the turns, the tool calls
-by name with their failures and denials (a denied call is a call and a denial, never a failure), the compactions, what
+reason where a part could not be counted, how many usage reports it was charged (`reports`), the turns (the model's
+answers, one response each, on every client: each run's own count as its end says it, `RunFinished.Turns`, and for a
+run a crash cut before its end the answers its ended turns held, `TurnFinished.AnswersHeld` -
+`AgentRunSpend.TurnsTaken`), the tool calls by name with their failures and denials (a denied call is a call and a denial, never a failure), the compactions, what
 it asked of the codebase graph in pages past the first (`graphPages`: how many, and the deepest page one answer
 reached, with the operation that asked it and how many pages were asked of that answer - an answer its operation and
 its inputs less the page, keyed as a kept result is - whichever client called the tool, by the one reading of a
@@ -4033,8 +4499,12 @@ step's newest; the failed attempt the engine runs again carries its backoff
 (`FlowCoordinator.TakeMessage`'s usage branch, `Charge`): every turn charges the run's budget and the attempt's entry
 with the same numbers, so the run's `spent` is the sum of its instances' - and is summed from them again at a resume,
 for a step's record is written before the run's, with what a build that kept no measures recorded before them
-(`flow.json`'s `spent.unmeasured`). What the advisor spent answering a step's own questions is kept beside them
-(`measure.advice`, never in an attempt, for the advisor's turns are its own records'). An attempt a crash cut off - its
+(`flow.json`'s `spent.unmeasured`). A turn of an attempt that is over - a handoff turn answered as a pause hands the
+step off, one its runner reported as the attempt ended - is written to the step's own record as it is charged (a
+`step` change saying so), for a resume gives back from a stream only what an attempt still running spent. What the
+advisor spent answering a step's own questions is kept beside them (`measure.advice`, never in an attempt, for the
+advisor's turns are its own records'), on the step's own record as each advice is taken (an `advised` change about
+the step, which writes its record: `FlowRunRecords`). An attempt a crash cut off - its
 record still `Running` - is completed at the resume from its own stored stream (`IFlowHandoffRunner.AttemptOf`: the
 events of the attempt the record says it was on, replayed through the engine's own count of a run's spending, each turn
 priced as it was reported): only the turns past what its entry was charged (`reports`) are charged now, its run ends
@@ -4061,19 +4531,27 @@ ended waits there and none holds a slot (`LegStepRunner.StepHold`).
 
 The report of a run is built from its records alone by their one owner (`FlowRunReport`, from `flow.json`,
 `questions.json`, `updates.json`, `events.jsonl`, the item agents' closure ledgers and the frozen definition, read for
-every report of the run in one place, `FlowService.SourceOf`): the same records give the same bytes in every form -
+every report of the run in one place, `FlowService.SourceOf`, with what the run's engine is doing): the same records,
+the engine doing the same, give the same bytes in every form -
 text for a terminal, `--json` as one document, `--markdown` for a pull request or the clipboard - with the steps in the
 run's order (the instance order of `flow.json`), every row of a list with an id of its own (an error
 `<instance>@<attempt>`, a signal `<kind>#<n>`, a convergence row its list, the item, step or agent that said it and
 what it is of), every number in one fixed form (durations to one decimal, dollars to four with the currency, times as the records keep them) and never a word
 of now: a run still going is said so at the time of its last record, marked partial. What the records cannot give is
-said in its `notes` - an events file whose last line was torn (the report is as of the event before it), a definition
-that is not there, or one that does not read with why it does not (`OrchestrationStore.ReadDefinitionOrWhy`; no
+said in its `notes` - an events file not read whole, in its reader's own words (`FlowEventLog.Read`): a torn last line,
+or the lines from the first that holds a NUL on, what a power loss left of a pass (the report is as of the event before
+it) - a definition that is not there, or one that does not read with why it does not (`OrchestrationStore.ReadDefinitionOrWhy`; no
 critical path is named). Its sections are the run (its sessions, its wall time, its active
-time - the union of every attempt's runs, two steps at once counted once - its pauses between sessions, its waits for a
+time - the union of every attempt's runs, two steps at once counted once - its pauses between sessions, each from a
+session's end - its last record, or where a crash ended it and left none, its last event - to the next session's own
+first event, whatever its kind, by the session each event names (`FlowRunReport.PausedSecondsOf`, `FlowEvent.Session`: a
+resume writes what its start took up before it records that it began, its held writes stamped as the hold is made, and
+what is written after a session's end and before the next's - an answer its last poll takes - is the ended session's and
+ends no pause; an older build's events, which name no session, are read as that build's were - from a session's last
+record to the next event, and after a crash to the next session's record of its beginning), its waits for a
 person, each question's to its first answer or, still open, to the last record, and its budget), the totals (tokens by
 kind, the cache's share of input, the dollars grouped - `dollarsBy`, by the model that served each part of each attempt
-and each step's advice by its advisor's, or by provider, step, agent or type - the retries and the fallbacks), one row
+and each advice by its advisor's (by step, the run's own question's under `run`), or by provider, step, agent or type - the retries and the fallbacks), one row
 per step (its state, attempts, waits by cause - a wait on the machine's dispatch queue naming the class of it and each
 tenant waited behind, joined over the whole wait, so a reader can tell its own run's units from another repository's -
 run time, model, tokens, dollars, exit, error, handler and why it did
@@ -4095,7 +4573,24 @@ counted - each naming its steps and its numbers, their thresholds keys of `defau
 (`FlowReportThresholds.Of`) for every report of the run. The session's end writes this same report
 (`FlowReports.Write` keeps its place; `report.json` is the document with the session's own members - its line, its
 code, its end and its handoffs - beside it, `report.md` its sections with the session's own words at its head and its
-questions, updates, handoffs and what is left for a person said in full), and `read-orchestrator-report <run>`
+questions, updates, handoffs and what is left for a person said in full - each open question with its recommendation
+and its next step, by the one rule of it over what the run's engine is doing (`FlowAnswerRules.NextStepOf`, worded once
+by `FlowAnswerRules.NextStepSaid` for the report, the status and every refusal of an answer alike):
+`answer-orchestrator <run> <answer> --question <id>` where it owes nothing; where it still owes the recommendation it is
+answered with (`FlowAnswerRules.OwesRecommendation`) - none sought yet, one sought, or one deferred - with no engine
+running the run or a gone one, `resume-orchestrator <run>`, which seeks it first, for no advisor seeks one between
+sessions and the answer command refuses any answer but `abort` until then; with a live engine whose advisor seeks it now
+(`sought`), a running one, which seeks it as it raises the question, or a starting one (`FlowEngineState.Starting`),
+which seeks every recommendation the run owes whatever the session before left the question saying, the answer, taken
+at once - one handed over as the start begins, once the start has sought it - and ending the asking - never the resume,
+which a live owner refuses, nor a stop, which would end the advice for the next resume to pay for again;
+with a live engine pausing or recording what its complete pause left running - or running, the recommendation deferred,
+which only a pause asked does - the pause's advice, the answer given then; and with a live engine that is stopping
+(`FlowEngineState.Stopping`) the resume once the engine has gone, for a stop starts no advice - `abort` taken now
+wherever one is owed. The report a session's end writes reads no engine (its source's `Engine` none), for that session
+is leaving the run; `read-orchestrator-report` and `analyze-orchestrator-report` read it as they read the records
+(`OrchestratorService.EngineOf`, in `FlowService.SourceOf`), so the same records give the same bytes while the engine
+does the same), and `read-orchestrator-report <run>`
 answers it any time - reads only, its `--json` the code, the line and the report on every exit (the report null where
 the read stopped early), with `--steps` keeping the rows to named instances (one the run does not hold refused,
 named), `--by` regrouping the dollars in every form and `--top` bounding the signal lists.
@@ -4194,8 +4689,16 @@ answer answers them together. What the person gave the run answers first (`Answe
 `preAnswer` entry whose `when` holds answers at once by the one answer path with `by: input` and the values its when
 read, and an entry that quotes words holds only where they are not empty and stand in the input they are said to be of
 (`StandsIn`, every run of white space compared as one space) - reported words the input does not hold answer nothing,
-the event log says so, and the person is asked. The advisor: before a person is left with a
-question the engine raises itself, `FlowCoordinator.SeekAdvice` runs the orchestrator's `advisor` block through
+the event log says so, and the person is asked. The advisor: every question the engine raises is recommended before a
+person is asked it, so every workflow a run is started of names an `advisor` - `WorkflowValidator` refuses one that names
+none (V43), the refusal naming the block `init` writes as its fix (`WorkflowTemplates.ShippedAdvisor`, read from the
+shipped definition), and the advisor's retired `kinds` is refused by the reader (`WorkflowFileParser.RetiredAdvisorKey`)
+and read forever from a frozen definition an earlier release wrote - empty where the file named none, as every release
+that read an advisor wrote it - and ignored, never applied nor written back, so no digest a resume compares carries it
+(`FrozenDefinition.Retired`); and every
+session of a run is given the advisor's runner (`FlowService`), so a question no advisor could be started for is a
+defect that fails the session (`InvalidOperationException`), never one asked unrecommended. `FlowCoordinator.SeekAdvice`
+runs the orchestrator's `advisor` block through
 `IFlowAdvisorRunner` (`Runners\AdvisorRunner.cs`) - one reason step that only reads, wherever the asking step works,
 its model resolved and its order built as a step's is, the Claude Code its order starts only found and never installed
 or updated (`ReasonLaunch.ProgramAsync` with `change: false`, as the reporter's is: one missing or too old leaves the
@@ -4215,17 +4718,151 @@ one check of a schema's text. The question is raised at
 once with its recommendation marked sought, and the session does not end while the advice runs
 (`FlowCoordinator.TakeAdviceAsync`, the loop's wait); an answer ends the asking (`TakeAnswer` dropping it, the
 recommendation `cancelled`), the asking step not admitted again until the advice's runner has ended (the hold
-`FlowWaits.Advice`); a safe pause and a stop end it too (`DeferAdvice`, `BeginHardStop` through the session's advice stop), the
-question `deferred`, and a session's end ends and waits for whatever is left (`EndAdviceAsync`); a recommendation
+`FlowWaits.Advice`); a safe pause never ends it, whatever asked for the pause: it finishes as a machine step the pause
+leaves running does, the session waiting for it, and its recommendation is kept (`PauseInOrderAsync` ends no advice), so
+a resume that comes back to a pause - the budget's, whose question is still open (`CheckBudget`) - pays for each advice
+once; a stop ends it as the loop applies it (`DeferAdvice` from `ApplyTheStop`), the question `deferred` - a stop once
+the pause is complete among them, which is what `--all` is for the machine steps (`RequestStop` marking the stop, the
+loop's `DeferAdvice` ending and taking each asking), and after which the complete pause starts no advice
+(`AdviseThePause` leaving each question owing one to the resume, deferred), so the stop never waits on an advisor - an
+advice a stop ended that returns its recommendation all the same giving it to its question, which the resume then never
+pays for again (`Took`, the one owner of what a taken asking leaves) - and a session's end ends and waits for whatever
+is left (`EndAdviceAsync`). An advice is ended by the loop alone, which marks it ended before its runner is told
+(`DropAdvice`, the one way an asking is ended: an answer, a stop as the loop applies it, the session's end), and by
+nothing else - no stop from another thread, no session's token - so an advice that returns no recommendation is said
+ended only where it was, and never left `notObtained`, which no resume seeks again, for one a stop or the session's end
+cut short. A session its cancellation token ends - which no run verb hands it: their interrupts and their command's own
+cancellation are the pause and the stop (`FlowTerminal`, `FlowService.DriveAsync`) - ends where the loop meets the
+token: in the loop's wait for what the run learns, which the token ends at once (`WaitNextAsync`), at the top of each
+pass, and after every wait the token does not end itself - a pause's or a plan update's handoff turns, whose answers it
+keeps - so once it has, nothing more is drawn, decided, started or waited for, a pause under way never completing and
+an instance a plan update brings to rest neither coming to rest nor visited again until the next session
+(`PauseInOrderAsync`, `SettlePiecesEndingAsync`). The loop's one wait on its channel waits for a message to arrive and
+reads none: it is armed with no token and is the loop's across its waits and its sessions, left armed by a wait it did
+not win and by a session's end, while each wait observes its own session's token - so the token of a session that ended
+ends nothing of a later one - and every message stays in the channel until the loop reads it, so whether one waits has
+one owner (`AMessageWaits`) that sees every message: an answer that comes while the loop is busy after a wait that a
+retry's time, a drain's bound or the budget's tick won is taken before the session ends, never handed back unweighed by
+a session that ended paused on the question it settles. It writes what it charged and holds all the same: each
+advice it ends deferred as a stop defers it and taken by `Took`, its recommendation kept where it returned one, and the
+session's last record with every spend among it (`FlowCoordinator.RecordTheSessionsEnd`, the one owner of that record,
+`Finish`'s too), saying `cancelled` with the steps it leaves running - their runners are not the token's to end - and
+no end time while one runs, whatever the run's status says: `Running`, or the pause's or the stop's own where one is in
+force (`StillRunning`, the one owner of what still runs, which the loop waits on, the run's status reads and the summary
+names). A group is only bookkeeping over its members, and one whose member waits on a question runs nothing, so a run
+left with no step running is never said `Running` beside its end time. A session that ends in order records the
+standing it ends with, its end set before its last record is written (`Finish`), and the run's status is `Done` only
+where nothing of it is left unended (`Unended`, the one owner of what keeps a run from done, `Finish`'s too): an
+instance left - not started, in flight, paused, or stopped where it stood by a pause or a stop, which runs it again at
+the resume, never one a plan update ended (`FlowInstance.IsLeft`, the one rule of what is left, which the status of a
+run's records reads too) - a failure owed to the next session and each raise an ending still owes, as the records
+hold them and the resume makes them, by the visit the resume raises - the next visit of the handler in its source's
+scope, `fix+2` where the scope holds `fix` - and never beside the visit a raise made, which is counted as itself
+(`FlowInstance.IsUnended`, `FlowInstance.RaisesOwed`, which the resume and the status of a run's records read too, so
+its facts never say nothing is left over work owed, and never count one raise twice), and a step its scope still
+draws - the top's from the moment the engine is made for a run that begins. Work left
+with nothing running is the session's to go on with while one drives the run, which is `Running`, and stands `Paused`
+between sessions - an engine built from a resume reads it so before its session, which rebuilds no pause and no stop of
+the session before, and one made for a run that begins reads it so before its first session draws anything, and as
+that session's start is shown - so no gate of a plan update takes a run with work left for one with nothing to go back to
+(`FlowUpdateGates`): an amendment queued while no engine ran, or an answer changed, that the engine taking the run up
+weighs before its session runs what a pause or a stop left, is never refused as given to a run that is done, and
+nothing that weighing writes says the run done.
+While a session is driven the loop owns the graph and changes it from its own thread, and what the engine shows a
+reader on another - a front end, a test, the session's caller - is never a reading of what the loop is changing: the
+instances and the questions it hands out (`Instances`, `Questions`, `OpenQuestions`) are copies taken under the guard
+the loop makes or takes back an instance, raises a question and opens or closes one under (`FlowCoordinator._shown`),
+a question's and a visit's answers are each a list replaced whole by every answer, never changed under a reader
+(`FlowQuestion.Given`, `FlowInstance.Answers`), and the run's standing is the one the loop last said (`Status`) - as the
+run's records last said it, shown with the write that says it - every write of the run's state, an instance's own
+record written alone among them, made by the one writer that shows it (`Record`) - so a write a start holds is shown
+once made and one it drops never is, or as the change is made where the run holds no records (`Show`) - where between
+sessions the engine is its caller's, and its standing is read as it is.
+What the steps a token-ended session leaves running answer as it ends is kept for the coordinator's next session
+(`HandBackWhatIsLeft`); one its token ends during its start writes nothing, as a refused start does, and one a defect
+ends leaves what a crash leaves - nothing more written, each question it was advising still marked sought.
+A stop is in the run's state from the moment it is applied - the hard stop by `ApplyTheStop`, a stop once the pause is complete
+as the loop takes it, recorded on its own (`StopApplied`) where the pause said all already - as `flow.json`'s
+`stoppingSince`, kept by the session's end and written out by the first write of the session that goes on, so a reader tells a
+live engine that is stopping from a pause whose advice is still to come (`OrchestratorService.EngineOf`). What a past
+session left of its engine - that stop, a complete pause, a question marked sought - says nothing of the engine that
+claims the run next: its claim marks the run `starting` (`flow.json`'s `starting`, written under the claim's lock by
+`FlowRunOwner.Claim` before the owner, and said by every write of the start while the start takes an answer handed to it
+- no stop or pause asked of it, `FlowCoordinator.StartTakesAnswers`), a mark read only beside a live owner, over every
+other state - one owner, so the status, the report and the engine's refusal agree in every state of a start without
+erasing the run's history - until the start's own end, a `startEnded` change written once the start has made what it
+held, sought every recommendation the run owes and weighed what waited for them, so a session that then writes nothing
+for as long as an advice or room takes never leaves the state saying it starts; or until a stop or a pause is asked of
+the start - an abort it takes among them, or one asked while the state may still say `starting`, the start's held writes
+made and its end not written yet - which is what the start stands on from then: written over `flow.json` at once,
+outside its held writes - the stop applied, `stoppingSince` the moment it was asked, or the pause asked, `pause` begun
+then and not complete, and never `starting` - with each question the past session left sought written deferred in
+`questions.json`, as the start defers it, for no advisor of this engine seeks it (the resume reads it so,
+`FlowCoordinator.Replay`), and said by every write of the session after it, a held one among them, the loop applying the
+stop and beginning the pause at that moment (`FlowStartsStanding`, `FlowCoordinator.TakeTheStartsStanding`,
+`FlowCoordinator.AsWritten`, `IFlowRecords.Stand`), so the status and the report name the step the engine's refusal names
+- the resume once it has gone, or the pause once it is complete - whatever the past session left. The moment the loop
+applies the stop or begins the pause at is read from the standing the loop takes itself as it does so
+(`FlowCoordinator.ApplyTheStop`, `FlowCoordinator.PauseInOrderAsync`), never apart from it: an asker takes the standing
+only after its ask is made, so the loop may meet a stop first, and whichever of the two takes it first gives the moment
+the loop applies and every write says - the other finds it taken - so no write says the stop beside a pause the standing
+held before it, nor does an asker's later taking write another moment over it; the pause asked stays the standing while
+the loop carries it out. The standing is its session's: the session's end, however it ends - in order, refused, by its
+token or by a defect - lets it go once its last write is made (`FlowCoordinator.LetTheSessionsStandingGo`), so a stop or
+a pause asked of an engine between two of its sessions writes nothing until the next session's start takes it, at the
+moment that start begins, whether or not an earlier start took a standing. Only then is the session's drive over: the
+engine drives one session at a time over the whole of a drive, from its call to that letting go, and a second drive
+asked while one is under way - from another thread, or as the first's end is still being made - is refused in its own
+task, changing nothing of the session driven (`FlowCoordinator.Drive`). A start that never goes on - refused, or ended before its hold is made - puts back what the
+standing wrote over, as it writes nothing else of itself (`IFlowRecords.Unstand`), and ends at once, inside the one
+section every standing is taken and every write made in, before anything is put back
+(`FlowCoordinator.EndTheStartThatNeverWentOn`): a stop or a pause asked after it - by a poll still under way, an
+interrupt or the session's token, each bound to the engine until its drive ends - stands for nothing, so the run keeps
+the pause, or the stop, the session before left. The order of the reads is the
+rule's too: every reader of a run's engine reads its owner, then `flow.json`, then its owner again, and judges the state
+only beside an owner that stood across its read, reading again where it changed (`OrchestratorService.EngineOf`, the one
+path `list-orchestrator`, the report, the status and the advisor's facts take); and a session's release removes the owner
+first, then takes the mark back inside the repository's one section, only where no owner has claimed the run since
+(`FlowRunOwner.Release`) - so a reader never pairs the past session's state with a live owner, at a claim or a release; a recommendation
 obtained is written with who gave it and where its records are, none obtained said so, and what every advice spent - an
-ended one's among them, counted from its turns (`AgentRunSpend`) - is counted in the run's spend, each held to what is
-left of the run's dollars as a step is; a bar that cannot be read leaves the question `notObtained` saying why, and a
+ended one's among them, counted from its turns (`AgentRunSpend`) - is counted in the run's spend, the loop going round
+once it takes one so an advice that spends the run to its budget's reserve pauses it at once (`TakeAdviceAsync` answering
+true, then `CheckBudget`), and one taken while the run pauses already asks no second pause (`CheckBudget` does nothing
+while the run is pausing). Every advice is held to its own definition's bounds alone - `maxTurns`, `maxBudgetUsd`,
+`maxMinutes` (`AdvisorRunner`'s `AgentLimits`) - never to what is left of the run's dollars, which a reason step's launch
+is held to (`FlowRunBudget.Bound`): an asking carries nothing of the run's budget (`FlowAdvisorCall`), so a question raised
+once the run is past its reserve - one a complete pause advises (`AdviseThePause`), or a failure owed to a resume - is
+recommended as any other is; a bar that cannot be read leaves the question `notObtained` saying why, and a
 default `recommendations.md` that could not be looked at is never taken for one that is not there
-(`WorkflowNamedFiles.ReadTextIfThere`); an advice owed at a resume - sought by a session a crash ended, or deferred
-while the run was pausing or stopping - is sought once the session is known to go on (`SeekOwedAdvice` after
-`MakeTheHold`), never by a resume refused. No advisor named, the question says so plainly; a kind only a person or an
-agent answers (`runBudget`, `ask`), a `pause` step's own shown questions, one its `preAnswer` answers (weighed before
-the advisor is sought), and a kind the advisor's `kinds` leaves out, are never advised.
+(`WorkflowNamedFiles.ReadTextIfThere`); an advice owed at a resume - sought by a session a crash ended, deferred by a
+stop or by a pause a stop cut short, the budget's own among them - is sought once the session is known to go on
+(`SeekOwedAdvice` after `MakeTheHold`, over `FlowCoordinator.OwedUnsought`), never by a resume refused - a question an
+earlier build's questions file holds as `notSought` and still open among them (`FlowCoordinator.OwesAdvice`, by the one
+rule `FlowAnswerRules.OwesRecommendation`). A question raised while the run is pausing is `deferred`, and a pause of any
+cause, once complete and nothing runs, advises before the session ends every open question still owing its
+recommendation that no advice under way seeks (`FlowCoordinator.AdviseThePause`) - the one reasoning a complete pause
+starts, for the pause leaves those questions to a person - the budget's own question, the run's, raised there first where
+the pause is the budget's. A person's answer is held to the recommendation by the one rule the command and the engine
+share (`FlowAnswerRules.Unrecommended`): an answer to an open question still owing its recommendation that no advisor
+seeks now is refused, nothing answered, and `abort` taken - by `answer-orchestrator` before anything of the run is
+touched where no engine runs it (13, naming `resume-orchestrator`, which seeks it first), and by the engine as it weighs
+a person's answer (`TryAnswer`), naming the step from its own state in the words every document says it in
+(`FlowAnswerRules.NextStepSaid`): between sessions the resume, where a stop ends the session - a stop once the pause
+is complete among them, after which the pause seeks none, and one asked as the session begins, after which the start
+seeks none - the resume once the engine has gone, and while a pause under way defers it the pause's completion; an
+answer given while the advisor works is taken and ends the asking. One handed over as a session starts - the command's
+own, an inbox entry a past engine left, or one offered before the session's first admit - to a question owing the
+recommendation that start seeks waits for it (`FlowCoordinator.WeighHandedOver`, `WaitsForTheStartsAdvice`), and is
+weighed once the start has sought it (`WeighWhatWaitedForTheStartsAdvice`, after `SeekOwedAdvice`): it meets the advice
+under way and is taken, ending the asking - never refused naming the resume this session itself is. The budget's own question is asked of the run as a whole - `FlowQuestions.RunsOwn` its
+instance, so its records sit under `steps/run/advice/<n>/` and `{question.step}` reads `run`, no agent's tree held, and
+`{question.record}` the run's facts as `FlowStatus.Facts` gives them (`AdvisorRunner`); held, as every advice is, to its
+own definition's bounds alone; and what it spends is charged on the run's own measure (`FlowBudgetSpent.RunsOwn`), kept in `flow.json` as
+`spent.advice` (`FlowBudgetRecord.Advice`), summed with the instances' at a resume and in the report's totals. An
+agent's own questions (`ask`, and a `pause` step's shown questions) carry their recommendation within them and are
+never advised, nor is one its `preAnswer` or its configuration answers at once (weighed before the advisor is sought),
+which no person is asked; an advisor that fails past its retries leaves the question `notObtained` saying why, and the
+person is asked all the same.
 The handoff, the checks and the stream's account: where an agent gave no handoff of its own - the pause's
 turn gave none, a limit ended its run, or a resume found the attempt cut off by a crash or a stop - the engine writes
 one from the stored stream of the step (`FlowCoordinator.EngineHandoffOf` over `IFlowStreamAccount`, routed by
@@ -4240,7 +4877,7 @@ yielded, none refused for an empty list would read as no narrowing), and narrows
 The continuation record says each step of the chain as its own record states it ended
 (`ReasonStepRunner.EndedOf`), the files changed the paths this agent's folds wrote into the main tree (`FoldLedger`)
 and the paths its worktree holds that no fold has taken (`AgentFold.WeighedAsync`, the fold's own rule of what an
-agent's change is, opened to the record), and the red legs of the agent's newest red build or test with where the
+agent's change is, opened to the record) - none for an agent that only reads, whose tree nothing folds - and the red legs of the agent's newest red build or test with where the
 copied ledger and its logs are (`ReasonStepRunner.RedLegsOf` over the run's own index). The engine stores the agent it names for a read-only step as the
 one the step works in, so the runner makes it on that name (`ReasonStepRunner`'s making, `CreateAgentRunner.MakeAsync`
 answering a live one as already made); the run places the step's records under the agent's directory before the agent
@@ -4248,8 +4885,28 @@ is made, so `AgentService.CreateAsync` makes an agent in a directory that holds 
 program a launch starts is found ready where the step starts (`ClaudeCodeUpdateService.ReadyAsync`, wired into the
 reason step runner, its answer carrying the program and the version it answered; a step's mask holding every form of
 each web-search key it was given, built of `Runners.ActionValues`); and the agent's scratch is the run's own
-`work/<agent>/` (`OrchestratorLayout.WorkDirectory`), where the child is started; the continuation's copies and the
+`work/<agent>/` (`OrchestratorLayout.WorkDirectory`); the child is started in the tree it works on
+(`ReasonLaunch.Workspace`) - its worktree, a read-only agent's own tree among them, brought to the main checkout's HEAD,
+or to the commit its step names,
+as the step started, so a path relative to where it starts, its tools', its commands' and those its prompt writes from
+the repository's root, names what the repository holds, and a command over that tree names the working directory, which
+the policy never refuses for the slots beneath it (`AgentPolicy.ThroughWorkingDirectory`) - and the reporter, which
+works as no agent of the run's, in its own scratch; the continuation's copies and the
 skills are put in the step's own `handed/` (`OrchestratorLayout.HandedDirectory`), which no command writes.
+A reason step holds write on the tree of the agent it works in whatever its access (`FlowClaims.Of`, read through the
+step whose work it goes on with, `FlowCoordinator.WorkingOf`): the start of a step that works as an agent that only
+reads resets that tree and its work writes it, so of two steps that go on with one reading step's work the second
+starts once the first has ended - two visits of one that goes on with its own, which work in the agent its first visit
+made, claiming that agent by the declaration before either is given it (`FlowCoordinator.ClaimedAgentOf`); within the
+recovery, by the declaration and the thing its visit puts right (`FlowInstance.RecoveryThread`, `RecoveryThreadOf`), so visits
+for different issues each make an agent of their own and diagnose side by side, each within the run's limits - and no
+step's start discards another's scratch under it. A reading step that begins work of its own is given its agent as it
+starts, and holds write on that agent's tree from then (`FlowCoordinator.ClaimsOf`, read again once `Start` names it),
+so what its attempt keeps held past its end names the tree too. A step that waits on a question holds nothing, so the
+second may start while the first waits - and the first's going on brings the tree there again; an advice of the run's
+advisor holds read on the tree it works in until its runner ends (`FlowClaims.OfAdvice`, the tree named as the asking
+step's own claims name it, `FlowCoordinator.AdvisedTreeOf`), so no step's start brings that tree elsewhere under the
+advice.
 The two acts of a plan update and their record: `amend-orchestrator-request <run> "<text>"`
 amends the request a run was started with and `answer-orchestrator <run> <answer> --again` changes the last answer a
 person gave - both through one record, `updates.json` (`Flow\FlowUpdates.cs`: its entries `u<n>` by order taken, cause
@@ -4273,8 +4930,8 @@ finished from it by a session's start where a crash came between the two (`FlowC
 (`FlowUpdateGates.Refused`, read by the command over the run's files and by the engine over its own state): a run that
 is done, one past the step its `amend.before` names, one past the work items of its last round (a loop at its bound,
 or a work-item group with no loop around it whose newest round has ended and that runs no round more - updates have
-added every round `amend.maxAddedIterations` allows, counted by the rounds their entries name, and none of them waits
-to open, or a group around it ended otherwise than done and draws nothing more, `FlowUpdateGates.NoRoundMore`, the one
+added every round `amend.maxAddedIterations` allows, counted by the rounds their entries name that stand
+(`FlowUpdateEntry.StandingIteration`: one taken back before it opened counts no more), and none of them waits to open, or a group around it ended otherwise than done and draws nothing more, `FlowUpdateGates.NoRoundMore`, the one
 rule the engine reads too; a round an update added that the run's steps do not hold yet (`FlowUpdateGates.RoundNotOpened`)
 takes a change given before the check that opens it has started - the check's visit drawn after the group's newest,
 read of the steps in the order the run made them - which joins it, `FlowUpdateGates.PendingRound`, and once that check
@@ -4286,17 +4943,47 @@ The planning of a plan update: where the run has begun the scope its plan update
 (the group its `amend.step` is directly in), a taken change is not refused but planned - the step the block names is
 raised by the update alone as a handler is raised by an ending (`FlowCoordinator.RaisePlanner`: a new visit of it in
 the newest instance of that scope, `FlowInstance.RaisedByUpdate` in its record, a group around it that had ended in
-progress again), never drawn by the ordinary schedule (`FlowCoordinator.Instantiate`), and admitted ahead of
-everything else (`AdmissionWalk`) - while the run is held (`FlowCoordinator.HoldOf`: nothing starts outside that
+progress again, and every `repeat` around it counting its own bound from the iteration the update is planned in -
+`FlowLoopCount`, in the loop's own record: the iterations from that one, and those granted past the bound since - an
+iteration an update added before the count began, and a later update took back, left out no more,
+`FlowLoopCount.AddedBy` - `FlowLoopCount.Made` and `Given` the one count the engine, the run's facts and the gates read, so the planning of a
+late update in a long run is held to the loop's own bound from where it begins, never refused by the iterations the
+plan spent before it, the bound's question saying what it counted since that update), never drawn by the ordinary
+schedule (`FlowCoordinator.Instantiate`), and admitted ahead of
+everything else (`AdmissionWalk`, which walks every other waiting step in the order it first became ready - the pass
+that drew it, `FlowInstance.DrawnIn` in the run's own order, never a clock - the fixed order breaking ties among what
+one pass freed: a step blocked on a claim reserves it, so a fold or an
+agent's making waiting behind readers is never overtaken by a reader that became ready after it - a busy run's
+pre-existing triages once starved a recovery's remedy that way) - while the run is held (`FlowCoordinator.HoldOf`: nothing starts outside that
 scope, a held step reserving no claim, what is in flight untouched, no next iteration of a loop outside it, no
 redirect made outside it), `flow.json` saying `hold {update, at}` (`FlowHoldRecord`). The step's `amend.then` is
 followed when it is done - the redirect's machinery inside that scope (`FlowCoordinator.SettleUpdates` ->
-`DecideRedirectOf`), a question open on a step it resets withdrawn - and once that scope has come to rest (the step
-ended, what `then` set going ended, and a `repeat` it is in has ended its iteration) the updated plan stands: the
-update is `done`, the hold ends, and the steps that start from here on resolve every name anew. A failed planning
+`DecideRedirectOf`), a question open on a step it resets withdrawn. Its decision and that redirect are one fact, the
+redirect's own write - with the question it asks of agents it would leave open written just before - and only after it
+does the update's entry name the then (`FlowUpdateEntry.Then`, which `FlowCoordinator.NextOfTheUpdate` reads): a crash
+before the redirect's write leaves the then undecided, the question written without it withdrawn by the replay as one
+asking of nothing, and the session that takes the run up decides it again, asking anew; one between the two leaves the
+redirect owed, which the replay reads as the then decided and the session's start writes into the entry
+(`FlowCoordinator.ReadTheThen`), so a `stay` that gives the redirect up never has it decided again. The question the
+redirect asked, open or answered, is read as the then decided whatever the entry says - a `stay` takes the redirect out
+of the records at once, before the entry names the then (one the workflow's `answers` give, taken as the question is
+raised, or a person's taken before a session's start has written the entry), and leaves its question as all there is of
+the decision - for no question is answered before its redirect is written, and one written without it is withdrawn by
+the replay before the then is read; and an entry an older
+build wrote naming the then before a redirect the process never wrote - nothing of it in the records: no redirect owed,
+no visit it left, no visit of the step it names since the planning step, no question it asked open or answered - reads
+as undecided, and the then is decided again. So the plan never stands on a check that never ran on it. Once that scope
+has come to rest (the step
+ended, what `then` set going ended - never a step of it left of the run, one a pause or a stop stopped among them, which
+runs again at the resume (`FlowInstance.IsLeft`) - and a `repeat` it is in has ended its iteration) the updated plan
+stands: the update is `done`, the hold ends, and the steps that start from here on resolve every name anew. A failed planning
 step is decided by its own handlers and `onFailure` as any step: `stop` ends the run, `pause` asks, `continue` gives
 the update up - `failed`, nothing placed, nobody told, the hold ended, the run going on with the plan as it was, the
-entry saying the request or the answer is recorded and no plan holds it. The prompts of the planning step and of its
+entry saying the request or the answer is recorded and no plan holds it. A plan the check `then` names refuses stands
+only once a later iteration of the loop around the planning passes one (`FlowCoordinator.TheThenRefuses`); where
+nothing around the planning plans it again - the loop accepted at its bound as it stood, or no loop there is - the
+update is given up alike, its entry saying why (`FlowCoordinator.PlansNoMore`), and the run is never held for ever
+on a plan that cannot stand. The prompts of the planning step and of its
 scope read the update (`{update.cause}`, `{update.since}` and `{update.work}`, `FlowCoordinator.UpdateValues`) -
 outside an update each is a sentence that says none is under way. Updates are taken one at a time: one that arrives
 while another is under way is `queued` behind it and taken when that one is done, in the order given
@@ -4312,7 +4999,14 @@ by `FlowCoordinator.PlaceThePieces` and kept in the update's entry (`FlowUpdateP
 was placed, the visit that carries it). An `added` piece makes one more work item of the work-item group (the `forEach`
 group `amend.whenAddScope` names a step of), at once where the round is in progress and owed to the check that opens the
 round where it has not begun - which checks its own items and the owed ones as one list (`PlanCheckRunner`), its output
-`items` that list, so nothing joins a round unchecked. A `changed` or a `removed` piece finds the newest instance of the
+`items` that list, so nothing joins a round unchecked. An update done that changes the work updates owe a round whose
+opening check has already joined it - that check started, and the work-item group it opens not expanded yet, a step
+between them such as a pause over an audit still to end - draws that check again (`FlowCoordinator.CheckAgainWhatWasJoined`,
+the redirect machinery from the update's planning step: every step of the check's scope that depends on it drawn
+again, a question one of them asks withdrawn), so the round opens with what the updates owe it now - a withdrawn item
+never built, a changed one built as its newest piece says, never as the piece it replaced. The entry names the check
+(`FlowUpdateEntry.CheckedAgain`, absent from an older entry, which reads as before), a session's start draws it again
+from there where a crash came before the drawing was written, and the report says it (`FlowReports.CheckedAgainSaidOf`). A `changed` or a `removed` piece finds the newest instance of the
 group whose item has its name: where it waits it is given the piece's item in the place of its own, or - `removed` -
 withdrawn before it began; where it has begun - a step of it started, at any depth - it is brought to rest (nothing
 more started or drawn in it, what it owed dropped, what is drawn or raised in it since skipped, each reason step in
@@ -4325,14 +5019,44 @@ the instance, at any depth, by one walk down it, `FlowCoordinator.StepsWithin`, 
 over work the update takes back) and then visited again, in its place and with its agent - a new
 scope of the piece's kind in which the live agent a `create-agent` step made is taken and not made again, made and named
 in the piece's entry before the instance brought to rest ends, so a crash between finds it and never makes a second;
-where it has ended, one more work item of the group, with new agents. What an update did to an instance is in
+where it has ended, one more work item of the group, with new agents. A `removed` piece whose work item no instance
+carries needs no step, and withdraws the work an earlier update owes a round that has not opened under that name: each
+such piece ends in its own update's entry as withdrawn by this one before it was built
+(`FlowCoordinator.WithdrawWhatIsOwed`), so no round builds what the plan took back. One naming an item of the list the
+check that opens a round was opening it with (`FlowCoordinator.OpeningUnderWay`), which no instance carries, takes it
+out of that list: the piece is owed to that round as a withdrawal (`FlowUpdatePiece.Withdrawal`, absent from an older
+piece, which reads as before; `IsWithdrawing`), the check that opens the round, drawn again once the update is done, is
+handed its name (`withdrawn`) and drops the item from its own, the group's visit never expands it
+(`FlowCoordinator.OpenGroup`, which ends the withdrawal once the round opens without it), and no list an update's pieces
+join holds it (`PlanValidator.CheckPieces`: a removed piece's item joins the round only where an instance carries it). What an update did to an instance is in
 the instance's own records - ended for the update (`FlowStepRecord.EndedFor`), the piece it carries (`PieceOf`) and the
 instance it was visited again in place of (`AgainOf`) - so no session after runs an instance an update ended, a resume
 goes on bringing one to rest, and the pieces are placed once from the update's entry however often a crash makes the
-engine meet its plan standing, an instance an earlier update visited again among them. A visit an update ended waits on
-nothing and is counted ended by the status, by the engine's own rule (`FlowInstance.IsStoppedForAnUpdate`, read by
-`FlowStatus.IsLeft`). Every instance of the group is of one kind, and the step its kind names runs in the place of the one
-`whenAddScope` names - under its name, with its dependencies and its `when` (`FlowCoordinator.DrawWorkItemPlace`) - the
+engine meet its plan standing, an instance an earlier update visited again among them. Placing a piece against an
+instance under way is durable as one step: the placement's first write of it is the instance's own record saying it is
+being ended for the update, before anything it owed is dropped or anything in it skipped, so a crash anywhere among the
+writes that follow leaves a session that takes the run up to complete them before anything runs, whatever its start
+stands on - a stop pending, asked between sessions or left for the resume to take, is applied only after, so the
+instance is at rest when the stop applies and every session after reads it in one state
+(`FlowCoordinator.CompleteWhatTheSessionBeforeLeftAsync`, which first measures every attempt a crash cut off to where it
+stopped, never to the moment of a stop applied over it) - what it owed dropped, a redirect with the question it asks, the
+ending of each of its steps still owed what decides it given up, and what never started in it or waits on a question
+skipped, the question withdrawn (`FlowCoordinator.EndWhatItHolds`, the one owner the placement, the resume and each pass
+that settles the instance go through) - and a crash before it leaves the piece unplaced, which that session places;
+neither is refused over a question the placement withdraws, for an update under way that moves on without a step - its
+plan standing among it - is something that can run (`FlowCoordinator.NextOfTheUpdate`). An ending given up there - a
+machine step a safe pause left running that ended failed before the piece was placed, its failure owed to the next
+session (`FlowFailure.Owed`) with the handlers it would raise, or that ended done in the instance being ended, its
+handlers owed - is given up in one write of the step's own record: every handler it owes or raised is left, and the
+failure is owed no more and never settled (`FlowCoordinator.GiveUpTheEnding`), so no session raises a handler into the
+instance at rest or takes the failure to its policy, its group - which would fail the round the visit again runs in - or
+the recovery, and what is left of the run counts none of it, the engine and the status of its records alike
+(`FlowInstance.IsUnended`); records an older build left owing so in an instance at rest are given up the same at the
+session's start. A visit an update ended waits on
+nothing and is counted ended by the engine and the status alike, by the engine's own rule of what is left
+(`FlowInstance.IsLeft`, over `FlowInstance.IsStoppedForAnUpdate`; read by `Unended` and by `FlowStatus.IsLeft`), where one
+a pause or a stop stopped is left, to run again at the resume. Every instance of the group is of one kind, and the step
+its kind names runs in the place of the one `whenAddScope` names - under its name, with its dependencies and its `when` (`FlowCoordinator.DrawWorkItemPlace`) - the
 other two alternatives skipped in its instance, saying why; a read of the add step (`{add.latest}`) or a resume of it
 follows whichever ran (`FlowCoordinator.EndedDoneLastOf`, which `<step>.latest` reads for every step that goes on with
 another's work: the newest answer among the step and every visit whose `resume`, resolved in its own scope or one
@@ -4344,7 +5068,12 @@ are empty. `PlanValidator.CheckPieces` checks the pieces with the items where a 
 them - each of the four kinds and its texts, an `added` or `changed` item an item of the plan's list by name and member
 for member, no two pieces one work item, a `changed` or `removed` piece naming a work item the plan had, an `added`
 one naming none an instance of the work-item group carries - and the items an update places are checked with those of
-the round they join as one list. A work item is known by its name across
+the round they join as one list. Where the check that opens a round raised the update, that round has not opened and no
+instance carries its items - from the second round on a list the self-audit wrote, which no planner did - so the round
+the pieces join is the list that check was opening it with, its output's `items` (`FlowCoordinator.OpeningUnderWay`):
+the update's checks are handed it under `round`, a piece may change or withdraw any item of it (`known`), and the
+planner is shown its items among the run's work (`{update.work}`, `FlowCoordinator.WorkOf`), each as not begun. A
+problem two rules find - one pair of items meeting in the plan's list and in that round - is said once. A work item is known by its name across
 the run - `ItemInstanceNamed`, its tests' key in `affected-tests.json`, its updates - so the check that opens a round
 is handed the names every instance of the group carries (`carried`, read where it starts) and refuses a round's own
 item under one of them (`PlanValidator.Check`'s `carried`), an owed item excepted: a changed or a removed piece names
@@ -4365,7 +5094,8 @@ with why (`FlowUpdateEntry.Told`/`NotConcerned`/`NotDelivered`, each telling als
 the round a piece joins has ended, the work is owed to the loop's next iteration (`FlowInstance.OwedIterationBy`,
 rebuilt at the resume, by each piece's own state, `FlowUpdatePiece.IsOwed`), which runs whatever its `until` says - a
 loop that ended done runs again for it; only where that loop is at its own bound is one iteration
-added for the update. With no loop around the work-item group, the piece is owed to a round added to the group
+added for the update, and none while the loop's newest iteration is under way with its round still to open, which the
+work joins at the check that opens it (`FlowCoordinator.RoundToOpenIn`). With no loop around the work-item group, the piece is owed to a round added to the group
 (`FlowCoordinator.AddARoundOwed`): the group is drawn once more as its next visit (`build.items+2`), with the check that
 opens its rounds and every step on the dependency path from that check to the group - a pause asked about the check's
 problems among them - where each was drawn before the round ended, and every group around it that had ended done in
@@ -4373,7 +5103,20 @@ progress again (`FlowCoordinator.OpenTheRoundAgain`, called again from the entry
 not yet drawn); the check is handed the owed work with its own items as one list, and the visit carries the owed work
 alone (`FlowCoordinator.OpenGroup`), never the items the round before built. An iteration or a round is added once per
 update, at most `amend.maxAddedIterations` over the run, published as an `iterationAdded` event and kept in the entry
-(`FlowUpdateEntry.AddedIteration`, said by `FlowReports.IterationSaidOf` as round n of the loop or of the group); a
+(`FlowUpdateEntry.AddedIteration`, said by `FlowReports.IterationSaidOf` as round n of the loop or of the group). One
+whose owed work is all withdrawn before it opens is taken back by the update whose placement left it owing nothing
+(`FlowCoordinator.TakeBackWhatOwesNothing`), unless another update's work still owes the same loop or round: its entry
+says so (`FlowUpdateEntry.AddedWithdrawnBy`, absent from an older entry, which reads as before), and from there it
+counts against no bound - `FlowUpdateEntry.StandingIteration` is the one read of what an entry added that stands, taken
+by the run's count of iterations given, the gates (`NoRoundMore`, `RoundNotOpened`, `PendingRound`), the grants
+(`FlowGrants.AddedTo`) and the status. A loop's added iteration not yet made is given no more (`ExtraIterations`
+lowered), so its bound reads as it did and asks its question again where work is owed past it; a round added to a group
+with no loop around it is closed again (`FlowCoordinator.CloseTheRoundAgain`): the check drawn for it and every step
+between that check and the group end skipped saying why - each drawn visit that had not ended, a question it asked
+withdrawn, and each not drawn yet - the group's slot holds its round before, the groups around it made in progress
+again end as their members have, and a later update's round drawn again reads that reason to draw them anew; a session's
+start takes back and closes from the entries where a crash cut either off. The report and `list-orchestrator` say the
+taking back (`FlowReports.TakenBackSaidOf`). A
 loop at its bound where the run has been given every iteration allowed asks its bound for the owed work - it reaches
 that question whatever its `until` or its `blocking` says, for owed work ends no loop - and each owing entry says so
 once the question is asked, or is found standing at a session's start (`FlowCoordinator.LeaveToTheBound`,
@@ -4425,8 +5168,8 @@ gh answers fewer than asked, so one among any number is found (`GitPublisher`). 
 `FoldFamilyStepRunner` - calls the verbs' typed use cases and reads their `AgentVerbFacts`, never an exit code:
 `FoldStandings.Read` says whether a dry run ends the step, asks or applies; `FlowQuestions.FoldQuestionOf` is the one rule
 of the question it raises - `foldConflicts` for conflicting merges alone, `foldOutside` for paths `FoldWithin` finds
-outside a fold's `within`, then each consent it lacks, a person's first - with what it is about (`FlowDryRun.Of`, over
-`AgentPlanned`), which the runner keeps in the step's `fold.json` (`FlowFoldRecord`) with where its answer will stand; a
+outside a fold's `within`, read from the main tree's root, then each consent it lacks, a person's first - with what
+it is about (`FlowDryRun.Of`, over `AgentPlanned`), which the runner keeps in the step's `fold.json` (`FlowFoldRecord`) with where its answer will stand; a
 consent is given by name only where the dry run made again names exactly that, and one that no longer does is never
 passed. A fold's apply, and a deletion's, is held to what its dry run named (`FoldAgentRequest.Expected`,
 `DeleteAgentRequest.Expected`, measured again under its hold and compared by `AgentPlanned.DifferenceFrom`) - a
@@ -4470,7 +5213,9 @@ before the repository's section where another run's ledger owes a path, a path g
 leaves it out), so a commit made by hand ends a stopped run's hold as the run's own does. The texts of what a run
 checked - `{run.ran}`, `{run.notRun}`, `{run.red}`, and `{carried.*}` of one commit - are `FlowChecks`', over the
 step records the coordinator hands it; a check is a type `WorkflowStepTypes.StepType.Checks` marks or an independent
-reason step. A deletion run
+reason step. A red result stands until a later visit or iteration of the same step of the same work item ends green
+checking the same (`FlowCheck.Work`): within the recovery, a visit for the same failure or issue, so another issue's
+green never hides it from the visit that is to put it right. A deletion run
 again whose agent its record says deleted - its ending cut off by a stop's drain, a time limit or a crash - is done
 (`FoldFamilyStepRunner.DoneAlreadyAsync`), its output what `fold.json` kept of the apply. A
 refresh or a rebase of `others` is one turn for each target (`FlowInstance.Targets`, `FlowTargetRecord`), in
@@ -4485,7 +5230,9 @@ holds every push step that names a remote to - through `IGitPublisher.PushAsync`
 `<sha>:refs/heads/<branch>` with `--porcelain`, never forced, its line read for whether the branch moved; the pull
 request is found - among those gh lists from the branch's name, never one from another repository (`isCrossRepository`) -
 or opened through `GhProcess` on the repository `GitRemotes.ForgeAddress` reads from the remote's
-address - its host as ssh's configuration names it where the address is over ssh (`SshHostNames`, `ssh -G`, asked through `Waits` with no limit of its own and told every five minutes while it lasts), and none,
+address (`FlowCheckout.Forge`, read with the checkout; a remote whose address names none - a path on this machine, a
+`file://` address, a path on an ssh server - is refused, 13, by `FlowCheckout.NotOnForge`, and `orient.onForge` is the
+same fact, which the shipped flow's pull request and CI wait, and `orient.ciConfigured`, read) - its host as ssh's configuration names it where the address is over ssh (`SshHostNames`, `ssh -G`, asked through `Waits` with no limit of its own and told every five minutes while it lasts), and none,
 leaving gh to read the remotes itself, where it cannot be told - against `FlowCheckout.BaseBranch`, its body the workflow's file the coordinator read and filled where the step
 started (`WorkflowNamedFiles.ReadText`, the one rule the definition's check holds a named file to) and the runner wrote
 to the step's directory; `FlowReports.LeftForAPerson` names each pull request the run opened or found, and each path
@@ -4532,7 +5279,7 @@ is each run fact (`WorkflowExpressions.RunFacts`), which a template reads and an
 A `pushCheckpoints` with no push step that is a checkpoint, two handlers one ending raises that
 both name a `then`, a fallback that is its agent's own model or is named twice, a gathered name
 given twice, named for an engine's fact or for a member, `times` or `then` beside a `pause`
-answer, and an advisor whose `kinds` are given empty or name `ask` or `runBudget` are each refused.
+answer, and a workflow that names no advisor (V43) are each refused.
 
 `export-workflow <workflow> --to <dir>` is a use case of Core (`WorkflowExportService`): it copies
 a workflow - its yml and every file it names, the one list `validate-workflow` and `init` read
@@ -4564,13 +5311,56 @@ unfinished run with work in the tree - a run whose agent's record cannot be read
 said - chooses the name (`r<N>`, one more than the highest there; a name `--run` gives is held to
 `worktrees.maxNameLength` where the repository sets one and refused where a record or anything else is there), holds the start
 to the path budget of its agents' worktrees - what each worktree's own check counts below it
-(`WorktreeRoom`), with the copies and workers its leg steps keep inside them (`FlowRunPaths`) - makes the run's record, its status and its owner
-(`.orchestrators/<run>.owner.json`), and leaves the section. A session of a run already made -
+(`WorktreeRoom`), with the copies and workers its leg steps keep inside them (`FlowRunPaths`) - opens the file each of
+the run's own inputs of the kind `file` names where its value, given or its default, is not empty - a path from the
+main checkout's root or an absolute one inside it, read from the main checkout as it stands, committed or not, and
+decided as an agent's read of it is, since every agent of the run reads the copy - on the ground the one builder of an
+agent's ground builds for it (`AgentStepGround.OfFileInputs`: an agent's read of the main checkout under the
+configuration the run starts under, never a ground built by hand beside it): held to the main checkout by where it
+leads, every link on its way followed - the file's own and a directory's above it (`ConfinedPaths`) - kept from every
+place no agent's read reaches - every credential slot of the tool, every Claude Code directory and every place the user
+keeps credentials in, `agentPolicy.hiddenPlaces` among them - and from every read `agentPolicy.restrictions` refuse
+(`AgentPolicy`), and read through the file as it
+was opened, where it stands decided again before a byte passes (`AgentFiles.OpenDecided`), so a link put on its way
+since reaches nothing; anything else refused (13), naming the input and the path, no run started
+(`FlowInputs.OpenFiles`) - makes the run's directory and copies each file into it, `inputs/<input>/<the file's name>`
+(`OrchestratorLayout.InputCopy`), before it makes the run's record, its status and its owner
+(`.orchestrators/<run>.owner.json`), and leaves the section. The file's bytes are first read there: a place of the
+run or a copy that cannot be made - a file on a share gone, a locked range, a full disk - takes back what the start had
+made of the run, or says what it could not, and refuses the start (13), naming the input and why and that no run was
+started (`FlowInputFiles.Keep`, `FlowSessions.CreateAsync`), so no directory is left holding no run's record, which a
+start of that name would be refused over. What a step reads for such an input - `{input.<name>}`
+in every prompt and every expression, and a pull request's base - is the copy's full path (`FlowInputs.AsRead`, the
+one owner of what a step reads for an input, which every session hands the engine), so every step of every session,
+a resume's included, reads the file the run was started with, whatever the person did to it since; the run's records
+keep the value as it was given. That the run keeps its copies is a fact of its own, recorded as it is made
+(`FlowRunContext.InputCopies`, `flow.json`'s `inputCopies`) and read back by every session: a run an older build made
+kept none and its `flow.json` says nothing of them, so its steps read each file input as it was given, as that build
+handed it to them, never the path of a copy that was never made. Every agent of the run reads the run's `inputs/` as a root of its own
+(`AgentStepGround`): an untracked or uncommitted file is in no agent's tree - a write agent's worktree is cut from the
+run's start commit, and an agent that only reads has its tree brought to the main checkout's HEAD - and reaches both
+alike. A used workflow's file input is no such thing: it names a file of that workflow's own directory, which the
+definition's check reads. A session of a run already made -
 `resume-orchestrator`, or `answer-orchestrator` where no engine runs the run - first sweeps what a
 killed engine's steps left running (`ChildSessions`), refuses a definition the repository's entry
-in the main checkout no longer matches - compared by digest of what the definition says
-(`FlowRunContext.DigestOf`), never of where its file was read from, so a checkout that moved or a
-command typed in another tree is no change - and claims the run inside the same section: refused by
+in the main checkout no longer says - a definition is changed only by what it says, so what each says is compared,
+both as this build reads them and digested by this build's one serializer (`FlowResume.RefuseAChangedDefinition`
+over `FlowRunContext.DigestOf`): the entry the definition's check makes now, and the run's `definition.json` as this
+build reads a frozen one (`FrozenDefinition`), whichever build froze it - each member that may be null and that an
+earlier release left out, as it left out every null and had none of the members added since, read as null, and each
+member a new definition is refused for naming, which an earlier release's may hold (`FrozenDefinition.Retired`: the
+advisor's `kinds`, the codebase graph's `maxFileBytes`), read in its shape and ignored, and each member written in a
+shape this build changed (`FrozenDefinition.Reshaped`: a sweep's `arms`, a test step's `filter`) held to the shape that
+release wrote it in and read as what this build's parser makes of the same words - a sweep's list of arm ids, written
+empty on every step that named none, read as no arms, every arm swept, and the ids it listed as the list they are; a
+filter written as one text read as the expression that scalar is - so it says what the unchanged entry does, and
+written again is in this build's shape alone. Never against the digest
+`flow.json` holds (`definitionDigest`, written as the run began and kept as the record of what it began with), which
+the build that began it made of the same words written its own way; never by where the file was read from; and never
+by a use's fingerprint, the digest that build made of the called file, which no frozen definition holds to make
+again - what the use brings the run, its steps and every part of it carried, is in the definition and compared there
+(`FlowResume.Said`). So a checkout that moved, a command typed in another tree, or a run an earlier release began is no
+change - and claims the run inside the same section: refused by
 name where the run was deleted since, refused while a live engine owns it, a dead owner reclaimed
 and said, a request no engine took removed - one that cannot be read refuses the session, and the
 claim just made is let go first, so no owner is left behind by a session that never began. Two starts,
@@ -4584,13 +5374,32 @@ with each target and where it stands; a reason step's `policy.json`, written as 
 agents' configuration is read when each step starts, as its prompts are, so an edit of `config.json` -
 a side-task's among them - reaches the steps that start after it and never one under way, and each
 keeps the policy it started under - the ground as resolved, the web search it asks, what it runs on
-with the key's name alone), then `flow.json` (the
+with the key's name alone; and, where its `writes` narrow its worktree, its `untracked-at-start.jsonl`,
+written once, as it first starts, and read by every later start: its head, then each path the worktree
+held untracked, one to a line), then `flow.json` (the
 truth a resume reads), `workflow.json`, `pre-existing-issues.json` where the change listed one, and last the event
-in `events.jsonl` - each read back strictly: a value the engine does not name, a nested record that
+in `events.jsonl` - each naming the run's session it belongs to (`session`, from 1, one more for each session the run's
+engines drive: what a session's start writes, held or before the session is driven, is that session's, and what is
+written after a session's end and before the next's the ended one's; the log's opening reads the sessions it tells of,
+the highest any event names and no fewer than the beginnings it records, `FlowEventLog.Sessions`; an older build's events
+name none) - each line handed to the system whole and in order as it is written and put on the disk once per
+pass of the engine's loop - as the pass ends, before the loop waits on anything, and as the session ends, in order or by
+its cancellation token (`IFlowRecords.Flush`) - so an end of the engine's process loses no line, and a power loss what the last pass had not
+put on the disk, never a line before it: writes never put on the disk reach it in any order, so the log can come back
+with the pass's later lines and its size and NULs where an earlier page of the pass never landed, and as no line holds a
+NUL - each is JSON - the log's opening takes back from its first NUL to its end (`AppendLog.Open`, `batched`) and its
+reader sets aside the first line that holds one with every line after it, said. That holds where the file system shows a
+byte it never wrote as NUL, as ext4's ordered and journalled modes, XFS, Btrfs, APFS and NTFS do; one that can show a
+block's old bytes instead (ext4's writeback mode) can leave a line of the last pass's that reads as no event, refused by
+its number. The log's close never throws a flush's failure over the failure a session leaves by: the records say it as a
+warning (`FlowRunRecords.Dispose`), and a session that ends in order heard it at its last pass's flush. Each record is
+read back strictly: a value the engine does not name, a nested record that
 does not hold, a time in any but the one form (`yyyy-MM-dd HH:mm:ss`, UTC; one not yet come is
 written `null`), a log line out of sequence or corrupt is refused by its number, and only a torn last
-line is set aside, said. A resume reconciles `flow.json` against every step's own record, taking the
-step's own whole wherever there is one, keeping the index's order and adopting what only a step's
+line, or the lines from the first that holds a NUL, are set aside, said - by the report's notes, and as a warning by the
+session that opens the log for append and takes them back (`FlowEventLog.SetAside`). A resume reconciles `flow.json` against every step's own record, taking the
+step's own whole wherever there is one - so what changes a step's measure that no stream gives back, an advice taken and
+a turn of an attempt that is over, is written to the step's own record as it is charged - keeping the index's order and adopting what only a step's
 directory holds at the end. The graph is rebuilt in that order, never sorted again - `build+10` after
 `build+2`, `rounds#10` after `rounds#2`, a loop's later visit (`rounds+2`) and its items as their own,
 a block's members whatever the block ended, the agents the run holds open (each a create-agent step
@@ -4626,22 +5435,89 @@ all but its id and time is not listed again. A change's snapshot holds the run b
 (`FlowBudgetSpent.Recorded`) and the pause (`FlowPauseState.Recorded`) taken as they stood, never the engine's own
 objects - so a write a session's start holds, made once the session goes on, says the run as it stood when the change
 was taken, never paired with a grant or a mark that came since. Each record is written before what follows from it - a question before the record of the
-step that waits on it, an answer before what it changes, a visit with what raised it, a failure
+step that waits on it, an answer before what it changes, a visit with what raised it, a handler's raise in its source's
+record before the handler's visit, so no record holds a raise owed beside the visit it made (`FlowInstance.RaisesOwed`:
+a crash between the two leaves the raise said and no visit of it, which the next session makes, and a record an older
+build left holding a raise owed beside its visit is read raised, its visit that raise), a failure
 owed until it is decided, every visit a redirect leaves marked `leftBy` before the redirect leaves
 the run's records, and a handler a redirect leaves before it ended marked `left` in its source's
 record, for it took nothing: the ending it was raised for is abandoned, settled by none of its handlers
 and never rebuilt by a resume - so a crash between any two writes leaves records the next session completes: an
 answer written is carried out once, a configured answer never written is given, a handler is never
-raised twice, and an ending whose handlers all ended is settled. A session is never said done over a
-step that never ended, nor one its scope never drew. What the session's start writes is held, in the
+raised twice, and an ending whose handlers all ended is settled. What a visit of the recovery that ended done puts right
+runs again as decided from the records, once: the visit's done record starts the list of what it sent the run back to
+(`reruns`), and each redirect it decides puts the step in that list in the redirect's own write - with the question
+the redirect asks where it would leave an agent open, so no crash and no answer taken at once loses the question - and
+the rerun is owed until that record names it; for a handler, until a visit is raised again for the same ending in its
+place. A crash between the visit's done record and the rerun's leaves it to the resume, which makes it once; whatever
+becomes of the redirect after - made, given up by a `stay`, or dropped, its question withdrawn, with a work item a plan
+update brings to rest (`FlowCoordinator.DropWhatItOwes`) - no session decides it again, for that one fact is what is
+read. A visit an older build recorded names no list: that build decided its redirect in the write after the visit's
+done record and never again at a resume - and a handler's not at all, for no redirect resets a handler - so whether it
+decided is read from what that redirect left in the records: the redirect still owed, a question it asked of the agents
+it would leave open - which a `stay` that gave it up answered - or the step inside a work item a plan update is bringing
+or brought to rest, which dropped it; one made left the step, which no rerun goes back over. None of those is the crash
+between the two writes, which leaves the rerun undecided, and the resume sends the run back once. The visit's own record
+tells those shapes apart, never a question's state: that build wrote the question a redirect asks before the redirect,
+so a crash between the two leaves the question open naming the visit and no redirect owed, and the resume, withdrawing
+it as one that asks of nothing, starts the visit's list, empty - written at the session's start before the withdrawal
+(`FlowCoordinator.WriteTheListsStarted`) - so the rerun is decided again, asking anew, never read as decided by the
+question withdrawn; and a drop of such a visit's redirect starts its list in the drop's own write, naming what the
+redirect sent back. Nothing is sent back into a work item a plan update is bringing or brought to rest, whichever way
+the visit's record says what it decided. Whether a rerun is decided has that one owner, which the rerun of a failed step and of a
+reporter both ask (`FlowCoordinator.RerunDecided`). A reporter of an issue a visit fixed runs again by the same fact of
+the visit that fixed it last, once - a `stay` an older build's visit was given is never asked again when another triage
+of the reporter ends - and never into a work item a plan update is bringing or brought to rest, whose work is done again
+in the item visited in its place (`FlowCoordinator.RerunOwed`, `FlowCoordinator.RunTheReporterAgain`,
+`FlowCoordinator.GoOnFromTheRecovery`). An answer the records hold and the session never carried out - a `stay` or a
+`retry` written before a crash - finds its redirect's question restored with the redirect, and is carried out on it at
+the resume, for each redirect whose record names it - never through the one question its handler waits on, for a visit
+whose two redirects each ask waits on the newer, and an answer ends the wait on its own question alone - unless the
+handler had asked again for that redirect, which then waits on the question asked again. A
+redirect and the question it asks are one fact: a redirect dropped - with a work item a plan update brings to rest, or
+with a visit a redirect leaves, whose redirects still owed go with it, never left asking a question withdrawn
+(`FlowCoordinator.Leave`) - leaves the run's records in one write before its question is withdrawn
+(`FlowCoordinator.DropRedirectsOf`, the one owner of dropping a redirect), so a crash between the two leaves a question
+that asks of no owed redirect, which the resume withdraws; a redirect whose record names a question withdrawn - an
+older build withdrew the question before it wrote the drop, or left the redirect of a visit a redirect left owed - is
+never made; and one whose record names no question in play while the question its handler asked for it is open - the
+process ended between that question's write and the record that would name it: an older build's first ask, which it
+named only in the write after, or a question asked again after `retry` - waits on that question. A handler group made
+again for a retry is made before its failure stops standing - a crash between the two writes leaves that failure beside the new visit, which is the retry made - while a
+group the schedule draws says its retry in the very write that settles its failure (`retried`): the schedule, the one
+owner of drawing a group - its dependencies, its `when`, what holds it back - draws the new visit from that record, so a
+crash before the draw leaves the retry owed, which the resume's schedule draws, never a failure gone with no new visit
+owed for it; and a visit of the recovery answered `retry` is taken again only while it is still the newest taken for
+what it puts right (`FlowCoordinator.Retry`). A handler's visit a raise made that a failure's `stop` left NotRun before it started - the run
+ended before it - is put back by the resume that goes on with no failure standing to stop it, not started again under
+the same id and raised by the same ending, where that ending still waits on it: the schedule never draws a handler, and
+the visit never ran, held nothing and wrote nothing but its place in that ending (`FlowCoordinator.RedrawWhatTheStopLeft`).
+An ending the records leave waiting - a handler's own
+among them, which the ending it answers waits on, and each raise it still owes made - is rebuilt as its
+raise made it, from its source's record: the visit of each handler that record holds `raised` - the newest raised for
+that ending, so a visit made again in a failed one's place is the one waited on - in the order the
+workflow declares them (`FlowCoordinator.EndingOf`) - never a triage of an issue the source reported nor a visit of the
+recovery, which name the source as what raised them too - so what depends on a source that failed waits for its
+handlers alone, as it does within a session, and the source's record names only them as the ending settles. A session is never said done over a
+step that never ended, nor one its scope never drew, and a run is never said done - by a session, or by the engine that
+takes it up before its session - over a step a pause or a stop stopped, which runs again at the resume, nor over a
+failure or a handler's raise owed to the next session. What the session's start writes is held, in the
 order made and each with the run as it stood, until it is known the session goes on: a resume beside
-an open question is refused only where nothing can run until a question is answered, and then it has
-written nothing - no event, no attempt, no state; a session an answer began, and one whose budget
-question is open, are never refused, and end paused on the question left. A stop asked between
+an open question is refused only where nothing can run until a question is answered - no step that starts, no redirect
+owed that can be made, no plan update under way that moves on without a step (its planning step raised where a crash
+cut the raise off, its end, its `then`, or its pieces placed where its plan stands, `FlowCoordinator.NextOfTheUpdate`,
+the one owner of when an update moves on, which `SettleUpdates` carries out) - and then it has
+written nothing - no event, no attempt, no state; a session an answer began, one whose budget
+question is open, and one beside a question still owing its recommendation - deferred by a stop or by a
+pause a stop cut short, left sought by a crash, or never sought in a questions file an earlier build wrote
+(`FlowCoordinator.OwesAdvice`), which `SeekOwedAdvice` seeks - are never refused, and end paused on the
+question left. A stop asked between
 sessions - `abort` answered with no engine running the run - ends the session it begins where the run
 stands, stopped, as a stop in a session ends it: nothing it found stopped runs again or is given the
 engine's handoff in place of its own, nothing owed is made and nothing starts; the session after it
-goes on with all of it.
+goes on with all of it. What the session before left part made is completed first, the stop applied after it: an attempt
+a crash cut off measured to where it stopped, and a placement of a plan update's piece a crash cut off made whole
+(`FlowCoordinator.CompleteWhatTheSessionBeforeLeftAsync`).
 
 Each session ends however it ends with the run's report (`report.md`, `report.json`), its owner
 released in a `finally`, its line in the run's log, and every record it wrote named in text and in
@@ -4656,20 +5532,52 @@ waits until the pause is complete; `stop-orchestrator`, which waits while the en
 every 5 minutes, its own Ctrl+C ending the wait with the stop left asked) and `inbox.json`
 (`answer-orchestrator` to a running engine, each answer under an id of its own). The poller never
 waits on what it hands the engine; what it cannot read is said once and read again, anything else
-asks the run to pause; a last poll at the session's end takes what came late, and the next session
-takes what is left. The engine takes an answer offered before a session begins at its start, before
+asks the run to pause; a last poll at the session's end takes what came late - a pause or a stop
+handed to the engine as every poll hands one (`FlowService.HandOnWhatIsAsked`), never only removed,
+so where an answer that poll takes drives the run on, that drive's start takes what the engine then
+stands on as it begins - read of the engine, never of `stop.json` (`FlowCoordinator.AskedOfTheNextStart`):
+a stop asked of it, by an `abort` the poll took or before the poll, stands in the place of the pause
+asked beside it, and the session's line says the stop replaces it - and where none does it ends with
+the session - and the next session takes what is left. The engine takes an answer offered before a session begins at its start, before
 anything is admitted - so a resume is never refused over the question it settles - and hands one left
 unread as its session ends back cancelled, never refused, so it stays in the inbox for whoever takes it
 next; what a step spent that came late is counted. Every answer handed over is weighed by one owner
 (`FlowCoordinator.AnswerHandedOver`), whether a session's loop or the inbox taken between two drives
 meets it, and what became of it is written into `questions.json` under its inbox entry's id before
 anything else is said of it: an answer taken carries the id in who gave it (`by.inbox`), and one the
-run does not take - its question no longer open, or it changes an answer already given - is kept in
+run does not take - its question no longer open, its question still owing its recommendation with no advisor
+seeking it (`FlowAnswerRules.Unrecommended`), or it changes an answer already given - is kept in
 the file's `refused` list, then recorded as an `answer` event naming why. An answer a session weighed
 leaves the inbox only once what became of it is written: one weighed at a session's start, whose writes
 are held until it is known the session goes on, is settled when they are made, and handed back - left in
 the inbox, and said - where they never are, a refused resume writing nothing; so nothing empties from
-the inbox an answer the run's records do not hold. Once settled it is counted, and leaves the inbox
+the inbox an answer the run's records do not hold. One that reaches a start that goes on - the command's own entry, one
+a past engine left in the inbox, one handed over before the first admit - answering a question owing the recommendation
+the start seeks, is weighed once that advice is under way (`FlowCoordinator.WeighHandedOver`), so it is taken and ends
+the asking; only a start that seeks none for it - a stop asked as it began, after which it seeks none, or a pause, which
+defers it - refuses it, naming the resume once the engine has gone or the pause once it is complete. Whether the start
+takes such an answer is one rule (`FlowCoordinator.StartTakesAnswers`), which also decides whether the start's writes
+say `starting` - each as it is made, so a write the start held from before a stop or a pause was asked of it says it is
+not once the hold is made (`FlowCoordinator.AsWritten`) - and a stop or a pause asked of a start under way, or while the
+run's state may still say `starting`, writes what the start stands on over `flow.json` at once, outside the hold - the
+stop applied or the pause asked, the questions the past session left sought deferred - (`FlowStartsStanding`,
+`FlowCoordinator.TakeTheStartsStanding`, `IFlowRecords.Stand`, through `OrchestrationStore.Rewrite` and
+`OrchestrationStore.RewriteFlowQuestions`, the one read and write of a part of each, which the release's taking back of
+the mark uses too), inside the one section every write of the run's records is made in, so it never meets one half
+made: the run's state never says `starting` once the start no longer takes such an answer, and says the step its
+refusal names, though the start writes nothing else until its hold is made. What became of a waiting answer is
+kept with what it is settled with, its why among it (`FlowWeighed`),
+and said once the start has weighed it: `answer-orchestrator`'s own answer so refused is the command's refusal (13) with
+the run's why, read from `questions.json` under its entry's id - whatever the session it began went on to do, its own
+end, line and code, said after it and kept beside the command's in `--json`'s `session` (`FlowRunResult.Session`) - by
+the one rule an answer the command handed over is answered by whichever session weighed it (`FlowService.OwnRefused`),
+and an inbox entry's line says it was taken once its recommendation was sought, or why not. What became of what was
+handed to a session is said by one owner on every exit of it, its end in order and a refusal met inside it alike
+(`FlowService.SayWhatWasHandedOver`), the command's own answer read from what the run's records hold under its entry's
+id and otherwise from what the session settled it with, which it keeps past the entry's leaving the inbox
+(`Offered.Weighed`) - never from what it still offers, which forgets an entry as the inbox lets it go: refused, the
+command's refusal as above; taken, said so; never weighed or handed back, said to stay in the inbox.
+Once settled it is counted, and leaves the inbox
 once the file lets it go: a removal that fails is tried again at the next poll or drive's end, and one
 the inbox still holds as the session ends - the removal failed to the last, or a crash came between the
 take and the removal - is settled by the run's records, so a later session that meets the entry only
@@ -4694,8 +5602,9 @@ only on this machine, and only the process whose start matches the one its owner
 removes the owner once the engine's process has gone, the rest of its tree not waited for. Whether a run's engine is live is asked of one owner
 (`FlowRunOwner`) by every command: `delete-orchestrator` refuses a run a live engine owns (13,
 naming `pause-orchestrator` and `stop-orchestrator`) and removes a gone engine's owner with the run,
-and `list-orchestrator` says what the engine is doing - none, running, pausing, recording what a
-complete pause left running, or gone.
+and `list-orchestrator` says what the engine is doing - none, starting, a session's claim taking the run up
+(`flow.json`'s `starting`), running, pausing, recording what a complete pause left running, stopping, a stop it applied
+ending its session (`flow.json`'s `stoppingSince`), or gone.
 
 Two commands answer a person's question about a run (`FlowService.AskStatusAsync`,
 `FlowService.AskAsync`): `ask-orchestrator-status` the tool's own - what is happening now, what is
@@ -4704,10 +5613,21 @@ over the same facts. The facts are the engine's (`FlowStatus`, pure, over the re
 methods `list-orchestrator` reads: `flow.json`, `questions.json`, `updates.json`, the frozen
 `definition.json` and the run's owner), computed and never guessed, stamped with the moment they
 were read: how the run stands and for how long, its engine and its pause; each step instance in
-progress; what it waits for - each open question with the command that answers it, a plan update
-under way or queued, an instance waiting on another or on a claim or room, a `ci-wait` reading the
+progress; what it waits for - each open question with its next step, by the one rule the report names it by
+(`FlowAnswerRules.NextStepOf`, over what the engine is doing): its answer; its answer taken now, ending the asking, where a
+live engine's advisor seeks the recommendation or a live engine is starting, which seeks every one the run owes; or, where the question still owes its recommendation
+(`FlowAnswerRules.OwesRecommendation`), the pause's advice where a live engine's pause defers it, the resume, which seeks
+it first, where no engine runs the run, and the resume once the engine has gone where it is stopping, `abort` alone taken
+now - a plan update
+under way or queued, an instance waiting on another, on a claim or room, or on the fix of an issue that holds a file its
+work item owns or that the item needs, a `ci-wait` reading the
 checks of the commit the run last pushed; what is done and what was spent of the budget; what is
-left at least and at most, with the bound that gave the most - each member of a scope still open not
+left at least and at most, with the bound that gave the most - at least what keeps the run from done,
+by the engine's own rule of it (`FlowInstance.IsUnended`, `FlowInstance.RaisesOwed`, which the
+engine's `Unended` and the resume read too): each instance that has not ended and what an ending owes the session
+that goes on, a failure owed and each raise an ending still owes, named - a raise by the visit the resume raises, and
+never one whose visit the records hold, which is counted once, as itself; at most besides each
+member of a scope still open not
 drawn yet, a loop's iterations to its bound, a handler's visits to its `maxVisits` with the steps its
 `then` sends the run back over, the recovery's visits to its `maxVisits` for each failure it can take
 with the steps it sends the run back over, and what no numeric bound holds named - and when it may
@@ -4716,18 +5636,24 @@ the definition that works the shortest and the longest time an instance of it to
 group's own span is its members' time, never counted beside it - (the lower end laying what is left
 along what depends on what as the engine orders two instances, `FlowInstanceId.Precedes` then
 `FlowGraph.Waits`, so work that runs side by side is counted once; the upper end summing every
-instance that is left and everything the run may still make, one after another), a step no
-instance of which has ended `Done` in this run counted and named and in neither end, the time a
+instance that is left - a handler owed its raise among them, as the instance the resume raises, timed
+by its step - and everything the run may still make, one after another), a step no
+instance of which has ended `Done` in this run counted and named and in neither end, as a failure
+owed is, which its handlers, its policy or the recovery decide, the time a
 person takes to answer and a wait for room - a claim, the run to be quiet, a counter of its limits,
 each a word the admission writes from `FlowWaits` and the facts class by it - left out and said to
-be, and no estimate at all where nothing has ended or the run has ended (done or failed: a stopped
+be, and no estimate at all where nothing has ended, where nothing is left - nothing keeps the run from
+done, so a run paused with only an owed failure or raise is never said to have nothing left - or where
+the run has ended (done or failed: a stopped
 run goes on at its resume, and its stopped instances are among what is left), the facts saying
 which. The most is everything the run may still make by the engine's own bounds and rules
 (`FlowComing`), so it is a bound: in each scope still open - the top level while the run goes on, and
 each group, iteration, item and recovery visit not ended - each member the schedule has not drawn yet;
 `FlowRepeat.Bound` for each repeat instance not ended, past the iterations it made;
 `WorkflowStep.VisitsAllowed` for a handler, in each scope its source can still end in, as the engine
-counts its visits, with the steps its `then` sends the run back over at each visit; and
+counts its visits, with the steps its `then` sends the run back over at each visit - where that `then` sends the
+run back over a group around it, in the scope it goes back to, past the visits made of it anywhere in that scope's
+instance; and
 `FlowRecover.VisitsAllowed` for each step whose failure the recovery can take (the policy that decides
 for it, `FlowScope.OnFailureOf`, is `recover`), each visit of the recovery with the steps it sends the
 run back over - what a redirect resets read by the engine's one rule of it, `FlowResets.Of`, and a step
@@ -4738,8 +5664,8 @@ plan update added to a loop), a handler's granted visit the run has not carried 
 scope it was granted in, and each piece of a plan update not carried out one item of the work-item
 group. What such a visit makes is counted whole - a group with all that is in it, its loops to their
 bounds and its own handlers and recovery. What no numeric bound holds - a `forEach` not yet expanded, a
-repeat with no numeric bound, a step whose pre-existing issues each raise a triage, a handler that
-sends the run back outside its own group, a plan update still to be planned - is named, the run's own
+repeat with no numeric bound, a step whose pre-existing issues each raise a triage, a plan update
+still to be planned - is named, the run's own
 bound of instances the only one that holds it; and a question open at a bound is named as what can
 grant more past it. Where the
 workflow's `reporter` names an agent, its words follow the facts, run by the one runner of the
@@ -4838,8 +5764,10 @@ on Claude Code its own `WebSearch`, kept in a side-task's
 messages the way its client goes on with any conversation: one launch held open where the
 client renders its conversations (Claude Code), the person's later messages reaching the agent through
 the channel a message to an agent at work uses, recorded as the person's (`ChatMessage`), the first
-interrupt cutting the turn alone and leaving the launch open, a message the interrupt dropped said to
-have been dropped, each turn of the launch written to `task.json` as it ends, and a launch that ends
+interrupt cutting the turn alone and leaving the launch open - reaching the launch after every line
+the person wrote before it and before any written after, for the client hands those lines on as the
+interrupt is raised, on the thread that raises it (`AgentTurnInterrupt.WhenAsked`) - a message the
+interrupt dropped said to have been dropped, each turn of the launch written to `task.json` as it ends, and a launch that ends
 by itself recorded and the lines it never answered sent again to a new one - counted by the client's
 own count of the messages its turns answered (`AgentRunResult.MessagesAnswered`), never by what was
 written, so a line taken by a turn that ended without answering is sent again. Such a launch is never
@@ -4884,12 +5812,15 @@ last turn's only where the client says the run ended at that turn's own result
 nothing waiting as the person leaves), so a launch gone between turns, or in the middle of one, marks
 no finished turn with its failure. The person leaving while a turn runs or a line waits never drops
 that turn: Claude Code interrupts the turn under way with the waiting lines cancelled - unless the
-person's own interrupt is still unanswered - reads on to the cut turn's result within
-`ClaudeCodeClient.InterruptBound`, counts it and ends there, the lines it dropped never counted as
-answered, so what the turn used, cost and spent is kept and a line it never took goes on with the
-chat. `/model` or `/effort` typed while the launch works ends it the same way and carries the lines it
-never took to the new launch (`GoneOnAsync`), each turn written on the entry of the launch that served
-it. One
+person's own interrupt cut it already, answered or not, for a turn cut is never interrupted again -
+reads on to the cut turn's result within `ClaudeCodeClient.InterruptBound`, counts it and ends there,
+the lines it dropped never counted as answered, so what the turn used, cost and spent is kept and a
+line it never took goes on with the chat. A turn begun once the person left - a line Claude Code took
+before the interrupt reached it, or one typed after the person's own interrupt was answered - is cut
+at once and settles nothing: its line is never counted as answered, and goes on with the chat too.
+`/model` or `/effort` typed while the launch works ends it the same way and carries the lines it
+never took, or took only once the person had left, to the new launch (`GoneOnAsync`), each turn
+written on the entry of the launch that served it. One
 request per message where the client stores them, each going on with the stored
 one. A side-task whose last run that worked - one that began a session - ended `ContextExhausted`, a
 chat's or a one shot's, has outgrown its context (`Working.Outgrown`, read from its stream): it keeps
@@ -4960,7 +5891,10 @@ Stopped from then on whatever a runner its drain waits for still does; the engin
 the stop as stopped all the same (`PointOfNoReturn.SafePauseDrain`), and the command ends within 120 s
 of the interrupt whatever is left (`PointOfNoReturn.HardStopBound`, the drain and 30 s to write the
 end, so the terminal never cuts off a session the engine is still ending in order) - what a crash
-leaves, which a resume goes on from. A session cut off answers as every command over its run does:
+leaves, which a resume goes on from. A command given `--output-logs` then writes its zip before it
+ends, after the bound and with no bound of its own (no cap is put on it), for as long as packing the
+run's directory takes, the run in it as the engine left it then; the second interrupt's warning says
+so (`FlowTerminal`, told what the command writes at its end through `IEndWrites`, which `FlowOutputLogs` answers). A session cut off answers as every command over its run does:
 the run and `resume-orchestrator <run>` named, every record listed in text and `--json`, and its line
 in the run's log. A hang-up keeps the process to pause the run but leaves nobody to read the
 terminal: from it on the terminal says nothing, and a line said while the session runs - an
@@ -4969,6 +5903,76 @@ written to, never an exception that ends the process part way; the run's records
 and a cancellation of the session's token is the second, never a cut-off. A step of a type no
 runner serves yet is given to `NoStepRunner`, `FlowStepRunners`' fallback: it fails, saying no
 runner serves its type (its code 14).
+
+A session's output logs are one Core service, `FlowOutputLogs`, which any front end asks for through
+the session it begins (`SessionOptions.OutputLogs`, an `OutputLogsRequest`: the path and the command line
+as typed) - the command line by `--output-logs <file>` on `run-orchestrator`, `resume-orchestrator` and
+`answer-orchestrator` alone, with no configuration key and no default: no flag, no zip. The lifecycle
+every command shares (`CommandSession`) holds the path before anything is weighed - whole, read from
+the directory the process stands in; a directory, a path inside `.orchestrators/` (where every run
+keeps its own records, and a start names its run only as it starts), one inside the repository's main
+checkout or one of its agents' trees where that tree does not ignore it - the tree found by git from the
+nearest directory on its way that is there, and held to be the run's where it shares the command's main
+checkout's git common directory - that checkout and every worktree git keeps of it - or is an agent's
+repository whose mark names that checkout (`AgentRepositoryMark`), asked of git directly and never of
+the locator of a tree's repository, which refuses a tree it runs nothing from, such as a worktree of a
+bare repository, where the question is only whose tree it is; `check-ignore` read
+against the index (`IGitClient.IsIgnoredAsync`), so a path the tree tracks is never ignored: such a zip
+is one of the tree's uncommitted files, which every agent a run of it makes is handed with its seed, and
+the next zip would hold it once for each; any other work tree, another project's checkout, a worktree
+of a bare repository or a repository of dotfiles at the home, is none a run hands or folds from, and takes the zip - or one whose directory cannot be
+made is refused with 13, nothing started - and at every end - the body's answer, a directory refused,
+a failure it caught - writes the zip before it says how the command ended, the operation's own end and
+the ends handed to it run first, with `--json` or without, so the manifest holds the lines they say and
+the code a defect they met gives (70), and every wait any end makes - replacing a zip another program
+holds among them - is said as the body's waits are, the operation's teller (`Waits.TellingTo`) set for
+its whole life: the events it ends with are
+kept as they will be written, so the zip holds its output as it ends, and then published, the zip named
+as every record of a run is, the last line naming them (`outputLogs: <file>`) and
+`records.outputLogs` in every document (`IDocumentFacts`). The zip is written whole through
+`IFileSystem.WriteAtomic` - a file beside the target, then renamed over it - so a resumed run's zip
+holds the whole run and a crash never leaves half a zip; one that cannot be written is said in its
+place and named nowhere, the code standing as a run's log stands where it could not take a line, a
+defect of the tool's ending the command with 70 as at its end. Which run the command reached is told
+by `FlowService` as soon as the run's record is there (`FlowRunReached`), so a start without `--run`
+that ended by a defect still has its run in the zip. The command's output is kept beside its console
+by `CapturedHarnessOutput`, which hands every member to the console and to `OutputCapture`, the
+console's own renderer writing into memory, under one lock: the lines in the order the terminal got
+them, the `--json` document apart. The run's directory is walked from it held (`IFileSystem.Hold`,
+`HeldDirectory`), one directory held for each level, so no link or junction is ever followed; links,
+key stores and dotenv files at any depth (the tool's slots' names, `.env.*` and `*.env`) and the shared
+copy of one a seed names, the run's `temp/`, the graph's caches (`FlowOutputLogs.GraphCaches`) and each
+agent's worktree are left out, each listed in `manifest.json` with why. Every byte is held to the mask
+the command's sessions kept the run's records through, never built again at the end: each session
+begins its masks (`SessionMasks`, an owner of the engine's session) with the secrets its configuration
+appoints that the key slot answers, and holds every mask the one builder of a launch's mask makes while
+it runs (`ReasonLaunch.Mask`) - a step's web-search keys in every form they are sent in among them - and
+every mask that comes to hold the gh login read again (`GrowingMask`), read as it holds its tokens at
+the end; the sessions are told to `FlowRunReached`, whose `Masks` the zip reads. So a configuration
+edited or a slot changed since a session began masks nothing its records were not masked of. Those are
+this command's sessions alone: a resumed run's zip holds the records of earlier sessions too, which were
+masked as they were written, but a file an earlier session kept as it came may hold a secret this
+command's sessions no longer hold - a key since rotated out of the slot, a provider taken out of the
+configuration - for nothing derived from a secret (a digest, a length) is kept from one session to the
+next. The mask
+is read byte for byte - Latin-1, which keeps every byte - by `ActionValues.ReadByteForByte`, which masks
+each secret's bytes in UTF-8 and in UTF-16 of either byte order read so beside the secret itself, a
+piece at a time cut where no secret parts (`ILineMask.Cut`); the manifest's strings are masked as text.
+Where no session built the mask - the command began none, as an answer handed to an engine running
+elsewhere (`FlowService.AnswerAsync` waiting on its inbox entry) and a refused resume begin none, or
+none could build the configuration's (its providers do not resolve, the slot could not be read) - every
+place the run's layout marks as one whose writer keeps bytes as they came, which no record's mask was
+applied to, is left out whole, each named with why: never an unmasked copy. The layout that spells every
+place is the one owner of the mark (`OrchestratorLayout.IsKeptAsItCame`), read by the zip and by the
+help that lists it: the run's own (`OrchestratorLayout.RunPlacesKeptAsTheyCame` - each agent's
+transcripts under `logs/`, `work/`, `plans/`, `inputs/`, `artifacts/`, `remote-workflows/`, and each
+agent's `shared/`, `rows/`, `evidence/` (`AgentEvidence`'s copies of its worktree's evidence roots) and
+`sessions/` (the provider's messages as they came)), and in each attempt's directory
+(`OrchestratorLayout.AttemptDirectories`: every step's, each advice's, ask's and analysis's), what
+`OrchestratorLayout.AttemptPlacesKeptAsTheyCame` names - the red legs' and red CI jobs' `logs/`, which
+the runner's values alone masked, a measure call's `logs/`, `handed/`, a side agent's `work/` and
+`sessions/`, and the continuation record, which quotes red legs' lines as they came. A command line the
+parser refuses writes none: no command began.
 
 ### The codebase graph
 
@@ -5860,8 +6864,17 @@ at all fails the sync. Extraction runs on one of every
 An agent's view is its worktree listed the same way and held against the base - the main checkout's manifest, synced
 first where the run has none - as the overlay of each file the worktree holds otherwise and each of the base's it does
 not hold, the digest of the base it stands on with it: a file whose extract the base or an earlier sync of the view made
-is not read. A `graphify-codebase` step with `in` syncs that agent's view, or the base for an agent that only reads. Each
-tree has its gate: syncs of one wait for each other, syncs of different trees run side by side, and a view takes the base
+is not read. A `graphify-codebase` step with `in` syncs that agent's view, or the base for an agent that only reads.
+Every agent with a tree of its own is served the view of the tree it reads (`FlowGraphSyncs.WorktreeOf`): an agent that
+only reads as well, whose tree holds what the main checkout committed - or the commit its step names (`commit`) - and not
+the main checkout's uncommitted changes nor a fold landed since, so its reason step is served its own tree's view
+(`FlowGraphSyncs.ViewsOwnTree`), synced by a whole listing once the step's runner brought the tree there - or, for an
+attempt an answer goes on with (`ReasonStepRunner.GoingOnOf`), found it as that attempt left it, what it wrote there among
+it (`FlowGraphSyncs.ReadiedAsync`) - held against the base, so it reads only what differs - and never at the step's start
+before it, when the tree may stand as the agent's last step left it. What its reads are told of a file, their narrowing and
+the working set its reads are placed by are then of the tree it reads: one rule matches a file to the view, relative to
+the tree the view is of (`CodebaseGraphQueries.PathOf`, which `CodebaseGraphTool.PathOf` and `FullOf` and the working
+set read), so a file of the main checkout a reader reads beside its tree is no file of its view. Each tree has its gate: syncs of one wait for each other, syncs of different trees run side by side, and a view takes the base
 as one snapshot, which a view reads without the base's gate and never puts back older than a sync left it
 (`Graph.Adopt`). When the base moves, every view - one whose first sync is under way among them - is held against it
 again under its gate with no file read, from the earlier manifest it stood on, until a newer sync of the base holds them
@@ -5895,7 +6908,10 @@ where nothing changed; a process begun again links its first sync whole, from th
 The engine syncs on its own, through `FlowGraphSyncs`, only where the run has a graph and under the claim its step already
 holds: `FlowStepRunners` syncs the view of a step that reads it where it starts (`FlowStepRunners.ReadsViewAtStart`: a
 reason step, and a `class-closure` check, which reads what the worktree still declares) - its agent's, the one the step it
-goes on with works in (`FlowCoordinator.WorkingOf`, which its claims are read through too), the base for one that reads; `fold` and
+goes on with works in (`FlowCoordinator.WorkingOf`, which its claims are read through too), and a reader's own tree's once
+its runner readied the tree or found it as the attempt an answer goes on with left it, never at its start, and again
+where such a check judges a reason step's answer at the answer (`FlowStepRunners.CorrectionsOf`), for it reads the tree
+that answer leaves; `fold` and
 `delete-agent` sync the base by every path the run's folds changed that the graph has not taken yet
 (`FoldLedger.Ungraphed`, `FoldLedger.Changed`) - before each attempt does anything and after its apply - and record each
 fold it took (`graphed` in `folds.json`), so a sync that failed, was stopped or was cut off by a crash is owed until one
@@ -5908,7 +6924,7 @@ the hook looks for it, which its runner finds as it does.
 `delete-orchestrator` removes the graph with its run, outside what `--delete-evidence` guards.
 
 What an agent asks of the graph is one tool, `graph` (`Agents\Runtime\CodebaseGraphTool`), whose `op` is `find`, `node`,
-`related`, `outline`, `body`, `sites`, `pack`, `changes`, `edit` or `wholeFile`, over the lookups of `CodebaseGraphQueries` - each node by its id,
+`related`, `outline`, `around`, `impact`, `body`, `sites`, `pack`, `changes`, `map`, `edit` or `wholeFile`, over the lookups of `CodebaseGraphQueries` - each node by its id,
 handle, qualified name (one written with its language's `::` or `\` read as the model's `.`, or with only its last
 parts, `Order.Total`) and simple name and `path:line`, each file's nodes, each node's edges in and out by kind, the words its
 name splits into weighed by how rare they are - built once
@@ -5917,10 +6933,39 @@ from a `CodebaseGraphRead`. Every node an answer names is one line with its hand
 prefix, then the share of the query's words weighed by their rarity, a summary's and a path's words a twentieth as much,
 generated code after every other, a tie by how near the step's own work each node is (`GraphNearness`: its context
 pack or a working set it was given, a file its `writes` covers, a file its agent changed, a path or a name its prompt
-holds) and then by id; `related` walks as many hops as asked, from 1, going through every node it reaches: it keeps the
-nodes it reached and never reaches one again, so it is linear in the edges it follows, cycles among them, and a hop that
-reaches nothing new ends it; `body` serves each node named once and reads each file once, again only where an extract of it
-found its lines moved, and reads a file whole whatever it holds. `sites` answers "every place that decides this" of one datum
+holds) and then by id; `related` walks one relation (`GraphRelations.Described`, the one list of each relation and what it
+reaches, which the schema's `relation` and the help say: `callers`, `callees`, `derived`, `implementations`, `references`,
+`tests`, `includedBy`, `styledBy`, `styles`, and `bases`, `overrides`, `overriddenBy`, `dispatchers`, `users`, `uses`, `parts`
+and `tested`, which reach the edges the `node` operation groups - inheritance, implementation and mixins out of a type,
+overrides both ways, dispatches into a member, uses both ways, the parts of a declaration, a test's own `tests` edges) as
+many hops as asked, from 1, by distance, going through every node it reaches: it keeps the nodes it reached and never
+reaches one again, so it is linear in the edges it follows, cycles among them, and a hop that reaches nothing new ends it -
+every other part of a declaration walked as the node itself (`CodebaseGraphQueries.OneDeclaration`) but by `parts`, which
+walks to them (`GraphRelations.WalksPartsAsOne`); `body` serves each node named once and reads each file once, again only where an extract of it
+found its lines moved, and reads a file whole whatever it holds. Three operations answer in one call what an agent
+otherwise reads and searches many files for. `outline` of a directory (`CodebaseGraphQueries.FilesUnder`, the directory as
+`CodebaseGraphQueries.DirectoryNamed` reads it - either separator, a leading `./` and a trailing separator read as none,
+`.` the tree's root - in another case where the tree's file system finds a name in any case) gives every file under it, its
+subdirectories' too, a section for each directory that holds any directly, by path - each file one result whose block is
+its own node's line with the language that read it, or the state none read it in, and `test` where it is test code
+(`CodebaseGraphQueries.TestFile`, the view's one rule of a file that declares a test, `ExtractNode.Test` or one the link
+finds by its type), then each of its top declarations (`CodebaseGraphQueries.TopDeclarations`: every type and member no
+type or member of the file holds, a namespace's among them, each with what it and the declarations inside it exercise by
+the link's `tests` edges, each declaration read once - the outermost it is or is inside found from its parent's); the
+repository's `outline` outlines the root's own files so too. `around` gives a node's place: what it is declared in,
+outermost first - its file, its namespace's part there, its type (`CodebaseGraphQueries.Containers`, by each extract's
+`ExtractNode.Parent`) - its siblings, every other declaration directly inside the nearest of those
+(`CodebaseGraphQueries.Siblings`, `CodebaseGraphQueries.Inside`: a file's top, or what a node contains with its other
+parts), its members, the declarations just before and just after it in its file (`CodebaseGraphQueries.Beside`, the
+outermost on each side), and its callers and callees as `node` groups them, each a section counted in its caption at
+`CodebaseGraphTool.NodeLinesAKind` a page. `impact` gives what a change of a node reaches, by the one walk of a change's
+impact the change-first pack leads with (`CodebaseContextPack.Impact`, over `CodebaseContextPack.Impacted`, the edges of
+`GraphRelations.Impact`) from the node and every other part of its declaration: each node it settles under the relation
+whose edge reached it - its callers at every distance, `overrides`, `overriddenBy`, `implementations`, `dispatchers`,
+`derived`, and its `tests` last, every test that reaches any of them - with how many edges its best path has and the path
+itself, each edge said as the pack says one (`CodebaseContextPack.Phrase`) with the node it leaves by its handle, nearest
+first and then best first, at `CodebaseGraphTool.RelatedLines` of each a page; a node the step may not read is neither
+listed nor gone through, only counted, and a hub is gone through, its many neighbours ranked down, never cut. `sites` answers "every place that decides this" of one datum
 (`data`: a symbol as `symbol` takes one - a handle, an id or a `path:line`, which names its one node, or a qualified or simple
 name - a key path, dotted - a name holding a dot or a bracket quoted in brackets, `Logging.LogLevel["Microsoft.AspNetCore"]`
 or `Logging.LogLevel['Microsoft.AspNetCore']`, or with its names' own dots as they are - or as .NET's configuration spells
@@ -6076,7 +7121,10 @@ answer ends with (`AgentSearch.LeftOut`), through the read rule the tool is hand
 node, edge and hit of a file it refuses; a path or a `path:line`
 is searched for by no word. `body` reads a node's lines fresh - a type's members' bodies left out unless `full`, each
 member's signature line kept - and where its hash moved since the view was read, has the file checked again before
-serving it, where the tool may sync, the node looked for again in the same file (`CodebaseGraphQueries.Part`); `edit`,
+serving it, where the tool may sync, the node looked for again in the same file (`CodebaseGraphQueries.Part`) - every
+moved file of the call in one check, never a check a file (`CodebaseGraphTool.ExtractedAgainAsync`, the one owner of a
+check the tool makes again, which hands the check every file it names), so a call pays for the files it checks and one
+view however many it meets; `edit`,
 one at a time, writes a node's lines through `EditedText.ReplaceLines` only where the hash given is its hash now
 (optimistic concurrency) - a node spread over files in the part that hash names - after the write rule the tool is
 handed, keeping the file's encoding, endings and final newline, and answers the card the file's new extract gives. Every
@@ -6104,9 +7152,11 @@ extractions take). A path the tool is given is the file the view holds by the tr
 offered and every call answers the sentence for a step that left no output. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
 
 The context pack (`CodebaseContextPack`) is the part of the graph a step's work touches, made at its start
-from the view and what the step says alone (`ContextPackRequest`: its filled prompt, `writes`, the working sets it is
-given, its changes, its read rule and cap), so the same step on the same tree is given the same pack. Its seeds are what
-the prompt names exactly - a symbol or a path in backquotes (a path standing for its declarations), a qualified name
+from the view and what the step says alone (`ContextPackRequest`: its task - what the run handed its prompt, the values
+`FlowTemplate.FillAroundSkills` filled it with, which the coordinator hands its runner as `FlowStepRun.PromptValues`
+beside the pieces, with a handoff, never the template's own words, which every run of the workflow is given alike -
+`writes`, the working sets it is given, its changes, its read rule and cap), so the same step on the same tree is given
+the same pack. Its seeds are what the task names exactly - a symbol or a path in backquotes (a path standing for its declarations), a qualified name
 or its last parts, a handle, a `path:line` as a stack frame or a compiler writes one, the longest of an absolute or a
 foreign path's endings the view holds or the one file it holds that ends with it - each a weight of 4 (a name several readable nodes
 carry seeds every one of them, however many, sharing the 2 a name written weighs among them), a working set's nodes 4
@@ -6132,7 +7182,7 @@ pages of the step's tokens
 (`GraphTextPages`, `EstimatedTokens`), best first, a page's task lines by file, generated code
 last in each section, the pages laid whole when the pack is made - every line laid before any page
 is written, so every page knows the total and the count of nodes the read rule left out of the whole
-walk: page 1 is given, and its last line says nothing is left out or which page of how many and how to
+walk: page 1 is pushed where the step pushes its pack and served first by graph's `pack` where it does not, and its last line says nothing is left out or which page of how many and how to
 ask graph's `pack` with page for the next, the total exact on every page and the last saying it
 is; a step whose graph is not tools is told, in the same place, that the rest is on the pages
 after it, which a step whose graph is tools asks the graph for; a
@@ -6153,7 +7203,8 @@ under `could not be compared:` ahead of its other lines, never saying no declara
 declaration moved to another file said moved from where it was, a part of a type in each file it changed in listed
 for each, one taken out said as the base held it, whether or not another file still declares a part of it, and what
 went with its container said by the container alone - then their impact walked best first over
-`CodebaseContextPack.Impacted` - their tests, at full weight, under their own section, then their
+`CodebaseContextPack.Impacted` (`CodebaseContextPack.Impact`, the one walk of a change's impact, which the graph tool's
+`impact` answers too) - their tests, at full weight, under their own section, then their
 callers as far as they go, overrides both ways, implementations and dispatches, and derived types -
 then the task's seeds;
 its first line counts the lines the changes lead with, and with no base, its changes unread (and why, on one line:
@@ -6162,19 +7213,33 @@ in. `FlowGraphSyncs.ChangesBase` names the base: an agent's recorded `Base`, the
 checkout. A pack keeps, beside its text, its seeds (each node once, by its heaviest seed - the one its line says), its
 nodes and each node line it wrote (`ContextPack.Lines`, what a delta gives of a pack a conversation was not given).
 A reason step that has a graph (`FlowStepGraph`, its `graph` `map` or `tools` with its default resolved - the mode
-the `graph` of the step its chain of work began with says, `ResumeChain.Root`, and for a step of the recovery a graph
-only where a graphify step of the run has ended done) is served through one request of its view
+the `graph` of the step its chain of work began with says, `ResumeChain.Root`, and for a step that runs wherever the run
+takes it - the recovery's, and a raised one such as the pre-existing triage (`FlowStepGraph.RunsWherever`, which the
+definition's check reads too) - a graph only where a graphify step of the run has ended done) is served through one request of its view
 (`FlowGraphSyncs.RequestOf`, the agent's worktree where it works in one - `FlowGraphSyncs.WorktreeOf` - so its changes,
 a check of a file the tool makes again and the view it is served are the worktree's, never the main checkout's). Its
 pack's own keys are its step's, the chain's root's where it says none, so a step that goes on with another's work
 starts its pack where it says; a `graphFrom` naming a step is found as the definition's check finds it
 (`FlowScope.Resolve` from the step's scope) and read from that step's instance in the step's own work item and
-iteration, never another's beside it. It is given its pack as the `<codebase>` part of the first user message of each
-launch that begins a conversation of its own, after the run's map (`AgentPromptParts.CodebaseTag`, before
+iteration, never another's beside it. Pull, not push: what of the graph a step's first message holds is
+`WorkflowStep.GraphPromptTokensOf`'s one rule (`FlowStepGraph.Pushes`). A step at `tools` is pushed no map and no pack -
+measured against `graph: off` on the same requests, the ~1,500-token map and ~2,600-token pack at the head of every graphed
+step's first message were all but unused (0 to 2% of a pack's nodes touched by a step's work in the triages, the reviews
+and fixes and the diagnosis, 10% in the planner, 35% only in the implementer on three samples, no `map` ever asked) and
+added 60% to 98% to those steps' input - and its tool offers `map` and `pack` from page 1 wherever there is a map or a pack
+to serve (`CodebaseGraphTool.Operations`); its pack is still made at its start, at `WorkflowStep.DefaultGraphPromptTokens`
+a page, for the tool serves it and `find` breaks its ties by its `Near`, and the map is made where it always was, so its
+bytes are what the base held when the first graphed step of its ground began. A step at `tools` that says
+`graphPromptTokens` above 0 is pushed page 1 of its pack at that size, the map never. A step at `map`, whose agent cannot
+read through the tool, is pushed both - its pack at its `graphPromptTokens`, `WorkflowStep.DefaultGraphPromptTokens` where
+it says none, none at 0. A pushed pack is the `<codebase>` part of the first user message of each
+launch that begins a conversation of its own, after a pushed map (`AgentPromptParts.CodebaseTag`, before
 `<run-context>`; `AgentPromptParts.Part` the one writer of a part's form) - or, where the run's graph was never built,
-the sentence for a step that left no output in its place - and the tool its `Near`; a launch that goes on with a
-stored conversation is told the changes instead, the one decision `AgentPromptParts.CodebaseOf`'s, made as each
-launch's first message is written, so a fallback to another client or provider begins with the map and the pack. A
+the sentence for a step that left no output in its place, which a step that pushes no pack is told by its tool instead; a launch that goes on with a
+stored conversation is told the changes instead (`CodebaseConversationChanges`: what moved of the declarations it was told,
+and, where its step pushes its pack, the nodes of it the conversation was not given - none at all where the step pushes no
+pack and the conversation holds no declaration of the codebase: `CodebaseConversationChanges.HoldsAny`), the one decision `AgentPromptParts.CodebaseOf`'s, made as each
+launch's first message is written, so a fallback to another client or provider begins with what its step pushes. A
 graph that cannot be served - its records, its map, a line of it - is said, and the step goes on without it.
 The run's repository map (`CodebaseRepositoryMap`, `FlowStepGraph.MapOfAsync`) is made once for each ground of reads
 the run's steps share, from the base as it stands when the first graphed reason step of that ground is given its
@@ -6189,19 +7254,49 @@ written by `OrchestrationStore.MapOnce` in the map's own cross-process section, 
 are. A kept map's count is read from its first page's own last line (`CodebaseRepositoryMap.PagesOf`), the line every
 step of the ground is told, so a step is offered every page it is told there is, whatever became of the map's other records; a
 page is read back by the one reader beside the writer (`OrchestrationStore.MapPage`), for a run's steps and a
-side-task alike, a page the disk will not give back said with why. Every step of the ground reads
-the same first page - the prefix a client caches never moves - and a step given the tool asks the rest of it as
-`graph`'s `map` with page. One wording of a page's last line serves the map's every step, with the tool and without
+side-task alike, a page the disk will not give back said with why. Every step of the ground that is pushed the map
+reads the same first page - the prefix a client caches never moves - and a step given the tool asks every page of it,
+from page 1, as `graph`'s `map` with page. One wording of a page's last line serves the map's every step, with the tool and without
 it: it says the rest is on the pages after it, which a step whose graph is tools asks the graph for, never how this
-step asks for it, for the map is one file every step of the ground reads and no step's kind is written into it. Its reads
-narrowed (`graphReads: narrow`, the default) deny a whole `view_file` on every client - Claude
-Code's served by the engine's tool server - of a file the view holds as parsed over `CodebaseGraphTool.NarrowLines` lines, with the way to the graph in
-the refusal; a range, a search and a write pass; a file the graph is not sure of
-(`CodebaseGraphQueries.UnsureOfFile`: a `dynamic` mark, generated, or more than a quarter of its references `candidates`)
-passes as an escape `lowConfidence`, and `graph`'s `wholeFile` lifts the narrowing for one file the view
-holds as parsed for the rest of the step, an escape `stated` with the agent's reason and the lines and tokens the view
-read the file as - a path it holds no parsed file at a usage line, nothing read. A read the narrowing denies is no view
-an edit may follow, nor a read of the run's.
+step asks for it, for the map is one file every step of the ground reads and no step's kind is written into it.
+The graph lives inside the reads such a step already makes, on every client - Claude Code's served by the engine's tool
+server - for every view is a turn and every turn reads the conversation again: the graph saves only where it costs no call
+of its own. The tool owns what those reads are told of a file, `CodebaseGraphTool.DeclarationsAsync`: the file's
+declarations (`GraphFileDeclarations`) where the view holds it as parsed and the step's reads reach it, the file read fresh
+as a body's is and each declaration's hash checked against the lines it spans now - the file extracted again where one
+moved, where the tool may check it, the tool answering from the view that leaves - and a declaration whose lines the file
+still does not hold as the graph read them (an extraction that could not be made) left out and counted, so no span or hash
+given stands for lines the file does not hold. `search_files` (`AgentToolRuntime.SearchAsync`) reads a file's
+declarations at its first hit, as its lines confirm them alone (`CodebaseGraphTool.ConfirmedDeclarationsAsync`) - hits
+come file by file, each file's in order - and where a file's moved, writes nothing more and only finds the rest: every
+moved file of the call is checked again in one check (`CodebaseGraphTool.ReadAgainAsync`), the answer begun again and the
+files that held a hit searched again, so a search pays for the files that moved and one view, never a view a file, and
+its hits still stand under the declarations as the files stand now, in the listing's order. It writes each hit inside one under that
+declaration's line, as `GraphLines.Of` names a node, the innermost a type, a member or a section that holds the hit's line
+(`GraphFileDeclarations.Holding`, by `CodebaseGraphQueries.AtLine`; a namespace or a project heads no hit), its hits and
+their context lines indented beneath it, the separator between two of its hits indented with them and the line said again
+only where a hit outside it came between; a hit outside every declaration, or of a file the graph does not parse, is
+written as it is, and a step with no graph answers as it always has. The answer is written a line at a time - the
+declaration's line a block's head (`ResultLines.HeadAsync`), each line beneath it a line of its block - and paged as
+every answer is, by `read_result`, each line whole, a page that begins among a declaration's lines beginning with its line
+again (`TextBlocks`). A range of `view_file` (`AgentToolRuntime.RangeAsync`) is headed
+(`AgentToolRuntime.RangeDeclarations`) by the declarations the lines it gives meet (`GraphFileDeclarations.Meeting`), each
+joining the head once a line given reaches its first line, the head charged with the lines to a page's room
+(`KeptResults.Room`), the first line's among them - the lines stopping where the two would pass it, the rest asked for by
+its next start as any is, and a head that passes the room with the first line written with that line as the call's
+answer a line at a time, the head a block (`AgentToolRuntime.PagedRangeAsync`), kept and given a page at a time by
+`read_result` as every answer longer than a page is, so no range is sent over a page however many declarations begin on
+its first line. `AgentTools.InAGraphStep` says so in the two tools' own descriptions where the step's graph was
+built. Its reads narrowed (`graphReads: narrow`, the default) answer a whole `view_file` of a file the view holds as parsed
+over `CodebaseGraphTool.NarrowLines` lines with the file's outline in its place (`CodebaseGraphTool.WholeReadAsync`): a line
+saying how to read its lines - a range, a page, a body, or `wholeFile` with why - then the outline as `outline` with its
+path gives it, every declaration as the file stands, all of it, paged as every answer is - so the step learns the
+structure in the call it read by, and no turn is spent on a refusal; a range, a page, a search and a write pass; a file the
+graph is not sure of (`CodebaseGraphQueries.UnsureOfFile`: a `dynamic` mark, generated, or more than a quarter of its
+references `candidates`) passes as an escape `lowConfidence`, and `graph`'s `wholeFile` lifts the narrowing for one file
+the view holds as parsed for the rest of the step, an escape `stated` with the agent's reason and the lines and tokens the
+view read the file as - a path it holds no parsed file at a usage line, nothing read. An outline shows the agent the file's
+declarations and none of its lines: it is no view an edit may follow, nor a read of the run's.
 The working set (`CodebaseWorkingSet`) is what a reason step that has a graph worked with, kept in its
 directory as `working-set.json` (`OrchestrationStore.WriteWorkingSet`): each node it edited, served, read or found
 (`WorkingSetUses`), with how often it was touched and its handle, file, lines and hash at the step's end - every one,
@@ -6209,7 +7304,9 @@ however many - edited first, then by how often - and a node the view no longer
 holds kept by its id, marked gone. `CodebaseWorkingSet.Make` reads it from the step's `graph.jsonl` (`GraphStepLine`,
 one `GraphCallLine` for each call of the tool, from the facts its answer carries, `GraphToolFacts`: each node a call
 asked about by name is found, each a line of which a `body`'s answer gives, within its cap, is served, and an `edit` is
-matched by the lines it wrote, as every write is, the node it named edited where they no longer declare it) and from
+matched by the lines it wrote, as every write is, the node it named edited where they no longer declare it; the nodes
+a `pack` answer's page lists, `GraphToolFacts.Listed`, are kept on its line, `GraphCallLine.Listed`, and are no use - a
+line of each, never its lines - so none is found or served, and a line an earlier build wrote without them still reads) and from
 the tool calls its stored stream holds (`OrchestrationStore.ReadStepStream`; a call is named by its `ToolCallStarted` or
 the `AssistantMessage` that made it), on every client's form: a read (`Read`, `view_file`) by where the lines its answer
 gave stand once in the file as the step left it, else by the first and the last number it gave them, a write (`Edit`,
@@ -6221,23 +7318,39 @@ lines never its type's), as the view at the step's end holds them. The coordinat
 `FlowStepRun.WorkedFrom` the instances whose sets seed its pack: the step it goes on with (`resume`), each step it
 depends on directly - its own `dependsOn` and `on` and each enclosing group's, a group by each reason step in it -
 then its own earlier visits of the same work item (`FlowInstanceId.SameStep`: the same id but for the visits and
-iterations after its innermost item), newest first, each that began, once; `FlowWorkingSets.SeedsOf` reads their sets
+iterations after its innermost item - and within the recovery, of visits for the same failure or issue,
+`FlowCoordinator.EarlierVisitsOf`), newest first, each that began, once; `FlowWorkingSets.SeedsOf` reads their sets
 into `ContextPackRequest.Worked` (`CodebaseWorkingSet.Seeds`: each node once, edited where any set says so, none
 gone). A reason step that has a graph writes both files as it ends (`FlowStepGraph.Ended`: the working set made from
 the view at the step's end, its `graph.jsonl` and its stored stream) and its pack is given the seeds; its `graph.jsonl`
 holds a line for each launch's first message, written as the message is and before any line of that launch's calls
-(`GraphPromptLine`: the map's tokens and the pack's seeds, nodes, tokens and what was left out, or the tokens of the
-changes a conversation gone on with was told in their place, or why no pack was given), one line for each call of the tool (`GraphCallLine`, with its answer's estimated tokens and its text hits), and
-one for each escape of its narrowing and each whole read the narrowing refused (`GraphEscapeLine`, `GraphDeniedLine`),
-and its figures - mode, view, `mapTokens`, the pack with how many of its nodes the step then used, `changesTokens` (the
-three its last launch was given), calls, served tokens, bodies, text hits, edits made and refused, whole-file reads
-counted from the stored stream on every client's form as the working set reads its calls
-(`CodebaseWorkingSet.WholeFileReads`), denied reads and escapes -
-are held in its `step.json` under `graph` and summed for the run's report (`FlowReports`).
-`query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand on the base or an agent's view
+(`GraphPromptLine`: the pushed map's tokens and the pushed pack's seeds, nodes, tokens and what was left out, or the tokens of the
+changes a conversation gone on with was told in their place, or why no pack was given, by one rule (`FlowStepGraph.NoPackOf`) -
+`FlowStepGraph.NoPackHeld` where the pack made held nothing, said first, since such a step is offered no `pack` to ask,
+and `FlowStepGraph.NoPackPushed` for a step at `tools` that pushes none), one line for each call of the tool (`GraphCallLine`, with its answer's estimated tokens and its text hits), and
+one for each escape of its narrowing and each whole read the narrowing answered with the file's outline
+(`GraphEscapeLine`, `GraphOutlinedLine`: the file, its lines, what reading it whole would have cost and what the outline
+cost) - a line an earlier build wrote of a read the narrowing refused (`GraphDeniedLine`) still read, and counted in no
+figure - and its figures - mode, view, `mapTokens`, the pack with how many of its nodes the step then used,
+`changesTokens` (the three its last launch was pushed: a pack made and not pushed counts 0, for its first message held
+none of it), `pulled` (the pages of the `map` and of the `pack` its tool was asked for and gave, each `pages` and
+`tokens`, counted from its `graph.jsonl`'s answered calls and among the served tokens, the `pack`'s with `nodes`, the
+nodes its pages listed, each once, and `used`, how many of them the step then used - by the one rule the pushed pack's
+`used` is counted by, `CodebaseWorkingSet.Used`: its working set's nodes the view still holds that they list), calls,
+served tokens, bodies, text hits, edits made and refused,
+whole-file reads counted from the stored stream on every client's form as the working set reads its calls - neither a
+page nor a range, its answer the file's numbered lines, so an outline given is none (`CodebaseWorkingSet.WholeFileReads`)
+- the outlined reads (`outlinedReads`: how many, `tokens` what reading them whole would have cost, `outlineTokens` what
+the outlines given in their place cost) and escapes - are held in its `step.json` under `graph` and summed for the run's
+report (`FlowRunReport`: its `totals.graph`, the pushed pack's `packTokens` beside the `pulled` map's pages and tokens
+and the pulled pack's pages, tokens, nodes and used).
+`query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand - `--find`, `--node`, `--related`,
+`--outline` (a file the view holds; a path that names no node and is written as a file is, or is a directory the view holds
+files under; a symbol else), `--around`, `--impact`, `--body` and `--sites` - on the base or an agent's view
 through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on disk, no gate, no sync, nothing written, a
 view linked in memory from the base's files and its record, and a link result another linker made linked again in
-memory - with a read rule that refuses what no graph lists (`CodebaseGraphService.NeverListed`), the main checkout's run
+memory - with a read rule that refuses what no graph lists (`CodebaseGraphService.NeverListed`: the credential slots,
+the tool's own state and the workflows' own files, whose prompts a pack would match first), the main checkout's run
 and configuration wherever it is typed (`MainTree`); a misuse is told by `CodebaseGraphTool.Misused` before anything is
 read, and a view not made yet is said and the base answered; `--page` asks any page of the answer, its document answering
 the digest of the graph answered from (`CodebaseGraphQueries.Graph`), the page, the pages, the whole answer's total and the

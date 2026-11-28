@@ -7,6 +7,8 @@ using DssHarness.Core.Agents.Loop;
 using DssHarness.Core.Agents.ZaiApi;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Schemas;
+using NamedFiles = DssHarness.Core.Orchestration.Flow.WorkflowFiles;
 
 namespace DssHarness.Tests;
 
@@ -30,11 +32,17 @@ public sealed class StructuredOutputLiveTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
-    /// Every shipped schema's envelope is answered on the Claude API, as a step that may ask and as one that may not: as
-    /// the format in the copy it is sent - where the API compiles it - or else, the schema refused, in words in a message
-    /// after the conversation's, as the loop goes on (2026-10-26: the plan's, with questions offered, is more than
-    /// structured outputs compile). None fails; the plan's that offers no questions is taken as the format, its work item
-    /// one definition. Each answer is held to a few tokens, for only the taking is asked.
+    /// Every shipped schema's envelope - the flow's and its item pipeline's - is answered on the Claude API, as a step that
+    /// may ask and as one that may not, each sent as a run sends it: read whole, the definitions it shares with the schemas
+    /// beside it taken in (<see cref="JsonSchemaSubset.Whole"/>), so a self-audit's and a diagnosis's carry the plan's work
+    /// item and its class. Each is answered as the format in the copy it is sent - where the API compiles it - or else, the
+    /// schema refused (<see cref="ClaudeApiFailures.MoreThanItCompiles"/>), in words in a message after the conversation's,
+    /// as the loop goes on. Measured on 2026-11-27, Haiku and Opus answering alike: structured outputs compile a format of
+    /// only some 40 to 80 properties - a flat object of 40 required texts compiles and one of 80 is refused, its size the
+    /// cause and not its optional members, patterns or enums - so the plan's, offering no questions too, the self-audit's,
+    /// the diagnosis's and the implement step's envelopes are said in words. None fails, in words or as the format; and
+    /// the triage's, well under that size, is taken as the format, so a copy the wire is sent broken still shows. Each
+    /// answer is held to a few tokens, for only the taking is asked.
     /// </summary>
     [Fact]
     public async Task EachShippedEnvelope_IsAnsweredOnTheClaudeApi_AsTheFormatOrInWords()
@@ -49,8 +57,12 @@ public sealed class StructuredOutputLiveTests
         var inWords = new List<string>();
         var said = new StringBuilder();
 
-        foreach (var file in WorkflowTemplates.Files.Where(file => file.StartsWith("schemas/", StringComparison.Ordinal)))
+        foreach (var file in WorkflowTemplates.Files.Where(file => file.EndsWith(".schema.json", StringComparison.Ordinal)))
         {
+            var whole = JsonSchemaSubset.Whole(WorkflowTemplates.TextOf(file)!, beside => NamedFiles.RootOf(WorkflowTemplates.TextOf(NamedFiles.Beside(file, beside))));
+            Assert.Empty(whole.Problems);
+            var schema = whole.TookIn ? whole.Schema!.ToJsonString() : WorkflowTemplates.TextOf(file)!;
+
             foreach (var rounds in new int?[] { null, 1 })
             {
                 var name = $"{Path.GetFileNameWithoutExtension(Path.GetFileNameWithoutExtension(file))}{(rounds is null ? string.Empty : "-asking")}";
@@ -64,7 +76,7 @@ public sealed class StructuredOutputLiveTests
                     [provider.UserMessage("Answer with the shortest answer the schema takes.")],
                     64,
                     key,
-                    AgentEnvelope.Schema(new AgentOutput("o", WorkflowTemplates.TextOf(file)!, AskRounds: rounds)));
+                    AgentEnvelope.Schema(new AgentOutput("o", schema, AskRounds: rounds)));
                 var parts = await Parts(provider, request);
 
                 // The schema refused is the loop's to answer: the request sent again with none, the envelope in words after it.
@@ -87,7 +99,7 @@ public sealed class StructuredOutputLiveTests
         TestContext.Current.SendDiagnosticMessage(said.ToString());
 
         Assert.Empty(failed);
-        Assert.DoesNotContain("plan", inWords);
+        Assert.DoesNotContain("triage", inWords);
     }
 
     /// <summary>

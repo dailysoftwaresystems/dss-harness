@@ -162,7 +162,8 @@ public sealed class FlowReasonStepTests
     /// <summary>
     /// A reason step's prompt file is read and filled where the step starts, every name but a skill's filled by the
     /// same roots an expression reads, and handed to its runner under prompt as pieces - the filled text, and each skill
-    /// kept in its place for the runner to hand over - never as text to be read as a template again.
+    /// kept in its place for the runner to hand over - never as text to be read as a template again; and beside them the
+    /// values it was filled with alone, which its context pack is seeded from, the template's own words none of them.
     /// </summary>
     [Fact]
     public async Task AReasonStepsPromptFile_IsReadAndFilledWhereTheStepStarts_SkillsLeftForItsRunner()
@@ -189,6 +190,7 @@ public sealed class FlowReasonStepTests
             [(FlowTemplate.PieceKind.Text, "Plan the work for run r1 with "), (FlowTemplate.PieceKind.Placeholder, "skill.planning"), (FlowTemplate.PieceKind.Text, ".")],
             prompts["prompt"].Select(piece => (piece.Kind, piece.Text)));
         Assert.Equal("Plan the work for run r1 with {skill.planning}.", FlowTemplate.Joined(prompts["prompt"]));
+        Assert.Equal(["r1"], runner.Runs.Single().PromptValues!["prompt"]);
         Assert.False(prompts.ContainsKey("resumePrompt"));
         Assert.False(runner.Runs.Single().Read?.ContainsKey("prompt") ?? false);
     }

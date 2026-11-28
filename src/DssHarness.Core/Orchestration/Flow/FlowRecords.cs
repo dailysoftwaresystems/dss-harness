@@ -74,6 +74,12 @@ public static class FlowRecordNames
 /// <param name="To">The state the instance stands in now; null where none applies.</param>
 /// <param name="Attempt">Which attempt of the instance's visit the event tells of; null for the run's own events.</param>
 /// <param name="Detail">What the event says in words, where the kinds alone cannot.</param>
+/// <param name="Session">
+/// The run's session the event belongs to, from 1, one more for each session the run's engines drive: what its start wrote
+/// - held, or at once before the session was driven - among it, and what was written after its end and before the next
+/// session's, which the time between the two runs over (<see cref="FlowRunReport"/>); null in an event an older build wrote,
+/// which named none.
+/// </param>
 public sealed record FlowEvent(
     int Seq,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At,
@@ -83,7 +89,8 @@ public sealed record FlowEvent(
     string? From = null,
     string? To = null,
     int? Attempt = null,
-    string? Detail = null)
+    string? Detail = null,
+    int? Session = null)
 {
     /// <summary>Every kind of event a run appends: one for each kind of change the coordinator hands the records, and no other.</summary>
     public static readonly IReadOnlyList<string> Kinds = [.. Enum.GetValues<FlowChangeKind>().Select(KindOf)];
@@ -100,6 +107,7 @@ public sealed record FlowEvent(
         => Seq < 1 ? $"its seq is {Seq.ToString(CultureInfo.InvariantCulture)}, and the first event of a run is 1"
             : !Kinds.Contains(Kind, StringComparer.Ordinal) ? $"'{Kind}' is not an event a run writes"
             : !FlowInstanceId.IsWellFormed(Instance ?? "step") && Instance is not null ? $"'{Instance}' is not an instance id"
+            : Session is < 1 ? $"its session is {Session.Value.ToString(CultureInfo.InvariantCulture)}, and a run's first session is 1"
             : null;
 }
 
@@ -146,10 +154,10 @@ public sealed record FlowEvent(
 /// <param name="Item">The work item of the <c>forEach</c> this instance is one of; null outside every one.</param>
 /// <param name="Index">The item's index, from 0; null outside every <c>forEach</c>.</param>
 /// <param name="Iteration">The iteration of the <c>repeat</c> this instance is one of, from 1; null outside every one.</param>
-/// <param name="Handlers">What the ending of this step owes and owes no longer: each handler declared beside it, and where it stands - <c>owed</c>, <c>raised</c>, <c>done</c> or <c>passed</c>.</param>
+/// <param name="Handlers">What the ending of this step owes and owes no longer: each handler declared beside it, and where it stands - <c>owed</c>, <c>raised</c>, <c>done</c>, <c>passed</c> or <c>left</c> (<see cref="FlowHandlerState.States"/>).</param>
 /// <param name="HandledBy">The handler that took this step's failure, where one did: its name; the question whose answer accepted its ending at a bound, where it did that.</param>
 /// <param name="Leftover">What a repeat that ended with its until still false says it left, as its leftover expression read it; null where the loop names none.</param>
-/// <param name="RaisedBy">The instance whose ending raised this one - a handler's source, the step whose failure a recovery took; null for every step the schedule starts.</param>
+/// <param name="RaisedBy">The instance whose ending raised this one - a handler's source; the step whose failure a visit of the recovery took, or the triage whose issue it fixes; the step that reported the issue a triage triages - null for every step the schedule starts. Only a handler is one its source's ending waits on: the source's <paramref name="Handlers"/> name it.</param>
 /// <param name="Direction">The fix a person gave for the failure this instance's recovery works on, where recoveryBound was answered direct; null on every other visit.</param>
 /// <param name="NotRunCause">
 /// Which kind of reason the step is NotRun for, one of <see cref="FlowNotRunCause"/>'s names exactly: a resume runs one
@@ -210,8 +218,9 @@ public sealed record FlowEvent(
 /// what the tool served, and what the agent still read whole; null where the step was given no graph.
 /// </param>
 /// <param name="AttemptBegan">
-/// Where the latest attempt began in the run's own order of attempts begun and instances ended - one count for both,
-/// carried across sessions - so which came first is never a question of the clock; null where no attempt began yet.
+/// Where the latest attempt began in the run's own order of instances drawn, attempts begun and instances ended - one
+/// count for all three, carried across sessions - so which came first is never a question of the clock; null where no
+/// attempt began yet.
 /// </param>
 /// <param name="EndedIn">Where the instance ended in that order; null where it has not ended.</param>
 /// <param name="ReportedIn">
@@ -233,6 +242,45 @@ public sealed record FlowEvent(
 /// What the instance's work measured, written by the engine as it runs: when it was ready, how long it waited and for
 /// what, and what each of its attempts used - the model that served it, the tokens of every kind, the dollars at the
 /// price of that moment. Null until the engine draws the instance, and for a step that never ran.
+/// </param>
+/// <param name="DrawnIn">
+/// Where the pass that drew the instance stands in that same order: every step one pass of the engine frees takes the
+/// one count, so a resume ranks what waits by the pass that freed it as the session before did; null until the engine
+/// draws it, or where a record written before the order was kept says none.
+/// </param>
+/// <param name="Counted">
+/// The record of a repeat a plan update was planned in: where its own bound counts from (<see cref="FlowLoopCount"/>),
+/// so every session holds the loop to the same count; null for every other record, and for a loop no update was
+/// planned in, whose bound counts every iteration.
+/// </param>
+/// <param name="Thread">
+/// The record of a visit of the recovery: what it puts right (<see cref="FlowRecoveryThread"/>), decided as the visit was
+/// made and written with its first record, so a resume goes on in the thread the session that made it chose - the
+/// visits that go on with one diagnostician's conversation and work in its agent are the same in every session. Null
+/// for every other record, and for a visit a build that kept none recorded: a resume reads its thread from the visits,
+/// the duplicates and the joins that had ended when it was made.
+/// </param>
+/// <param name="RaisedByAttempt">
+/// A handler's visit: the attempt of the instance <paramref name="RaisedBy"/> names whose ending raised it, written with its
+/// first record - a source run again as a new attempt raises its handlers anew for that attempt's ending, so which raise
+/// answers which ending is read from here. Null for every other record, and for a visit a build that kept none recorded,
+/// whose attempt is read once from its source's record (<see cref="FlowInstance.AttemptRaisedFor"/>) by the first resume
+/// that reads it, which writes it here before anything rewrites its source's.
+/// </param>
+/// <param name="Reruns">
+/// A visit of the recovery that ended done: what it sent the run back to as what it put right runs again - each by the id
+/// of the instance it sent back, the step whose failure it took or the reporter of an issue it fixed - each written in
+/// the same write as that decision, the redirect or the question the redirect asks, so a session that goes on decides
+/// none of them again, whatever became of it: made, given up by a <c>stay</c>, dropped with a work item a plan update
+/// brings to rest, or resetting nothing. Empty from its done record until one is decided; null for every other record,
+/// and for a visit a build that kept none recorded, which decided its reruns as it ended. A handler put right is run
+/// again as a new visit, whose own first record says it (<see cref="RaisedByAttempt"/>).
+/// </param>
+/// <param name="Retried">
+/// A group's visit that failed and was run again as a retry the schedule opens - answered <c>retry</c>, or its failure's
+/// stop run again at a resume: written with the write that settles its failure, so a session that takes the run up while
+/// the visit is still its scope's newest draws its new visit, which the schedule had not drawn yet. Null for every other
+/// record.
 /// </param>
 public sealed record FlowStepRecord(
     string Instance,
@@ -286,7 +334,13 @@ public sealed record FlowStepRecord(
     long? ReportedIn = null,
     JsonObject? Inputs = null,
     FlowLoopDecision? Decided = null,
-    FlowStepMeasure? Measure = null)
+    FlowStepMeasure? Measure = null,
+    long? DrawnIn = null,
+    FlowLoopCount? Counted = null,
+    FlowRecoveryThread? Thread = null,
+    int? RaisedByAttempt = null,
+    IReadOnlyList<string>? Reruns = null,
+    bool? Retried = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -325,6 +379,8 @@ public sealed record FlowStepRecord(
             : Handlers is { Count: > 0 } && Handlers.Any(handler => handler.Problem() is not null) ? $"its handlers hold one that is not a state: {Handlers.First(handler => handler.Problem() is not null).Problem()}"
             : HandledBy is not null && !FlowInstanceId.IsWellFormed(HandledBy) && !FlowQuestionIds.IsWellFormed(HandledBy) ? $"'{HandledBy}' names neither an instance nor a question"
             : RaisedBy is not null && !FlowInstanceId.IsWellFormed(RaisedBy) ? $"'{RaisedBy}' is not an instance id"
+            : RaisedByAttempt is not null && RaisedBy is null ? "it names the attempt of what raised it, and names nothing that raised it"
+            : RaisedByAttempt < 1 ? $"it was raised for attempt {RaisedByAttempt.Value.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
             : RaisedByUpdate is not null && !FlowUpdateIds.IsId(RaisedByUpdate) ? $"'{RaisedByUpdate}' is not an update's id"
             : LeftBy is not null && !FlowInstanceId.IsWellFormed(LeftBy) ? $"'{LeftBy}' is not an instance id"
             : Told?.Any(told => !FlowUpdateIds.IsId(told.Update) || string.IsNullOrWhiteSpace(told.How)) == true ? "one it was told holds no update or no way it reached it"
@@ -340,7 +396,114 @@ public sealed record FlowStepRecord(
                 ? "a skill it was given names no name, place, file, digest or folder"
             : (Inputs is not null || Decided is not null) && !Group ? "it holds what only a group's own record holds: a use's inputs, or a loop's decision"
             : Decided?.Problem() is { } decided ? $"its loop's decision: {decided}"
+            : Counted is not null && !Group ? "it holds where a loop's bound counts from, and only a loop's own record does"
+            : Counted?.Problem() is { } counted ? $"where its bound counts from: {counted}"
+            : Thread is not null && !Group ? "it holds what a visit of the recovery puts right, and only a visit's own record does"
+            : Thread?.Problem() is { } thread ? $"what it puts right: {thread}"
+            : Reruns is not null && (!Group || RaisedBy is null) ? "it holds what a visit of the recovery sent the run back to, and only a visit's own record does"
+            : Reruns?.FirstOrDefault(rerun => !FlowInstanceId.IsWellFormed(rerun)) is { } rerun ? $"it sent the run back to '{rerun}', which is not an instance id"
+            : Retried is not null && !Group ? "it says a retry the schedule opens, and only a group's own record does"
             : Measure?.Problem() is { } measure ? $"its measure: {measure}"
+            : null;
+}
+
+/// <summary>
+/// Where a repeat's own bound counts from, once a plan update was planned in one of its iterations: the update opens a
+/// count of its own, so the loop's bound - its <c>maxIterations</c>, or its rounds and the further ones blocking holds
+/// for - is held to the iterations from the one the update was planned in, and to the iterations granted past it since,
+/// never to what the loop spent before. A late update in a long run is held to the loop's own bound from where its
+/// planning began, and refused by no iteration the plan spent before it; nothing is added to the bound and nothing taken
+/// from it. Kept in the loop's own record; the one owner of what a loop's bound counts, for the engine and the run's
+/// facts alike (<see cref="Made"/>, <see cref="Given"/>).
+/// </summary>
+/// <param name="Update">The plan update whose planning began the count, by its id.</param>
+/// <param name="Before">The iterations the loop had made before the one the update was planned in, which the count leaves out.</param>
+/// <param name="Granted">The iterations its answers and updates had granted past its bound by then, which the count leaves out too.</param>
+/// <param name="AddedBy">
+/// The plan updates whose added iterations were among <paramref name="Granted"/>, by id: one a later update takes back
+/// before it opened (<see cref="FlowUpdateEntry.AddedWithdrawnBy"/>) is granted no more, so the count leaves it out no
+/// more either. Null where none was - and in a count written before iterations were taken back, which reads as before.
+/// </param>
+public sealed record FlowLoopCount(string Update, int Before, int Granted, IReadOnlyList<string>? AddedBy = null)
+{
+    /// <summary>The iterations of <paramref name="made"/> a loop has made that its bound counts: every one, where <paramref name="count"/> is none; else those from the one its update was planned in.</summary>
+    /// <param name="made">The iterations the loop has made.</param>
+    /// <param name="count">Where its bound counts from; null where every iteration counts.</param>
+    public static int Made(int made, FlowLoopCount? count) => made - (count?.Before ?? 0);
+
+    /// <summary>
+    /// The iterations of <paramref name="granted"/> granted past a loop's bound that its count holds: every one, where
+    /// <paramref name="count"/> is none; else those granted since it began - those granted before it, less each an update
+    /// added and a later one took back (<see cref="AddedBy"/>), left out.
+    /// </summary>
+    /// <param name="granted">The iterations its answers and updates have granted past its bound, as they stand.</param>
+    /// <param name="count">Where its bound counts from; null where every iteration counts.</param>
+    /// <param name="updates">The run's plan updates, whose entries say which added iteration was taken back.</param>
+    public static int Given(int granted, FlowLoopCount? count, IEnumerable<FlowUpdateEntry> updates)
+        => granted - (count is null ? 0 : count.Granted - count.TakenBackOf(updates));
+
+    /// <summary>The iterations <see cref="AddedBy"/> names that a later update has taken back: granted before the count began, and granted no more.</summary>
+    private int TakenBackOf(IEnumerable<FlowUpdateEntry> updates)
+        => AddedBy is not { Count: > 0 } added ? 0 : updates.Count(update => update.AddedWithdrawnBy is not null && added.Contains(update.Id, StringComparer.Ordinal));
+
+    /// <summary>What is wrong with this count; null when nothing is.</summary>
+    public string? Problem()
+        => !FlowUpdateIds.IsId(Update) ? $"'{Update}' is not an update's id"
+            : Before < 0 || Granted < 0 ? "it counts fewer than no iterations"
+            : AddedBy is not null && AddedBy.Any(added => !FlowUpdateIds.IsId(added)) ? "it names an iteration added by what is not an update's id"
+            : AddedBy is not null && AddedBy.Count > Granted ? "it names more iterations added by updates than it holds granted"
+            : null;
+}
+
+/// <summary>
+/// What a visit of the recovery puts right - the thread its diagnostician's work goes on in, apart from where its bound
+/// counts it: a step's failure, by the scope it stands in and its path among the flow; or an issue, by the scope its
+/// triage stands in and the issue's own words, its title and where it is, whichever step reported it and whatever visit
+/// of it this is. Decided as the visit is made, from the visits made before it, and kept in its own record
+/// (<see cref="FlowStepRecord.Thread"/>), so every session reads the thread the session that made it chose, whatever a
+/// duplicate or a join that ended since says of the issues an earlier visit fixed.
+/// </summary>
+/// <param name="Scope">The id of the scope the failed step or the triage stands in; empty at the flow's root.</param>
+/// <param name="Step">A failure's: the failed step's path among the flow; null for an issue's.</param>
+/// <param name="Title">An issue's: its title, as its triage holds it; null for a failure's.</param>
+/// <param name="Where">An issue's: where it is, as its triage holds it; null for a failure's.</param>
+public sealed record FlowRecoveryThread(string Scope, string? Step = null, string? Title = null, string? Where = null)
+{
+    /// <summary>The thread of the failure of the step at <paramref name="step"/> in the scope <paramref name="scope"/>.</summary>
+    /// <param name="scope">The scope's id.</param>
+    /// <param name="step">The step's path among the flow.</param>
+    public static FlowRecoveryThread OfFailure(string scope, string step) => new(scope, Step: step);
+
+    /// <summary>The thread of <paramref name="issue"/>, by its own words, taken in the scope <paramref name="scope"/>.</summary>
+    /// <param name="scope">The scope's id.</param>
+    /// <param name="issue">The issue, as its triage holds it.</param>
+    public static FlowRecoveryThread OfIssue(string scope, FlowPreExistingReport issue)
+    {
+        ArgumentNullException.ThrowIfNull(issue);
+
+        return new(scope, Title: issue.Title, Where: issue.Where);
+    }
+
+    /// <summary>
+    /// An issue by its title and where it is, as one text: a NUL before each, which no step's path nor instance id holds,
+    /// so it never names a step. The one spelling of an issue as a key, which a thread takes (<see cref="Taken"/>), and
+    /// where the recovery's visits for an issue met again after its fix are counted.
+    /// </summary>
+    /// <param name="title">The issue's title.</param>
+    /// <param name="where">Where it is.</param>
+    public static string IssueText(string title, string where) => $"\0{title}\0{where}";
+
+    /// <summary>
+    /// What the thread takes, as one text: the step's path for a failure, the issue's words for an issue (<see cref="IssueText"/>)
+    /// - what the claim of a diagnostician's agent and the work a check within a visit checks name it by.
+    /// </summary>
+    public string Taken() => Step ?? IssueText(Title ?? string.Empty, Where ?? string.Empty);
+
+    /// <summary>What is wrong with this record; null when nothing is: it names a failure's step, or an issue's title and where it is, and never both.</summary>
+    public string? Problem()
+        => Step is not null && (Title is not null || Where is not null) ? "it names both a step and an issue"
+            : Step is not null ? (string.IsNullOrWhiteSpace(Step) ? "it names no step" : null)
+            : Title is null || Where is null ? "it names neither a step nor an issue's title and where it is"
             : null;
 }
 
@@ -446,8 +609,9 @@ public sealed record FlowHandoffRecord(string By, string? Why = null)
 /// <param name="Handler">The handler's name, as its declaration names it.</param>
 /// <param name="State">
 /// Where it stands: <c>owed</c> (the ending is written, the raise is not made yet), <c>raised</c>, <c>done</c>,
-/// <c>passed</c>, or <c>left</c> (a redirect left its visit before it ended: it took nothing, and the ending it was raised
-/// for is abandoned - settled by none of its handlers, and never rebuilt by a resume).
+/// <c>passed</c>, or <c>left</c> (the ending it was raised for is abandoned - a redirect left its visit before it ended, a
+/// plan update brought the work item it is in to rest, or the ending's question was answered <c>fail</c> or withdrawn
+/// after it was raised: settled by none of its handlers, and never rebuilt by a resume).
 /// </param>
 public sealed record FlowHandlerState(string Handler, string State)
 {
@@ -507,6 +671,38 @@ public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnly
 /// The plan update the run is held for, and when it was taken; null where none is under way. While it holds, nothing
 /// is started outside the scope the update is planned in.
 /// </param>
+/// <param name="InputCopies">
+/// True where the run keeps a copy of each file its own inputs of the kind <c>file</c> named, made as it was created -
+/// every run this build makes - which its steps read for those inputs in every session (<see cref="FlowRunContext.InputCopies"/>);
+/// left out by a run an older build made, which kept none, and whose steps read each file input as it was given.
+/// </param>
+/// <param name="StoppingSince">
+/// When a stop was applied that the session which applied it ends with - the run's hard stop, or a stop once its pause
+/// was complete - every step in flight stopped, every advice under way ended and none started after it: written as the
+/// stop is applied, before anything it stops is touched - one asked of a session's start, a stop or an abort the start
+/// takes, at once as it is asked, over what the session before left, for the start stands on it from then on
+/// (<see cref="FlowStartsStanding"/>) - and kept by the session's end, so a reader of a live
+/// engine's run tells a stop under way from a pause whose advice is still to come (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout)"/>);
+/// left out where no stop was applied, and from the next session's first write on. Between, the next session's claim
+/// marks the run <see cref="Starting"/>, which no reader takes a stop the session before ended with for.
+/// </param>
+/// <param name="Starting">
+/// True while the live engine is taking the run up and takes an answer handed to it as it seeks the recommendation the
+/// question owes: written by its session's claim, before the owner is (<see cref="FlowRunOwner.Claim"/>), and by every
+/// write its start makes while no stop or pause is asked of it, after which it seeks no advice for such an answer and
+/// refuses it - the mark written over the moment one is asked, outside the start's hold, by what the start stands on then,
+/// the stop applied (<see cref="StoppingSince"/>) or the pause asked (<see cref="Pause"/>), which no write made after that
+/// moment fails to say (<see cref="FlowStartsStanding"/>, <see cref="IFlowRecords.Stand"/>) - until the start's own end
+/// (<see cref="FlowChangeKind.StartEnded"/>), written once it has made what it held, sought every recommendation the run
+/// owes and weighed what was handed over meanwhile; left out by every write after it, by the release of a session that
+/// ended before its own writes said what its engine did (<see cref="FlowRunOwner.Release"/>), and by a run an older build
+/// wrote. A reader of a live engine's run takes nothing else this file says of what its engine is doing for that engine's
+/// while it is true - a stop the session before it ended with, the pause it was left under, which stays the run's record
+/// of where it stood - and names the start's own step for a question owing its recommendation: the start seeks it and
+/// takes an answer then (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout)"/>,
+/// <see cref="FlowAnswerRules.NextStepOf"/>). Like <see cref="StoppingSince"/>, it is read only beside an owner found live
+/// before this file was read and still the same after: one a crash left says nothing of a run no engine holds.
+/// </param>
 public sealed record FlowFile(
     int Schema,
     string Run,
@@ -523,7 +719,10 @@ public sealed record FlowFile(
     string? Branch = null,
     FlowPauseRecord? Pause = null,
     IReadOnlyList<FlowRedirectRecord>? Redirects = null,
-    FlowHoldRecord? Hold = null)
+    FlowHoldRecord? Hold = null,
+    bool? InputCopies = null,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? StoppingSince = null,
+    bool? Starting = null)
 {
     /// <summary>
     /// The steps the file holds running that are no group's own record, by instance: once a pause is complete, the
@@ -584,7 +783,12 @@ public sealed record FlowHoldRecord(string Update, [property: JsonConverter(type
 /// What the run spent before its steps' measures were kept - a run a build that recorded the run's spend alone began -
 /// which no instance's measure holds and the totals above carry whole; left out where every part was measured.
 /// </param>
-public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes, string? Uncounted = null, int? ReserveMetAt = null, FlowUnmeasuredSpend? Unmeasured = null)
+/// <param name="Advice">
+/// What the advisor spent recommending on the run's own question - its budget's - which no step asked, so no instance's
+/// measure holds it and the totals above carry it beside theirs; left out where none was spent, as a record written
+/// before the run's own question was recommended is read.
+/// </param>
+public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes, string? Uncounted = null, int? ReserveMetAt = null, FlowUnmeasuredSpend? Unmeasured = null, FlowStepAdvice? Advice = null)
 {
     /// <summary>The dollars as the one fold holds them: what was counted, and why the rest is not known where it is not.</summary>
     [JsonIgnore]
@@ -884,7 +1088,7 @@ public sealed record PreExistingProof(string Kind, string At, string? File = nul
 
 /// <summary>
 /// The run's record of the issues its triages sent to its next round, <c>next-round.json</c>: each a defect the run
-/// took from a round's work and owes its next round as its first item, with its size, and - once a work item settled
+/// took from a round's work and owes its next round as a work item listed and started first, with its size, and - once a work item settled
 /// it - that item. What <c>run.nextRound</c> reads: the issues no work item of the run has settled, for the rounds to
 /// go on while one is left. Nothing else writes the file, and it holds nothing but the issue, its size and what settled
 /// it.
@@ -910,8 +1114,9 @@ public sealed record FlowNextRoundFile(
 }
 
 /// <summary>
-/// One issue the run owes its next round, with its size: what the self-audit is told to make the round's first item of,
-/// which names it in <c>settles</c>, and what the check that opens the round holds its items to. It is settled by the
+/// One issue the run owes its next round, with its size: what the planner and the self-audit are told to make a work item
+/// of the round, listed and started first and built beside the rest, which names it in <c>settles</c>; what every check whose items a round opens with lets an
+/// item settle; and what the check that opens the round holds its items to. It is settled by the
 /// work item that names it, once that item ended done with its work landed - a commit of its own made - never by one
 /// that ended done with nothing landed, as an item a person skipped does.
 /// </summary>
@@ -1318,23 +1523,35 @@ public enum FlowChangeKind
     PauseCompleted,
 
     /// <summary>
-    /// A stop of the steps in flight was applied - the run's hard stop, or a safe pause's <c>all</c> asked once the pause
-    /// had begun: recorded as it is applied, before any step it stops is touched, so the run's state says it from then
-    /// on, whatever a runner its drain waits for still does.
+    /// A stop of the steps in flight was applied - the run's hard stop, a safe pause's <c>all</c> asked once the pause
+    /// had begun, or a stop once the pause was complete, which a pause that said all already records on its own: recorded
+    /// as it is applied, before any step it stops is touched, so the run's state says it from then on, whatever a runner
+    /// its drain waits for still does.
     /// </summary>
     StopApplied,
 
-    /// <summary>A session ended, however it ended.</summary>
+    /// <summary>A session ended, however it ended: in order, or by its cancellation token once it went on.</summary>
     SessionEnded,
 
     /// <summary>An answer was given from outside the session - taken from the inbox, or refused where its question was no longer open.</summary>
     Answer,
 
-    /// <summary>The run's advisor answered an open question with a recommendation, or left it without one.</summary>
+    /// <summary>
+    /// The run's advisor answered an open question with a recommendation or left it without one, or an asking of it ended
+    /// while it ran was taken, what it spent counted, or let go of: about the step that asked, whose own record is written
+    /// with it, for what the advice spent is that step's measure's - and about the run where its own question asked.
+    /// </summary>
     Advised,
 
     /// <summary>An iteration was added to a loop at its bound, for a plan update that owes it work.</summary>
     IterationAdded,
+
+    /// <summary>
+    /// A session's start is over and the session goes on: what the start held is written, every recommendation the run owes
+    /// is sought and what was handed over meanwhile weighed - the start's own write, so the run's state says what the engine
+    /// does from here on, never that it is starting (<see cref="FlowFile.Starting"/>), however long it then writes nothing.
+    /// </summary>
+    StartEnded,
 }
 
 /// <summary>
@@ -1364,6 +1581,13 @@ public enum FlowChangeKind
 /// Every issue the run owes its next round, whole, where the change holds them: the records write the run's file of
 /// them as they write its listed issues; null where the change says nothing of them.
 /// </param>
+/// <param name="StoppingSince">When the stop the session ends with was applied - its hard stop, or a stop once its pause was complete; null where none was (<see cref="FlowFile.StoppingSince"/>).</param>
+/// <param name="Starting">Whether the change was taken while the engine's start was under way and took what it was handed, no stop and no pause asked of it (<see cref="FlowFile.Starting"/>) - and, for a write a start held, still so as it is made.</param>
+/// <param name="Session">
+/// Which of its engine's sessions took the change, from 1: its first for what it writes before driving one, one more for
+/// each it drives, and between two the one that ended - which the records name the run's session by
+/// (<see cref="FlowEvent.Session"/>).
+/// </param>
 public sealed record FlowSnapshot(
     FlowRunStatus Status,
     DateTimeOffset? EndedAt,
@@ -1377,7 +1601,90 @@ public sealed record FlowSnapshot(
     FlowHoldRecord? Hold = null,
     WorkflowPreExisting? PreExisting = null,
     IReadOnlyList<PreExistingIssue>? Issues = null,
-    IReadOnlyList<FlowNextIssue>? NextRound = null);
+    IReadOnlyList<FlowNextIssue>? NextRound = null,
+    DateTimeOffset? StoppingSince = null,
+    bool Starting = false,
+    int Session = 1);
+
+/// <summary>
+/// What an engine stands on once a stop or a pause is asked of its start under way - the one owner of what the run's state
+/// says of the engine from that moment, written at once over the state the start found, outside its hold
+/// (<see cref="IFlowRecords.Stand"/>), and by every write the session makes after it, a write the start held from before it
+/// among them, until the loop's own record of the stop or the pause says it: the stop applied from the moment it was asked
+/// (<see cref="FlowFile.StoppingSince"/>), after which the start seeks no advice and the engine ends its session, or the
+/// pause asked then, begun and not complete (<see cref="FlowFile.Pause"/>), which defers each advice to the pause's end - and
+/// never that the engine is starting (<see cref="FlowFile.Starting"/>), for from that moment the start refuses an answer
+/// handed to it to a question owing the recommendation it would have sought; with it, at once, each question the session
+/// before left sought is written deferred, as the start defers it, for no advisor of this engine seeks it
+/// (<see cref="On(FlowQuestionsFile, IReadOnlyCollection{string})"/>). So a reader of the run's state names the step
+/// the engine takes for such a question - the resume once it has gone, or the pause once it is complete
+/// (<see cref="FlowAnswerRules.NextStepOf"/>) - exactly as the engine's refusal names it, whatever the session before it
+/// left the state saying.
+/// </summary>
+/// <param name="At">When the stop or the pause was asked of the start.</param>
+/// <param name="Pause">The pause asked, by its cause and whether it stops the machine steps too; null for a stop.</param>
+public sealed record FlowStartsStanding(DateTimeOffset At, FlowPauseRequest? Pause)
+{
+    /// <summary>The pause asked, as the run's state holds it: begun as it was asked, no handoff written yet, not complete; null for a stop.</summary>
+    public FlowPauseRecord? Paused => Pause is { } asked ? new FlowPauseRecord(asked.Cause, asked.All, At, [], null) : null;
+
+    /// <summary>
+    /// The run's state as the standing says it, written at once: never starting, and the stop applied - the pause the state
+    /// holds kept as the run's record of where it stood, which a stop is read before - or the pause asked, in the place of a
+    /// stop and of a pause that began before it, which the session before left. Everything else stands as written.
+    /// </summary>
+    /// <param name="flow">The run's state as it stands.</param>
+    public FlowFile On(FlowFile flow)
+    {
+        ArgumentNullException.ThrowIfNull(flow);
+
+        return Pause is null
+            ? flow with { Starting = null, StoppingSince = At }
+            : flow with { Starting = null, StoppingSince = null, Pause = PauseOver(flow.Pause) };
+    }
+
+    /// <summary>
+    /// A change as it is written while the standing holds: never starting, and the stop applied from the moment it was asked
+    /// where the change was taken before the loop applied it - a write the start held among them - or the pause asked where
+    /// the change holds none the engine began since (<see cref="FlowFile.Pause"/>). The loop begins the pause it takes up, and
+    /// applies the stop, at the standing's own moment, so its own records say what the standing said.
+    /// </summary>
+    /// <param name="snapshot">The run as it stood when the change was taken.</param>
+    public FlowSnapshot On(FlowSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        return Pause is null
+            ? snapshot with { Starting = false, StoppingSince = snapshot.StoppingSince ?? At }
+            : snapshot with { Starting = false, Pause = PauseOver(snapshot.Pause) };
+    }
+
+    /// <summary>
+    /// The run's questions as the standing says them, written at once with the state: each open one the session before left
+    /// sought (<paramref name="leftSought"/>), which no advisor of this engine seeks, deferred as the start defers every advice
+    /// it owes under a stop or a pause (<see cref="FlowRecommendation.Withheld"/>) - so no reader takes it for one the engine's
+    /// advisor seeks now. Every other question stands as written.
+    /// </summary>
+    /// <param name="questions">The run's questions as they stand.</param>
+    /// <param name="leftSought">The ids of the questions the session before left sought, which the start found so.</param>
+    public FlowQuestionsFile On(FlowQuestionsFile questions, IReadOnlyCollection<string> leftSought)
+    {
+        ArgumentNullException.ThrowIfNull(questions);
+        ArgumentNullException.ThrowIfNull(leftSought);
+
+        return questions.Questions.Any(question => Withholds(question, leftSought))
+            ? questions with { Questions = [.. questions.Questions.Select(question => Withholds(question, leftSought) ? question with { Recommendation = FlowRecommendation.Withheld } : question)] }
+            : questions;
+    }
+
+    /// <summary>Whether <paramref name="question"/> is one the standing defers: open, and still as the session before left it, sought.</summary>
+    private static bool Withholds(FlowQuestionEntry question, IReadOnlyCollection<string> leftSought)
+        => question is { State: "open", Recommendation.State: "sought" } && leftSought.Contains(question.Id);
+
+    /// <summary>The pause the run is under once the pause is asked: one begun since it was asked - the loop's, which takes it up - else the one asked.</summary>
+    private FlowPauseRecord? PauseOver(FlowPauseRecord? held)
+        => held is { } own && own.At >= At ? own : Paused;
+}
 
 /// <summary>One step instance as the snapshot holds it: everything its own record and the index say of it.</summary>
 /// <param name="Instance">The instance's id.</param>
@@ -1409,7 +1716,7 @@ public sealed record FlowSnapshot(
 /// <param name="Handlers">What the ending of this step owes and owes no longer: each handler declared beside it, and where it stands.</param>
 /// <param name="HandledBy">The handler that took this step's failure, where one did; null where none did.</param>
 /// <param name="Leftover">What a repeat that ended with its until still false says it left; null where the loop names none.</param>
-/// <param name="RaisedBy">The instance whose ending raised this one; null for every step the schedule starts.</param>
+/// <param name="RaisedBy">The instance whose ending raised this one - a handler's source, what a visit of the recovery puts right, the reporter of a triage's issue; null for every step the schedule starts.</param>
 /// <param name="Direction">The fix a person gave for the failure this instance's recovery works on; null on every other visit.</param>
 /// <param name="NotRunCause">Which kind of reason the step is NotRun for, where it is; null otherwise.</param>
 /// <param name="Issue">The pre-existing issue this instance was raised to triage; null for every step the schedule starts.</param>
@@ -1432,6 +1739,12 @@ public sealed record FlowSnapshot(
 /// <param name="Inputs">A use's scope's own record: what its with filled the used workflow's inputs with (<see cref="FlowStepRecord.Inputs"/>); null for every other.</param>
 /// <param name="Decided">An iteration's of a repeat that says decideAfter: the decision read at its deciding step (<see cref="FlowStepRecord.Decided"/>); null for every other.</param>
 /// <param name="Measure">What the instance's work measured (<see cref="FlowStepRecord.Measure"/>); null until the engine draws it.</param>
+/// <param name="DrawnIn">Where the pass that drew it stands in the run's own order (<see cref="FlowStepRecord.DrawnIn"/>); null until the engine draws it.</param>
+/// <param name="Counted">A repeat's that a plan update was planned in: where its bound counts from (<see cref="FlowStepRecord.Counted"/>); null for every other.</param>
+/// <param name="Thread">A visit of the recovery's: what it puts right, as it was decided when the visit was made (<see cref="FlowStepRecord.Thread"/>); null for every other.</param>
+/// <param name="RaisedByAttempt">A handler's visit: the attempt of its source whose ending raised it (<see cref="FlowStepRecord.RaisedByAttempt"/>); null for every other.</param>
+/// <param name="Reruns">A visit of the recovery that ended done: what it sent the run back to, each decided once (<see cref="FlowStepRecord.Reruns"/>); null for every other.</param>
+/// <param name="Retried">A group's visit that failed: its retry the schedule opens (<see cref="FlowStepRecord.Retried"/>); null for every other.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -1484,4 +1797,10 @@ public sealed record FlowSnapshotStep(
     long? ReportedIn = null,
     JsonObject? Inputs = null,
     FlowLoopDecision? Decided = null,
-    FlowStepMeasure? Measure = null);
+    FlowStepMeasure? Measure = null,
+    long? DrawnIn = null,
+    FlowLoopCount? Counted = null,
+    FlowRecoveryThread? Thread = null,
+    int? RaisedByAttempt = null,
+    IReadOnlyList<string>? Reruns = null,
+    bool? Retried = null);

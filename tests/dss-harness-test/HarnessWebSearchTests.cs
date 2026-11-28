@@ -759,6 +759,140 @@ public sealed class HarnessWebSearchTests
         Assert.DoesNotContain("0123", searched.Text, StringComparison.Ordinal);
     }
 
+    /// <summary>A source of GitHub's own whose key is the machine's gh login: its API's search, signed for that host.</summary>
+    private static WebSearchSource Signed()
+        => Source("hub", Alpha
+            .Replace("https://alpha.example.test/search", "https://api.github.com/search", StringComparison.Ordinal)
+            .Replace("\"items\"", "\"credential\": { \"from\": \"gh\" }, \"items\"", StringComparison.Ordinal));
+
+    /// <summary>A gh that answers each of <paramref name="tokens"/> in turn, the last again after them, each asking kept.</summary>
+    private static (Core.Ci.GhProcess Gh, List<Core.Processes.ProcessRequest> Asked) Gh(params string[] tokens)
+    {
+        var asked = new List<Core.Processes.ProcessRequest>();
+        var runner = NSubstitute.Substitute.For<Core.Processes.IProcessRunner>();
+        var answers = tokens.Select(token => Task.FromResult(new Core.Processes.ProcessResult(0, token + "\n", string.Empty, TimeSpan.Zero, TimedOut: false))).ToArray();
+
+        NSubstitute.SubstituteExtensions.Returns(runner.FindExecutable(Core.Ci.GhProcess.Executable), Core.Ci.GhProcess.Executable);
+        NSubstitute.SubstituteExtensions.Returns(runner.RunAsync(NSubstitute.Arg.Do<Core.Processes.ProcessRequest>(asked.Add), NSubstitute.Arg.Any<CancellationToken>()), answers[0], answers[1..]);
+
+        return (new Core.Ci.GhProcess(runner, Core.Git.GitLocalVariables.Fixed([]), _ => null), asked);
+    }
+
+    /// <summary>
+    /// A request the host refuses as unsigned - the gh login's token expired or revoked since it was read - is sent once
+    /// more, with the login read again: the token read in its place held by the step's mask before it is sent, so an answer
+    /// that echoes it tells none of it, and neither token is in anything the search wrote or recorded.
+    /// </summary>
+    [Fact]
+    public async Task ARequestRefusedAsUnsigned_IsSentOnceMoreWithTheLoginReadAgain_ItsNewTokenMaskedFirst_AndWrittenNowhere()
+    {
+        using var rig = new Rig(request => request.Headers.Authorization?.Parameter == "gho_new"
+            ? Json("""{ "total": 1, "items": [ { "title": "One", "link": "https://one.example.test/", "text": "signed as gho_new" } ] }""")
+            : Json("""{ "message": "Bad credentials" }""", HttpStatusCode.Unauthorized));
+        var (gh, asked) = Gh("gho_old", "gho_new");
+        var logins = new Core.Ci.GhLogins(gh, rig.Clock);
+        _ = await logins.ReadAsync(rig.Root, "github.com", TestContext.Current.CancellationToken);
+
+        var searched = await rig.SearchAsync(rig.Signed(Signed(), "gho_old", logins), "x");
+
+        Assert.Equal(["Bearer gho_old", "Bearer gho_new"], rig.Endpoint.Asked.Select(sent => sent.Headers["Authorization"]));
+        Assert.Equal(2, asked.Count);
+        Assert.Contains("signed as ***", searched.Text, StringComparison.Ordinal);
+
+        // Every file the search wrote, read beside the writers still holding them - their claims, which hold nothing, aside.
+        var written = string.Join('\n', Directory.EnumerateFiles(rig.Root, "*", SearchOption.AllDirectories).Where(file => !file.EndsWith(".lock", StringComparison.Ordinal)).Select(Shared))
+            + string.Join('\n', rig.Records.Decided)
+
+            // What a step's records write of each answer (AgentToolRuntime's records): its address, status, type, size and failure.
+            + string.Join('\n', rig.Records.Answered.Select(answered => (answered.Source, answered.Hop.Address, answered.Hop.Status, answered.Hop.Type, answered.Hop.Bytes, answered.Hop.Failure)));
+
+        Assert.DoesNotContain("gho_", searched.Text + written, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The request sent once more is never sent a third time: refused again, it is answered as the first refusal is
+    /// answered where nothing renews the login - and where gh reads the same token again, it is not sent again at all.
+    /// </summary>
+    [Theory]
+    [InlineData("gho_new", 2)]
+    [InlineData("gho_old", 1)]
+    public async Task ASecondRefusal_IsAnsweredAsTheFirstIs_NeverAThirdSending(string readAgain, int sent)
+    {
+        static HttpResponseMessage Refused(HttpRequestMessage _) => Json("""{ "message": "Bad credentials" }""", HttpStatusCode.Unauthorized);
+
+        using var rig = new Rig(Refused);
+        var (gh, _) = Gh("gho_old", readAgain);
+        var logins = new Core.Ci.GhLogins(gh, rig.Clock);
+        _ = await logins.ReadAsync(rig.Root, "github.com", TestContext.Current.CancellationToken);
+
+        var searched = await rig.SearchAsync(rig.Signed(Signed(), "gho_old", logins), "x");
+
+        using var plain = new Rig(Refused);
+        var unrenewed = await plain.SearchAsync(plain.Step([Signed()], keys: new Dictionary<string, WebSearchKey> { ["hub"] = new("gho_old", null) }, mask: new Secrets([.. Signed().Credential!.Forms("gho_old")])), "x");
+
+        Assert.Equal(sent, rig.Endpoint.Asked.Count);
+        Assert.Equal(unrenewed.Text, searched.Text);
+    }
+
+    /// <summary>
+    /// The expiry the host tells of the token it was sent is kept beside the token: a search less than a minute before it
+    /// reads the login again first, and sends the token read in its place - nothing refused on the way.
+    /// </summary>
+    [Fact]
+    public async Task AnExpiryTheHostTells_IsKept_AndTheLoginReadAgainBeforeItPasses()
+    {
+        var expires = At.AddMinutes(2);
+        using var rig = new Rig(request => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Headers = { { Core.Ci.GhLogins.ExpiryHeader, expires.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss 'UTC'", System.Globalization.CultureInfo.InvariantCulture) } },
+            Content = new StringContent(Found, System.Text.Encoding.UTF8, "application/json"),
+        });
+        var (gh, asked) = Gh("gho_old", "gho_new");
+        var logins = new Core.Ci.GhLogins(gh, rig.Clock);
+        _ = await logins.ReadAsync(rig.Root, "github.com", TestContext.Current.CancellationToken);
+        var step = rig.Signed(Signed(), "gho_old", logins);
+
+        _ = await rig.SearchAsync(step, "x");
+        rig.Clock.Advance(TimeSpan.FromSeconds(61));
+        _ = await rig.SearchAsync(step, "y");
+
+        Assert.Equal(["Bearer gho_old", "Bearer gho_new"], rig.Endpoint.Asked.Select(sent => sent.Headers["Authorization"]));
+        Assert.Equal(2, asked.Count);
+        Assert.Equal("***", step.Mask.Redact("gho_new"));
+    }
+
+    /// <summary>
+    /// A step that began without a token - its gh signed out then - is sent the one the session comes to hold, read by
+    /// another of its steps: held by the step's mask before it is sent, its part no longer saying it was asked without a
+    /// key, and gh never asked by the step itself while none is held.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatBeganWithoutAToken_IsSentTheOneTheSessionCameToHold_MaskedFirst()
+    {
+        using var rig = new Rig(request => Json(request.Headers.Authorization?.Parameter is { } token ? Found.Replace("first", $"signed as {token}", StringComparison.Ordinal) : Found));
+        var (gh, asked) = Gh("gho_new");
+        var logins = new Core.Ci.GhLogins(gh, rig.Clock);
+        var mask = new GrowingMask(Core.Runners.ActionValues.Empty);
+        var step = rig.Step(
+            [Signed()],
+            keys: new Dictionary<string, WebSearchKey> { ["hub"] = new(null, "gh answered no token: the machine's gh login for github.com is signed out") },
+            mask: mask,
+            renewal: new WebSearchRenewal(logins, new HarnessLayout(rig.Root, rig.Root), mask));
+
+        var unsigned = await rig.SearchAsync(step, "x");
+        Assert.Empty(asked);
+
+        // Another step of the session reads the login, signed back in.
+        _ = await logins.ReadAsync(rig.Root, "github.com", TestContext.Current.CancellationToken);
+        var signed = await rig.SearchAsync(step, "y");
+
+        Assert.Equal(new string?[] { null, "Bearer gho_new" }, rig.Endpoint.Asked.Select(sent => sent.Headers.GetValueOrDefault("Authorization")));
+        Assert.Single(asked);
+        Assert.Equal(("gh answered no token: the machine's gh login for github.com is signed out", (string?)null), (unsigned.Parts[0].KeyMissing, signed.Parts[0].KeyMissing));
+        Assert.Contains("signed as ***", signed.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("gho_", signed.Text, StringComparison.Ordinal);
+    }
+
     /// <summary>What a source answered without its key is no answer to a step that sends it: the run keeps each apart, and serves each again.</summary>
     [Fact]
     public async Task AnAnswerMadeWithoutTheKey_IsNotServedToAStepThatSendsIt()
@@ -1533,7 +1667,8 @@ public sealed class HarnessWebSearchTests
             int maxPerStep = 60,
             IReadOnlyDictionary<string, WebSearchKey>? keys = null,
             Core.Execution.ILineMask? mask = null,
-            WebSearchRules? rules = null)
+            WebSearchRules? rules = null,
+            WebSearchRenewal? renewal = null)
             => new(
                 sources,
                 maxPerStep,
@@ -1542,7 +1677,28 @@ public sealed class HarnessWebSearchTests
                 mask ?? new Masking(),
                 keys ?? new Dictionary<string, WebSearchKey>(),
                 rules ?? Rules(),
-                Records);
+                Records)
+            {
+                Renewal = renewal,
+            };
+
+        /// <summary>
+        /// A step searching <paramref name="source"/> - whose key is the machine's gh login - with the token
+        /// <paramref name="token"/> it began with, its login held by <paramref name="logins"/> and renewed through them, its
+        /// mask growing with each token read.
+        /// </summary>
+        public WebSearchStep Signed(WebSearchSource source, string token, Core.Ci.GhLogins logins)
+        {
+            var mask = new GrowingMask(new Core.Runners.ActionValues(
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                source.Credential!.Forms(token).Select((form, at) => (form, at)).ToDictionary(pair => $"began-{pair.at}", pair => pair.form, StringComparer.Ordinal)));
+
+            return Step(
+                [source],
+                keys: new Dictionary<string, WebSearchKey> { [source.Name] = new(token, null) },
+                mask: mask,
+                renewal: new WebSearchRenewal(logins, new HarnessLayout(_directory.Path, _directory.Path), mask));
+        }
 
         public Task<WebSearched> SearchAsync(WebSearchStep step, string query, IReadOnlyList<string>? names = null, int page = 1)
             => Search.SearchAsync(step, query, names, page, TestContext.Current.CancellationToken);

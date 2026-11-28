@@ -235,7 +235,7 @@ public static class ClaudeLaunch
             environment[name] = null;
         }
 
-        foreach (var (name, value) in ClaudeSettings.Launched)
+        foreach (var (name, value) in ClaudeSettings.LaunchedWith(ClaudeSettings.CacheTtlOf(run.Entries?.Client)))
         {
             environment[name] = value;
         }

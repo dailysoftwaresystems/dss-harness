@@ -419,6 +419,57 @@ public sealed class AgentRepositoriesTests
     }
 
     /// <summary>
+    /// What is below an orchestrator's directory, asked as delete-orchestrator asks it, holds no agent's repository a
+    /// deletion takes away while git is asked about it: neither a worktree below nor a directory git records nothing at,
+    /// which the person would be told to look in and delete - it is gone.
+    /// </summary>
+    /// <param name="asked">The command the tree is taken away at.</param>
+    /// <param name="started">Whether git had started in it when it went.</param>
+    [Theory]
+    [InlineData("config", false)]
+    [InlineData("count-objects", true)]
+    public async Task BelowAnOrchestrator_ARepositoryTakenAwayAsItIsAsked_IsNothing(string asked, bool started)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var main = (await kit.Harness.GitClient.GetMainWorktreeAsync(kit.Main, Token))!.Path;
+        Directory.CreateDirectory(kit.Worktrees);
+        Assert.Null((await Repositories(kit.Harness).MakeAsync(main, Address, kit.Worktree("a"), Token)).Failure);
+        var git = InterceptingGitClient.TakingAway(kit.Harness.GitClient, kit.Harness.FileSystem, kit.Worktree("a"), asked, started);
+
+        var below = await new WorktreeInspector(git, kit.Harness.FileSystem, kit.Harness.Platform, kit.Harness.Output)
+            .FindWorktreesBelowAsync(main, Path.GetDirectoryName(kit.Worktrees)!, kit.Worktrees, orchestrators: true, Token);
+
+        Assert.Empty(below.Worktrees);
+        Assert.Empty(below.Unrecorded);
+        Assert.Empty(below.Moved);
+        Assert.False(Directory.Exists(kit.Worktree("a")));
+    }
+
+    /// <summary>
+    /// git that cannot answer about an agent's repository that is still there fails the listing, saying why: only one taken
+    /// away while it is asked about is read as no tree, never one git merely could not be asked about.
+    /// </summary>
+    [Fact]
+    public async Task ARepositoryStillThereThatGitCannotAnswerAbout_FailsTheListing()
+    {
+        using var temp = new TempDirectory();
+        var (harness, main, path) = await InitializedAsync(temp);
+        var git = new InterceptingGitClient(harness.GitClient)
+        {
+            InsteadOfRunIn = (_, arguments) => arguments.Contains("count-objects", StringComparer.Ordinal)
+                ? new GitCommandResult(128, string.Empty, InterceptingGitClient.LostItsDirectory)
+                : null,
+        };
+
+        var failed = await Assert.ThrowsAsync<HarnessException>(() => Service(harness, harness.FileSystem, git).ListAsync(main, Token));
+
+        Assert.Equal(HarnessExit.CommandFailed, failed.ExitCode);
+        Assert.Equal($"Which objects the repository at '{path}' borrows could not be read: {InterceptingGitClient.LostItsDirectory}.", failed.Message);
+        Assert.True(Directory.Exists(Path.Combine(path, ".git")));
+    }
+
+    /// <summary>
     /// An agent's repository holding a change is not deleted, and nothing of it is removed: the refusal names the change and
     /// what keeps it - a fold into the main tree - since a branch or a stash made in it would go with it.
     /// </summary>
@@ -610,9 +661,9 @@ public sealed class AgentRepositoriesTests
         Assert.True(Directory.Exists(Path.Combine(path, ".git")));
     }
 
-    /// <summary>A deletion of worktrees on <paramref name="fileSystem"/>, everything else the harness's own.</summary>
-    private static WorktreeService Service(HarnessFactory harness, IFileSystem fileSystem)
-        => new(harness.ContextLoader, harness.GitClient, fileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(fileSystem), harness.RunLock, harness.ProcessContext);
+    /// <summary>The worktree service on <paramref name="fileSystem"/> - and on <paramref name="gitClient"/>, where one is given - everything else the harness's own.</summary>
+    private static WorktreeService Service(HarnessFactory harness, IFileSystem fileSystem, IGitClient? gitClient = null)
+        => new(harness.ContextLoader, gitClient ?? harness.GitClient, fileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(fileSystem), harness.RunLock, harness.ProcessContext);
 
     /// <summary>
     /// The real file system, except that the first time a deletion asks what holds a tree - once its checks have passed,

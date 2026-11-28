@@ -233,17 +233,19 @@ public sealed class AgentModelTests
         Assert.NotNull(resolved);
         Assert.Equal("balanced", agentTier);
         Assert.Equal(["anthropic", "zai"], [.. providers.Select(provider => provider.Name)]);
-        Assert.Equal(5, providers.SelectMany(provider => provider.Models).Count());
+        Assert.Equal(6, providers.SelectMany(provider => provider.Models).Count());
 
         // Every Claude model holds a 1M context and a 128K output - 128000, the max_tokens Anthropic's own Models API
-        // reports and the API clients send, which a request over it is refused for - and GLM 5.3 its own 1M and 131072.
+        // reports and the API clients send, which a request over it is refused for - and each GLM model its own 1M and
+        // 131072.
         Assert.Equal(
             [
-                ("claude-fable-5-1", 1_000_000L, 128_000L),
+                ("claude-fable-5-2", 1_000_000L, 128_000L),
                 ("claude-opus-5-5", 1_000_000L, 128_000L),
                 ("claude-sonnet-5-5", 1_000_000L, 128_000L),
                 ("claude-haiku-5-5", 1_000_000L, 128_000L),
-                ("glm-5.3", 1_000_000L, 131_072L),
+                ("glm-5.4", 1_000_000L, 131_072L),
+                ("glm-5.3-flash", 1_000_000L, 131_072L),
             ],
             providers.SelectMany(provider => provider.Models).Select(model => (model.Code, model.ContextTokens, model.MaxOutputTokens)));
     }
@@ -254,11 +256,11 @@ public sealed class AgentModelTests
     {
         var (_, _, tierConfig) = AgentProviderTemplates.Read();
 
-        Assert.Equal(["claude-fable-5-1", "glm-5.3"], tierConfig["best"]);
-        Assert.Equal(["claude-opus-5-5", "glm-5.3"], tierConfig["high"]);
-        Assert.Equal(["claude-sonnet-5-5", "glm-5.3"], tierConfig["balanced"]);
-        Assert.Equal(["claude-haiku-5-5", "glm-5.3"], tierConfig["fast"]);
-        Assert.Equal(["claude-sonnet-5-5", "glm-5.3"], tierConfig["reporting"]);
+        Assert.Equal(["claude-fable-5-2", "glm-5.4"], tierConfig["best"]);
+        Assert.Equal(["claude-opus-5-5", "glm-5.4"], tierConfig["high"]);
+        Assert.Equal(["claude-sonnet-5-5", "glm-5.4"], tierConfig["balanced"]);
+        Assert.Equal(["claude-haiku-5-5", "glm-5.3-flash"], tierConfig["fast"]);
+        Assert.Equal(["claude-sonnet-5-5", "glm-5.3-flash"], tierConfig["reporting"]);
     }
 
 
@@ -408,6 +410,52 @@ public sealed class AgentRunSpendTests
         // Six pages past the first in all; the deepest answer is find Total's, three of them asked of it.
         Assert.NotEqual(AgentGraphSupport.ToolName, served);
         Assert.Equal(new FlowStepGraphPages(6, new FlowStepGraphAsk("find", 3, 6)), spend.Account().GraphPages);
+    }
+
+    /// <summary>
+    /// The run's account counts its turns as the model's answers, run by run: a run whose end says its own count is that
+    /// count - its launch cut before a turn's end answered more than its ended turns say - a run a crash cut before its
+    /// end, which a later run's start shows, is the answers its ended turns held, and a run whose end says none, as a
+    /// stream written before runs said it, is its ended turns', each one where it says no answers of its own.
+    /// </summary>
+    [Fact]
+    public async Task TheRunsAccount_CountsItsTurnsAsTheModelsAnswers_EachRunsOwnCountWhereItsEndSaysIt()
+    {
+        var (providers, problems) = AgentProviders.Resolve(new HarnessConfig());
+
+        Assert.Empty(problems);
+
+        var spend = new AgentRunSpend(providers!, "claude-sonnet-5-5");
+        var used = AgentUsage.None;
+        AgentEvent[] stream =
+        [
+            new RunStarted(1),
+            new TurnStarted(1),
+            new TurnFinished(1, "claude-sonnet-5-5", used, "end_turn", Answers: 3),
+            new TurnStarted(2),
+            new RunFinished(AgentRunStatus.Stalled) { Turns = 5 },
+            new RunStarted(1),
+            new TurnStarted(1),
+            new TurnFinished(1, "claude-sonnet-5-5", used, "tool_use", Answers: 4),
+            new RunStarted(1),
+            new TurnStarted(1),
+            new TurnFinished(1, "claude-sonnet-5-5", used, "end_turn"),
+            new TurnStarted(2),
+            new TurnFinished(2, "claude-sonnet-5-5", used, "end_turn"),
+            new RunFinished(AgentRunStatus.Completed),
+            new RunStarted(1),
+            new TurnStarted(1),
+            new TurnFinished(1, "claude-sonnet-5-5", used, "tool_use", Answers: 6),
+        ];
+
+        foreach (var happened in stream)
+        {
+            await spend.EmitAsync(happened);
+        }
+
+        // 5 the first run's end says, 4 of the run the second's start showed cut, 2 of the run whose end said none, and 6 of
+        // the run under way.
+        Assert.Equal((17, (int?)17), (spend.TurnsTaken, spend.Account().Turns));
     }
 
     /// <summary>

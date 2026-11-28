@@ -482,17 +482,27 @@ public sealed class JsonSchemaSubsetTests
     /// <summary>
     /// A document is checked in time against definitions whose every <c>anyOf</c> offers the next one twice: a
     /// definition is read once at each place in the document, so a value no shape answers costs the depth, not
-    /// two to the depth.
+    /// two to the depth - and so do its words: what each definition found at the place is said once, where it is first
+    /// met, and the second shape that reads the place by it says so in a line, so the problem grows with the depth.
     /// </summary>
     [Fact]
     public async Task ADefinitionChainDoublingAtEveryStep_IsCheckedInTime()
     {
-        var schema = Chain(32, next => new JsonObject { ["anyOf"] = new JsonArray(Ref(next), Ref(next)) });
+        const int Depth = 32;
+        var schema = Chain(Depth, next => new JsonObject { ["anyOf"] = new JsonArray(Ref(next), Ref(next)) });
 
         var problems = await Task.Run(() => JsonSchemaSubset.Problems(schema, JsonNode.Parse("7")), TestContext.Current.CancellationToken)
             .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
-        Assert.Equal(["$: answers none of the 2 shapes its schema offers"], problems);
+        // Built from the innermost definition out: each level says the next one whole once, and names it the second time.
+        var said = "$: 7 is not a string";
+
+        for (var level = Depth - 1; level >= 0; level--)
+        {
+            said = $"$: answers none of the 2 shapes its schema offers - shape 1 ({said}), shape 2 ($: does not answer '#/$defs/d{level + 1}', as said above)";
+        }
+
+        Assert.Equal([said], problems);
         Assert.Empty(JsonSchemaSubset.Problems(schema, JsonNode.Parse("\"x\"")));
     }
 
@@ -581,7 +591,7 @@ public sealed class JsonSchemaSubsetTests
         Assert.Empty(JsonSchemaSubset.Problems(typed, JsonNode.Parse("7")));
         Assert.Equal(["$: \"7\" is not an integer"], JsonSchemaSubset.Problems(typed, JsonNode.Parse("\"7\"")));
         Assert.Equal(
-            ["$: answers none of the 2 shapes its schema offers", "$: true is not an integer"],
+            ["$: answers none of the 2 shapes its schema offers - shape 1 ($: true is not a string), shape 2 ($: true is not an integer)", "$: true is not an integer"],
             JsonSchemaSubset.Problems(typed, JsonNode.Parse("true")));
 
         var listed = Schema("""{"anyOf":[{"type":"string"}],"enum":["a"]}""");
@@ -603,7 +613,7 @@ public sealed class JsonSchemaSubsetTests
 
         Assert.Empty(JsonSchemaSubset.Problems(schema, JsonNode.Parse("""{"a":1}""")));
         Assert.Equal(
-            ["$: answers none of the 1 shape its schema offers"],
+            ["$: answers none of the 1 shape its schema offers - shape 1 ($.a: \"x\" is not an integer)"],
             JsonSchemaSubset.Problems(schema, JsonNode.Parse("""{"a":"x"}""")));
     }
 
@@ -980,8 +990,30 @@ public sealed class JsonSchemaSubsetTests
         Assert.Empty(JsonSchemaSubset.Problems(schema!, JsonNode.Parse("\"7\"")));
         Assert.Empty(JsonSchemaSubset.Problems(schema!, JsonNode.Parse("7")));
         Assert.Equal(
-            ["$: answers none of the 2 shapes its schema offers"],
+            ["$: answers none of the 2 shapes its schema offers - shape 1 ($: true is not a string), shape 2 ($: true is not an integer)"],
             JsonSchemaSubset.Problems(schema!, JsonNode.Parse("true")));
+    }
+
+    /// <summary>
+    /// Where no shape of an <c>anyOf</c> answers, the problem names what each shape objected to, in the schema's order and
+    /// each shape's own problems whole, so the one answering can tell which shape it meant and what that one still asks -
+    /// never only that none answered.
+    /// </summary>
+    [Fact]
+    public void WhereNoShapeAnswers_WhatEachShapeObjectedTo_IsSaid()
+    {
+        var schema = Schema("""
+            {"anyOf":[
+              {"type":"object","additionalProperties":false,"required":["kind","values"],"properties":{"kind":{"const":"list"},"values":{"type":"array","minItems":1}}},
+              {"type":"object","additionalProperties":false,"required":["kind","why"],"properties":{"kind":{"const":"none"},"why":{"type":"string","pattern":"\\S"}}}
+            ]}
+            """);
+
+        Assert.Empty(JsonSchemaSubset.SubsetProblems(schema));
+        Assert.Equal(
+            ["$: answers none of the 2 shapes its schema offers - shape 1 ($.values: holds 0 items and at least 1 is asked), shape 2 ($: 'why' is required and missing; $.kind: \"list\" is not \"none\"; $.values: is said by no property of the schema)"],
+            JsonSchemaSubset.Problems(schema, JsonNode.Parse("""{"kind":"list","values":[]}""")));
+        Assert.Empty(JsonSchemaSubset.Problems(schema, JsonNode.Parse("""{"kind":"none","why":"nothing varies"}""")));
     }
 
     /// <summary>

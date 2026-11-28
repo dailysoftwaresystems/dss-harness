@@ -5,15 +5,16 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// so the most the facts say is left is a bound: in each scope still open - the flow's top level while the run goes on,
 /// and each group, iteration, item and recovery visit not ended - every member not drawn yet, every handler that can
 /// still be raised, to its bound (<see cref="WorkflowStep.VisitsAllowed"/>) widened by what was granted it, with the steps
-/// its <c>then</c> sends the run back over (<see cref="FlowResets"/>) at each visit, and every member a failure of which
+/// its <c>then</c> sends the run back over (<see cref="FlowResets"/>) at each visit - in the scope its loop goes round in,
+/// where that <c>then</c> sends the run back over a group around it (<see cref="InwardAt"/>) - and every member a failure of which
 /// the recovery can take (<see cref="FlowScope.OnFailureOf"/>), to its bound (<see cref="FlowRecover.VisitsAllowed"/>)
 /// widened by what was granted it, with the steps it sends the run back over at each visit; each repeat instance not
 /// ended, past the iterations it made, to its bound (<see cref="FlowRepeat.Bound"/>) widened by what was granted it
 /// (<see cref="FlowGrants"/>); and each piece of a plan update not carried out, one item of the work-item group. What
 /// such a visit makes is counted whole - a group with all that is in it, its loops to their bounds and its own scope's
 /// handlers and recovery - and what no numeric bound holds is named instead: a <c>forEach</c> whose items are not drawn,
-/// a repeat with no numeric bound, a step whose pre-existing issues each raise a triage, a handler that sends the run
-/// back outside its own group, a plan update still to be planned.
+/// a repeat with no numeric bound, a step whose pre-existing issues each raise a triage, a plan update still to be
+/// planned.
 /// </summary>
 internal sealed class FlowComing
 {
@@ -24,6 +25,8 @@ internal sealed class FlowComing
     private readonly Dictionary<string, long> _fresh = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> _bodies = new(StringComparer.Ordinal);
     private readonly List<string> _unbounded = [];
+    private Dictionary<string, List<Inward>>? _inward;
+    private Dictionary<string, string>? _stepOf;
 
     /// <summary>What may still come of the run whose records these are.</summary>
     /// <param name="definition">The workflow the run began with.</param>
@@ -164,24 +167,106 @@ internal sealed class FlowComing
         => _definition.Recover is not null && FlowScope.OnFailureOf(path, _definition)?.Step.OnFailure == WorkflowStep.Recover;
 
     /// <summary>
-    /// The steps a handler's <c>then</c> sends the run back over in the scope at <paramref name="scope"/>; none where it
-    /// names none, and none - said to be held by no numeric bound - where it sends the run back outside its own group,
-    /// whose next visit holds the handler again.
+    /// The paths of the steps the <c>then</c> of <paramref name="handler"/>, declared in the scope at
+    /// <paramref name="scope"/>, sends the run back over at each of its visits there: what the redirect resets in the
+    /// scope its target is declared in, the handler's own or one around it. None where it names none, and none where it
+    /// sends the run back over a group around it, whose next visit holds the handler again: that loop goes round in the
+    /// target's scope, and is counted there to the handler's bound (<see cref="InwardAt"/>), as the engine counts it.
     /// </summary>
-    private IReadOnlyList<WorkflowStep> ResetsOf(string? scope, WorkflowStep handler)
+    private IReadOnlyList<string> ResetsOf(string? scope, WorkflowStep handler)
     {
-        if (handler.Then is not { } then || FlowScope.Resolve(then, _definition, scope) is not { } target)
+        if (ThenTarget(scope, handler) is not { } target)
         {
             return [];
         }
 
-        if (!string.Equals(FlowScope.ScopeOf(target.Path), scope, StringComparison.Ordinal))
+        var at = FlowScope.ScopeOf(target.Path);
+        var resets = FlowResets.Of(MembersAt(at), target.Step, AlwaysAround(at));
+
+        return HolderIn(at, scope) is { } holder && resets.Any(reset => reset.Name == holder)
+            ? []
+            : [.. resets.Select(reset => PathIn(at, reset))];
+    }
+
+    /// <summary>The step the <c>then</c> of <paramref name="handler"/>, declared in the scope at <paramref name="scope"/>, names: a sibling, or one beside a group around it; null where it names none.</summary>
+    private FlowScope.Located? ThenTarget(string? scope, WorkflowStep handler)
+        => handler.Then is { } then ? FlowScope.Resolve(then, _definition, scope) : null;
+
+    /// <summary>
+    /// The name of the member of the scope at <paramref name="outer"/> that holds the scope at <paramref name="inner"/>,
+    /// where <paramref name="inner"/> lies inside it; null where it is that scope itself, or lies outside it.
+    /// </summary>
+    private static string? HolderIn(string? outer, string? inner)
+    {
+        if (inner is null || string.Equals(outer, inner, StringComparison.Ordinal)
+            || outer is not null && !inner.StartsWith(outer + ".", StringComparison.Ordinal))
         {
-            Unbound($"'{PathIn(scope, handler)}' sends the run back to '{target.Path}', outside its own group");
-            return [];
+            return null;
         }
 
-        return FlowResets.Of(MembersAt(scope), target.Step, AlwaysAround(scope));
+        return (outer is null ? inner : inner[(outer.Length + 1)..]).Split('.')[0];
+    }
+
+    /// <summary>
+    /// A handler declared inside a member of a scope whose <c>then</c> names a step of that scope: its path, its
+    /// declaration, the member that holds it, and what its redirect resets there.
+    /// </summary>
+    /// <param name="Path">The handler's path.</param>
+    /// <param name="Handler">The handler's declaration.</param>
+    /// <param name="Holder">The name of the member of the scope that holds it.</param>
+    /// <param name="Resets">What its redirect resets in the scope (<see cref="FlowResets.Of"/>).</param>
+    private sealed record Inward(string Path, WorkflowStep Handler, string Holder, IReadOnlyList<WorkflowStep> Resets)
+    {
+        /// <summary>
+        /// Whether its redirect makes the member that holds it anew, so its loop goes round in this scope and is counted
+        /// here, as the engine counts the handler's visits.
+        /// </summary>
+        public bool Loops => Resets.Any(reset => reset.Name == Holder);
+    }
+
+    /// <summary>
+    /// Every handler declared inside a member of the scope at <paramref name="scope"/> whose <c>then</c> names a step of
+    /// it (<see cref="Inward"/>), read once for the whole definition, in one walk of its declarations.
+    /// </summary>
+    private IReadOnlyList<Inward> InwardAt(string? scope)
+    {
+        if (_inward is null)
+        {
+            _inward = new Dictionary<string, List<Inward>>(StringComparer.Ordinal);
+
+            foreach (var (path, step) in FlowScope.Declared(_definition).Where(declared => declared.Step.On is not null && declared.Step.Then is not null))
+            {
+                var declared = FlowScope.ScopeOf(path);
+
+                if (ThenTarget(declared, step) is not { } target || HolderIn(FlowScope.ScopeOf(target.Path), declared) is not { } holder)
+                {
+                    continue;
+                }
+
+                var at = FlowScope.ScopeOf(target.Path);
+                var key = at ?? string.Empty;
+
+                if (!_inward.TryGetValue(key, out var held))
+                {
+                    _inward[key] = held = [];
+                }
+
+                held.Add(new Inward(path, step, holder, FlowResets.Of(MembersAt(at), target.Step, AlwaysAround(at))));
+            }
+        }
+
+        return _inward.TryGetValue(scope ?? string.Empty, out var inward) ? inward : [];
+    }
+
+    /// <summary>Whether the instance <paramref name="id"/> lies inside the group instance <paramref name="container"/> - anywhere in the run, for the top level's empty one.</summary>
+    private static bool Under(string id, string container)
+        => container.Length == 0 || id.StartsWith(container + ".", StringComparison.Ordinal);
+
+    /// <summary>The declaration path of the instance <paramref name="id"/>, as its record holds it; null where the records hold none of it.</summary>
+    private string? StepOf(string id)
+    {
+        _stepOf ??= _flow.Steps.GroupBy(held => held.Instance, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.Last().Step, StringComparer.Ordinal);
+        return _stepOf.GetValueOrDefault(id);
     }
 
     /// <summary>How many instances one <paramref name="unit"/> makes at most.</summary>
@@ -264,7 +349,7 @@ internal sealed class FlowComing
 
             if (member.On is not null)
             {
-                var again = ResetsOf(scope, member).Aggregate(0L, (whole, reset) => Add(whole, Fresh(PathIn(scope, reset))));
+                var again = ResetsOf(scope, member).Aggregate(0L, (whole, reset) => Add(whole, Fresh(reset)));
                 count = Add(count, Times(member.VisitsAllowed, Add(Fresh(path), again)));
             }
             else if (Drawn(scope, member))
@@ -277,6 +362,14 @@ internal sealed class FlowComing
                 var again = FlowResets.Of(members, member, AlwaysAround(scope)).Aggregate(0L, (whole, reset) => Add(whole, Fresh(PathIn(scope, reset))));
                 count = Add(count, Times(_definition.Recover!.VisitsAllowed, Add(Add(1, Body(FlowScope.Recovery)), again)));
             }
+        }
+
+        foreach (var inward in InwardAt(scope).Where(inward => inward.Loops))
+        {
+            // A handler inside a member whose then makes that member anew turns its loop here, to its bound: each turn its
+            // own visit and what its redirect resets in this scope.
+            var again = inward.Resets.Aggregate(0L, (whole, reset) => Add(whole, Fresh(PathIn(scope, reset))));
+            count = Add(count, Times(inward.Handler.VisitsAllowed, Add(Fresh(inward.Path), again)));
         }
 
         _bodies[key] = count;
@@ -306,8 +399,9 @@ internal sealed class FlowComing
         if (step.Repeat is { } repeat && !IsIteration(group.Instance))
         {
             // A repeat instance not ended is a loop of its own, beside the iterations it made: its bound widened by what
-            // was granted it, past the iterations it has made.
-            var bound = repeat.Bound(FlowGrants.IterationsOf(group.Instance, questions, updates));
+            // was granted it, past the iterations it has made - each counted as the engine counts them, from the
+            // iteration a plan update was planned in where its record says one was (FlowLoopCount).
+            var bound = repeat.Bound(FlowLoopCount.Given(FlowGrants.IterationsOf(group.Instance, questions, updates), group.Counted, updates?.Updates ?? []));
 
             if (bound == int.MaxValue)
             {
@@ -315,7 +409,7 @@ internal sealed class FlowComing
                 return;
             }
 
-            var made = _flow.Steps.Count(held => IterationOf(group.Instance, held.Instance));
+            var made = FlowLoopCount.Made(_flow.Steps.Count(held => IterationOf(group.Instance, held.Instance)), group.Counted);
 
             if (bound - made > 0)
             {
@@ -366,6 +460,7 @@ internal sealed class FlowComing
         }
 
         var raised = new HashSet<string>(StringComparer.Ordinal);
+        var turned = new HashSet<string>(StringComparer.Ordinal);
         var recovered = new HashSet<string>(StringComparer.Ordinal);
 
         for (var changed = true; changed;)
@@ -392,8 +487,46 @@ internal sealed class FlowComing
 
                 foreach (var reset in ResetsOf(scope, handler))
                 {
+                    if (string.Equals(FlowScope.ScopeOf(reset), scope, StringComparison.Ordinal))
+                    {
+                        reachable.Add(NameOf(reset));
+                    }
+
+                    Units.Add(new Unit(Made.Visit, reset, remaining));
+                }
+            }
+
+            foreach (var inward in InwardAt(scope).Where(inward => reachable.Contains(inward.Holder) && !turned.Contains(inward.Path)))
+            {
+                // A handler inside a member that can still end, whose then sends the run back to a step of this scope:
+                // what it resets here can end again. Where it makes that member anew, its loop goes round here and is
+                // counted here, to its bound past its visits made anywhere in this scope's instance - as the engine
+                // counts them - widened by what was granted it.
+                turned.Add(inward.Path);
+                changed = true;
+                var remaining = 0L;
+
+                if (inward.Loops)
+                {
+                    var source = $"{FlowScope.ScopeOf(inward.Path)}.{inward.Handler.On!.Step}";
+                    var granted = _granted.Count(one => one.Grant == FlowGrant.Visit && one.Handler == inward.Handler.Name && Under(one.About, container) && StepOf(one.About) == source);
+                    var visits = _flow.Steps.Count(held => held.RaisedBy is not null && held.Step == inward.Path && Under(held.Instance, container));
+                    remaining = inward.Handler.VisitsAllowed + granted - visits;
+
+                    if (remaining > 0)
+                    {
+                        Units.Add(new Unit(Made.Visit, inward.Path, remaining));
+                    }
+                }
+
+                foreach (var reset in inward.Resets)
+                {
                     reachable.Add(reset.Name);
-                    Units.Add(new Unit(Made.Visit, PathIn(scope, reset), remaining));
+
+                    if (remaining > 0)
+                    {
+                        Units.Add(new Unit(Made.Visit, PathIn(scope, reset), remaining));
+                    }
                 }
             }
 

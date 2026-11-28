@@ -5,6 +5,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Json;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
@@ -30,7 +31,8 @@ public sealed record CommandCompletion(int ExitCode, CommandOutcome? Outcome, Ru
 /// line; the run is named before anything could refuse it, so a run refused before it had a directory keeps its id to
 /// be cited by; and what the operation leaves on the hosts it reached is said however it ended, in its own end - which
 /// an operation begun as a step of a run leaves to that run to await, whatever ended the run, together with the
-/// services that end runs on.
+/// services that end runs on. A wait anything of the operation makes is said as its lines are from its first line to its
+/// last, its ends included - a refusal's, a failure's and its own end's.
 /// </remarks>
 public sealed class CommandSession : IAsyncDisposable
 {
@@ -50,13 +52,19 @@ public sealed class CommandSession : IAsyncDisposable
     private bool? _defective;
 
     /// <summary>
-    /// Whether the end ran before the operation said how it ended - where a document is asked for - and the event that
-    /// says it ended is still to be published, after that.
+    /// Whether the end ran before the operation said how it ended - where a document or the output logs are asked for -
+    /// and the event that says it ended is still to be published, after that.
     /// </summary>
     private bool _endedUnsaid;
 
     /// <summary>Set once the services are disposed, by whichever of this session and its handed end disposes them.</summary>
     private int _servicesDisposed;
+
+    /// <summary>The operation's output logs, where its front end asked for them; <see langword="null"/> where it asked for none.</summary>
+    private FlowOutputLogs? _logs;
+
+    /// <summary>Whether writing the operation's output logs met a defect of this tool, which the operation then ends with.</summary>
+    private bool _logsDefect;
 
     /// <summary>The operation's id.</summary>
     public OperationId Id { get; }
@@ -109,6 +117,11 @@ public sealed class CommandSession : IAsyncDisposable
         // surveyed: a line written before then would sit in front of it.
         using var document = _options.Document != DocumentKind.None ? _output.DataOnly() : null;
 
+        // A wait deep below the operation - a machine-wide file's update, a child's end, a rename over a file another
+        // program holds - is said as the operation's lines are, for the whole of it: its ends wait as its body does, the
+        // output logs replaced as it stops or fails among them, and a wait told to nobody is one that looks like a hang.
+        using var telling = Waits.TellingTo(told => _output.Info(_options.Command, told.Line()));
+
         if (Run is not null)
         {
             _output.Publish(new RunBegan(_options.Command, Run));
@@ -127,7 +140,24 @@ public sealed class CommandSession : IAsyncDisposable
                     () => _services.GetRequiredService<IProcessContext>().CurrentDirectory,
                     _services.GetRequiredService<IFileSystem>());
 
-                if (!resolved.Holds)
+                // The output logs' path is held before anything is weighed: one the zip cannot be written at is refused,
+                // nothing started; one that holds is the zip's however the operation then ends, a directory refused below
+                // among its ends.
+                if (_options.OutputLogs is { } asked)
+                {
+                    _logs = _services.GetRequiredService<FlowOutputLogs>();
+
+                    if (await _logs.CheckAsync(asked.Path, asked.CommandLine, resolved.Directory, cancellationToken).ConfigureAwait(false) is { } unusable)
+                    {
+                        completion = await StopAsync(HarnessExit.Refused, unusable).ConfigureAwait(false);
+                    }
+                }
+
+                if (completion is not null)
+                {
+                    // Refused already: the output logs' path is no place a zip can be written.
+                }
+                else if (!resolved.Holds)
                 {
                     completion = await StopAsync(HarnessExit.UsageError, resolved.Problem!).ConfigureAwait(false);
                 }
@@ -135,10 +165,8 @@ public sealed class CommandSession : IAsyncDisposable
                 {
                     var scope = new CommandScope(_services, resolved.Directory!, Run);
 
-                    // A commit a line names is shown as git abbreviates it in the repository the operation works in, and a
-                    // wait deep below the body - a machine-wide file's update, a child's end - is said as the body's lines are.
+                    // A commit a line names is shown as git abbreviates it in the repository the operation works in.
                     using var commits = CommitIds.Use(Commits(resolved.Directory!));
-                    using var telling = Waits.TellingTo(told => _output.Info(_options.Command, told.Line()));
                     var outcome = await body(scope, cancellationToken).ConfigureAwait(false);
 
                     if (await EndedDefectiveAsync().ConfigureAwait(false))
@@ -148,11 +176,16 @@ public sealed class CommandSession : IAsyncDisposable
 
                     // Its body answers with its document exactly where a stop would: the stopped form read once, here. Either
                     // says what the operation did that every document says.
-                    outcome = outcome.Data.Count == 0 ? outcome : outcome with { Data = [.. outcome.Data.Select(Documented)] };
-                    var stopped = _stopped is not null && outcome.Data.Count == 0 ? Documented(_stopped(Context(), outcome.ExitCode, outcome.Message)) : null;
-                    _output.Publish(new CommandReported(_options.Command, outcome, stopped));
+                    var answered = outcome;
+                    var reported = (CommandReported)await ReportAsync(
+                        () => new CommandReported(
+                            _options.Command,
+                            answered.Data.Count == 0 ? answered : answered with { Data = [.. answered.Data.Select(Documented)] },
+                            _stopped is not null && answered.Data.Count == 0 ? Documented(_stopped(Context(), answered.ExitCode, answered.Message)) : null),
+                        answered.ExitCode,
+                        answered.Message).ConfigureAwait(false);
 
-                    completion = new(outcome.ExitCode, outcome, Run);
+                    completion = new(reported.Outcome.ExitCode, reported.Outcome, Run);
                 }
             }
             catch (Exception ex)
@@ -175,17 +208,19 @@ public sealed class CommandSession : IAsyncDisposable
             }
         }
 
-        return _defective is true ? completion with { ExitCode = HarnessExit.InternalError } : completion;
+        return _defective is true || _logsDefect ? completion with { ExitCode = HarnessExit.InternalError } : completion;
     }
 
     /// <summary>
-    /// Where a document is asked for, runs the end now - once - and says whether it met a defect: a document says the code
-    /// the process exits with, and nothing can be taken back once written, so a defect the end meets is the document's
-    /// code too. Where none is asked for, the end runs after the operation has said how it ended, and nothing is said here.
+    /// Where a document or the output logs are asked for, runs the end now - once - and says whether it met a defect: a
+    /// document says the code the process exits with, and the zip's manifest that code and every line the command wrote,
+    /// and nothing can be taken back once written, so a defect the end meets is their code too, and the lines its end says
+    /// are among the zip's. Where neither is asked for, the end runs after the operation has said how it ended, and nothing
+    /// is said here.
     /// </summary>
     private async Task<bool> EndedDefectiveAsync()
     {
-        if (_options.Document == DocumentKind.None)
+        if (_options.Document == DocumentKind.None && _logs is not { HasAny: true })
         {
             return false;
         }
@@ -244,6 +279,23 @@ public sealed class CommandSession : IAsyncDisposable
             return null;
         }
     }
+
+    /// <summary>The event an operation ends with, its code and every document it carries saying the code a defect has.</summary>
+    private static RunEvent Recoded(RunEvent told)
+        => told switch
+        {
+            CommandReported reported => reported with
+            {
+                Outcome = DefectiveEnd(reported.Outcome),
+                Stopped = reported.Stopped is { } stopped ? Recoded(stopped) : null,
+            },
+            CommandFailed failed => failed with
+            {
+                ExitCode = HarnessExit.InternalError,
+                StoppedDocument = failed.StoppedDocument is { } document ? Recoded(document) : null,
+            },
+            _ => told,
+        };
 
     /// <summary>A document whose root says an <c>exitCode</c>, saying the code a defect has; any other, as it was.</summary>
     private static string Recoded(string document)
@@ -314,6 +366,12 @@ public sealed class CommandSession : IAsyncDisposable
             throw new InvalidOperationException(
                 $"'{options.Command}' answers with no document ({nameof(DocumentKind)}.{nameof(DocumentKind.None)}), and its front end supplies a stopped form "
                 + $"({nameof(SessionFrontEnd.Stopped)}) it would answer a stop with all the same: a document nobody asked for.");
+        }
+
+        if (options.OutputLogs is not null && !FlowOutputLogs.Commands.Contains(options.Command, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"'{options.Command}' writes no output logs ({nameof(SessionOptions.OutputLogs)}): {string.Join(", ", FlowOutputLogs.Commands)} alone write them.");
         }
 
         if (frontEnd?.Output is not null || frontEnd?.Prompt is not null)
@@ -482,8 +540,12 @@ public sealed class CommandSession : IAsyncDisposable
     private async Task<CommandCompletion> StopAsync(int exitCode, string message)
     {
         var said = await EndedDefectiveAsync().ConfigureAwait(false) ? HarnessExit.InternalError : exitCode;
-        var document = _stopped is not null ? Documented(_stopped(Context(), said, message)) : null;
-        _output.Publish(new CommandFailed(_options.Command, exitCode, message, Defect: false, StoppedDocument: document));
+
+        _ = await ReportAsync(
+            () => new CommandFailed(_options.Command, exitCode, message, Defect: false, StoppedDocument: _stopped is not null ? Documented(_stopped(Context(), said, message)) : null),
+            said,
+            message).ConfigureAwait(false);
+
         return new(exitCode, null, Run);
     }
 
@@ -495,11 +557,67 @@ public sealed class CommandSession : IAsyncDisposable
     {
         var meaning = KnownCauses.Meaning(exception);
         var said = await EndedDefectiveAsync().ConfigureAwait(false) ? HarnessExit.InternalError : meaning.ExitCode;
-        var document = _stopped is not null ? Documented(_stopped(Context(), said, meaning.Message)) : null;
         var trace = meaning.Defect ? _output.Shown(exception.ToString()) : null;
 
-        _output.Publish(new CommandFailed(_options.Command, meaning.ExitCode, meaning.Message, meaning.Defect, trace, document));
+        _ = await ReportAsync(
+            () => new CommandFailed(_options.Command, meaning.ExitCode, meaning.Message, meaning.Defect, trace, _stopped is not null ? Documented(_stopped(Context(), said, meaning.Message)) : null),
+            said,
+            meaning.Message).ConfigureAwait(false);
+
         return new(meaning.ExitCode, null, Run);
+    }
+
+    /// <summary>
+    /// Publishes the event the operation ends with, as <paramref name="report"/> builds it - every document it carries saying
+    /// what every document says - and, where the operation's output logs were asked for and their path held, writes them
+    /// first, with that event and the line that names them kept as they are about to be written, so the zip holds the
+    /// operation's output as it ends: the zip named in its documents, and in the last of the lines that name its records -
+    /// a line of its own before the line it ends on, where it stopped before its body answered. Where the zip could not be
+    /// written, that is said in its place - a cause this tool knows as a warning, the code standing as a run's log stands
+    /// where it could not take a line; a defect as a failure, which the operation ends with - and the report is built
+    /// again naming none.
+    /// </summary>
+    /// <param name="report">Builds the event, as the operation's facts stand when it is called.</param>
+    /// <param name="exitCode">The code the event says the operation exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    /// <returns>The event published.</returns>
+    private async Task<RunEvent> ReportAsync(Func<RunEvent> report, int exitCode, string summary)
+    {
+        if (_logs is not { HasAny: true } logs)
+        {
+            var told = report();
+            _output.Publish(told);
+            return told;
+        }
+
+        // Named as the last of the lines that name the operation's records, where its report has any, and else in a line of
+        // its own before the line it ends on.
+        IReadOnlyList<RunEvent> named = report() is CommandReported reported
+            ? [reported with { Outcome = reported.Outcome with { Details = [.. reported.Outcome.Details ?? [], logs.Line] } }]
+            : [new TextLine(LineKind.Info, _options.Command, logs.Line), report()];
+
+        try
+        {
+            // Apart from the operation's own token, as its end is: an interrupted command still leaves its zip.
+            await logs.WriteAsync(_options.Command, exitCode, summary, named, _options.Document != DocumentKind.None, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logs.Unnamed();
+            _logsDefect = Said($"the output logs '{logs.Target}' could not be written", ex);
+
+            var unnamed = _logsDefect ? Recoded(report()) : report();
+            _output.Publish(unnamed);
+            return unnamed;
+        }
+
+        foreach (var told in named)
+        {
+            _output.Publish(told);
+        }
+
+        _output.Publish(new RecordWritten(FlowOutputLogs.Record, logs.Target!));
+        return named[^1];
     }
 
     private SessionContext Context() => new(_options, Id, Run, _output);

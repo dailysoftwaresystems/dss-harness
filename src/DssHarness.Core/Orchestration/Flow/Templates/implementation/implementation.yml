@@ -39,10 +39,19 @@ pushCheckpoints: false
 # The workflow's texts: prose a prompt reads by name - {text.<name>} - beside the bar
 # for recommendations, which every prompt that recommends reads as {recommendations}
 # still, as it always did. closure.md is the repository's own from the day it is
-# written: the universe its decisions range over, and what else judges them.
+# written: the universe its decisions range over, and what else judges them. done.md
+# is the rule a definition of done is written by, read wherever one is written or
+# judged; issues-before.md is what a step does with an issue that was there before
+# the run, read by the prompt of every step that reports one; fixes.md is the one
+# saying of what an issue being fixed is to the work items, which the planner's
+# prompts and the self-audit read beside the issues the run has taken: the
+# recovery's, and an item that needs its fix names it (needs) and waits for it.
 texts:
   recommendations: recommendations.md
   closure: closure.md
+  done: done.md
+  issuesBefore: issues-before.md
+  fixes: fixes.md
 advisor:
   agent: advisor
   tier: high
@@ -200,6 +209,9 @@ steps:
         prompt: prompts/plan.md
         resumePrompt: prompts/replan.md
         outputs: schemas/plan.schema.json
+      # The check's rules hold the items within the plan step itself, and within a plan
+      # update's: the planner is told each problem there and answers again, so a problem it
+      # can put right costs no audit and no iteration; the check is the record and the gate.
       - name: check
         type: validate-plan
         dependsOn: [plan]
@@ -207,11 +219,11 @@ steps:
         scope: 'plan.latest.scope'
         onFailure: recover
       # The audits search a class's sites themselves: the graph's sites, beside their own text
-      # search, with no pack - a pack lights none of a plan's text.
+      # search; like every step with the tool, they are pushed no pack - a pack lights none of a
+      # plan's text - and ask the tool for one where they need it.
       - name: plan-audit
         type: reason
         graph: tools
-        graphPromptTokens: 0
         agent: plan-auditor
         tier: high
         effort: xhigh
@@ -275,13 +287,17 @@ steps:
         type: pause
         dependsOn: [item-check]
         when: '!item-check.ok'
-        # The planner was given the problems once; what is still wrong is built as it
-        # is, and a fold or a test that it breaks goes to the agents that put it right.
+        # The agent that gave the items - the planner, or a later round's self-audit - was
+        # told each problem the check finds within its own step, until it answered clean or
+        # said it could not put one right, and so was the planner of the plan update the
+        # check raises, whose planning asks at its bound where it could not; what is still
+        # wrong is built as it is, and a fold or a test that it breaks goes to the agents
+        # that put it right.
         answers:
           pause: continue
         onFailure: recover
         question: |-
-          This round's work items still do not pass the plan check, after the planner was given the problems to settle and its plan was audited and approved: {item-check.problems}
+          This round's work items still do not pass the plan check, though the agent that gave them was told its problems within its own step: {item-check.problems}
           Answer continue to build them as they are, or abort.
         options: [continue]
       # A later round's items come from the last self-audit, and are audited before any is
@@ -290,7 +306,6 @@ steps:
       - name: item-audit
         type: reason
         graph: tools
-        graphPromptTokens: 0
         agent: plan-auditor
         tier: high
         effort: xhigh
@@ -470,14 +485,14 @@ steps:
   - name: pr
     type: pull-request
     dependsOn: [final-push]
-    when: 'orient.hasRemote'
+    when: 'orient.onForge'
     onFailure: recover
     title: '{intake.triage.title}'
     body: prompts/pr-body.md
   - name: checks
     type: ci-wait
     dependsOn: [pr]
-    when: 'orient.hasRemote && orient.ciConfigured'
+    when: 'orient.onForge && orient.ciConfigured'
     waitMinutes: 60
     answers:
       checksPending:
@@ -485,15 +500,22 @@ steps:
         times: 2
     onFailure: recover
   # Raised once for each issue a reasoning step reports as there before the run - never
-  # scheduled, as the recovery is not. It checks the issue on the base commit, then gives it
+  # scheduled, as the recovery is not. It checks the issue on the base commit - its tree is
+  # that commit (commit), read and searched as any tree is, its graph that tree's - then gives it
   # to the recovery to fix at its root now (onAddress: recover) where it is in a step's way,
-  # related to the work or critical; otherwise it is added, proven, to the run's
-  # pre-existing-issues.json, shown in the pull request and the handoff.
+  # related to the work or critical - at once, beside any other fix at work, and a work item
+  # that owns a file the fix holds, or names the issue under needs, starts once the fix is
+  # done (fixes.md says so to the planner and the self-audit); joins it, by its id, to the fix
+  # of an issue taken before it, being triaged, being fixed or fixed, whose root cause it shares
+  # - one fix settles both, or one fixed already gives it a fix of its own, told what that one
+  # did; otherwise it is added, proven, to the run's pre-existing-issues.json,
+  # shown in the pull request and the handoff.
   - name: triage-pre-existing-issue
     type: reason
     agent: pre-existing-triage
     tier: balanced
     effort: high
+    commit: '{orient.startCommit}'
     raised: preExisting
     onAddress: recover
     retries: 3
@@ -507,13 +529,16 @@ recover:
   # fixed; never by a reasoning step's own failure, which is tried again,
   # on its fallback, and then asked. The remedy items built are the ones the plan's own check
   # read, after the last word on them: the diagnosis's, or the one it gives again on a
-  # person's answer (redirect), is checked (remedy-check); where the check finds problems, they
-  # go back to the diagnostician within the visit (remedy-revise), and what it gives again is
-  # checked again (remedy-recheck) - once, as a plan's problems go back to its planner once - and
-  # built as it stands. Once its steps are done, the step that gave it its
+  # person's answer (redirect), is checked (remedy-check) - and held to the same check within the
+  # diagnostician's step, which is told each problem it finds, in its own conversation, until it
+  # answers clean or says it cannot - and built as the check read it. No step after the check
+  # sends its problems back again: the diagnostician was told them already, by the same check,
+  # before it ended. Once its steps are done, the step that gave it its
   # failure runs again from where it stopped (onSuccess: failed-step), now that what stood
   # in its way was put right. Should that step fail again, its own onFailure: recover brings
-  # it back here, to the diagnostician who saw the last attempt - until the step passes or
+  # it back here, to the diagnostician who saw the last attempt - the one of that failure or
+  # issue, whichever step met the issue and however often it was met again after a fix that
+  # did not hold: a visit for another issue has its own, beside it - until the step passes or
   # the diagnosis says only a person can lift what stands in the way. The recovery never
   # calls itself: its steps have their own retries, and where its own work still fails, a
   # person is asked (onFailure: pause). Past five recoveries of one step the run asks
@@ -560,37 +585,19 @@ recover:
       graphFrom: changes
       prompt: prompts/redirect.md
       outputs: schemas/diagnosis.schema.json
-    # The diagnosis's last word on its remedy items is what the check reads, and what the
-    # remedies build is what a check read: its own items, or - where it refused them and the
-    # diagnostician said them again on its problems - the revised ones, checked again.
+    # The diagnosis's last word on its remedy items is what the check reads - the diagnostician
+    # told its problems within its own step, as it answered - and what the remedies build is
+    # what the check read.
     - name: remedy-check
       type: validate-plan
       dependsOn: [redirect]
       when: "diagnose.latest.course == 'fix'"
       items: 'diagnose.latest.items'
       onFailure: pause
-    - name: remedy-revise
-      type: reason
-      resume: diagnose
-      dependsOn: [remedy-check]
-      when: '!(remedy-check.ok ?? true)'
-      retries: 3
-      backoffSeconds: 30
-      onFailure: pause
-      onPreExisting: triage-pre-existing-issue
-      graphFrom: changes
-      prompt: prompts/remedy-revise.md
-      outputs: schemas/diagnosis.schema.json
-    - name: remedy-recheck
-      type: validate-plan
-      dependsOn: [remedy-revise]
-      when: "!(remedy-check.ok ?? true) && diagnose.latest.course == 'fix'"
-      items: 'diagnose.latest.items'
-      onFailure: pause
     - name: remedies
-      dependsOn: [remedy-recheck]
+      dependsOn: [remedy-check]
       when: "diagnose.latest.course == 'fix'"
-      forEach: 'remedy-recheck.items ?? remedy-check.items'
+      forEach: 'remedy-check.items'
       # The item pipeline again, used by the recovery as the rounds use it: each remedy is built in
       # an agent of its own, tested, reviewed, folded and checkpointed. This use builds one with the
       # remedy prompt, reading the diagnosis this step of the recovery hands it, and hands it no plan:
@@ -612,4 +619,4 @@ recover:
     - name: publish
       type: push
       dependsOn: [remedies]
-      when: "orient.hasRemote && !empty(pr.url) && diagnose.latest.course == 'fix'"
+      when: "orient.onForge && !empty(pr.url) && diagnose.latest.course == 'fix'"

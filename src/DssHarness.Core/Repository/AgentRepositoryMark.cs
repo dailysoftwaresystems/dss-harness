@@ -55,9 +55,10 @@ public sealed record AgentRepositoryMark(string MainCheckout, string Agent)
             return null;
         }
 
-        // A file that never spells the section's name holds none of its keys, and git, which would read every main
-        // checkout's configuration at every command, is not asked. One that cannot be read here is left to git to say.
-        if (SpellsSection(fileSystem, configuration) == false)
+        // A file that holds no header opening the section holds none of its keys, and git, which would read every main
+        // checkout's configuration at every command, is not asked - whatever its values spell: a user's address, a
+        // remote's name or a path naming the tool. One that cannot be read here is left to git to say.
+        if (OpensSection(fileSystem, configuration) == false)
         {
             return null;
         }
@@ -118,53 +119,86 @@ public sealed record AgentRepositoryMark(string MainCheckout, string Agent)
             return "is not there";
         }
 
-        var main = await gitClient.GetMainWorktreeAsync(MainCheckout, cancellationToken).ConfigureAwait(false);
-
-        if (main is null)
+        // A main checkout the engine's session located already is one: no bare repository and no agent's repository, which
+        // names another (SessionTrees.IsMainCheckout) - what the three questions below ask, answered by the session.
+        if (SessionTrees.OfSession(platform.PathComparison)?.IsMainCheckout(MainCheckout, fileSystem) is not true)
         {
-            return "is no repository's main checkout";
+            var main = await gitClient.GetMainWorktreeAsync(MainCheckout, cancellationToken).ConfigureAwait(false);
+
+            if (main is null)
+            {
+                return "is no repository's main checkout";
+            }
+
+            if (main.IsBare)
+            {
+                return "is a bare repository, which has no checkout";
+            }
+
+            if (!PathContainment.AreSame(main.Path, MainCheckout, platform.PathComparison))
+            {
+                return $"is no main checkout: git answers for it with '{ReportText.Printable(main.Path)}'";
+            }
+
+            if (await ReadAsync(gitClient, fileSystem, MainCheckout, cancellationToken).ConfigureAwait(false) is not null)
+            {
+                return "is itself an agent's repository";
+            }
         }
 
-        if (main.IsBare)
-        {
-            return "is a bare repository, which has no checkout";
-        }
-
-        if (!PathContainment.AreSame(main.Path, MainCheckout, platform.PathComparison))
-        {
-            return $"is no main checkout: git answers for it with '{ReportText.Printable(main.Path)}'";
-        }
-
-        if (await ReadAsync(gitClient, fileSystem, MainCheckout, cancellationToken).ConfigureAwait(false) is not null)
-        {
-            return "is itself an agent's repository";
-        }
-
-        var objects = await ObjectsOfAsync(gitClient, MainCheckout, cancellationToken).ConfigureAwait(false);
+        var objects = await ObjectsOfAsync(gitClient, fileSystem, platform, MainCheckout, cancellationToken).ConfigureAwait(false);
 
         return await BorrowsAsync(gitClient, platform, tree, objects, cancellationToken).ConfigureAwait(false)
             ? null
             : $"does not lend it its objects: '{ReportText.Printable(objects)}' is not among the object directories git reads there";
     }
 
-    /// <summary>The object directory of the repository whose checkout is <paramref name="mainCheckout"/>, as git spells it: absolute.</summary>
+    /// <summary>
+    /// The object directory of the repository whose checkout is <paramref name="mainCheckout"/>, as git spells it: absolute -
+    /// asked once in an engine's session, which keeps it (<see cref="SessionTrees.ObjectsAsync"/>).
+    /// </summary>
     /// <param name="gitClient">Asks git.</param>
+    /// <param name="fileSystem">Looks for the checkout's <c>.git</c>, which the session's answer is served while it holds.</param>
+    /// <param name="platform">How paths compare.</param>
     /// <param name="mainCheckout">The checkout.</param>
     /// <param name="cancellationToken">Stops git.</param>
     /// <exception cref="HarnessException">git could not say (<see cref="HarnessExit.CommandFailed"/>).</exception>
-    public static async Task<string> ObjectsOfAsync(IGitClient gitClient, string mainCheckout, CancellationToken cancellationToken)
+    public static Task<string> ObjectsOfAsync(IGitClient gitClient, IFileSystem fileSystem, IHostPlatform platform, string mainCheckout, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(gitClient);
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentNullException.ThrowIfNull(platform);
+
+        return SessionTrees.ObjectsAsync(
+            mainCheckout,
+            platform.PathComparison,
+            fileSystem,
+            async () => await CommonDirectoryAsync(gitClient, mainCheckout, "keeps its objects", cancellationToken).ConfigureAwait(false) + "/objects");
+    }
+
+    /// <summary>
+    /// The common directory of the repository whose work tree <paramref name="tree"/> is, as git spells it: absolute - the
+    /// one git directory a main checkout and every worktree git keeps of it share, a bare repository's own for a worktree of
+    /// one, and an agent's repository's own, which is a repository of its own.
+    /// </summary>
+    /// <param name="gitClient">Asks git.</param>
+    /// <param name="tree">A directory of the work tree.</param>
+    /// <param name="asked">What the refusal says could not be read of it, after "where the repository of the tree".</param>
+    /// <param name="cancellationToken">Stops git.</param>
+    /// <exception cref="HarnessException">git could not say (<see cref="HarnessExit.CommandFailed"/>).</exception>
+    public static async Task<string> CommonDirectoryAsync(IGitClient gitClient, string tree, string asked, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(gitClient);
 
-        var asked = await gitClient
-            .RunAsync(mainCheckout, ["rev-parse", "--path-format=absolute", "--git-common-dir"], cancellationToken: cancellationToken)
+        var answer = await gitClient
+            .RunAsync(tree, ["rev-parse", "--path-format=absolute", "--git-common-dir"], cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
-        return asked.Succeeded && asked.OutputLines is [var common]
-            ? common + "/objects"
+        return answer.Succeeded && answer.OutputLines is [var common]
+            ? common
             : throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"Where the repository of '{ReportText.Printable(mainCheckout)}' keeps its objects could not be read: {asked.FailureMessage.TrimEnd('.')}.");
+                $"Where the repository of '{ReportText.Printable(tree)}' {asked} could not be read: {answer.FailureMessage.TrimEnd('.')}.");
     }
 
     /// <summary>
@@ -201,12 +235,15 @@ public sealed record AgentRepositoryMark(string MainCheckout, string Agent)
             .Any(borrowed => PathContainment.AreSame(Path.GetFullPath(borrowed), Path.GetFullPath(objects), platform.PathComparison));
     }
 
-    /// <summary>Whether the configuration file spells the mark's section's name anywhere; null where it cannot be read here.</summary>
-    private static bool? SpellsSection(IFileSystem fileSystem, string configuration)
+    /// <summary>
+    /// Whether the configuration file may hold a header opening the mark's section (<see cref="GitConfigText.MayOpenSection"/>);
+    /// null where it cannot be read here.
+    /// </summary>
+    private static bool? OpensSection(IFileSystem fileSystem, string configuration)
     {
         try
         {
-            return fileSystem.ReadAllText(configuration).Contains(SectionName, StringComparison.OrdinalIgnoreCase);
+            return GitConfigText.MayOpenSection(fileSystem.ReadAllText(configuration), SectionName);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

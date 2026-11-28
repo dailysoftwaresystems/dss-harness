@@ -197,6 +197,148 @@ public sealed class FlowRunReportTests
     }
 
     /// <summary>
+    /// The run's pause is the time from a session's last record to the next session's first event, whatever its kind: a
+    /// resume's start writes what it takes up - a stopped step made a new attempt, the handoff it is given, a stop it applies,
+    /// an answer it takes - before it records that it began, every write it held stamped as the hold is made, so the time
+    /// between the sessions falls before that first write, never before the record of the session's beginning.
+    /// </summary>
+    /// <param name="first">The kind of the resumed session's first event.</param>
+    [Theory]
+    [InlineData(FlowChangeKind.Step)]
+    [InlineData(FlowChangeKind.Handoff)]
+    [InlineData(FlowChangeKind.StopApplied)]
+    [InlineData(FlowChangeKind.Answer)]
+    public void TheRunsPause_RunsToTheNextSessionsFirstEvent_WhateverItsKind(FlowChangeKind first)
+    {
+        var source = Source() with
+        {
+            Events =
+            [
+                new(1, Began, FlowEvent.KindOf(FlowChangeKind.SessionBegan)),
+                new(2, Began.AddSeconds(100), FlowEvent.KindOf(FlowChangeKind.SessionEnded), Detail: "paused"),
+                new(3, Began.AddSeconds(1000), FlowEvent.KindOf(first), Instance: "a"),
+                new(4, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.Step), Instance: "a"),
+                new(5, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.SessionBegan), Detail: "taken up from a run state holding 3 steps"),
+                new(6, Began.AddSeconds(1100), FlowEvent.KindOf(FlowChangeKind.SessionEnded), Detail: "done"),
+            ],
+        };
+
+        var run = FlowRunReport.Of(source)["theRun"]!;
+
+        Assert.Equal((2, 900.0), (run["sessions"]!.GetValue<int>(), run["pausedSeconds"]!.GetValue<double>()));
+    }
+
+    /// <summary>
+    /// A session a crash ended wrote no last record, so where it stopped and the next began is told only by the next
+    /// session's record of its beginning: the time before that record is counted as the run's pause, as it always was, and
+    /// nothing before a session's first event is taken for one.
+    /// </summary>
+    [Fact]
+    public void TheRunsPause_AfterASessionACrashEnded_RunsToTheNextSessionsRecordOfItsBeginning()
+    {
+        var source = Source() with
+        {
+            Events =
+            [
+                new(1, Began, FlowEvent.KindOf(FlowChangeKind.SessionBegan)),
+                new(2, Began.AddSeconds(100), FlowEvent.KindOf(FlowChangeKind.Step), Instance: "a"),
+                new(3, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.SessionBegan)),
+                new(4, Began.AddSeconds(1100), FlowEvent.KindOf(FlowChangeKind.SessionEnded), Detail: "done"),
+            ],
+        };
+
+        var run = FlowRunReport.Of(source)["theRun"]!;
+
+        Assert.Equal((2, 900.0), (run["sessions"]!.GetValue<int>(), run["pausedSeconds"]!.GetValue<double>()));
+    }
+
+    /// <summary>
+    /// After a crash, which leaves no last record, the run's pause runs from the crashed session's last event to the next
+    /// session's own first event, whatever its kind, by the session each event names: a resume's start writes what it takes
+    /// up - a stopped step made a new attempt, the handoff it is given - before it records that it began, so the time between
+    /// the two falls before that first write, never before the record of the beginning.
+    /// </summary>
+    /// <param name="first">The kind of the resumed session's first event.</param>
+    [Theory]
+    [InlineData(FlowChangeKind.Step)]
+    [InlineData(FlowChangeKind.Handoff)]
+    public void TheRunsPause_AfterACrash_RunsFromTheCrashedSessionsLastEvent_ToTheNextSessionsFirst(FlowChangeKind first)
+    {
+        var source = Source() with
+        {
+            Events =
+            [
+                new(1, Began, FlowEvent.KindOf(FlowChangeKind.SessionBegan), Session: 1),
+                new(2, Began.AddSeconds(100), FlowEvent.KindOf(FlowChangeKind.Step), Instance: "a", Session: 1),
+                new(3, Began.AddSeconds(1000), FlowEvent.KindOf(first), Instance: "a", Session: 2),
+                new(4, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.Step), Instance: "a", Session: 2),
+                new(5, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.SessionBegan), Detail: "taken up from a run state holding 3 steps", Session: 2),
+                new(6, Began.AddSeconds(1100), FlowEvent.KindOf(FlowChangeKind.SessionEnded), Detail: "done", Session: 2),
+            ],
+        };
+
+        var run = FlowRunReport.Of(source)["theRun"]!;
+
+        Assert.Equal((2, 900.0), (run["sessions"]!.GetValue<int>(), run["pausedSeconds"]!.GetValue<double>()));
+    }
+
+    /// <summary>
+    /// What is written after a session's end and before the next session's - an answer the session's last poll takes, an
+    /// inbox entry weighed - is the ended session's, and ends no pause: the run's pause runs from the session's last record
+    /// to the next session's own first event.
+    /// </summary>
+    [Fact]
+    public void TheRunsPause_RunsFromASessionsEnd_OverWhatIsWrittenBeforeTheNextSession()
+    {
+        var source = Source() with
+        {
+            Events =
+            [
+                new(1, Began, FlowEvent.KindOf(FlowChangeKind.SessionBegan), Session: 1),
+                new(2, Began.AddSeconds(100), FlowEvent.KindOf(FlowChangeKind.SessionEnded), Detail: "paused", Session: 1),
+                new(3, Began.AddSeconds(101), FlowEvent.KindOf(FlowChangeKind.Answer), Detail: "'q1' answered 'go' by a person", Session: 1),
+                new(4, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.Step), Instance: "a", Session: 2),
+                new(5, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.SessionBegan), Session: 2),
+                new(6, Began.AddSeconds(1100), FlowEvent.KindOf(FlowChangeKind.SessionEnded), Detail: "done", Session: 2),
+            ],
+        };
+
+        var run = FlowRunReport.Of(source)["theRun"]!;
+
+        Assert.Equal((2, 900.0), (run["sessions"]!.GetValue<int>(), run["pausedSeconds"]!.GetValue<double>()));
+    }
+
+    /// <summary>
+    /// An older build's events name no session and are read as that build's were - the pause from a session's last record
+    /// to the next event, and after a crash to the next session's record of its beginning - and one of this build's that
+    /// follows them begins a session of its own: the pause runs from the older session's last event to it.
+    /// </summary>
+    /// <param name="thenThisBuild">Whether the second session is this build's, its events naming it; else the older build's too.</param>
+    /// <param name="paused">The run's pause.</param>
+    [Theory]
+    [InlineData(false, 1.0)]
+    [InlineData(true, 900.0)]
+    public void TheRunsPause_OfEventsThatNameNoSession_IsReadAsTheirBuildReadIt(bool thenThisBuild, double paused)
+    {
+        var source = Source() with
+        {
+            Events =
+            [
+                new(1, Began, FlowEvent.KindOf(FlowChangeKind.SessionBegan)),
+                new(2, Began.AddSeconds(100), FlowEvent.KindOf(FlowChangeKind.SessionEnded), Detail: "paused"),
+                new(3, Began.AddSeconds(101), FlowEvent.KindOf(FlowChangeKind.Answer), Detail: "'q1' answered 'go' by a person"),
+                new(4, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.Step), Instance: "a", Session: thenThisBuild ? 2 : null),
+                new(5, Began.AddSeconds(1000), FlowEvent.KindOf(FlowChangeKind.SessionBegan), Session: thenThisBuild ? 2 : null),
+                new(6, Began.AddSeconds(1100), FlowEvent.KindOf(FlowChangeKind.SessionEnded), Detail: "done", Session: thenThisBuild ? 2 : null),
+            ],
+        };
+
+        var run = FlowRunReport.Of(source)["theRun"]!;
+
+        Assert.Equal((2, paused), (run["sessions"]!.GetValue<int>(), run["pausedSeconds"]!.GetValue<double>()));
+    }
+
+    /// <summary>
     /// Each signal fires on what it names - the slowest steps, the most expensive, the most retried, every fallback,
     /// the longest wait for a person, a queue wait past its share of a step's time, a cache share under its bound,
     /// a step that read past the depth of one graph answer, output a digest held unread, a review at its bound, a class
@@ -379,22 +521,39 @@ public sealed class FlowRunReportTests
     }
 
     /// <summary>
-    /// The report's notes say what its records could not give it: an events file whose last line was torn - the report
-    /// as of the event before it - and a definition that is not there, or is there and does not read with why said, so
-    /// no critical path is named.
+    /// The report's notes say what its records could not give it: an events file not read whole, in its reader's own
+    /// words - a torn last line, and apart from it the lines a power loss left from the first that holds a NUL on - the
+    /// report as of the event before it; and a definition that is not there, or is there and does not read with why said,
+    /// so no critical path is named.
     /// </summary>
     [Fact]
-    public void TheNotes_SayATornEventsLine_AndADefinitionThatIsNotThereOrDoesNotRead()
+    public void TheNotes_SayAnEventsFileNotReadWhole_AndADefinitionThatIsNotThereOrDoesNotRead()
     {
         var source = Source();
+        using var temp = new TempDirectory();
+        var files = new HarnessFactory().FileSystem;
+        var torn = temp.Combine("torn.jsonl");
+        var cut = temp.Combine("cut.jsonl");
+
+        foreach (var file in new[] { torn, cut })
+        {
+            using var log = FlowEventLog.Open(files, file);
+            _ = log.Append(Began, FlowChangeKind.SessionBegan);
+        }
+
+        File.AppendAllText(torn, """{"seq": 2, "at""");
+        File.WriteAllBytes(cut, [.. File.ReadAllBytes(cut), .. new byte[5], .. System.Text.Encoding.UTF8.GetBytes("2}\n")]);
 
         Assert.Empty(FlowRunReport.Of(source)["notes"]!.AsArray());
         Assert.Equal(
             [
-                $"the last line of '{source.Layout.EventsFile}' was torn - a writer stopped mid-line - and is not read: the report is as of the event before it",
+                $$"""'{{source.Layout.EventsFile}}' was not read whole: the log's last line has no newline and was set aside: '{"seq": 2, "at'; the report is as of the event before it""",
                 $"'{source.Layout.DefinitionFile}' is not there, so the report names no critical path: the steps' dependencies are the definition's",
             ],
-            FlowRunReport.Of(source with { EventsTorn = true, Definition = null })["notes"]!.AsArray().Select(note => note!.GetValue<string>()));
+            FlowRunReport.Of(source with { EventsSetAside = FlowEventLog.Read(files, torn).Torn, Definition = null })["notes"]!.AsArray().Select(note => note!.GetValue<string>()));
+        Assert.Equal(
+            [$"'{source.Layout.EventsFile}' was not read whole: the log's lines from the one after event 1 on hold a NUL, what a power loss left of a pass never put on the disk, and were set aside: ''; the report is as of the event before it"],
+            FlowRunReport.Of(source with { EventsSetAside = FlowEventLog.Read(files, cut).Torn })["notes"]!.AsArray().Select(note => note!.GetValue<string>()));
         Assert.Equal(
             [$"'{source.Layout.DefinitionFile}' does not read: it holds null - so the report names no critical path: the steps' dependencies are the definition's"],
             FlowRunReport.Of(source with { Definition = null, DefinitionWhy = "it holds null" })["notes"]!.AsArray().Select(note => note!.GetValue<string>()));
@@ -485,7 +644,9 @@ public sealed class FlowRunReportTests
         var torn = JsonNode.Parse((await CliRunner.RunAsync([FlowService.ReadReportCommand, "o1", "--json", "-C", kit.Main], TestContext.Current.CancellationToken)).StandardOutput)!["report"]!;
 
         Assert.Equal(FlowTimeConverter.Written(Began), torn["at"]!.GetValue<string>());
-        Assert.Contains($"the last line of '{layout.EventsFile}' was torn", torn["notes"]![0]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal(
+            $"'{layout.EventsFile}' was not read whole: the log's last line has no newline and was set aside: '{{\"seq\":2,\"at\":\"2026-'; the report is as of the event before it",
+            torn["notes"]![0]!.GetValue<string>());
     }
 
     /// <summary>
@@ -591,6 +752,36 @@ public sealed class FlowRunReportTests
     }
 
     /// <summary>
+    /// The run's graph totals sum every step's figures: the pushed pack's tokens beside the pages its steps pulled - the
+    /// map's pages and tokens, and the pack's pages, tokens, the nodes they listed and how many of them the steps then
+    /// used - so a run measures the pack it pulled as it measures the pack it pushed. A step an earlier build measured,
+    /// whose figures hold no pulled pages, adds none. Red with the pulled totals left out, or one of them not summed.
+    /// </summary>
+    [Fact]
+    public void TheRunsGraphTotals_SumThePagesItsStepsPulled_BesideThePushedPacksTokens()
+    {
+        var source = Source();
+        var steps = source.Flow.Steps;
+        var held = source with
+        {
+            Flow = source.Flow with
+            {
+                Steps =
+                [
+                    steps[0] with { Graph = JsonNode.Parse("""{"mode":"tools","pack":{"seeds":0,"nodes":0,"tokens":0,"used":0},"pulled":{"map":{"pages":1,"tokens":300},"pack":{"pages":2,"tokens":1500,"nodes":40,"used":3}},"calls":4,"servedTokens":2000}""") },
+                    steps[1] with { Graph = JsonNode.Parse("""{"mode":"map","pack":{"seeds":2,"nodes":5,"tokens":800,"used":1},"calls":0,"servedTokens":0}""") },
+                    steps[2] with { Graph = JsonNode.Parse("""{"mode":"tools","pack":{"seeds":1,"nodes":3,"tokens":200,"used":0},"pulled":{"map":{"pages":2,"tokens":700},"pack":{"pages":1,"tokens":900,"nodes":25,"used":5}},"calls":3,"servedTokens":1600}""") },
+                ],
+            },
+        };
+
+        var graph = FlowRunReport.Of(held)["totals"]!["graph"]!;
+
+        Assert.Equal((3, 1000, 7, 3600), (graph["steps"]!.GetValue<int>(), graph["packTokens"]!.GetValue<int>(), graph["calls"]!.GetValue<int>(), graph["servedTokens"]!.GetValue<int>()));
+        Assert.Equal("""{"map":{"pages":3,"tokens":1000},"pack":{"pages":3,"tokens":2400,"nodes":65,"used":8}}""", graph["pulled"]!.ToJsonString());
+    }
+
+    /// <summary>
     /// Every number the sections an analysis may cite hold has its unit in the report's one table of units, and every
     /// entry of the table is a member the report writes: a number the builder writes with no unit is one no placeholder of
     /// an impact could write, and an entry no member is names a unit for nothing - so a member added, renamed or moved
@@ -623,7 +814,7 @@ public sealed class FlowRunReportTests
                 [
                     steps[0] with
                     {
-                        Graph = JsonNode.Parse("""{"mode":"tools","from":"base","view":"base","mapTokens":300,"pack":{"seeds":2,"nodes":5,"tokens":800,"used":3},"changesTokens":40,"calls":3,"servedTokens":1200,"bodies":1,"textHits":4,"edits":{"made":1,"refused":0},"wholeFileReads":{"count":1,"tokens":90},"deniedReads":0,"escapes":{"count":1,"tokens":70,"lowConfidence":0,"stated":1}}"""),
+                        Graph = JsonNode.Parse("""{"mode":"tools","from":"base","view":"base","mapTokens":300,"pack":{"seeds":2,"nodes":5,"tokens":800,"used":3},"changesTokens":40,"pulled":{"map":{"pages":1,"tokens":300},"pack":{"pages":1,"tokens":500,"nodes":12,"used":2}},"calls":3,"servedTokens":1200,"bodies":1,"textHits":4,"edits":{"made":1,"refused":0},"wholeFileReads":{"count":1,"tokens":90},"outlinedReads":{"count":1,"tokens":2000,"outlineTokens":150},"escapes":{"count":1,"tokens":70,"lowConfidence":0,"stated":1}}"""),
                         Measure = steps[0].Measure! with { Ran = 10 },
                     },
                     steps[1],

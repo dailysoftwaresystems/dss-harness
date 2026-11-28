@@ -208,7 +208,7 @@
             "properties": {
               "axes": {
                 "type": "array",
-                "description": "Each axis of the universe the class names, with the values the work covered: every axis the item's class names is among them.",
+                "description": "Each axis the class's universe says applies, with the values the work covered: every axis that applies in the universe the item's class names is among them, and one it says does not apply has no cell to cover.",
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
@@ -219,7 +219,7 @@
                   "properties": {
                     "name": {
                       "type": "string",
-                      "description": "The axis's name."
+                      "description": "The axis, by the name the class's universe gives it: the member that answers it there, such as configurations, or a further axis's own name."
                     },
                     "values": {
                       "type": "array",
@@ -259,7 +259,7 @@
               },
               "tableDriven": {
                 "type": "boolean",
-                "description": "True only where the tests are table-driven over the universe the class names - not over the reported case."
+                "description": "True only where the tests are table-driven over the universe the class names - over every axis of it a test can range over, the targets and the configurations covered by the pin run on each leg and in each configuration - not over the reported case."
               },
               "over": {
                 "type": "string",
@@ -353,7 +353,7 @@
           },
           "claim": {
             "type": "string",
-            "description": "The closing claim, which names the universe and never the case: 'Invariant I holds over U; cells C measured on references R; cells N not measured because B'."
+            "description": "The closing claim, which names the universe and never the case: 'Invariant I holds over U; cells C measured on references R; cells N not measured because B', U naming each axis of the universe above by its name."
           },
           "homeAudit": {
             "type": "object",

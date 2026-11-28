@@ -49,7 +49,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new DoneRunner(), new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, new DoneRunner(), new RunnerFacts(), clock, records: records);
             await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
 
@@ -92,7 +92,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("gate");
 
@@ -138,7 +138,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(
+            var coordinator = TestAdvice.Coordinator(
                 definition,
                 new DoneRunner().On("plan", run => FlowStepResult.Ended(passed: true, 0, output: JsonNode.Parse("""{"list": ["a", "b"]}"""))),
                 new RunnerFacts(),
@@ -174,7 +174,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("gate");
             coordinator.RequestPause("interrupt");
@@ -214,7 +214,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
 
@@ -254,7 +254,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             await runner.StartedAsync("build").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
@@ -284,6 +284,87 @@ public sealed class WorkflowStatusTests
         Assert.Equal(0, recovered.Progress.Recovering);
     }
 
+    /// <summary>
+    /// A failure whose visit of the recovery the engine holds at work shows Recovering, by the engine's own rule of a visit
+    /// at work (<see cref="FlowInstance.IsAtWork"/>): a visit a pause or a stop stopped - which runs again at the resume, as
+    /// an older build's pause left a visit stopped and the session that takes it up holds it stopped until its start goes
+    /// on - is at work, where the status read only the states of a visit still running and showed the failure Failed; a
+    /// visit a plan update ended, in a work item it brought to rest, is over, and the failure shows Failed.
+    /// </summary>
+    [Theory]
+    [InlineData(null, "Recovering", 1)]
+    [InlineData("u1", "Failed", 0)]
+    public void AFailureWhoseRecoveryVisitIsStopped_ShowsRecoveringWhileTheVisitIsAtWork(string? endedFor, string shown, int recovering)
+    {
+        var at = new DateTimeOffset(2026, 11, 27, 10, 0, 0, TimeSpan.Zero);
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              maxVisits: 2
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: build
+                type: orient
+                onFailure: recover
+            """);
+        var snapshot = new FlowSnapshot(
+            FlowRunStatus.Paused,
+            null,
+            new FlowBudgetRecord(0, 0, 0),
+            0,
+            null,
+            [
+                SnapshotStep("build", "build", "orient", group: false, FlowInstanceState.Failed, at, at),
+                SnapshotStep("recover", FlowScope.Recovery, null, group: true, FlowInstanceState.Stopped, at, null, raisedBy: "build", endedFor: endedFor),
+                SnapshotStep("recover.mend", "recover.mend", "orient", group: false, FlowInstanceState.Stopped, at, null, endedFor: endedFor),
+            ],
+            [],
+            []);
+
+        var status = WorkflowStatusWriter.StatusOf(FlowRunContext.Of("r1", definition, startedAt: at), snapshot, at);
+
+        Assert.Equal(shown, status.Steps["build"].Status);
+        Assert.Equal(
+            new WorkflowInstanceStatus(shown, 1, 1, 1, at, at, 0, recovering == 1 ? new WorkflowRecovery(1, 2, "fix") : null),
+            status.Steps["build"].Instances["build"]);
+        Assert.Equal(recovering, status.Progress.Recovering);
+    }
+
+    /// <summary>One instance as the engine's snapshot holds it, with what a test of the status sets and nothing else.</summary>
+    private static FlowSnapshotStep SnapshotStep(string instance, string step, string? type, bool group, FlowInstanceState state, DateTimeOffset started, DateTimeOffset? finished, string? raisedBy = null, string? endedFor = null)
+        => new(
+            instance,
+            step,
+            type,
+            group,
+            state,
+            Attempt: 1,
+            Visit: 1,
+            started,
+            finished,
+            Exit: null,
+            Error: null,
+            SkippedBecause: null,
+            NotRunBecause: null,
+            Failure: null,
+            EndedByQuestion: null,
+            Agent: null,
+            Made: null,
+            Question: null,
+            Handoff: null,
+            Output: null,
+            FlowValue.Missing,
+            Index: null,
+            Iteration: null,
+            Answers: [],
+            WaitsOn: [],
+            RaisedBy: raisedBy,
+            EndedFor: endedFor);
+
     /// <summary>A resume rewrites the status from the run's state and its step records before it goes on, so after a crash it is never behind.</summary>
     [Fact]
     public async Task AResumeRewritesTheStatusBeforeItGoesOn()
@@ -304,20 +385,20 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("gate");
 
             // The crash: the session never ends, and the records stop where they stand - the last whole writes.
         }
 
-        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
 
         var (_, _, again) = Records("r1", temp.Path, definition, clock);
 
         using (again)
         {
-            var coordinator = new FlowCoordinator(definition, new DoneRunner(), new RunnerFacts(), clock, resume: taken, records: again);
+            var coordinator = TestAdvice.Coordinator(definition, new DoneRunner(), new RunnerFacts(), clock, resume: taken, records: again);
             var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -360,7 +441,7 @@ public sealed class WorkflowStatusTests
 
         using (records)
         {
-            await new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records).RunAsync(TestContext.Current.CancellationToken);
+            await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records).RunAsync(TestContext.Current.CancellationToken);
         }
 
         var status = harness.OrchestrationStore.ReadWorkflowStatus(layout)!;

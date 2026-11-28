@@ -39,12 +39,15 @@ public sealed partial class HelpTests
         Assert.Contains(Prose.Words($"({string.Join(", ", DssHarness.Core.Codebase.CodeConfidences.All.Select(confidence => $"{confidence} {DssHarness.Core.Codebase.CodebaseContextPack.Confidence(confidence).ToString(System.Globalization.CultureInfo.InvariantCulture)}"))})"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("so a hub is gone through and its many neighbours are ranked down by how many they are, never cut."), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words($"or which page of how many and how to ask for the next - graph's {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NameOf(DssHarness.Core.Agents.Runtime.GraphOp.Pack)} with page - the pack's pages laid once whole with it, so every page's last line names the total, and the last saying it is;"), prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words("graphPromptTokens 0 gives no pack, and so does a size that cannot hold a page's first and last lines."), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("graphPromptTokens 0 gives a step whose graph is map no pack, and so does a size that cannot hold a page's first and last lines."), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"Pull, not push: a step whose graph is tools is pushed none of it - graph's {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NameOf(DssHarness.Core.Agents.Runtime.GraphOp.Pack)} gives its pages, from page 1, when asked - unless its graphPromptTokens says a size, which pushes page 1 at that size at the head of its first message"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"a step whose graph is map, which has no tool, is pushed page 1 at its graphPromptTokens, {WorkflowStep.DefaultGraphPromptTokens.ToString(CultureInfo.InvariantCulture)} where it says none."), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("A step whose graph is tools is pushed no map: no step with the tool was measured asking it for a page. Every launch of a step whose graph is map that begins a conversation of its own is given it as the <repository-map> part ahead of its context pack"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("A step that starts from its changes is packed first from the declarations its tree changed against its base - an agent's where its worktree was made or last moved to, the main checkout's the run's start - each with where its lines differ"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("then their impact walked the same way from them - their tests, carried whole, first, then their callers, overrides, implementations and dispatches, and derived types, as far as it goes - then from the task; where nothing changed, its first line says so and the task's seeds stand in."), prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words($"It is given in pages of the step's graphPromptTokens ({DssHarness.Core.Codebase.CodebaseContextPack.DefaultTokens} estimated tokens - bytes over {DssHarness.Core.Codebase.EstimatedTokens.BytesPerToken} - by default), best first"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"It is laid in pages of the step's graphPromptTokens, or of {DssHarness.Core.Codebase.CodebaseContextPack.DefaultTokens} estimated tokens - bytes over {DssHarness.Core.Codebase.EstimatedTokens.BytesPerToken} - where it says none, or 0 on a step with the tool, best first"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words($"is listed under '{DssHarness.Core.Codebase.CodebaseContextPack.NotCompared}' with why, and nothing in it is said unchanged."), prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words($"told in pages of the step's graphPromptTokens, page 1 in the message and each later page by graph's {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NameOf(DssHarness.Core.Agents.Runtime.GraphOp.Changes)} with page"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"and, where its step pushes its pack, the nodes of its own pack the conversation was not given, every one, told in pages of the step's pack's size, page 1 in the message and each later page by graph's {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NameOf(DssHarness.Core.Agents.Runtime.GraphOp.Changes)} with page"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("a tie broken by how near the step's own work each is - its context pack or a working set it was given, a file it writes, a file its agent changed, a path or a name its prompt holds - then by id"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words($"each node it {string.Join(", ", DssHarness.Core.Codebase.WorkingSetUses.All.SkipLast(1))} or {DssHarness.Core.Codebase.WorkingSetUses.All[^1]}, with its handle, file, lines and hash at the step's end, every one however many,"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("A reason step's pack is to be given the working sets of the step it goes on with (resume), of each step it depends on directly, a group by each reason step in it, and of its own earlier visits of the same work item, newest first"), prose, StringComparison.Ordinal);
@@ -59,6 +62,29 @@ public sealed partial class HelpTests
         Assert.Contains(Prose.Words($"the cards grouped by file kind - the language that read the file, else its extension or its name - and tier - the project nearest above the file, else its top directory - {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.RelatedLines} places a page; every place held to the step's reads, those they do not reach counted;"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("with the coverage lines that end every such answer - how many files of each kind of what the graph does not answer were searched once they were read, with their hits, the files it lists only and those it is unsure of said where none was, the forms a selector and a key path were searched in, and, where any file the graph lists only was searched, that nothing is assumed of a language with no extractor - and every limit of each language whose files the graph read - one some of those files show the sign of in full, with how many show it, and every other by its short name, on one line for the language that points to 'help codebase-graph-languages', which says each in full under its name;"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("--body <symbol>... or --sites <data>, any of them with --page <n>"), prose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The codebase-graph topic says what view an agent that only reads is served: its own tree's, never the base's - the
+    /// tree at the main checkout's HEAD or the commit its step names, synced once the step's start brought it there, or as
+    /// the attempt an answer goes on with left it - so
+    /// what its reads are told of a file, their narrowing and its working set are of the tree it reads.
+    /// </summary>
+    [Fact]
+    public void TheCodebaseGraphTopic_SaysAReader_IsServedItsOwnTreesView()
+    {
+        var prose = Prose.Words(HelpText.Of("codebase-graph").StandardOutput);
+
+        Assert.Contains(
+            Prose.Words(
+                "An agent that only reads is served the view of its own tree too, never the base's: its tree holds what the main checkout committed - or the commit its step "
+                + "names (commit, 'help workflows') - and not the main checkout's uncommitted changes, so its reason step's view is synced, by a whole listing held against the "
+                + "base, once the step's start brought the tree there - or, for an attempt an answer goes on with, found it as that attempt left it, what it wrote there "
+                + "among it - and served - the declarations its reads are given, their narrowing and its working set all of the tree it "
+                + "reads; a read of the main checkout beside it is of no file the view holds."),
+            prose,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("is served the base", prose, StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -31,6 +31,11 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
     private readonly List<(string Id, string Tool)> _open = [];
     private readonly List<FlowTurnSpend> _turns = [];
 
+    // The turns of every run of the stream whose end was read, or that a later run's start showed cut; and the answers the
+    // ended turns of the run under way held, until its end says the run's own count.
+    private int _runsTurns;
+    private int _endedTurns;
+
     /// <summary>
     /// The pages past the first the run's <c>graph</c> calls asked for, by answer - its operation and its inputs less the
     /// page, keyed as a kept result is (<see cref="Codebase.GraphPageStore.KeyOf"/>): the operation, how many pages past
@@ -57,8 +62,13 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
     /// <summary>Every turn the run's usage reports said, in order, each with its spend as it was counted.</summary>
     public IReadOnlyList<FlowTurnSpend> Turns => _turns;
 
-    /// <summary>How many turns the run's conversation took.</summary>
-    public int TurnsTaken { get; private set; }
+    /// <summary>
+    /// How many turns the run's conversation took - the model's answers, one response each, on every client: each run's
+    /// own count as its end says it (<see cref="RunFinished.Turns"/>), a launch cut before its turn's end among it; and for
+    /// a run a crash cut before its end, and one whose stream was written before runs said it, the answers its ended turns
+    /// held (<see cref="TurnFinished.AnswersHeld"/>).
+    /// </summary>
+    public int TurnsTaken => _runsTurns + _endedTurns;
 
     /// <summary>How many times the run's conversation was compacted.</summary>
     public int Compactions { get; private set; }
@@ -108,8 +118,20 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
                 Effort = moved.ToEffort ?? Effort;
                 break;
 
-            case TurnFinished:
-                TurnsTaken++;
+            case RunStarted:
+                // A run before it that never ended - a crash cut it - took the answers its ended turns held.
+                _runsTurns += _endedTurns;
+                _endedTurns = 0;
+                break;
+
+            case TurnFinished finished:
+                _endedTurns += finished.AnswersHeld;
+                break;
+
+            case RunFinished finished:
+                // The run's own count stands for what its ended turns held: it holds a launch cut before its turn's end too.
+                _runsTurns += finished.Turns ?? _endedTurns;
+                _endedTurns = 0;
                 break;
 
             case Compacted:

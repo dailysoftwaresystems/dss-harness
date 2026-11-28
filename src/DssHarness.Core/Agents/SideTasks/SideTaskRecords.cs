@@ -21,7 +21,7 @@ namespace DssHarness.Core.Agents.SideTasks;
 /// What it used and cost; null where nothing has said or counted it. A turn of a launch held open for a whole chat holds
 /// what its own turns were seen to use, and the launch's cost is the side-task's in all.
 /// </param>
-/// <param name="Turns">How many turns of the agent's it took.</param>
+/// <param name="Turns">How many turns of the agent's it took: the model's answers, one response each, on every client (<see cref="AgentRunResult.Turns"/>).</param>
 /// <param name="Status">How it ended; null where it ended inside a launch held open for the chat, whose end is the launch's.</param>
 /// <param name="Policy">What the agent ran under, as the policy was resolved for it.</param>
 public sealed record SideTaskTurn(

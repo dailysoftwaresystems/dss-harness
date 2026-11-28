@@ -335,6 +335,38 @@ public sealed class CommitStepTests
     }
 
     /// <summary>
+    /// The repository's commit hooks run in the person's own locale, as in their shell: started in a known locale other
+    /// than C, the tool's git runs a pre-commit hook that sees exactly that <c>LC_ALL</c> and <c>LANG</c> - never the C
+    /// every other git of the tool's runs under - and the commit is made.
+    /// </summary>
+    [Fact]
+    public async Task ACommitsHooks_RunInThePersonsOwnLocale()
+    {
+        const string Locale = "C.UTF-8";
+        const string Language = "en_US.UTF-8";
+        using var temp = new TempDirectory();
+        using var seen = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        _ = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+        var hook = Path.Combine(kit.Main, ".git", "hooks", "pre-commit");
+        var said = seen.Combine("locale.txt");
+        File.WriteAllText(hook, $"#!/bin/sh\nprintf '%s|%s' \"$LC_ALL\" \"$LANG\" > '{said.Replace('\\', '/')}'\n");
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(hook, File.GetUnixFileMode(hook) | UnixFileMode.UserExecute);
+        }
+
+        // The person's shell, as the tool inherits it: a locale of its own, whatever the machine running the test has.
+        var git = new GitClient(new InTheLocale(kit.Harness.ProcessRunner, Locale, Language), kit.Harness.Output, localVariables: kit.Harness.LocalVariables);
+        var ended = await Runner(kit, git, new GitPublisher(git, new DssHarness.Core.Ci.GhProcess(kit.Harness.ProcessRunner, kit.Harness.LocalVariables))).RunAsync(Run(kit, Step(), "fold"), Token);
+
+        Assert.True(ended.Passed, ended.Error);
+        Assert.Equal($"{Locale}|{Language}", File.ReadAllText(said));
+        Assert.Equal(FlowCommitEntry.Committed, kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits[0].State);
+    }
+
+    /// <summary>
     /// A staged set an attempt before left - cut off after its commit was made - is settled as committed where HEAD moved
     /// and holds it, and the step is done with that commit, making none.
     /// </summary>
@@ -1274,5 +1306,24 @@ public sealed class CommitStepTests
         public void HandoffTaken()
         {
         }
+    }
+
+    /// <summary>
+    /// Programs started as from a shell whose locale is <paramref name="locale"/> and whose language is
+    /// <paramref name="language"/>: each is inherited where the request sets none of its own, as a child inherits its
+    /// parent's environment, so a locale the tool sets is the one its program gets.
+    /// </summary>
+    private sealed class InTheLocale(IProcessRunner inner, string locale, string language) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            var environment = new Dictionary<string, string?>(request.Environment, StringComparer.Ordinal);
+            environment.TryAdd(GitOwnSettings.LocaleVariable, locale);
+            environment.TryAdd("LANG", language);
+
+            return inner.RunAsync(request with { Environment = environment }, cancellationToken);
+        }
+
+        public string? FindExecutable(string command) => inner.FindExecutable(command);
     }
 }

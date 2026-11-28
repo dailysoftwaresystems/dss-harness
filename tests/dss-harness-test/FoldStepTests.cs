@@ -48,6 +48,9 @@ public sealed class FoldStepTests
 
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
+    /// <summary>A main tree that holds no directory, for a within whose entries are patterns alone.</summary>
+    private static readonly TreeDirectories NoDirectories = TreeDirectories.Of("start", []);
+
     /// <summary>
     /// A fold applies what its dry run named, writing its intent to the run's ledger of its folds before the verb is
     /// called and what it left after, and answers what it wrote, removed, the registry files its rows changed and the rows
@@ -848,9 +851,90 @@ public sealed class FoldStepTests
     [Fact]
     public void AFoldsWithin_MatchesByTheCaseRuleOfTheTree()
     {
-        Assert.Empty(FoldWithin.Outside(["Src/A.cs", "src/b.cs"], ["src/**"], StringComparison.OrdinalIgnoreCase));
-        Assert.Equal(["Src/A.cs"], FoldWithin.Outside(["Src/A.cs", "src/b.cs"], ["src/**"], StringComparison.Ordinal));
-        Assert.Empty(FoldWithin.Outside(["anything.txt"], null, StringComparison.Ordinal));
+        Assert.Empty(FoldWithin.Outside(["Src/A.cs", "src/b.cs"], ["src/**"], NoDirectories, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(["Src/A.cs"], FoldWithin.Outside(["Src/A.cs", "src/b.cs"], ["src/**"], NoDirectories, StringComparison.Ordinal));
+        Assert.Empty(FoldWithin.Outside(["anything.txt"], null, NoDirectories, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A fold's within is read from the main tree's root, as the plan's check read the work item's owned paths that flow
+    /// into it: the root's calc.c carries no calc.c beneath another directory, a path the main tree holds as a directory
+    /// carries what is in it, and one it does not hold carries itself alone - so a fold carries only what the check found
+    /// the item alone to own. Whether a path names a directory is asked of the tree of the commit the run started from.
+    /// </summary>
+    [Fact]
+    public async Task AFoldsWithin_IsReadFromTheMainTreesRoot()
+    {
+        using var main = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(main.Path, Token);
+        main.WriteFile("calc.c", "int calc;\n");
+        main.WriteFile("src/click/types.py", "types\n");
+        await harness.CommitAllAsync(main.Path, "the tree", Token);
+        var directories = await harness.StartTreeAsync(main.Path, Token);
+
+        Assert.Equal(
+            ["lib/calc.c", "src/new/a.py"],
+            FoldWithin.Outside(["calc.c", "lib/calc.c", "src/click/types.py", "src/click/testing.py", "src/new", "src/new/a.py"], ["calc.c", "src/click", "src/new"], directories, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A fold's within read against a start tree that could not be read takes no path for a directory, so a path beneath
+    /// an entry that names one is outside it; what the fold's question says of that path says why the tree could not be
+    /// read, once, after how to write the entry - and nothing of the tree where the entry's reading at the root alone
+    /// left a path out.
+    /// </summary>
+    [Fact]
+    public void AFoldsWithinReadAgainstAnUnreadStartTree_SaysWhyItCouldNotBeRead()
+    {
+        var unread = TreeDirectories.NoCommit;
+        IReadOnlyList<string> within = ["docs/api", "src", "*.md"];
+
+        var outside = FoldWithin.Outside(["docs/api/index.md", "src/a.c", "notes/a.md", "README.md"], within, unread, StringComparison.Ordinal);
+
+        Assert.Equal(["docs/api/index.md", "src/a.c", "notes/a.md"], outside);
+        Assert.Equal(
+            "'docs/api' names a file: a directory to be made is written 'docs/api/'; '*.md' names the root's own: '**/*.md' names any depth; "
+                + "'src' names a file: a directory to be made is written 'src/'; no path is taken for a directory of the run's start tree, which could not be read: the run names no commit it started from",
+            FoldWithin.Said(outside, within, unread, StringComparison.Ordinal));
+        Assert.Equal(
+            "'*.md' names the root's own: '**/*.md' names any depth",
+            FoldWithin.Said(["notes/a.md"], within, unread, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A fold's within is read against the tree of the commit the run started from, never the main tree as the run's own
+    /// folds left it: an entry that named no directory there - a file to be made - names that path alone though another
+    /// item's fold, before this one, has since made it a directory in the main tree; so the order folds come in never
+    /// widens what a fold carries, and the question it asks says how to write the directory it may have meant.
+    /// </summary>
+    [Fact]
+    public async Task AFoldsWithin_IsReadAgainstTheRunsStartTree_NeverTheMainTreeAnEarlierFoldChanged()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var start = await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, "docs/api/index.md", "the agent's page\n");
+
+        // Another item's fold, before this one, made docs/api a directory in the main tree.
+        OrchestrationKit.Write(kit.Main, "docs/api/other.md", "another item's page\n");
+
+        var place = new FlowRunPlace(kit.Main, OrchestrationKit.Orchestrator, start, Definition)
+        {
+            StartTree = await TreeDirectories.AtAsync(kit.Harness.GitClient, kit.Main, start, kit.Harness.Platform.PathComparison, Token),
+        };
+        var step = Fold() with { Within = new FlowList(["docs/api"], null) };
+
+        var asked = await Runner(kit).RunAsync(Run(kit, step) with { Place = place }, Token);
+
+        // A fold that found nothing outside its within would have applied, holding no dry run.
+        Assert.NotNull(asked.DryRun);
+        Assert.Equal(["docs/api/index.md"], asked.DryRun.Outside);
+        Assert.Equal(
+            "'fold': the fold of 'ag' would write 'docs/api/index.md', which is outside the paths its within names; 'docs/api' names a file: a directory to be made is written 'docs/api/'",
+            FlowQuestions.FoldProblemOf("fold", asked.DryRun, FlowQuestions.FoldQuestionOf(asked.DryRun)!));
+        Assert.False(File.Exists(Path.Combine(kit.Main, "docs", "api", "index.md")));
     }
 
     /// <summary>

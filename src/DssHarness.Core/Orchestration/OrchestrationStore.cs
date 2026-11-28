@@ -301,6 +301,22 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     }
 
     /// <summary>
+    /// Runs <paramref name="work"/> inside the repository's one section across its runs, as
+    /// <see cref="AcrossRuns{T}(HarnessLayout, Func{T}, CancellationToken)"/> does, for one who holds a run's layout alone:
+    /// a run's directory lies in the repository's orchestrators directory, beside the section's file, as its owner's does.
+    /// </summary>
+    /// <param name="run">One run of the repository.</param>
+    /// <param name="work">The reading, the decision and the writing, all synchronous.</param>
+    /// <param name="cancellationToken">Ends a wait for another process's decision, before the work begins.</param>
+    public T AcrossRuns<T>(OrchestratorLayout run, Func<T> work, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        ArgumentNullException.ThrowIfNull(work);
+
+        return WhileHeld(RunsSectionFileIn(Path.GetDirectoryName(run.Directory) ?? run.Directory), work, cancellationToken);
+    }
+
+    /// <summary>
     /// Runs <paramref name="work"/> with no other process inside the same section of <paramref name="path"/>, waiting for
     /// another process's for as long as it holds it - a holder that ended holding it is let go by the system - told every
     /// five minutes naming the file, and ended by <paramref name="cancellationToken"/>; never refused for how long another
@@ -312,13 +328,17 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     private T WhileHeld<T>(string path, Func<T> work, CancellationToken cancellationToken)
         => MachineWideFile.Update(path, MachineWideFile.Window, told => _output.Info(Hosts.ToolPackage.Id, told.Line()), TimeProvider.System, work, cancellationToken);
 
-    /// <summary>The file that names the repository's one section across its runs (<see cref="AcrossRuns{T}"/>).</summary>
+    /// <summary>The file that names the repository's one section across its runs (<see cref="AcrossRuns{T}(HarnessLayout, Func{T}, CancellationToken)"/>).</summary>
     /// <param name="layout">The repository.</param>
     public static string RunsSectionFile(HarnessLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
-        return Path.Combine(layout.OrchestratorsDirectory, ".runs");
+        return RunsSectionFileIn(layout.OrchestratorsDirectory);
     }
+
+    /// <summary>The section's file in the repository's orchestrators directory <paramref name="orchestrators"/>: the one place it is named.</summary>
+    /// <param name="orchestrators">The repository's orchestrators directory.</param>
+    private static string RunsSectionFileIn(string orchestrators) => Path.Combine(orchestrators, ".runs");
 
     /// <summary>The run's state in one file, or null where the run holds none.</summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
@@ -337,6 +357,46 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(file);
         Write(orchestrator.FlowFile, FlowKind, file, file.Problem());
+    }
+
+    /// <summary>
+    /// Takes the mark of an engine's start back from the run's state where it holds it (<see cref="Flow.FlowFile.Starting"/>):
+    /// what a session's release does once its owner is gone (<see cref="Flow.FlowRunOwner.Release"/>). Everything else the
+    /// state says stands as written; a state that holds no mark, and a run that holds no state, are left as they are.
+    /// </summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <exception cref="HarnessException">The state cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public void Unmark(OrchestratorLayout orchestrator)
+        => _ = Rewrite(orchestrator, flow => flow.Starting is true ? flow with { Starting = null } : flow);
+
+    /// <summary>
+    /// Writes the run's state again as <paramref name="rewritten"/> says it from the state as it stands: the one read and
+    /// write of a change of part of it - the mark's taking back, and what a start stands on once a stop or a pause is asked
+    /// of it (<see cref="Flow.IFlowRecords.Stand"/>) - nothing written where it hands the state back as it stood, and a run
+    /// that holds no state left so.
+    /// </summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="rewritten">The state as it is to be, from the state as it stands.</param>
+    /// <returns>The state as it stood before; null where the run holds none.</returns>
+    /// <exception cref="HarnessException">The state cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public Flow.FlowFile? Rewrite(OrchestratorLayout orchestrator, Func<Flow.FlowFile, Flow.FlowFile> rewritten)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(rewritten);
+
+        if (ReadFlow(orchestrator) is not { } stood)
+        {
+            return null;
+        }
+
+        var written = rewritten(stood);
+
+        if (!ReferenceEquals(written, stood))
+        {
+            WriteFlow(orchestrator, written);
+        }
+
+        return stood;
     }
 
     /// <summary>The run's status, or null where the run holds none.</summary>
@@ -521,26 +581,29 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         }
     }
 
-    /// <summary>The orchestrator entry as it ran, frozen, or null where the run holds none.</summary>
+    /// <summary>
+    /// The orchestrator entry as it ran, frozen, or null where the run holds none: read as this build reads one whichever
+    /// build froze it (<see cref="FrozenDefinition"/>).
+    /// </summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     /// <exception cref="HarnessException">The entry cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
     public WorkflowDefinition? ReadDefinition(OrchestratorLayout orchestrator)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
-        return Read<WorkflowDefinition>(orchestrator.DefinitionFile, DefinitionKind, _ => null);
+        return Read(orchestrator.DefinitionFile, DefinitionKind, _ => null, () => FrozenDefinition.Read(_fileSystem, orchestrator.DefinitionFile));
     }
 
     /// <summary>
     /// The orchestrator entry as it ran, frozen, or why it cannot be read: the entry null and the why set where the file
     /// is there and does not read, both null where it is not there - for a reader that answers anyway and says so in its
-    /// own words, where <see cref="ReadDefinition"/> refuses the whole read.
+    /// own words, where <see cref="ReadDefinition"/> refuses the whole read. Read as that one reads it.
     /// </summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     public (WorkflowDefinition? Definition, string? Why) ReadDefinitionOrWhy(OrchestratorLayout orchestrator)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
 
-        var (definition, why, _) = ReadOrWhy(orchestrator.DefinitionFile, DefinitionKind, _ => null, () => JsonStateFile.Read<WorkflowDefinition>(_fileSystem, orchestrator.DefinitionFile));
+        var (definition, why, _) = ReadOrWhy(orchestrator.DefinitionFile, DefinitionKind, _ => null, () => FrozenDefinition.Read(_fileSystem, orchestrator.DefinitionFile));
         return (definition, why);
     }
 
@@ -571,6 +634,36 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(file);
         Write(orchestrator.QuestionsFile, QuestionsKind, file, file.Problem());
+    }
+
+    /// <summary>
+    /// Writes the run's questions again as <paramref name="rewritten"/> says them from the file as it stands - what a start
+    /// stands on once a stop or a pause is asked of it defers among them (<see cref="Flow.IFlowRecords.Stand"/>), as
+    /// <see cref="Rewrite"/> writes the run's state: nothing written where it hands the file back as it stood, and a run that
+    /// holds none left so.
+    /// </summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="rewritten">The questions as they are to be, from the file as it stands.</param>
+    /// <returns>The questions as they stood before; null where the run holds none.</returns>
+    /// <exception cref="HarnessException">The file cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public FlowQuestionsFile? RewriteFlowQuestions(OrchestratorLayout orchestrator, Func<FlowQuestionsFile, FlowQuestionsFile> rewritten)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(rewritten);
+
+        if (ReadFlowQuestions(orchestrator) is not { } stood)
+        {
+            return null;
+        }
+
+        var written = rewritten(stood);
+
+        if (!ReferenceEquals(written, stood))
+        {
+            WriteFlowQuestions(orchestrator, written);
+        }
+
+        return stood;
     }
 
     /// <summary>Every plan update the run has taken, or null where the run holds none.</summary>

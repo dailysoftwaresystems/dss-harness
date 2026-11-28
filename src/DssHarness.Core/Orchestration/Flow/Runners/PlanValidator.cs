@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using System.Text.Json.Nodes;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
@@ -13,16 +14,25 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// the shape a work item has;
 /// every name valid and used once - in the list, and across the run where the list opens a round, for a work item is
 /// known by its name alone; no path owned by two items; each item's forbidden paths kept by its own owned
-/// paths; the path budget of the worktree each would get, with the copies and workers its legs keep inside it and the
+/// paths - each entry read from the repository's root, as the item's agent's writes and its fold's within read it
+/// (<see cref="GlobPattern.FromRoot"/>), whether it names a directory asked of the run's start tree as they ask it
+/// (<see cref="TreeDirectories"/>), so two entries meet only where some path the tree can hold is matched by both; no
+/// entry an item owns with no trailing separator that names a directory of the main tree the start tree does not hold -
+/// one an earlier round made - for every write beneath it would be refused; the path budget of the worktree each would get, with the copies and workers its legs keep inside it and the
 /// deepest file it owns; and the lists that hold an item to what the repository has - every path it reuses or replaces
 /// there in the main tree, something under one of the three, and a reason and a search for everything it creates. Each
 /// item also carries its classes - the decisions it changes, each with its one home, its sites, its searches and its
 /// universe - or says in <c>noClass</c> why it decides nothing, and the classes are held to what the tree and the
-/// item's own paths say of them (P-C1 to P-C8); and each names the tests its change affects, the units it is tested on
-/// alone, or says in <c>noTests</c> why it affects none (P-C9). Each breach is a problem of the plan, worded once here;
-/// none is a failure.
+/// item's own paths say of them, and each universe to the two ways an axis is answered and to the cells its axes make (P-C1 to P-C8); and each names the tests its change affects, the units it is tested on
+/// alone, or says in <c>noTests</c> why it affects none (P-C9). The rules that read the main tree as it now is - an
+/// owned entry naming one of its directories, a path reused or replaced, a class's home and sites being there - hold
+/// every item still to be built: an item an opened round of the run holds that nothing is to build again - no piece of a
+/// plan update places it, and no owed one does it again - was checked when its round opened, against the tree of that
+/// moment, and what a fold has made of the tree since is no breach of it; a removed piece's item builds nothing; and an
+/// item of a round that has not opened, whose check has just found it wanting, is held as it is
+/// (<see cref="CheckedBefore"/>). Each breach is a problem of the plan, worded once here; none is a failure.
 /// </summary>
-/// <param name="fileSystem">Reads the main tree for the paths the items reuse and replace.</param>
+/// <param name="fileSystem">Reads the main tree for the paths the items reuse and replace, and the directories it holds.</param>
 /// <param name="pathBudget">Reckons the paths of the worktree each item would get.</param>
 /// <param name="platform">This machine: its operating system, and how the tree's names compare.</param>
 public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget, IHostPlatform platform)
@@ -38,6 +48,11 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="run">The run's name, which names its agents' worktrees' directory.</param>
     /// <param name="definition">The workflow, whose leg steps say which copies a worktree keeps.</param>
+    /// <param name="startTree">
+    /// The directories of the run's start tree (<see cref="FlowRunPlace.Directories"/>), which every entry is read against:
+    /// for whether two entries meet, a path the tree could not answer for counts as a directory; for what an item owns, as
+    /// none.
+    /// </param>
     /// <param name="noItems">Whether a list of no work item is a problem: one that carries only what updates placed is not.</param>
     /// <param name="carried">
     /// The names of the work items earlier rounds of the run carry, which no item of the list may take: a work item is
@@ -46,13 +61,23 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// round, the run has none before it, or the round builds none of the list's own items: one added to a work-item
     /// group with no loop around it carries the owed work alone, its own items built by the round before.
     /// </param>
+    /// <param name="checkedBefore">
+    /// The names of the items the rules that read the main tree as it now is pass over (<see cref="CheckedBefore"/>;
+    /// <see cref="DirectoryProblems"/>, and the paths <see cref="ListProblems"/> and <see cref="ClassesProblems"/> look
+    /// for there): each an opened round holds that nothing is to build again - it was checked when its round opened,
+    /// against the main tree of that moment, and a fold since that made a directory of its bare entry or took away a path
+    /// it reused is no breach of it - and each a removed piece takes back, which builds nothing. An item of a round that
+    /// has not opened is never among them. None where the check holds every item to the tree: a plan's first check, and
+    /// every check that opens no round and is handed no plan update - a recovery's.
+    /// </param>
     /// <returns>Every problem of the plan, in the order of its items; none where it passes.</returns>
-    public IReadOnlyList<string> Check(IReadOnlyList<JsonNode?> items, HarnessContext context, string run, WorkflowDefinition definition, bool noItems = true, IReadOnlyCollection<string>? carried = null)
+    public IReadOnlyList<string> Check(IReadOnlyList<JsonNode?> items, HarnessContext context, string run, WorkflowDefinition definition, TreeDirectories startTree, bool noItems = true, IReadOnlyCollection<string>? carried = null, IReadOnlyCollection<string>? checkedBefore = null)
     {
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(run);
         ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(startTree);
 
         if (items.Count == 0)
         {
@@ -64,7 +89,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
         foreach (var (node, at) in items.Select((node, at) => (node, at)))
         {
-            if (ItemOf(node, at, problems) is { } item)
+            if (ItemOf(node, at, startTree, problems) is { } item)
             {
                 read.Add(item);
             }
@@ -84,18 +109,28 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
         foreach (var (item, at) in read.Select((item, at) => (item, at)))
         {
-            // No file is written by two items: each pair is said once, by the first patterns found to meet.
+            // No file is written by two items: each pair is said once, by the patterns found to meet - a pair that meets
+            // whatever the start tree holds first, and only where none does, one that meets because the start tree could
+            // not be read and every path was taken for a directory, saying so.
             foreach (var other in read.Skip(at + 1))
             {
-                if (Meeting(item.Owned, other.Owned, comparison) is var (mine, theirs))
+                if (Meeting(startTree, (item.Writes, other.Writes), (item.Owned, other.Owned), comparison) is var (mine, theirs, unread))
                 {
-                    problems.Add($"work items '{item.Name}' and '{other.Name}' both own what '{mine}' and '{theirs}' match: no file is written by two items, so give it to one");
+                    problems.Add($"work items '{item.Name}' and '{other.Name}' both own what '{mine}' and '{theirs}' match: no file is written by two items, so give it to one{unread}");
                 }
             }
 
-            if (Meeting(item.Owned, item.Forbidden, comparison) is var (owned, forbidden))
+            if (Meeting(startTree, (item.Writes, item.Kept), (item.Owned, item.Forbidden), comparison) is var (owned, forbidden, kept))
             {
-                problems.Add($"work item '{item.Name}' owns '{owned}' and must not touch '{forbidden}', which match the same paths: an item's forbidden paths are kept by the paths it owns");
+                problems.Add($"work item '{item.Name}' owns '{owned}' and must not touch '{forbidden}', which match the same paths: an item's forbidden paths are kept by the paths it owns{kept}");
+            }
+
+            // What the main tree holds now is asked of every item but one an opened round holds that nothing builds again, and one taken back.
+            var asNow = checkedBefore?.Contains(item.Name, StringComparer.Ordinal) != true;
+
+            if (asNow)
+            {
+                DirectoryProblems(item, context.Layout.MainCheckoutRoot, problems);
             }
 
             var deepest = item.Owned.Select(pattern => Literal(pattern.Text).Length).DefaultIfEmpty(0).Max();
@@ -106,8 +141,8 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
                 problems.Add($"work item '{item.Name}' would work in paths too long for this machine - its worktree, with the copies its legs keep inside it and the deepest file it owns: {budget.Describe(tree)}");
             }
 
-            ListProblems(item, context.Layout.MainCheckoutRoot, problems);
-            ClassesProblems(item, context.Layout.MainCheckoutRoot, comparison, problems);
+            ListProblems(item, asNow ? context.Layout.MainCheckoutRoot : null, problems);
+            ClassesProblems(item, asNow ? context.Layout.MainCheckoutRoot : null, comparison, problems);
         }
 
         ClassIdProblems(read, problems);
@@ -131,14 +166,37 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// </summary>
     /// <param name="pieces">The pieces, as the plan's scope yielded them.</param>
     /// <param name="items">The plan's items, as its <c>items</c> yielded them.</param>
-    /// <param name="round">The items of the round the pieces would join, every one it holds; null where the run has no round yet.</param>
-    /// <param name="known">The names of the work items the plan had before the update.</param>
+    /// <param name="round">
+    /// The items of the round the pieces would join, every one it holds: the list the check that opens that round was
+    /// opening it with, where that check raised the update - the round has not opened, and no instance carries them yet -
+    /// else the round the run reached; null where the run has neither.
+    /// </param>
+    /// <param name="known">The names of the work items the plan had before the update, those of the round the pieces join among them.</param>
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="run">The run's name.</param>
     /// <param name="definition">The workflow.</param>
+    /// <param name="startTree">The directories of the run's start tree, which every entry is read against (<see cref="Check"/>).</param>
     /// <param name="carried">
     /// The names every instance of the work-item group carries, over every round: an added piece under one of them would
     /// make a second work item of a name the run knows one by - the one it would replace is done again by a changed piece.
+    /// </param>
+    /// <param name="joined">
+    /// The list the round opens with once the update is placed, as it was checked: the round's items less those a
+    /// changed or a removed piece names, then each piece's item - or the pieces' items alone where the run has no round -
+    /// save a removed piece's whose work item no instance carries (none of <paramref name="carried"/>): it builds
+    /// nothing and is undone by nothing, so it is no item the round opens with.
+    /// </param>
+    /// <param name="opened">
+    /// The names of the work items opened rounds hold that nothing owed is to build again, which the rules that read the
+    /// main tree as it now is pass over where no piece places them (<see cref="CheckedBefore"/>) - never read of
+    /// <paramref name="round"/>, which may be a round that has not opened.
+    /// </param>
+    /// <param name="unopened">
+    /// Where <paramref name="round"/> is a round that has not opened - the list the check that opens it was opening it
+    /// with, which raised the update - the names an earlier round carries that the list it opens with may not take, as
+    /// that check holds them: none where the round carries the owed work alone, those the work owed it does not bear
+    /// otherwise. Every item of the joined list but a piece's is held to them; null where the round has opened, or there
+    /// is none.
     /// </param>
     /// <returns>Every problem of the pieces, in their order; none where they pass.</returns>
     public IReadOnlyList<string> CheckPieces(
@@ -149,11 +207,17 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
         HarnessContext context,
         string run,
         WorkflowDefinition definition,
-        IReadOnlyCollection<string>? carried = null)
+        TreeDirectories startTree,
+        out IReadOnlyList<JsonNode?> joined,
+        IReadOnlyCollection<string>? carried = null,
+        IReadOnlyCollection<string>? opened = null,
+        IReadOnlyCollection<string>? unopened = null)
     {
         ArgumentNullException.ThrowIfNull(pieces);
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(known);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(startTree);
 
         var problems = new List<string>();
 
@@ -179,7 +243,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             {
                 // The item under the name it had, written for the step that takes it back: of a work item's shape,
                 // so the step that takes back owns the paths it may write.
-                _ = ItemOf(piece.Item, 0, problems);
+                _ = ItemOf(piece.Item, 0, startTree, problems);
             }
             else if (!items.Any(other => string.Equals(FlowWorkItems.NameOf(other), name, StringComparison.Ordinal) && JsonNode.DeepEquals(other, piece.Item)))
             {
@@ -209,29 +273,100 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
         // The items the update places, checked with those of the round it joins as one list - its own less the work
         // items a changed or a removed piece names, for their item replaces them - or, where the run has no round,
-        // among themselves.
+        // among themselves. A removed piece whose work item no instance carries builds nothing and nothing undoes it -
+        // an item of a round not yet opened, or owed to one, is taken out of that round's list - so its item is none
+        // of the list's.
         var namedByPieces = held.Where(piece => piece.Kind is FlowUpdatePieceKinds.Changed or FlowUpdatePieceKinds.Removed)
             .Select(piece => piece.ItemName()!)
             .ToList();
 
-        var joined = (round ?? [])
+        joined = [.. (round ?? [])
             .Where(other => FlowWorkItems.NameOf(other) is not { } named || !namedByPieces.Contains(named, StringComparer.Ordinal))
-            .Concat(held.Select(piece => piece.Item))
-            .ToList();
+            .Concat(held.Where(piece => piece.Kind != FlowUpdatePieceKinds.Removed || carried?.Contains(piece.ItemName()!, StringComparer.Ordinal) == true).Select(piece => piece.Item))];
 
-        problems.AddRange(Check(joined, context, run, definition, noItems: false));
+        // The items an opened round holds were checked against the main tree as that round opened, and a removed piece's
+        // item builds nothing: the pieces that build are held to it now, and so is every item of a round not yet opened.
+        // Such a round's own items take no name an earlier round carries, and a list of none is a problem of it, as the
+        // check that opens it holds them: a piece's item is held to the names by the rules of the pieces above.
+        var pieceNames = held.Select(piece => piece.ItemName()!).ToHashSet(StringComparer.Ordinal);
+        problems.AddRange(Check(
+            joined,
+            context,
+            run,
+            definition,
+            startTree,
+            noItems: unopened is not null,
+            carried: unopened is null ? null : [.. unopened.Where(name => !pieceNames.Contains(name))],
+            checkedBefore: CheckedBeforeOf(held, opened)));
 
         return problems;
     }
 
-    /// <summary>A work item read whole: its name, the paths it owns and must not touch, and its three lists.</summary>
-    private sealed record Item(string Name, IReadOnlyList<(string Text, GlobPattern Pattern)> Owned, IReadOnlyList<(string Text, GlobPattern Pattern)> Forbidden, JsonObject Node);
+    /// <summary>
+    /// The names of the work items a check passes over where it reads the main tree as it now is (<see cref="Check"/>):
+    /// each an opened round of the run holds - one an instance of the work-item group carries, which nothing owed is to
+    /// build again (<paramref name="opened"/>, as the engine hands it) - that no <c>added</c> or <c>changed</c> piece of
+    /// <paramref name="pieces"/> places, and every <c>removed</c> piece's item, whatever round holds it or none, for an
+    /// item taken back builds nothing. Each of the first was checked when its round opened, against the tree of that
+    /// moment, and is built as it was then; an item of a round that has not opened - the list the check that opens it was
+    /// opening it with, the work an update owes it - is held to the tree as it now is, as every item still to be built is,
+    /// and a plan's first check, before any round, passes none over. The one owner of which items a check leaves to the
+    /// check that opened their round, which the check of a plan update's pieces, the check of the plan's own list beside
+    /// them, and the check that opens a round read alike.
+    /// </summary>
+    /// <param name="pieces">The pieces of the plan update the check is handed, as its scope yielded them; none where it is handed no update.</param>
+    /// <param name="opened">The names of the work items opened rounds hold that nothing owed is to build again, as the engine hands them; null where it hands none.</param>
+    public static IReadOnlyList<string> CheckedBefore(IReadOnlyList<JsonNode?> pieces, IReadOnlyCollection<string>? opened)
+    {
+        ArgumentNullException.ThrowIfNull(pieces);
+
+        return CheckedBeforeOf(pieces.Select(node => FlowUpdatePiece.Read(node, out _)).OfType<FlowUpdatePiece>(), opened);
+    }
+
+    /// <summary>The names of the work items a check handed the update <paramref name="pieces"/>, each read as a piece, passes over (<see cref="CheckedBefore"/>).</summary>
+    private static List<string> CheckedBeforeOf(IEnumerable<FlowUpdatePiece> pieces, IReadOnlyCollection<string>? opened)
+    {
+        var read = pieces.ToList();
+        var placed = read.Where(piece => piece.Kind is FlowUpdatePieceKinds.Added or FlowUpdatePieceKinds.Changed)
+            .Select(piece => piece.ItemName())
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
+
+        return [.. (opened ?? [])
+            .Where(name => !placed.Contains(name))
+            .Concat(read.Where(piece => piece.Kind == FlowUpdatePieceKinds.Removed).Select(piece => piece.ItemName()).OfType<string>())
+            .Distinct(StringComparer.Ordinal)];
+    }
 
     /// <summary>
-    /// The work item <paramref name="node"/> is, where it is of a work item's shape and its paths read as patterns; each
+    /// A work item read whole: its name, the paths it owns and must not touch - read for whether they meet another's - the
+    /// same read for what may be written beneath them (<paramref name="Writes"/>, <paramref name="Kept"/>), and its three
+    /// lists.
+    /// </summary>
+    /// <param name="Name">The item's name.</param>
+    /// <param name="Owned">Its owned paths, read for whether they meet (<see cref="TreeDirectories.Meeting"/>).</param>
+    /// <param name="Forbidden">Its forbidden paths, read for whether they meet.</param>
+    /// <param name="Writes">Its owned paths, read for what its agent may write and its fold carry (<see cref="TreeDirectories.ForWriting"/>).</param>
+    /// <param name="Kept">Its forbidden paths, read for what may be written beneath them, as its owned paths are.</param>
+    /// <param name="Node">The item as the plan gives it.</param>
+    private sealed record Item(
+        string Name,
+        IReadOnlyList<(string Text, GlobPattern Pattern)> Owned,
+        IReadOnlyList<(string Text, GlobPattern Pattern)> Forbidden,
+        IReadOnlyList<(string Text, GlobPattern Pattern)> Writes,
+        IReadOnlyList<(string Text, GlobPattern Pattern)> Kept,
+        JsonObject Node);
+
+    /// <summary>
+    /// The work item <paramref name="node"/> is, where it is of a work item's shape and its paths read from the
+    /// repository's root (<see cref="GlobPattern.FromRoot"/>), as its agent's writes and its fold's within read them; each
     /// thing wrong with it is a problem, and an item of the wrong shape is checked no further.
     /// </summary>
-    private static Item? ItemOf(JsonNode? node, int at, List<string> problems)
+    /// <param name="node">The item, as the plan gives it.</param>
+    /// <param name="at">Where it stands in its list, from 0.</param>
+    /// <param name="startTree">The directories of the run's start tree, which every entry is read against.</param>
+    /// <param name="problems">The problems of the plan, its own added to.</param>
+    private static Item? ItemOf(JsonNode? node, int at, TreeDirectories startTree, List<string> problems)
     {
         var place = $"work item {(at + 1).ToString(CultureInfo.InvariantCulture)}";
 
@@ -263,8 +398,10 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             problems.Add($"{where} is not named in lowercase letters, digits and single hyphens, as a work item is");
         }
 
-        var owned = Patterns(item, "ownedPaths", "owns", where, problems);
-        var forbidden = Patterns(item, "forbiddenPaths", "must not touch", where, problems);
+        var owned = Patterns(item, "ownedPaths", "owns", where, startTree.Meeting, problems);
+        var forbidden = Patterns(item, "forbiddenPaths", "must not touch", where, startTree.Meeting, problems);
+        var writes = owned.Select(entry => (entry.Text, startTree.ForWriting(entry.Text))).ToList();
+        var kept = forbidden.Select(entry => (entry.Text, startTree.ForWriting(entry.Text))).ToList();
 
         if (owned.Count == 0 && Texts(item["ownedPaths"])!.Count == 0)
         {
@@ -307,11 +444,11 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             problems.Add($"{where} names a test unit that is empty, or spaces alone: a runner reads it as no filter at all, or as one that matches every test - name the tests, or take it out");
         }
 
-        return new Item(name, owned, forbidden, item);
+        return new Item(name, owned, forbidden, writes, kept, item);
     }
 
-    /// <summary>The patterns of <paramref name="member"/>, each read as a glob; one that does not read is a problem, and is left out.</summary>
-    private static List<(string Text, GlobPattern Pattern)> Patterns(JsonObject item, string member, string does, string where, List<string> problems)
+    /// <summary>The entries of <paramref name="member"/>, each read from the repository's root; one that does not read is a problem, and is left out.</summary>
+    private static List<(string Text, GlobPattern Pattern)> Patterns(JsonObject item, string member, string does, string where, Func<string, bool> directories, List<string> problems)
     {
         var patterns = new List<(string, GlobPattern)>();
 
@@ -323,10 +460,56 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
                 continue;
             }
 
-            patterns.Add((text, GlobPattern.Parse(text)));
+            patterns.Add((text, GlobPattern.FromRoot(text, directories)));
         }
 
         return patterns;
+    }
+
+    /// <summary>
+    /// What the item's owned paths say of how to write what they once meant, where <paramref name="path"/> is none of
+    /// theirs (<see cref="GlobPattern.WrittenFor(IEnumerable{ValueTuple{GlobPattern, string}}, IEnumerable{string}, StringComparison)"/>),
+    /// as a clause after a semicolon; empty where they say nothing.
+    /// </summary>
+    private static string WrittenFor(Item item, string path, StringComparison comparison)
+        => GlobPattern.WrittenFor(item.Writes.Select(entry => (entry.Pattern, entry.Text)), [path], comparison) is { } said ? $"; {said}" : string.Empty;
+
+    /// <summary>
+    /// The pair two lists of entries are said to meet at, with what the start tree says of it as a clause after a
+    /// semicolon: the first pair, in the order written, that meets read narrowly - as what may be written beneath each
+    /// (<paramref name="narrow"/>) - which meets whatever the tree holds and is said with nothing of it; and only where none
+    /// does, the first that meets read wide - every path the tree could not answer for taken for one of its directories
+    /// (<paramref name="wide"/>) - with why, where the tree could not be read (<see cref="TreeDirectories.UnreadForMeeting"/>).
+    /// So a conflict that is real is never hidden behind one the unread tree alone made, and one it made is never said
+    /// without why. Null where no pair meets either way; where the tree was read, the two readings are one.
+    /// </summary>
+    private static (string Left, string Right, string Unread)? Meeting(
+        TreeDirectories startTree,
+        (IReadOnlyList<(string Text, GlobPattern Pattern)> Left, IReadOnlyList<(string Text, GlobPattern Pattern)> Right) narrow,
+        (IReadOnlyList<(string Text, GlobPattern Pattern)> Left, IReadOnlyList<(string Text, GlobPattern Pattern)> Right) wide,
+        StringComparison comparison)
+        => Meeting(narrow.Left, narrow.Right, comparison) is var (left, right) ? (left, right, string.Empty)
+            : Meeting(wide.Left, wide.Right, comparison) is var (wideLeft, wideRight) ? (wideLeft, wideRight, startTree.UnreadForMeeting is { } said ? $"; {said}" : string.Empty)
+            : null;
+
+    /// <summary>
+    /// An entry an item owns that names no directory of the run's start tree, read for what may be written beneath it - a
+    /// path with no trailing separator - and a directory of the main tree at <paramref name="root"/>: one an earlier round's
+    /// fold made since the run began, or one the start tree could not say it holds. Every reader of the item's paths reads
+    /// it as that one path, so the builder's every write beneath it would be refused, and its fold would carry none of it;
+    /// the check refuses it first, saying how to write it (<see cref="GlobPattern.WrittenForDirectory"/>). An entry an item
+    /// must not touch is never refused so: nothing gates a write by an item's forbidden paths - the check weighs them for
+    /// meeting the item's own owned paths, and its builder is told them - so no write is refused for how one is written.
+    /// </summary>
+    private void DirectoryProblems(Item item, string root, List<string> problems)
+    {
+        foreach (var (text, pattern) in item.Writes)
+        {
+            if (pattern.WrittenForDirectory(text) is { } said && fileSystem.KindOf(Path.Combine(root, PathPatterns.Normalize(text))) == PathKind.Directory)
+            {
+                problems.Add($"work item '{item.Name}' owns '{text}', which names nothing beneath it: {said}");
+            }
+        }
     }
 
     /// <summary>The first pattern of <paramref name="left"/> and of <paramref name="right"/> that some path matches both, in the order written; null where none meet.</summary>
@@ -339,9 +522,13 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
     /// <summary>
     /// What a work item's lists say of the repository, checked against the main tree at <paramref name="root"/>: something
-    /// under one of the three; every path it reuses or replaces there; a reason and a search for everything it creates.
+    /// under one of the three; every path it reuses or replaces a path inside the tree, and there; a reason and a search
+    /// for everything it creates.
     /// </summary>
-    private void ListProblems(Item item, string root, List<string> problems)
+    /// <param name="item">The work item.</param>
+    /// <param name="root">The main tree's root, every path it reuses or replaces is looked for in; null where the item is not held to the tree as it now is (<see cref="Check"/>'s <c>checkedBefore</c>).</param>
+    /// <param name="problems">The problems of the plan, each breach added to.</param>
+    private void ListProblems(Item item, string? root, List<string> problems)
     {
         var where = $"work item '{item.Name}'";
 
@@ -362,7 +549,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
                 {
                     problems.Add(problem);
                 }
-                else if (fileSystem.KindOf(Path.Combine(root, PathPatterns.Normalize(path))) == PathKind.None)
+                else if (root is not null && fileSystem.KindOf(Path.Combine(root, PathPatterns.Normalize(path))) == PathKind.None)
                 {
                     problems.Add($"{where} {does} '{path}', which is not in the main tree: a plan builds on what is there");
                 }
@@ -387,13 +574,14 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// change and there in the tree where it exists; a site marked the home exactly where it is the home, by its path and
     /// its symbol; every other site the item's too, for it changes - it reads the home or is deleted - and patching some
     /// of a class's sites is never done; more than one site means consolidate, as one site that is not the home does; a
-    /// class without a search, a search without a query and a universe without axes decide nothing checkable.
+    /// class without a search and a search without a query decide nothing checkable; and a universe answers each axis in
+    /// one of the two ways an axis is answered, and counts the cells its axes that apply make.
     /// </summary>
     /// <param name="item">The work item, its classes read as they are given.</param>
-    /// <param name="root">The main tree's root, the paths of a home and a site are checked against.</param>
+    /// <param name="root">The main tree's root, the paths of a home and a site are looked for in; null where the item is not held to the tree as it now is (<see cref="Check"/>'s <c>checkedBefore</c>).</param>
     /// <param name="comparison">How this machine compares paths.</param>
     /// <param name="problems">The problems of the plan, each breach added to.</param>
-    private void ClassesProblems(Item item, string root, StringComparison comparison, List<string> problems)
+    private void ClassesProblems(Item item, string? root, StringComparison comparison, List<string> problems)
     {
         var where = $"work item '{item.Name}'";
 
@@ -426,12 +614,12 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             if (homeAt is not null)
             {
                 // P-C3: the home is the item's to change, and where it exists it is in the tree.
-                if (!item.Owned.Any(pattern => pattern.Pattern.Matches(homeAt, comparison)))
+                if (!item.Writes.Any(pattern => pattern.Pattern.Matches(homeAt, comparison)))
                 {
-                    problems.Add($"{where}'s {id} has its home at '{homePath}', which the item does not own: the home changes, and the item that changes it owns it");
+                    problems.Add($"{where}'s {id} has its home at '{homePath}', which the item does not own: the home changes, and the item that changes it owns it{WrittenFor(item, homeAt, comparison)}");
                 }
 
-                if (homeExists && fileSystem.KindOf(Path.Combine(root, homeAt)) == PathKind.None)
+                if (homeExists && root is not null && fileSystem.KindOf(Path.Combine(root, homeAt)) == PathKind.None)
                 {
                     problems.Add($"{where}'s {id} has its home at '{homePath}', which is not in the main tree: a class is closed at what is there, or its home is created (exists: false)");
                 }
@@ -457,7 +645,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
                 var symbol = SymbolOf((site as JsonObject)?["symbol"]);
                 var then = Text((site as JsonObject)?["then"]);
 
-                if (fileSystem.KindOf(Path.Combine(root, siteAt)) == PathKind.None)
+                if (root is not null && fileSystem.KindOf(Path.Combine(root, siteAt)) == PathKind.None)
                 {
                     problems.Add($"{where}'s {id} has its site at '{path}', which is not in the main tree: the sites are the places that decide today");
                 }
@@ -479,9 +667,9 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
                 // marked reads-home or deleted, where it is not - so patching N-1 of N is refused.
                 var changes = homeAt is not null ? !isHome : then is "reads-home" or "deleted";
 
-                if (changes && !item.Owned.Any(pattern => pattern.Pattern.Matches(siteAt, comparison)))
+                if (changes && !item.Writes.Any(pattern => pattern.Pattern.Matches(siteAt, comparison)))
                 {
-                    problems.Add($"{where}'s {id} has its site at '{path}' ({then}) outside the item: the item owns it, or the class belongs to the item that owns it");
+                    problems.Add($"{where}'s {id} has its site at '{path}' ({then}) outside the item: the item owns it, or the class belongs to the item that owns it{WrittenFor(item, siteAt, comparison)}");
                 }
 
                 homeIsASite |= isHome;
@@ -520,26 +708,79 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
                 }
             }
 
-            // P-C7: the universe is the axes the repository declares, each with its values.
-            var axes = (@class["universe"] as JsonObject)?["axes"] as JsonArray;
-
-            if (axes is not { Count: > 0 })
+            foreach (var universe in UniverseProblems(@class["universe"] as JsonObject))
             {
-                problems.Add($"{where}'s {id} names no axis of its universe: the repository's closure text declares the axes a decision ranges over");
-            }
-            else
-            {
-                foreach (var axis in axes)
-                {
-                    var name = Text((axis as JsonObject)?["name"]) ?? "an axis";
-
-                    if (!((axis as JsonObject)?["values"] is JsonArray { Count: > 0 }))
-                    {
-                        problems.Add($"{where}'s {id} holds no value for the axis '{name}': an axis holds what the repository declares for it");
-                    }
-                }
+                problems.Add($"{where}'s {id} {universe}");
             }
         }
+    }
+
+    /// <summary>
+    /// What an answer of an axis must say beside its values, said once: where it applies, where they are declared and no
+    /// why; where it does not, why and nothing declared.
+    /// </summary>
+    private const string AxisRule = "an axis applies exactly where it names values - then it says where the repository declares them, and gives no why - and does not apply where it names none - then it says why, and declares nothing";
+
+    /// <summary>
+    /// P-C7: what is wrong with a universe, each axis read by the one reading of a planned universe
+    /// (<see cref="ClassClosureReading.PlannedAxes"/>): every axis answered in the one shape the plan's schema gives an axis
+    /// (<c>axis</c>), and so in one of its two ways - applying exactly where it names values, with where the repository
+    /// declares them and no why; not applying where it names none, with why and nothing declared - and the count of its
+    /// cells the product of the counts of the values of the axes that apply, 1 where none applies. The count is the size
+    /// of the decision as the plan states it: its audits, its builder and its closing review are each given the class
+    /// whole, and read the cells a pin and a sweep cover beside it; no other rule of the engine reads it. That the universe
+    /// answers every axis the closure text lists, by a member of its own, is the plan's schema's to hold, in the step that
+    /// answers it, as it holds every answer's shape; these, which a shape cannot say, this check holds there too.
+    /// </summary>
+    /// <param name="universe">The class's universe, as the plan gives it.</param>
+    private static IEnumerable<string> UniverseProblems(JsonObject? universe)
+    {
+        var axes = ClassClosureReading.PlannedAxes(universe);
+
+        foreach (var axis in axes)
+        {
+            var declared = !string.IsNullOrWhiteSpace(axis.DeclaredIn);
+            var reasoned = !string.IsNullOrWhiteSpace(axis.Why);
+            List<string> wrong = axis.Applies
+                ? [.. declared ? [] : new[] { "not where the repository declares them" }, .. reasoned ? new[] { "why it does not apply" } : []]
+                : [.. reasoned ? [] : new[] { "not why it does not apply" }, .. declared ? new[] { "where its values are declared" } : []];
+
+            if (wrong.Count > 0)
+            {
+                var named = axis.Applies ? $"names the values of its axis '{axis.Name}'" : $"names no value of its axis '{axis.Name}'";
+                yield return $"{named} and says {string.Join(", and ", wrong)}: {AxisRule}";
+            }
+        }
+
+        if (CellsProblem(universe, axes) is { } cells)
+        {
+            yield return cells;
+        }
+    }
+
+    /// <summary>
+    /// What is wrong with the count of a universe's cells, or null where it is right: the product of the counts of the
+    /// values of the axes that apply, and 1 where none applies (<see cref="UniverseProblems"/>).
+    /// </summary>
+    /// <param name="universe">The class's universe, as the plan gives it.</param>
+    /// <param name="axes">Its axes, as the one reading of a planned universe gives them.</param>
+    private static string? CellsProblem(JsonObject? universe, IReadOnlyList<UniverseAxis> axes)
+    {
+        var applying = axes.Where(axis => axis.Applies).ToList();
+        var product = applying.Aggregate(BigInteger.One, (made, axis) => made * axis.Values.Count);
+        var cells = ClassClosureReading.CellsOf(universe);
+
+        if (cells == product)
+        {
+            return null;
+        }
+
+        var counted = cells is { } given ? $"counts {given.ToString(CultureInfo.InvariantCulture)} cells in its universe" : "counts no cells in its universe";
+        var made = applying.Count == 0
+            ? "no axis of it applies, which makes 1"
+            : $"its axes that apply make {product.ToString(CultureInfo.InvariantCulture)} ({string.Join(" x ", applying.Select(axis => $"{axis.Name} {axis.Values.Count.ToString(CultureInfo.InvariantCulture)}"))})";
+
+        return $"{counted}, and {made}: a universe's cells are the product of the counts of the values of its axes that apply";
     }
 
     /// <summary>

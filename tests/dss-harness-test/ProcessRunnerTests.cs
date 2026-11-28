@@ -1645,6 +1645,34 @@ public sealed class ProcessRunnerTests
         Assert.Contains("working directory", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A start that fails as a file missing once its working directory is gone - one a deletion took away after the look
+    /// before the start, which Linux and macOS fail with the error a missing program gives - is said as the working
+    /// directory gone, in the words the look before the start says it in, never as an interpreter or loader the program
+    /// needs being missing. With the directory there, the same failure is still the program's.
+    /// </summary>
+    /// <param name="windows">Whether the failure is read as Windows reads it.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AStartFailingAsAFileMissing_OnceItsWorkingDirectoryIsGone_IsSaidAsTheDirectoryGone(bool windows)
+    {
+        using var temp = new TempDirectory();
+        var gone = temp.Combine("gone");
+        var program = Environment.ProcessPath!;
+        const string Requested = "git";
+
+        var failed = ProcessRunner.StartFailure(Requested, program, new Win32Exception(2), gone, windows);
+        var there = ProcessRunner.StartFailure(Requested, program, new Win32Exception(2), temp.Path, windows);
+
+        Assert.IsNotType<ExecutableNotFoundException>(failed);
+        Assert.Equal(Requested, failed.FileName);
+        Assert.Equal($"'{Requested}' could not be started: the working directory '{gone}' does not exist.", failed.Message);
+        Assert.Equal(
+            $"'{program}' exists but could not be started: the system reports a file missing, which happens when the interpreter or loader it needs is missing.",
+            there.Message);
+    }
+
     [Fact]
     public void FindExecutable_LocatesGit()
     {

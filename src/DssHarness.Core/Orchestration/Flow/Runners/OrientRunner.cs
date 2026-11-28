@@ -16,8 +16,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
 /// The <c>orient</c> step: what the run's repository is and has, read once at the start of the flow, so later steps
-/// decide by its output - the branch and the one its pull request goes to, the commit the run started on, a remote,
-/// legs and how each tests, anchors, CI, mutation arms - with what is dirty, which agents are open and who holds the
+/// decide by its output - the branch and the one its pull request goes to, the commit the run started on, a remote and
+/// whether it is on a forge, legs and how each tests, anchors, CI, mutation arms - with what is dirty, which agents are open and who holds the
 /// main tree now. Its checkout is read by the probe the run's start reads (<see cref="FlowCheckout"/>), and each fact by
 /// the owner of its rule.
 /// </summary>
@@ -79,12 +79,14 @@ public sealed class OrientRunner(
             ["baseBranch"] = baseBranch,
             ["startCommit"] = startCommit,
             ["hasRemote"] = checkout.HasRemote,
+            ["onForge"] = checkout.OnForge,
             ["hasLegs"] = legs.Count > 0,
             ["legCount"] = legs.Count,
             ["anchors"] = Anchors.AnchorCitationService.RootsOf(config.Anchors).Count > 0,
 
-            // CI is read on the branch the pull request goes to, so with none there is nothing it could be read on.
-            ["ciConfigured"] = config.Ci.Unset().Count == 0 && baseBranch is not null,
+            // CI is read through the forge, on the branch the pull request goes to: with no forge or no base there is
+            // nothing it could be read on.
+            ["ciConfigured"] = config.Ci.Unset().Count == 0 && baseBranch is not null && checkout.OnForge,
             ["hasMutations"] = MutationService.Declares(context, fileSystem),
             ["tests"] = new JsonArray([.. legs.Select(leg => TestsOf(config, leg)).OfType<JsonNode>()]),
             ["dirtyPaths"] = new JsonArray([.. checkout.Dirty.Select(path => (JsonNode)path)]),

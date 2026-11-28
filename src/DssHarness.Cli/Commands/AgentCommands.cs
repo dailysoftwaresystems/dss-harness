@@ -21,40 +21,55 @@ internal static class CreateAgentCommand
         Description = "Hand it nothing: record that it was made at a commit and given none of the main tree's uncommitted state.",
     };
 
-    private static readonly Option<bool> NoWorktreeOption = new("--no-worktree")
+    private static readonly Option<bool> ReadsOnlyOption = new(AgentService.ReadsOnlyOption)
     {
         Description = "Used by the orchestrator engine for a step that only reads; of no use typed by hand. Makes an agent that "
-            + "has no worktree: it reads the main tree and keeps only records. Nothing of it is seeded, refreshed, rebased or folded.",
+            + "only reads: its tree, made as every agent's is, at the main checkout's HEAD and brought there again - or to the commit "
+            + "its step names - as each of its steps starts, whatever it wrote there discarded. Nothing of it is seeded, refreshed, "
+            + "rebased or folded.",
+    };
+
+    /// <summary>
+    /// The option that once made an agent with no worktree, retired: hidden, and refused naming the option that took its
+    /// place, so a line that still gives it is told what to give instead, never that the option is unknown.
+    /// </summary>
+    private static readonly Option<bool> RetiredNoWorktreeOption = new(AgentService.RetiredNoWorktreeOption)
+    {
+        Hidden = true,
     };
 
     private static readonly Option<string?> SessionOption = OrchestrationArguments.Session(
         "The agent's Claude session id, or its subagent's id, whose transcripts delete-agent keeps. Run again, it records only this. "
-        + "Not with --no-worktree: that agent records none.");
+        + $"Not with {AgentService.ReadsOnlyOption}: that agent records none.");
 
     internal static Command Create()
     {
         var command = new Command(
             Name,
-            "Create an agent of an orchestrator: its record, its worktree - a git repository of its own that borrows the main checkout's objects, which git worktree list does not show - and its seed - the main tree's uncommitted state handed to it, each changed file copied and each deletion made, every path recorded; refused past the orchestrator's limit. With --no-worktree, the engine's agent: a record, with no worktree or seed, counted against no limit.");
+            "Create an agent of an orchestrator: its record, its worktree - a git repository of its own that borrows the main checkout's objects, which git worktree list does not show - and its seed - the main tree's uncommitted state handed to it, each changed file copied and each deletion made, every path recorded; refused past the orchestrator's limit. "
+            + $"With {AgentService.ReadsOnlyOption}, the engine's agent that only reads: a record and a tree made the same way at the main checkout's HEAD, with no seed, never folded, counted against no limit.");
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);
         command.Options.Add(ModelOption);
         command.Options.Add(EmptyOption);
-        command.Options.Add(NoWorktreeOption);
+        command.Options.Add(ReadsOnlyOption);
+        command.Options.Add(RetiredNoWorktreeOption);
         command.Options.Add(SessionOption);
         GlobalOptions.AddTo(command);
 
-        CommandRunner.Wire(command, async (context, cancellationToken) => (await context.Get<IAgentService>()
-            .CreateAsync(
-                new AgentCreateRequest(
-                    context.Directory,
-                    context.ParseResult.GetRequiredValue(OrchestratorArgument),
-                    context.ParseResult.GetRequiredValue(AgentArgument),
-                    context.ParseResult.GetRequiredValue(ModelOption),
-                    context.ParseResult.GetValue(EmptyOption),
-                    context.ParseResult.GetValue(SessionOption),
-                    context.ParseResult.GetValue(NoWorktreeOption)),
-                cancellationToken).ConfigureAwait(false)).Outcome);
+        CommandRunner.Wire(command, async (context, cancellationToken) => context.ParseResult.GetValue(RetiredNoWorktreeOption)
+            ? CommandOutcome.Usage(AgentService.RetiredNoWorktree)
+            : (await context.Get<IAgentService>()
+                .CreateAsync(
+                    new AgentCreateRequest(
+                        context.Directory,
+                        context.ParseResult.GetRequiredValue(OrchestratorArgument),
+                        context.ParseResult.GetRequiredValue(AgentArgument),
+                        context.ParseResult.GetRequiredValue(ModelOption),
+                        context.ParseResult.GetValue(EmptyOption),
+                        context.ParseResult.GetValue(SessionOption),
+                        context.ParseResult.GetValue(ReadsOnlyOption)),
+                    cancellationToken).ConfigureAwait(false)).Outcome);
 
         return command;
     }

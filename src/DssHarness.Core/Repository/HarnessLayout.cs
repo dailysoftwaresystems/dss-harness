@@ -199,6 +199,14 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     public const string OrchestratorArtifactsDirectoryName = "artifacts";
 
     /// <summary>
+    /// The directory, in each orchestrator's under the orchestrators', where a run keeps the files its own inputs of the
+    /// kind <c>file</c> were given: made with the run, each file copied there as the run starts and kept for its life - so
+    /// every step of every session reads what the run was started with, whatever became of the person's file since, and
+    /// every agent of the run reads it, wherever its own tree was cut from - and taken away with the run's directory.
+    /// </summary>
+    public const string OrchestratorInputsDirectoryName = "inputs";
+
+    /// <summary>
     /// The directory at the root of a tree where its mutation workers are kept: each a copy of the tree a sweep of one of
     /// its legs made, <c>&lt;tree&gt;/.m/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>, which goes with the tree.
     /// </summary>

@@ -41,8 +41,11 @@ public sealed record ContextPackWorked(string Id, bool Edited)
 /// <param name="Home">Whether the site is the class's one home.</param>
 public sealed record ContextPackClosure(string Path, string? Symbol, bool Home);
 
-/// <summary>What a step's context pack is made from, beside the view: its filled prompt, its read rule, and what the step says of its work.</summary>
-/// <param name="Prompt">The step's filled prompt: the request, the plan item, each upstream output it reads.</param>
+/// <summary>What a step's context pack is made from, beside the view: its task's text, its read rule, and what the step says of its work.</summary>
+/// <param name="Prompt">
+/// The step's task as its prompt was handed it: the request, the plan item, each upstream output it reads - the values
+/// its template was filled with, never the template's own words, which every run of the workflow is given alike.
+/// </param>
 /// <param name="MayRead">Whether the step's read rule lets a file be read, by its path relative to the tree: a node of a file it does not is left out, never named, and counted.</param>
 public sealed record ContextPackRequest(string Prompt, Func<string, bool> MayRead)
 {
@@ -50,8 +53,8 @@ public sealed record ContextPackRequest(string Prompt, Func<string, bool> MayRea
     public ContextPackFrom From { get; init; } = ContextPackFrom.Task;
 
     /// <summary>
-    /// The estimated tokens of a page of the pack (<see cref="EstimatedTokens"/>): page 1 is what the step's first message
-    /// holds, and every later page is the pack going on, at the same size; 0 gives no pack.
+    /// The estimated tokens of a page of the pack (<see cref="EstimatedTokens"/>): page 1 is what the first message of a
+    /// step that pushes its pack holds, and every later page is the pack going on, at the same size; 0 gives no pack.
     /// </summary>
     public int Tokens { get; init; } = CodebaseContextPack.DefaultTokens;
 
@@ -90,8 +93,9 @@ public sealed record ContextPackRequest(string Prompt, Func<string, bool> MayRea
 }
 
 /// <summary>
-/// A step's context pack: its page 1 - the text given at the head of its first message - what it was made of, and the
-/// pages after it, laid once whole from the same walk as the pack was (<see cref="Page"/>).
+/// A step's context pack: its page 1 - the text pushed at the head of its first message where its step pushes its pack,
+/// and the first page the graph tool's <c>pack</c> serves where it does not - what it was made of, and the pages after
+/// it, laid once whole from the same walk as the pack was (<see cref="Page"/>).
 /// </summary>
 /// <param name="Text">Page 1, line by line: its first line, the nodes, its last line; empty where the pack's page size is 0, or too small to hold its first and last lines.</param>
 /// <param name="Seeds">The nodes it was seeded from, each once, with why: what the step's records say it started from.</param>
@@ -151,8 +155,8 @@ public static class EstimatedTokens
 /// <summary>
 /// The context pack (value 370) and change-first (value 371): the part of the graph a step's work touches, made at its
 /// start from the view and what the step says alone - so the same step on the same tree is given the same pack - and
-/// given in pages of the step's tokens, best first, page 1 in its first message and every later page asked of the graph
-/// tool. Its seeds are what the prompt names exactly (a symbol or a path in backquotes, a qualified name, a handle, a
+/// given in pages of the step's tokens, best first, page 1 pushed into its first message where its step pushes it and
+/// every other page asked of the graph tool. Its seeds are what the prompt names exactly (a symbol or a path in backquotes, a qualified name, a handle, a
 /// <c>path:line</c>), every site and home of the classes of the work item its prompt reads the classes of
 /// (<see cref="ContextPackRequest.Closure"/>, each site's declaration at the weight of a named symbol, its file's at a
 /// named file's where it names none the file carries), the working sets it is given, the declarations of the files its
@@ -166,7 +170,10 @@ public static class EstimatedTokens
 /// </summary>
 public static partial class CodebaseContextPack
 {
-    /// <summary>The size of a page where a step says none: <c>graphPromptTokens</c>' default.</summary>
+    /// <summary>
+    /// The size of a page where a step says none: <c>graphPromptTokens</c>' default for a step at <c>map</c>, and the
+    /// size of the pages a step at <c>tools</c> that pushes none asks of the graph tool's <c>pack</c>.
+    /// </summary>
     public const int DefaultTokens = 3000;
 
     /// <summary>The weight of a node the prompt names exactly, or a working set carries.</summary>
@@ -215,20 +222,90 @@ public static partial class CodebaseContextPack
     ];
 
     /// <summary>
-    /// The edges a change's impact set is walked over from the declarations it changed: their tests, their callers, the
-    /// members they override and that override them, their implementations and what dispatches to them, and their
-    /// derived types - each from the node reached, to the end of the walk.
+    /// The edges a change's impact set is walked over from the declarations it changed - those of
+    /// <see cref="GraphRelations.Impact"/>, in its order: their tests, their callers, the members they override and that
+    /// override them, their implementations and what dispatches to them, and their derived types - each from the node
+    /// reached, to the end of the walk.
     /// </summary>
-    public static IReadOnlyList<(GraphSide Side, string Kind)> Impacted { get; } =
-    [
-        .. GraphRelations.Edges(GraphRelations.Tests),
-        .. GraphRelations.Edges(GraphRelations.Callers),
-        (GraphSide.Out, CodeEdgeKinds.Overrides),
-        (GraphSide.In, CodeEdgeKinds.Overrides),
-        .. GraphRelations.Edges(GraphRelations.Implementations),
-        (GraphSide.In, CodeEdgeKinds.Dispatches),
-        .. GraphRelations.Edges(GraphRelations.Derived),
-    ];
+    public static IReadOnlyList<(GraphSide Side, string Kind)> Impacted { get; } = [.. GraphRelations.Impact.SelectMany(GraphRelations.Edges)];
+
+    /// <summary>
+    /// What a change of <paramref name="changed"/> reaches: the one walk of a change's impact, which the change-first pack
+    /// leads with and the <c>graph</c> tool's <c>impact</c> answers - best first over <see cref="Impacted"/> from every one
+    /// of them at once, each node settled once at its best score, a change's tests carried whole and every other edge half,
+    /// weighed by the edge's confidence and shared among the nodes of that edge's kind the node it was reached from reaches
+    /// (<see cref="BestFirst"/>), so a hub is gone through and its many neighbours ranked down, never cut. The sources come
+    /// first, then every node reached, each with the edge and the node its best path reached it by.
+    /// </summary>
+    /// <param name="queries">The view walked.</param>
+    /// <param name="changed">The declarations changed, each with its weight and its order.</param>
+    /// <param name="goesThrough">Whether a node reached is listed and gone through: one the reader may not read is neither.</param>
+    public static IEnumerable<GraphWalked> Impact(CodebaseGraphQueries queries, IEnumerable<GraphWalked> changed, Func<GraphCard, bool> goesThrough)
+    {
+        ArgumentNullException.ThrowIfNull(queries);
+        ArgumentNullException.ThrowIfNull(changed);
+        ArgumentNullException.ThrowIfNull(goesThrough);
+
+        return BestFirst(queries, changed, Impacted, impact: true, goesThrough);
+    }
+
+    /// <summary>
+    /// The walk from <paramref name="sources"/> over <paramref name="edges"/>, best first, as far as it is read: each node
+    /// once, at its best score - its source's weight, at each edge carried on by <see cref="Carried"/>, weighed by the
+    /// edge's confidence and shared among the nodes of that edge's kind the node it was reached from reaches, so a hub's
+    /// many neighbours are ranked down by how many they are and never cut. Ties go to the earlier source, then the fewer
+    /// edges, then the id. A node <paramref name="goesThrough"/> refuses is not gone through at all. It keeps what it has
+    /// reached and never reaches it again: linear in the edges it follows, its cycles among them, with no count of hops.
+    /// Each node it settles names the edge and the node its best path reached it by, settled before it, as its score never
+    /// rises along a path.
+    /// </summary>
+    private static IEnumerable<GraphWalked> BestFirst(CodebaseGraphQueries queries, IEnumerable<GraphWalked> sources, IReadOnlyList<(GraphSide Side, string Kind)> edges, bool impact, Func<GraphCard, bool> goesThrough)
+    {
+        var queue = new PriorityQueue<GraphWalked, GraphWalked>(ReachOrder.Instance);
+        var best = new Dictionary<string, GraphWalked>(StringComparer.Ordinal);
+        var settled = new HashSet<string>(StringComparer.Ordinal);
+
+        void Offer(GraphWalked reach)
+        {
+            if (settled.Contains(reach.Id) || (best.TryGetValue(reach.Id, out var had) && ReachOrder.Instance.Compare(reach, had) >= 0))
+            {
+                return;
+            }
+
+            best[reach.Id] = reach;
+            queue.Enqueue(reach, reach);
+        }
+
+        foreach (var source in sources)
+        {
+            Offer(source);
+        }
+
+        while (queue.TryDequeue(out var reach, out _))
+        {
+            // A reach a better one came after is passed over: a node is settled once, at its best.
+            if (!settled.Add(reach.Id))
+            {
+                continue;
+            }
+
+            yield return reach;
+
+            var steps = queries.Steps(reach.Id, edges);
+            var degrees = steps.GroupBy(step => (step.Side, step.Kind)).ToDictionary(kind => kind.Key, kind => kind.Select(step => step.To).Distinct(StringComparer.Ordinal).Count());
+
+            foreach (var step in steps)
+            {
+                if (settled.Contains(step.To) || !goesThrough(queries.Card(step.To)))
+                {
+                    continue;
+                }
+
+                var score = reach.Score * Carried(step.Kind, impact) * Confidence(step.Confidence) / degrees[(step.Side, step.Kind)];
+                Offer(new GraphWalked(step.To, score, reach.Order, reach.Hop + 1) { By = step, From = reach.Id });
+            }
+        }
+    }
 
     /// <summary>Makes the pack of <paramref name="request"/> from <paramref name="queries"/>' view: its page 1, and the rest laid once whole with it.</summary>
     /// <param name="queries">The step's view, synced at its start.</param>
@@ -260,11 +337,29 @@ public static partial class CodebaseContextPack
     /// </summary>
     /// <param name="step">The edge followed.</param>
     /// <param name="from">The simple name of the node it was followed from.</param>
-    public static string Phrase(GraphStep step, string from)
+    public static string Phrase(GraphStep step, string from) => $"{Verb(step).Said} {from}";
+
+    /// <summary>
+    /// <see cref="Phrase"/> as a clause that follows the node named before it, as a path reads a step after its first:
+    /// <c>which calls FoldAsync</c>, <c>which is overridden by Area</c>.
+    /// </summary>
+    /// <param name="step">The edge followed.</param>
+    /// <param name="from">The name of the node it was followed from.</param>
+    public static string Which(GraphStep step, string from)
+    {
+        var (said, passive) = Verb(step);
+        return passive ? $"which is {said} {from}" : $"which {said} {from}";
+    }
+
+    /// <summary>
+    /// How <see cref="Phrase"/> says the edge <paramref name="step"/> followed, and whether it says it of the node reached as
+    /// what the edge's own node does to it - followed out of a node, all but a dispatch, which the member reached answers.
+    /// </summary>
+    private static (string Said, bool Passive) Verb(GraphStep step)
     {
         ArgumentNullException.ThrowIfNull(step);
 
-        var verb = (step.Kind, step.Side) switch
+        var said = (step.Kind, step.Side) switch
         {
             (CodeEdgeKinds.Calls, GraphSide.In) => "calls",
             (CodeEdgeKinds.Calls, GraphSide.Out) => "called by",
@@ -285,7 +380,7 @@ public static partial class CodebaseContextPack
             _ => step.Kind,
         };
 
-        return $"{verb} {from}";
+        return (said, step.Side == GraphSide.Out && step.Kind != CodeEdgeKinds.Dispatches);
     }
 
     /// <summary>
@@ -324,7 +419,7 @@ public static partial class CodebaseContextPack
             // only the last, and no later ask lays anything again.
             var page = request.Tokens == 0 ? null : new GraphTextPages(Lines(uncompared, changed), request.Tokens, number => number == 1 ? first : $"codebase graph: context pack page {Number(number)}", Last, ByFile);
             var one = page?.Page(1);
-            List<string> nodes = [.. (one?.Lines ?? []).Select(line => line.Id).OfType<string>().Distinct(StringComparer.Ordinal)];
+            var nodes = one?.Nodes ?? [];
             var near = new GraphNearness(
                 [.. nodes, .. request.Worked.Select(worked => worked.Id)],
                 request.Writes,
@@ -362,22 +457,22 @@ public static partial class CodebaseContextPack
 
                 // Their impact set is walked twice, the same walk each time: the tests it reaches first, under a section of
                 // their own, then every other node it reaches.
-                IEnumerable<Reach> Impact() => BestFirst(change.Held.Select((card, order) => new Reach(card.Id, EditedWeight, order, 0, "changed", CodeConfidences.Exact)), Impacted, impact: true);
+                IEnumerable<GraphWalked> Impacts() => Impact(queries, change.Held.Select((card, order) => new GraphWalked(card.Id, EditedWeight, order, 0) { Why = "changed" }), Reads);
 
-                foreach (var line in Section("their tests:", Impact().Where(reach => reach.Kind == CodeEdgeKinds.Tests)))
+                foreach (var line in Section("their tests:", Impacts().Where(reach => reach.By?.Kind == CodeEdgeKinds.Tests)))
                 {
                     yield return line;
                 }
 
-                foreach (var line in Section("their impact:", Impact().Where(reach => reach.Kind is not null and not CodeEdgeKinds.Tests)))
+                foreach (var line in Section("their impact:", Impacts().Where(reach => reach.By is { } by && by.Kind != CodeEdgeKinds.Tests)))
                 {
                     yield return line;
                 }
             }
 
-            var seeds = _seeds.Select(seed => new Reach(seed.Id, seed.Weight, seed.Order, 0, seed.Why, CodeConfidences.Exact));
+            var seeds = _seeds.Select(seed => new GraphWalked(seed.Id, seed.Weight, seed.Order, 0) { Why = seed.Why });
 
-            foreach (var line in Section(_taskCaption, BestFirst(seeds, Walked, impact: false)))
+            foreach (var line in Section(_taskCaption, BestFirst(queries, seeds, Walked, impact: false, Reads)))
             {
                 yield return line;
             }
@@ -387,7 +482,7 @@ public static partial class CodebaseContextPack
         /// One section's lines from a walk best first: each node it reaches that no line listed yet, in the order the walk
         /// reaches it, generated code after every other - held back until the walk has given the rest.
         /// </summary>
-        private IEnumerable<GraphTextLine> Section(string? caption, IEnumerable<Reach> walk)
+        private IEnumerable<GraphTextLine> Section(string? caption, IEnumerable<GraphWalked> walk)
         {
             var generated = new List<GraphTextLine>();
 
@@ -399,7 +494,8 @@ public static partial class CodebaseContextPack
                 }
 
                 var card = queries.Card(reach.Id);
-                var line = new GraphTextLine(caption, $"{GraphLines.Of(card)} | {Related(reach.Relation, reach.Confidence)}", card.Id);
+                var relation = reach.By is { } by ? Related(Phrase(by, queries.Card(reach.From!).Name), by.Confidence) : reach.Why!;
+                var line = new GraphTextLine(caption, $"{GraphLines.Of(card)} | {relation}", card.Id);
 
                 if (card.Generated)
                 {
@@ -413,63 +509,6 @@ public static partial class CodebaseContextPack
             foreach (var line in generated)
             {
                 yield return line;
-            }
-        }
-
-        /// <summary>
-        /// The walk from <paramref name="sources"/> over <paramref name="edges"/>, best first, as far as it is read: each node
-        /// once, at its best score - its source's weight, at each edge carried on by <see cref="Carried"/>, weighed by the
-        /// edge's confidence and shared among the nodes of that edge's kind the node it was reached from reaches, so a hub's
-        /// many neighbours are ranked down by how many they are and never cut. Ties go to the earlier source, then the fewer
-        /// edges, then the id. A node the step may not read is not gone through at all, and is counted. It keeps what it has
-        /// reached and never reaches it again: linear in the edges it follows, its cycles among them, with no count of hops.
-        /// </summary>
-        private IEnumerable<Reach> BestFirst(IEnumerable<Reach> sources, IReadOnlyList<(GraphSide Side, string Kind)> edges, bool impact)
-        {
-            var queue = new PriorityQueue<Reach, Reach>(ReachOrder.Instance);
-            var best = new Dictionary<string, Reach>(StringComparer.Ordinal);
-            var settled = new HashSet<string>(StringComparer.Ordinal);
-
-            void Offer(Reach reach)
-            {
-                if (settled.Contains(reach.Id) || (best.TryGetValue(reach.Id, out var had) && ReachOrder.Instance.Compare(reach, had) >= 0))
-                {
-                    return;
-                }
-
-                best[reach.Id] = reach;
-                queue.Enqueue(reach, reach);
-            }
-
-            foreach (var source in sources)
-            {
-                Offer(source);
-            }
-
-            while (queue.TryDequeue(out var reach, out _))
-            {
-                // A reach a better one came after is passed over: a node is settled once, at its best.
-                if (!settled.Add(reach.Id))
-                {
-                    continue;
-                }
-
-                yield return reach;
-
-                var name = queries.Card(reach.Id).Name;
-                var steps = queries.Steps(reach.Id, edges);
-                var degrees = steps.GroupBy(step => (step.Side, step.Kind)).ToDictionary(kind => kind.Key, kind => kind.Select(step => step.To).Distinct(StringComparer.Ordinal).Count());
-
-                foreach (var step in steps)
-                {
-                    if (settled.Contains(step.To) || !Reads(queries.Card(step.To)))
-                    {
-                        continue;
-                    }
-
-                    var score = reach.Score * Carried(step.Kind, impact) * Confidence(step.Confidence) / degrees[(step.Side, step.Kind)];
-                    Offer(new Reach(step.To, score, reach.Order, reach.Hop + 1, Phrase(step, name), step.Confidence) { Kind = step.Kind });
-                }
             }
         }
 
@@ -855,7 +894,7 @@ public static partial class CodebaseContextPack
         /// </summary>
         private string Last(GraphTextPageEnd end)
         {
-            var nodes = end.Lines.Select(line => line.Id).OfType<string>().Distinct(StringComparer.Ordinal).Count();
+            var nodes = end.Nodes.Count;
             var of = $"context pack page {Number(end.Page)} of {Number(end.Pages)}";
             var where = end is { Last: true, Page: 1 } ? "nothing left out"
                 : end.Last ? $"{of} · the last"
@@ -969,19 +1008,12 @@ public static partial class CodebaseContextPack
         Words,
     }
 
-    /// <summary>A node a walk reached, as its best path reached it.</summary>
-    private sealed record Reach(string Id, double Score, int Order, int Hop, string Relation, string Confidence)
-    {
-        /// <summary>The kind of the edge its best path reached it by; null for a node a walk starts from.</summary>
-        public string? Kind { get; init; }
-    }
-
     /// <summary>The order a walk settles what it reached in: the better score first, then the earlier source, the fewer edges, the id.</summary>
-    private sealed class ReachOrder : IComparer<Reach>
+    private sealed class ReachOrder : IComparer<GraphWalked>
     {
         public static ReachOrder Instance { get; } = new();
 
-        public int Compare(Reach? x, Reach? y)
+        public int Compare(GraphWalked? x, GraphWalked? y)
         {
             ArgumentNullException.ThrowIfNull(x);
             ArgumentNullException.ThrowIfNull(y);

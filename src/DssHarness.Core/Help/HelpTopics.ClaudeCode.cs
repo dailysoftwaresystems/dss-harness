@@ -45,7 +45,16 @@ public static partial class HelpTopics
              + $", and a step whose agent runs commands, of a repository that declares legs, takes {Agents.ClaudeCode.ClaudeCodeTools.ServedName(Agents.AgentMeasureSupport.ToolName)}, which measures one cell of the universe a class of the item names on one of the run's legs";
         var own = string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.Table.SelectMany(row => row.Tools).Select(tool => tool.Name));
         var ownWeb = string.Join(" and ", Agents.ClaudeCode.ClaudeCodeTools.OwnWeb.Select(tool => tool.Name));
-        var launched = string.Join(", ", Agents.Policy.ClaudeSettings.Launched.Select(name => $"{name.Key}={name.Value}"));
+        // Every name a launch sets, each with its value but the cache lifetimes, which carry the client's entry's.
+        var lifetimes = Agents.Policy.ClaudeSettings.CacheTtlVariables;
+        var launched = string.Join(
+                ", ",
+                Agents.Policy.ClaudeSettings.LaunchedWith(Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes)
+                    .Where(name => !lifetimes.Contains(name.Key, StringComparer.Ordinal))
+                    .Select(name => $"{name.Key}={name.Value}"))
+            + $", and {string.Join(" and ", lifetimes)} at agentClients.claude-code.cacheTtl "
+            + $"({Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes} where nothing is said), so cacheTtl alone says how a launch caches "
+            + "whatever the person's environment or settings hold";
 
         return "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed "
             + "and never continued, keeping no session file (one a launch leaves all the same is removed once it has ended, "
@@ -54,7 +63,12 @@ public static partial class HelpTopics
             + "directory, with every other root it reaches added. It is given its model and no fallback, the step's effort, "
             + "turns and budget, and the tools of the agent's capabilities and no other, each served by the engine's tool server - "
             + tools
-            + $" - and never {string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.NeverOffered)}. None of Claude Code's own tools "
+            + $" - and never {string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.NeverOffered)}. Its turns are the model's answers, as on "
+            + "the API clients and as Claude Code counts the turns its --max-turns holds the step's maxTurns to: each response a launch "
+            + "writes - the lines of one response sharing its message id, a line that names none an answer of its own, a message Claude "
+            + "Code writes itself none - counted as it arrives, over every launch of the run, so a launch cut before its turn's result "
+            + "still counts what it answered; the run's result, a side-task's record and a step's measure say them, never the engine's "
+            + "messages to the launch. None of Claude Code's own tools "
             + $"is given: --tools names none (--tools \"\"), so its shell and its file tools ({own}) reach no launch, and a side-task "
             + $"alone keeps Claude Code's own {ownWeb} beside the engine's; each call is asked of the engine and run by the tool "
             + $"runtime below as on the API clients - a command by {Agents.Runtime.AgentTools.RunCommand}, under the isolation of the agent's commands, its output kept "
@@ -72,7 +86,8 @@ public static partial class HelpTopics
             + "answered by the same owner that answers them on the API clients - its edit operation among them - and each recorded "
             + "as a line of the step's graph - a step whose agent runs commands, of a repository that declares legs, takes the "
             + "measure tool from the same server, by the one rule the tool runtime offers it by, its calls answered and recorded "
-            + "as every tool call is. A step's first user message holds the run's repository map first, then its context pack, then "
+            + "as every tool call is. A step's first user message holds what of the graph it is pushed - the run's repository map first, then its context pack, "
+            + "a step at graph: map both and one with the tool neither, unless its graphPromptTokens pushes its pack - then "
             + "its task - every launch a conversation of its own, it is given them as every launch is, and the order puts "
             + "them at the head of the message so every turn after the first reads them from Claude Code's own cache; the "
             + "engine sets no mark of its own. A launch whose init "
@@ -81,9 +96,10 @@ public static partial class HelpTopics
             + "refuse first is asked of the engine before it runs and answered from the policy above: a denial carries its rule's sentence, which the model "
             + $"reads, and is a line of the step's {Agents.AgentCallRecords.DenialsFileName}; a tool the launch was not given, or whose calls the engine "
             + "cannot read, is denied by name. A step whose reads are narrowed (graphReads: narrow, 'help codebase-graph') is "
-            + $"denied a whole {Agents.Runtime.AgentTools.ViewFile} - one with no start_line and no end_line - of a file its graph holds parsed over the narrowing bound, "
-            + "by the tool runtime as on the API clients and with the same words, a range passing and the same "
-            + "two escapes counted and recorded as the graph's lines. An answer sent back (below) and a message the engine gives an agent at work are "
+            + $"answered a whole {Agents.Runtime.AgentTools.ViewFile} - one with no start_line and no end_line - of a file its graph holds parsed over the narrowing bound "
+            + "with the file's outline in its place, by the tool runtime as on the API clients and with the same words, a range passing and the same "
+            + $"two escapes counted and recorded as the graph's lines; its {Agents.Runtime.AgentTools.SearchFiles} hits and its ranges answer from the graph as they do there. "
+            + "An answer sent back (below) and a message the engine gives an agent at work are "
             + "written to the same launch, and a result written before the launch took it is not the answer; a handoff asked "
             + "interrupts the turn and asks the agent for its handoff in the same launch once every message it was given was "
             + "taken or dropped, no tool running in that turn, a "

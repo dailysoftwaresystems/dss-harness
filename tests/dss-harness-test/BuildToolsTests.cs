@@ -68,14 +68,15 @@ public sealed class BuildToolsTests
 
     /// <summary>
     /// Each workflow that runs this suite says its runner is meant to hold every build tool, by the very variable the
-    /// suite reads, on the very step that runs it: spelt otherwise there, or set on another step, every real build
-    /// would again be skipped green on a runner that lost a tool - which is all the variable is for.
+    /// suite reads, on the very step that runs it in the job that runs its tests: spelt otherwise there, or set on
+    /// another step, every real build would again be skipped green on a runner that lost a tool - which is all the
+    /// variable is for. A job that only lists the suite - the matrix's deal - runs none of its tests.
     /// </summary>
     [Theory]
-    [InlineData("test.yml")]
-    public void EachWorkflowRunningThisSuite_SaysItsRunnerHoldsEveryBuildTool(string workflow)
+    [InlineData("test.yml", "test")]
+    public void EachWorkflowRunningThisSuite_SaysItsRunnerHoldsEveryBuildTool(string workflow, string job)
     {
-        var step = WorkflowFiles.StepRunning(workflow, typeof(WorkflowFiles).Assembly.GetName().Name!).ToList();
+        var step = WorkflowFiles.StepRunning(workflow, typeof(WorkflowFiles).Assembly.GetName().Name!, job).ToList();
 
         // Among the step's own variables: after its env key, and before what it runs.
         var env = step.IndexOf("env:");

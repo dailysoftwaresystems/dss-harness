@@ -15,20 +15,27 @@ class covers, so keep it true of the repository.
 
 ## The axes
 
-Every axis a decision ranges over, each named concretely or said not to apply, and where
-it is declared:
+Every axis a decision ranges over. A class's universe answers each of them by the name in
+brackets - its values, named concretely, and where they are declared; or why it does not
+apply - and answers each further axis the heading "This repository" names among its
+further axes, by the name it has there. No other heading names an axis: the references and
+the optimised forms below are no axes, for every cell is measured on each of them, and a
+universe never answers one.
 
 - Each kind or type the decision ranges over - an enum's members, a schema's keys, a
-  table's rows: name them.
-- Each target or platform the repository builds for: its legs.
+  table's rows: name them (`kinds`).
+- Each target or platform the repository builds for: its legs (`targets`).
 - Each build configuration and optimisation level - Debug and Release, `-O0` and `-O2`,
-  `/Od` and `/O2`.
-- Each input and output format.
-- Each entry point that reaches the decision - command line, API, configuration file, UI.
-- Each tier or layer it passes - parse, check, lower, emit; request, service, store.
+  `/Od` and `/O2` (`configurations`).
+- Each input and output format (`formats`).
+- Each entry point that reaches the decision - command line, API, configuration file, UI
+  (`entryPoints`).
+- Each tier or layer it passes - parse, check, lower, emit; request, service, store
+  (`tiers`).
 - Each form of the construct - declare, define, reference; read, write; with and without
-  the qualifier.
-- Both directions - accepted and refused; serialise and deserialise; encode and decode.
+  the qualifier (`forms`).
+- Both directions - accepted and refused; serialise and deserialise; encode and decode
+  (`directions`).
 
 ## The references
 
@@ -51,5 +58,6 @@ of one is a sign of.
 ## This repository
 
 (Left empty by the shipped file. This heading is where a repository writes its own
-universe: its formats x targets x tiers x optimisation pipelines x forms x both
-directions, with its references and its optimised forms named.)
+universe: the values of its kinds, targets, configurations, formats, entryPoints, tiers,
+forms and directions, with its references and its optimised forms named, and each
+further axis its decisions range over, by a name of its own.)

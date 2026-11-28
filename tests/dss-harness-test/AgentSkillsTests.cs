@@ -568,7 +568,7 @@ public sealed class AgentSkillsTests
         files["schemas/implement.json"] = """{ "type": "object", "additionalProperties": false, "properties": { "done": { "type": "boolean" } }, "required": ["done"] }""";
 
         return [.. WorkflowValidator.Validate(
-            WorkflowFileParser.Parse("flow.yml", text),
+            TestAdvice.Named(WorkflowFileParser.Parse("flow.yml", text)),
             hasCommitTemplate: false,
             (path, owner) => owner is null ? files.GetValueOrDefault(path) : null,
             skills: lookup ?? Skills())];

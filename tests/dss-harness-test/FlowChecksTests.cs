@@ -132,6 +132,40 @@ public sealed class FlowChecksTests
     }
 
     /// <summary>
+    /// A red check of a visit of the recovery is cleared only by a later green of the same step checking the same - a
+    /// visit for the same failure or issue - never by the green of a visit for another, whose step's id differs from it
+    /// only by the visit.
+    /// </summary>
+    [Fact]
+    public void ARedCheckOfARecoveryVisit_IsClearedOnlyByAGreenOfAVisitForTheSameThing()
+    {
+        FlowCheck[] checks =
+        [
+            Check("recover.check", "validate-plan", FlowInstanceState.Done, Output("""{"ok":false,"problems":["no cause"],"items":[]}"""), at: 1) with { Work = "first" },
+            Check("recover+2.check", "validate-plan", FlowInstanceState.Done, Output("""{"ok":true,"problems":[],"items":[]}"""), at: 2) with { Work = "second" },
+        ];
+
+        Assert.Equal("recover.check (validate-plan) in the main tree: 1 problem(s)", FlowChecks.Red(checks));
+        Assert.Equal(
+            FlowChecks.None,
+            FlowChecks.Red([.. checks, Check("recover+3.check", "validate-plan", FlowInstanceState.Done, Output("""{"ok":true,"problems":[],"items":[]}"""), at: 3) with { Work = "first" }]));
+    }
+
+    /// <summary>The help and the architecture say a red result stands until a visit checking the same ends green: within the recovery, one for the same failure or issue.</summary>
+    [Fact]
+    public void TheHelpAndTheArchitecture_SayARedStandsUntilAVisitCheckingTheSameEndsGreen()
+    {
+        Assert.Contains(
+            "{run.red}, each red result not seen green since by a later visit of the same step checking the same - in the recovery, a visit for the same failure or issue - a red leg,",
+            Prose.Words(DssHarness.Core.Help.HelpTopics.Render("workflows")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"A red result stands until a later visit or iteration of the same step of the same work item ends green checking the same (`{nameof(FlowCheck)}.{nameof(FlowCheck.Work)}`): within the recovery, a visit for the same failure or issue, so another issue's green never hides it from the visit that is to put it right.",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A red leg whose build its own tool failed says what its line said of the units - how many, and how far its tool
     /// got - after its phase; its entry in the step's red names each, and a leg whose entry carries none says nothing more.
     /// </summary>

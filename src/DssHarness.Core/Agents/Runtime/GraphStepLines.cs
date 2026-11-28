@@ -5,9 +5,9 @@ namespace DssHarness.Core.Agents.Runtime;
 /// <summary>
 /// One line of a step's <c>graph.jsonl</c>, in its directory beside its stored stream: what the step's codebase graph was
 /// asked and gave, a line for each, appended whole as it happens. A call of the <c>graph</c> tool, an escape of its
-/// narrowing of reads and a whole read it denied are lines; so is the first message of each launch of a step that has a
-/// graph - what of the graph that message was given, or why no pack - written as the message is, before any line of the
-/// launch's calls.
+/// narrowing of reads and a whole read it answered with the file's outline are lines; so is the first message of each
+/// launch of a step that has a graph - what of the graph that message was given, or why no pack - written as the message
+/// is, before any line of the launch's calls.
 /// </summary>
 /// <remarks>
 /// Read back by the options that refuse a member the type does not name and one it needs that the line leaves out
@@ -17,6 +17,7 @@ namespace DssHarness.Core.Agents.Runtime;
 [JsonDerivedType(typeof(GraphCallLine), "call")]
 [JsonDerivedType(typeof(GraphPromptLine), "prompt")]
 [JsonDerivedType(typeof(GraphEscapeLine), "escape")]
+[JsonDerivedType(typeof(GraphOutlinedLine), "outlinedRead")]
 [JsonDerivedType(typeof(GraphDeniedLine), "deniedRead")]
 public abstract record GraphStepLine
 {
@@ -79,7 +80,30 @@ public sealed record GraphEscapeLine(string Path, int Lines, int Tokens, string 
             : null;
 }
 
-/// <summary>One whole read the narrowing (<c>graphReads: narrow</c>) refused: the file, its lines and its tokens, denied with the way to the graph.</summary>
+/// <summary>
+/// One whole read the narrowing (<c>graphReads: narrow</c>) answered with the file's outline in its place: the file, its
+/// lines, what reading it whole would have cost and what the outline given instead cost - the two a step's figures weigh
+/// the narrowing by (<c>outlinedReads</c>).
+/// </summary>
+/// <param name="Path">The file, relative to the tree with forward separators.</param>
+/// <param name="Lines">How many lines the file holds.</param>
+/// <param name="Tokens">The file's estimated tokens: what the whole read would have cost.</param>
+/// <param name="OutlineTokens">The estimated tokens of the answer given in its place - its line and the file's outline.</param>
+public sealed record GraphOutlinedLine(string Path, int Lines, int Tokens, int OutlineTokens) : GraphStepLine
+{
+    /// <inheritdoc/>
+    public override string? Problem()
+        => string.IsNullOrWhiteSpace(Path) ? "an outlined read names the file it outlined"
+            : Lines < 1 || Tokens < 0 || OutlineTokens < 1 ? "an outlined read's file holds lines, its tokens are never below 0, and its outline holds some"
+            : null;
+}
+
+/// <summary>
+/// One whole read the narrowing refused, as a build before the narrowing answered such a read with the file's outline
+/// wrote it: the file, its lines and its tokens. No line of the kind is written now; one is read, so the
+/// <c>graph.jsonl</c> of a step an earlier build began still reads, and counted in no figure - it was neither a read
+/// nor an outline given.
+/// </summary>
 /// <param name="Path">The file, relative to the tree with forward separators.</param>
 /// <param name="Lines">How many lines the file holds.</param>
 /// <param name="Tokens">The file's estimated tokens.</param>
@@ -92,7 +116,10 @@ public sealed record GraphDeniedLine(string Path, int Lines, int Tokens) : Graph
             : null;
 }
 
-/// <summary>One call of the <c>graph</c> tool: its operation, how it ended, the nodes it asked about, served and edited, and what the answer cost.</summary>
+/// <summary>
+/// One call of the <c>graph</c> tool: its operation, how it ended, the nodes it asked about, served and edited, what the
+/// answer cost, and the nodes a <c>pack</c> answer's page listed.
+/// </summary>
 /// <param name="Op">The operation it asked, as the call named it; empty where a misused call named none.</param>
 /// <param name="Outcome">How it ended.</param>
 /// <param name="Asked">The nodes it asked about by name - <c>node</c>, <c>related</c>, <c>body</c> - by id.</param>
@@ -101,7 +128,12 @@ public sealed record GraphDeniedLine(string Path, int Lines, int Tokens) : Graph
 /// <param name="Wrote">The lines it wrote, where it wrote; null where it wrote none.</param>
 /// <param name="Tokens">The answer's estimated tokens - its bytes over four, the one bound every answer is held to.</param>
 /// <param name="Hits">How many text hits the answer added where the graph was not sure.</param>
-public sealed record GraphCallLine(string Op, GraphToolOutcome Outcome, IReadOnlyList<string> Asked, IReadOnlyList<string> Served, IReadOnlyList<string> Edited, GraphWrittenLines? Wrote = null, int Tokens = 0, int Hits = 0) : GraphStepLine
+/// <param name="Listed">
+/// The nodes the page of the context pack it gave lists, by id, each once (<see cref="GraphToolFacts.Listed"/>): no use
+/// of any, which the working set never counts, and what the step's figures weigh the pages it pulled by
+/// (<c>pulled.pack.used</c>); null for every other call, and on a line an earlier build wrote, which still reads.
+/// </param>
+public sealed record GraphCallLine(string Op, GraphToolOutcome Outcome, IReadOnlyList<string> Asked, IReadOnlyList<string> Served, IReadOnlyList<string> Edited, GraphWrittenLines? Wrote = null, int Tokens = 0, int Hits = 0, IReadOnlyList<string>? Listed = null) : GraphStepLine
 {
     /// <summary>The line of the call <paramref name="op"/> named, answered by <paramref name="answer"/>.</summary>
     /// <param name="op">The operation the call named; null where it named none.</param>
@@ -110,14 +142,14 @@ public sealed record GraphCallLine(string Op, GraphToolOutcome Outcome, IReadOnl
     {
         ArgumentNullException.ThrowIfNull(answer);
 
-        return new GraphCallLine(op ?? string.Empty, answer.Outcome, answer.Facts.Asked, answer.Facts.Served, answer.Facts.Edited, answer.Facts.Wrote, Codebase.EstimatedTokens.Of(answer.Text), answer.Facts.Hits);
+        return new GraphCallLine(op ?? string.Empty, answer.Outcome, answer.Facts.Asked, answer.Facts.Served, answer.Facts.Edited, answer.Facts.Wrote, Codebase.EstimatedTokens.Of(answer.Text), answer.Facts.Hits, answer.Facts.Listed is { Count: > 0 } listed ? listed : null);
     }
 
     /// <inheritdoc/>
     public override string? Problem()
         => string.IsNullOrWhiteSpace(Op) && Outcome != GraphToolOutcome.Usage ? "a call names its operation, unless it was refused as misused"
             : !Enum.IsDefined(Outcome) ? $"'{Outcome}' is no way a call ends"
-            : Asked.Concat(Served).Concat(Edited).Any(string.IsNullOrWhiteSpace) ? "a node is named by its id"
+            : Asked.Concat(Served).Concat(Edited).Concat(Listed ?? []).Any(string.IsNullOrWhiteSpace) ? "a node is named by its id"
             : Tokens < 0 || Hits < 0 ? "a call's tokens and hits are never below 0"
             : (Outcome == GraphToolOutcome.Wrote) != (Edited.Count == 1) || Edited.Count > 1 || (Outcome == GraphToolOutcome.Wrote) != (Wrote is not null)
                 ? "a call that wrote edited one node and names the lines it wrote, and one that wrote nothing neither"

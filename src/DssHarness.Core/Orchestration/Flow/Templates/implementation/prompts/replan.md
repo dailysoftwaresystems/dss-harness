@@ -11,7 +11,8 @@ Go: {previous.plan-audit.go}. Findings:
 {previous.plan-audit.findings}
 
 What the auditor's closure part found, each class with the sites it searched out that the plan lacks and the cells of
-its universe it leaves out:
+its universe it leaves out - the values an axis that applies lacks, and each axis said not to apply that the decision
+ranges over:
 
 {previous.plan-audit.closure}
 
@@ -23,19 +24,47 @@ Answer: {previous.approval.answer}. What to change:
 
 Where a line says that a step left no output, that step did not run in the last round and has nothing to say.
 
+## What this run owes its next round
+
+The issues this run owes its next round, each with its id and its size - the files its fix touches, what must be
+built, and what must be measured first:
+
+{run.nextRound}
+
+An empty list means none is owed. Each issue listed is a work item of the plan's first round, listed and started first,
+built beside the rest - no other item may need its result - naming the issue it settles in `settles` by its id exactly:
+keep the one the plan has, or, where it has none, make one built to the issue's size, with its class or, where its fix
+decides nothing, why in noClass. The round's check refuses a round whose items leave one unsettled.
+
 ## What to do
 
 Act on every problem, every finding and everything the person asked for; where the person's words and a finding
 disagree, the person's words hold. Where you think a finding is wrong, keep that point and say in the summary which
 finding and what you read that shows it wrong. Change what has to change and leave the rest, so that what already
 passed still passes. Where the auditor's closure part names a site your plan lacks, search the data for it yourself
-before you add it, and extend the class's site list, its searches and its universe to hold what you find; an item that
-changes a decision still gives the class, and one that decides none still says why in noClass.
+before you add it, and extend the class's site list, its searches and its universe to hold what you find. Where it
+names a cell of a universe your plan leaves out, the axis was not searched whole: search the tree for every cell of that
+axis, as a class's searches are made, and hold every one you find, never only the one it named - an audit that finds
+another holds the plan back again; an axis it shows your plan said does not apply is answered with its values,
+searched whole the same way. Where it names a statement of a definition of done that breaks the rule for a definition
+of done below - one the run's other work would change, or one the base commit already fails for what the work does
+not touch - write it again by that rule, held to what the work makes true; and write every statement you add or
+change by it, the run's base commit being `{orient.startCommit}`. An item that changes a decision still gives the
+class, and one that decides none still says why in noClass.
 
 A finding that the plan builds what the repository already has, or writes a rule a second time, is settled by
 planning the extension of what exists, not by a better reason for the new thing - unless the code it names does not
 do what the finding says. Whatever this revision adds, search for first, as before, and keep each item's lists of
 what it reuses, creates and replaces true of the plan as it now is.
+
+## What the recovery is fixing
+
+Every issue that was there before the run that the run has taken, each with its id, what became of it, its title and
+where; empty where none is:
+
+{run.preExisting}
+
+{text.fixes}
 
 ## Where a plan update is under way
 
@@ -52,3 +81,11 @@ Where this revision leaves something open that you may still ask the person, eac
 the one you recommend, by this bar as before:
 
 {recommendations}
+
+## A definition of done
+
+{text.done}
+
+## Issues that were there before
+
+{text.issuesBefore}

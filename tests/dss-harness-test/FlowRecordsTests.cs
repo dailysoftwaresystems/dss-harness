@@ -129,7 +129,123 @@ public sealed class FlowRecordsTests
         Assert.Equal("Running", events[1].To);
     }
 
-    /// <summary>A last line with no newline is the crash's own: the reader ignores it and says so, and the next writer takes it back.</summary>
+    /// <summary>
+    /// The sessions a run's log tells of as it is opened are the highest session an event names - one whose engine wrote
+    /// events and never recorded its beginning among them - and no fewer than the beginnings it records, as an older build's
+    /// events, which name none, tell of theirs: what the next engine's sessions are counted on from, so no two sessions of a
+    /// run name one number, and a session named reads back as written.
+    /// </summary>
+    [Fact]
+    public void AReopenedLog_TellsOfTheSessionsItsEventsName_AndOfThoseAnOlderBuildBegan()
+    {
+        using var temp = new TempDirectory();
+        var file = temp.Combine("events.jsonl");
+
+        using (var log = FlowEventLog.Open(Files(), file))
+        {
+            Assert.Equal(0, log.Sessions);
+
+            // An older build's two sessions, which name none.
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionBegan);
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionEnded, to: "Paused");
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed);
+        }
+
+        using (var log = FlowEventLog.Open(Files(), file))
+        {
+            Assert.Equal(2, log.Sessions);
+
+            // This build's third, which wrote what it took up and never recorded its beginning.
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Step, "one", "one", "Stopped", "NotStarted", 2, session: 3);
+        }
+
+        using (var log = FlowEventLog.Open(Files(), file))
+        {
+            Assert.Equal(3, log.Sessions);
+        }
+
+        var (events, _) = FlowEventLog.Read(Files(), file);
+        Assert.Equal(new int?[] { null, null, null, 3 }, events.Select(read => read.Session));
+        Assert.Equal("its session is 0, and a run's first session is 1", (events[3] with { Session = 0 }).Problem());
+    }
+
+    /// <summary>
+    /// The event log's lines are the system's as each is written - a reader beside the writer sees every one, so an end of
+    /// the engine's process loses none - and on the disk at the flush the engine asks as a pass ends, all of them at once:
+    /// no line is put on the disk alone, a flush with nothing written since the last costs nothing, and the log's close
+    /// flushes what is left, as a session left by a failure closes it.
+    /// </summary>
+    [Fact]
+    public void EventsAreTheSystemsAsWritten_AndOnTheDiskAtTheFlushOrTheClose_AllAtOnce()
+    {
+        using var temp = new TempDirectory();
+        var files = new CountingAppends(Files());
+        var file = temp.Combine("events.jsonl");
+
+        using (var log = FlowEventLog.Open(files, file))
+        {
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionBegan);
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Step, "one", "one", "NotStarted", "Running", 1);
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Step, "one", "one", "Running", "Done", 1);
+
+            Assert.Equal((3, 0, 0), (files.Appended, files.AppendedFlushed, files.Flushed));
+            Assert.Equal([1, 2, 3], FlowEventLog.Read(Files(), file).Events.Select(read => read.Seq));
+
+            log.Flush();
+            log.Flush();
+
+            Assert.Equal((3, 0, 1), (files.Appended, files.AppendedFlushed, files.Flushed));
+
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionEnded, to: "Done");
+        }
+
+        Assert.Equal((4, 0, 2), (files.Appended, files.AppendedFlushed, files.Flushed));
+        Assert.Equal([1, 2, 3, 4], FlowEventLog.Read(Files(), file).Events.Select(read => read.Seq));
+    }
+
+    /// <summary>A disk whose files of lines count how each line is written - put on the disk with it, or handed to the system - and each flush.</summary>
+    private sealed class CountingAppends(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public int Appended;
+        public int AppendedFlushed;
+        public int Flushed;
+
+        public override IAppendFile OpenForAppend(string path) => new Counted(base.OpenForAppend(path), this);
+
+        private sealed class Counted(IAppendFile file, CountingAppends counts) : IAppendFile
+        {
+            public long Length => file.Length;
+
+            public void ReadExactlyAt(long position, Span<byte> buffer) => file.ReadExactlyAt(position, buffer);
+
+            public void TruncateTo(long length) => file.TruncateTo(length);
+
+            public void AppendFlushed(ReadOnlySpan<byte> bytes)
+            {
+                counts.AppendedFlushed++;
+                file.AppendFlushed(bytes);
+            }
+
+            public void Append(ReadOnlySpan<byte> bytes)
+            {
+                counts.Appended++;
+                file.Append(bytes);
+            }
+
+            public void Flush()
+            {
+                counts.Flushed++;
+                file.Flush();
+            }
+
+            public void Dispose() => file.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// A last line with no newline is the crash's own: the reader ignores it and says so, and the next writer takes it back
+    /// and says, in the reader's own words, what it took back.
+    /// </summary>
     [Fact]
     public void ATornLastLineIsIgnoredAndSaid_AndTakenBackByTheNextWriter()
     {
@@ -147,17 +263,201 @@ public sealed class FlowRecordsTests
         var (events, torn) = FlowEventLog.Read(files, file);
 
         Assert.Single(events);
-        Assert.NotNull(torn);
-        Assert.Contains("no newline", torn, StringComparison.Ordinal);
+        Assert.Equal("""the log's last line has no newline and was set aside: '{"seq": 2, "at": "2026-10-19 12'""", torn);
 
         using (var again = FlowEventLog.Open(files, file))
         {
+            Assert.Equal(torn, again.SetAside);
             Assert.Equal(2, again.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed).Seq);
+        }
+
+        using (var mended = FlowEventLog.Open(files, file))
+        {
+            Assert.Null(mended.SetAside);
         }
 
         var (whole, _) = FlowEventLog.Read(files, file);
 
         Assert.Equal([1, 2], whole.Select(read => read.Seq));
+    }
+
+    /// <summary>
+    /// What a power loss left of a pass never put on the disk - NULs where an earlier page of the pass never landed, the
+    /// end of one of its lines and its later lines whole after them - is never refused: the reader sets aside the first line
+    /// that holds a NUL with every line after it, and says so, and the next writer takes them back, says so in the same
+    /// words, and goes on from the last event before them, so a resume of the run goes on.
+    /// </summary>
+    [Fact]
+    public void WhatAPowerLossLeftOfAPass_FromItsFirstNul_IsSetAsideAndTakenBack_NeverRefused()
+    {
+        using var temp = new TempDirectory();
+        var files = Files();
+        var file = temp.Combine("events.jsonl");
+        var pass = temp.Combine("pass.jsonl");
+
+        using (var log = FlowEventLog.Open(files, file))
+        {
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionBegan);
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Step, "one", "one", "NotStarted", "Running", 1);
+        }
+
+        using (var log = FlowEventLog.Open(files, pass))
+        {
+            for (var seq = 1; seq <= 5; seq++)
+            {
+                _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed);
+            }
+        }
+
+        // The pass after the two: events 3 to 5, of which the end of 3 and the whole of 4 and 5 landed, after the NULs
+        // where the page holding 3's start never did.
+        var lines = File.ReadAllLines(pass);
+        File.WriteAllBytes(file, [.. File.ReadAllBytes(file), .. new byte[37], .. System.Text.Encoding.UTF8.GetBytes($"{lines[2][9..]}\n{lines[3]}\n{lines[4]}\n")]);
+
+        var (events, torn) = FlowEventLog.Read(files, file);
+
+        Assert.Equal([1, 2], events.Select(read => read.Seq));
+        Assert.Equal("the log's lines from the one after event 2 on hold a NUL, what a power loss left of a pass never put on the disk, and were set aside: ''", torn);
+
+        using (var again = FlowEventLog.Open(files, file))
+        {
+            Assert.Equal(torn, again.SetAside);
+            Assert.Equal(3, again.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed).Seq);
+        }
+
+        var (whole, none) = FlowEventLog.Read(files, file);
+
+        Assert.Equal([1, 2, 3], whole.Select(read => read.Seq));
+        Assert.Null(none);
+        Assert.DoesNotContain((byte)0, File.ReadAllBytes(file));
+    }
+
+    /// <summary>
+    /// A session that opens a run's log not whole says what it took back as a warning, in the reader's words, before it
+    /// appends - never cutting the run's history silently; a log that is whole says nothing.
+    /// </summary>
+    [Fact]
+    public void ARunsRecords_OpeningALogNotWhole_WarnWhatTheyTookBack()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: one\n    type: orient\n");
+        var warned = new List<string>();
+
+        using (new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition), warn: warned.Add))
+        {
+        }
+
+        Assert.Empty(warned);
+
+        File.WriteAllBytes(layout.EventsFile, [.. File.ReadAllBytes(layout.EventsFile), .. new byte[3], .. System.Text.Encoding.UTF8.GetBytes("{}\n")]);
+        var (events, setAside) = FlowEventLog.Read(harness.FileSystem, layout.EventsFile);
+
+        using (new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition), warn: warned.Add))
+        {
+        }
+
+        Assert.Equal(
+            [$"'{layout.EventsFile}' was not whole as the session opened it: the log's lines from the one after event {events.Count} on hold a NUL, what a power loss left of a pass never put on the disk, and were set aside: ''; the run's events go on after the last whole one"],
+            warned);
+        Assert.NotNull(setAside);
+    }
+
+    /// <summary>
+    /// A line holding a NUL is never written to a log written a batch at a time, whose opening takes back from its first
+    /// NUL: refused, nothing written - a guard against its writer's defect, for the event log's own lines are JSON, which
+    /// writes a NUL of a value escaped.
+    /// </summary>
+    [Fact]
+    public void ALineHoldingANul_IsNeverWrittenToALogWrittenABatchAtATime()
+    {
+        using var temp = new TempDirectory();
+        var file = temp.Combine("events.jsonl");
+
+        using (var log = DssHarness.Core.Agents.AppendLog.Open(Files(), file, batched: true))
+        {
+            var refused = Assert.Throws<ArgumentOutOfRangeException>(() => log.Write("a\0b"));
+
+            Assert.StartsWith($"A line of '{file}' holds a NUL, which its opening would take back as what a power loss left of an unwritten batch; nothing was written.", refused.Message, StringComparison.Ordinal);
+        }
+
+        // An event whose words hold a NUL is written escaped, read back whole, and never taken for a power loss's.
+        using (var events = FlowEventLog.Open(Files(), file))
+        {
+            _ = events.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed, detail: "a\0b");
+        }
+
+        var (read, torn) = FlowEventLog.Read(Files(), file);
+
+        Assert.Equal(("a\0b", (string?)null), (Assert.Single(read).Detail, torn));
+        Assert.DoesNotContain((byte)0, File.ReadAllBytes(file));
+    }
+
+    /// <summary>
+    /// The log's close never throws a flush's failure over the failure a session leaves by: the failure in flight - here the
+    /// session's last pass's own flush that failed - is the one the session ends with, its code and its trace its own, and
+    /// the close's failed flush is said as a warning by the run's records.
+    /// </summary>
+    [Fact]
+    public async Task AFlushThatFailsAtTheClose_NeverReplacesTheFailureLeaving_AndTheRecordsSayIt()
+    {
+        using var temp = new TempDirectory();
+        var clock = new ManualClock();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+            """);
+        var harness = new HarnessFactory();
+        var files = new UnflushableAppends(harness.FileSystem);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var said = new List<string>();
+
+        var leaving = await Assert.ThrowsAsync<IOException>(async () =>
+        {
+            using var records = new FlowRunRecords(files, new OrchestrationStore(files, harness.Output), layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock, said.Add);
+            await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, records: records).RunAsync(TestContext.Current.CancellationToken);
+        });
+
+        Assert.Equal("flush 1 failed", leaving.Message);
+        Assert.Equal(["the run's events written since its last pass could not be put on the disk as its records closed: flush 2 failed; they are written, and only a power loss before they reach the disk would lose them"], said);
+
+        // And a log closed as a defect leaves never throws its own flush's failure over it.
+        var defect = Assert.Throws<InvalidOperationException>(new Action(() =>
+        {
+            using var log = FlowEventLog.Open(files, temp.Combine("other.jsonl"));
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed);
+            throw new InvalidOperationException("the defect leaving");
+        }));
+
+        Assert.Equal("the defect leaving", defect.Message);
+    }
+
+    /// <summary>A disk whose files of lines fail every flush, each said by its count.</summary>
+    private sealed class UnflushableAppends(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        private int _flushes;
+
+        public override IAppendFile OpenForAppend(string path) => new Unflushable(base.OpenForAppend(path), this);
+
+        private sealed class Unflushable(IAppendFile file, UnflushableAppends disk) : IAppendFile
+        {
+            public long Length => file.Length;
+
+            public void ReadExactlyAt(long position, Span<byte> buffer) => file.ReadExactlyAt(position, buffer);
+
+            public void TruncateTo(long length) => file.TruncateTo(length);
+
+            public void AppendFlushed(ReadOnlySpan<byte> bytes) => file.AppendFlushed(bytes);
+
+            public void Append(ReadOnlySpan<byte> bytes) => file.Append(bytes);
+
+            public void Flush() => throw new IOException($"flush {Interlocked.Increment(ref disk._flushes)} failed");
+
+            public void Dispose() => file.Dispose();
+        }
     }
 
     /// <summary>
@@ -192,11 +492,42 @@ public sealed class FlowRecordsTests
         Assert.Null((step with { Question = "q12", HandledBy = "q3" }).Problem());
     }
 
+    /// <summary>
+    /// What a visit of the recovery puts right, as its own record keeps it, names a failed step or an issue's title and
+    /// where it is - one of the two, whole - and only a visit's own record, a group's, keeps one: a record that says
+    /// otherwise is refused, naming what is wrong, rather than read as a thread no visit was made in.
+    /// </summary>
+    [Fact]
+    public void AVisitsThread_NamesAFailureOrAnIssue_AndOnlyAGroupsOwnRecordKeepsOne()
+    {
+        var visit = new FlowStepRecord("recover", "recover", true, "Running", 1, 1, [], []);
+        var issue = FlowRecoveryThread.OfIssue(string.Empty, new FlowPreExistingReport("a hole in the parser", "what it is", "src/Parser.cs", "read it", Blocks: false));
+
+        Assert.Null((visit with { Thread = issue }).Problem());
+        Assert.Null((visit with { Thread = FlowRecoveryThread.OfFailure("plan[0]", "build") }).Problem());
+        Assert.Equal(
+            [
+                "what it puts right: it names both a step and an issue",
+                "what it puts right: it names no step",
+                "what it puts right: it names neither a step nor an issue's title and where it is",
+                "what it puts right: it names neither a step nor an issue's title and where it is",
+                "it holds what a visit of the recovery puts right, and only a visit's own record does",
+            ],
+            new[]
+            {
+                visit with { Thread = issue with { Step = "build" } },
+                visit with { Thread = FlowRecoveryThread.OfFailure(string.Empty, " ") },
+                visit with { Thread = issue with { Where = null } },
+                visit with { Thread = new FlowRecoveryThread(string.Empty) },
+                visit with { Group = false, Thread = issue },
+            }.Select(record => record.Problem()));
+    }
+
     /// <summary>Every kind of event is the engine's own kind of change, by its camelCase name - one list, and a kind that is not one is never written.</summary>
     [Fact]
     public void EveryKindOfEventIsAKindOfChange_ByItsName()
     {
-        Assert.Equal(["sessionBegan", "resumed", "step", "pauseBegan", "handoff", "pauseCompleted", "stopApplied", "sessionEnded", "answer", "advised", "iterationAdded"], FlowEvent.Kinds);
+        Assert.Equal(["sessionBegan", "resumed", "step", "pauseBegan", "handoff", "pauseCompleted", "stopApplied", "sessionEnded", "answer", "advised", "iterationAdded", "startEnded"], FlowEvent.Kinds);
         Assert.Throws<ArgumentOutOfRangeException>(() => FlowEvent.KindOf((FlowChangeKind)99));
     }
 
@@ -363,7 +694,7 @@ public sealed class FlowRecordsTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
 
@@ -432,7 +763,7 @@ public sealed class FlowRecordsTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
             await runner.StartedAsync("make").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
             await runner.StartedAsync("work").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
@@ -454,7 +785,12 @@ public sealed class FlowRecordsTests
     public async Task TheHandoffIsAFileInTheStoppedStepsDirectory_RemovedOnceGiven()
     {
         using var temp = new TempDirectory();
-        var clock = new ManualClock();
+        var cancel = TestContext.Current.CancellationToken;
+        var bound = TimeSpan.FromSeconds(30);
+
+        // A clock whose timers fire only when the test moves it: the handoff turn's bound passes when the test says, at
+        // once, never after the real seconds it names.
+        var clock = new TimerClock();
         var definition = Parse("""
             name: flow
             steps:
@@ -468,12 +804,18 @@ public sealed class FlowRecordsTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             runner.HandsOff("think", "what the agent said it was doing");
-            var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
-            await runner.StartedAsync("think");
+            var session = coordinator.RunAsync(cancel);
+            await runner.StartedAsync("think").WaitAsync(bound, cancel);
+            var armed = clock.Waiting;
             coordinator.RequestPause("interrupt");
-            var end = await session;
+
+            // The held runner answers no turn: once the turn's bound is armed, the clock is moved past it - the 180 s a
+            // step that declares no handoffSeconds is given - and the attempt is ended, its handoff asked.
+            await clock.WaitingAsync(armed + 1).WaitAsync(bound, cancel);
+            clock.Advance(TimeSpan.FromSeconds(180));
+            var end = await session.WaitAsync(bound, cancel);
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
 
@@ -485,7 +827,7 @@ public sealed class FlowRecordsTests
             // The attempt the resume gives the handoff to may complete what the step was doing.
             runner.Complete("think");
 
-            var again = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+            var again = await coordinator.RunAsync(cancel).WaitAsync(bound, cancel);
 
             Assert.Equal(FlowRunStatus.Done, again.Status);
             Assert.Equal("what the agent said it was doing", runner.Given[2]);
@@ -511,7 +853,7 @@ public sealed class FlowRecordsTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
             await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
 
@@ -656,7 +998,7 @@ public sealed class FlowRecordsTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), clock, records: records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, records: records);
             await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
 

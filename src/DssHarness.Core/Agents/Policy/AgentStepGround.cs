@@ -14,10 +14,15 @@ namespace DssHarness.Core.Agents.Policy;
 public static class AgentStepGround
 {
     /// <summary>
-    /// The ground of a reason step working in <paramref name="workspace"/>: its agent's worktree where it has one -
-    /// which it writes below, unless its definition says <c>writes: false</c> or the run only reads, its work directory
-    /// always - or, for an agent with none, the main checkout, which it only reads. The tool's own state under each tree
-    /// it touches - its worktree, and always the main checkout, whose run records and other worktrees a command reaches
+    /// The ground of a reason step working in <paramref name="workspace"/>: its agent's worktree, where it starts and which
+    /// it writes below, unless its definition says <c>writes: false</c> or the run only reads, its work directory always.
+    /// An agent that only reads (<see cref="AgentWorkspace.OnlyReads"/>) writes its tree whatever its definition says - the
+    /// tree is its own scratch, the main checkout's HEAD as its step started, where it builds and tests, and nothing of it is
+    /// ever folded - and reads the main checkout besides, whose run records and logs it is pointed at; one whose record an
+    /// older tool wrote with no tree reads the main checkout alone. Every agent reads the run's inputs
+    /// (<see cref="OrchestratorLayout.InputsDirectoryOf"/>), the copies of the files the run's own file inputs named as it
+    /// started, which its steps read for those inputs, wherever its own tree was cut from. The tool's own state under each
+    /// tree it touches - its worktree, and always the main checkout, whose run records and other worktrees a command reaches
     /// from the worktree - git's own files beneath both under the worktree rules, and every credential slot of the main
     /// checkout (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>), every Claude Code directory and every place the
     /// user keeps credentials in, no action of the agent's reaches.
@@ -81,11 +86,12 @@ public static class AgentStepGround
             .Concat(step.Restrictions.Select(one => new AgentRestriction(one, AgentPolicySource.Agent)))
             .ToList();
 
-        // An agent with no worktree reads the main tree; one with a worktree works in it alone, its view of the main
-        // tree coming by the engine.
+        // An agent that only reads reads the main checkout beside its own tree - the run's records and logs are there - and
+        // so does a run with no tree; one whose work is folded works in its worktree alone, its view of the main tree coming
+        // by the engine.
         var reads = new List<string> { workspace.WorkingDirectory, workspace.WorkDirectory };
 
-        if (workspace.Worktree is null)
+        if (workspace.Worktree is null || workspace.OnlyReads)
         {
             reads.Add(workspace.MainCheckout);
         }
@@ -95,9 +101,16 @@ public static class AgentStepGround
             reads.Add(handed);
         }
 
+        // The files the run's own file inputs named, copied as the run started: every agent of the run reads them, one whose
+        // work is folded as well as one that only reads, whichever commit its tree was cut from - a root it reads and never
+        // writes, in the run's directory beside what it is handed.
+        reads.Add(OrchestratorLayout.InputsDirectoryOf(workspace.RunDirectory));
+
         // A worktree is written only where the agent writes: a definition's `writes: false`, and a run that only reads,
-        // leave it to be read, and the work directory is all the agent writes.
-        var writable = workspace.Worktree is { Length: > 0 } && definition?.Writes != false && !readsOnly
+        // leave it to be read, and the work directory is all the agent writes. The tree of an agent that only reads is its
+        // own scratch, written whatever its definition says, since nothing of it is ever folded: only a run that only reads
+        // whatever its definition gives it - the advisor in that tree - leaves it to be read.
+        var writable = workspace.Worktree is { Length: > 0 } && (definition?.Writes != false || workspace.OnlyReads) && !readsOnly
             ? Distinct([workspace.Worktree, workspace.WorkDirectory])
             : [workspace.WorkDirectory];
 
@@ -120,6 +133,37 @@ public static class AgentStepGround
             Trees = trees,
             RunDirectory = workspace.RunDirectory,
         };
+    }
+
+    /// <summary>
+    /// The ground a run's own file input is decided on (<see cref="FlowInputs.OpenFiles"/>): an agent's read of the main
+    /// checkout, for every agent of the run reads the copy - the ground of a run of no tree, definition or step of its own
+    /// over the main checkout (<see cref="Of"/>), so every place no agent's read reaches is unreached here as it is there:
+    /// every credential slot of the main checkout, every Claude Code directory, every place the user keeps credentials in -
+    /// <c>agentPolicy.hiddenPlaces</c> among them, inside the repository or not - and every read the configuration's
+    /// <c>agentPolicy.restrictions</c> refuse. Its one root is the main checkout, for a file input names a file inside the
+    /// repository - every root an agent's own of the run's directory lies inside it - and nothing is written on it.
+    /// </summary>
+    /// <param name="config">The configuration the run starts under.</param>
+    /// <param name="mainCheckout">The main checkout's root, which each file input is read from.</param>
+    /// <param name="claudeDirectories">Every Claude Code directory a client of this run uses, and the tool's own (<see cref="ReasonLaunch.ClaudeDirectories"/>).</param>
+    /// <param name="credentialPlaces">Every place the user keeps credentials in on this machine (<see cref="ReasonLaunch.CredentialPlaces"/>).</param>
+    public static AgentPolicyGround OfFileInputs(HarnessConfig config, string mainCheckout, IReadOnlyList<string> claudeDirectories, IReadOnlyList<Isolation.HiddenPlace> credentialPlaces)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(mainCheckout);
+
+        var read = Of(
+            config,
+            definition: null,
+            new WorkflowStep { Name = "inputs", Type = "reason" },
+            new AgentWorkspace(Worktree: null, WorkDirectory: mainCheckout, MainCheckout: mainCheckout, ExtraRoots: [], WorkingDirectory: mainCheckout, RunDirectory: mainCheckout),
+            webSearchGiven: false,
+            claudeDirectories,
+            credentialPlaces,
+            readsOnly: true);
+
+        // A decision and no run: no run's directory, and nothing held of it.
+        return read with { ReadRoots = [], WritableRoots = [], RunDirectory = null };
     }
 
     /// <summary>The paths a writing step may write, as its <c>writes</c> name them; null where it narrows nothing.</summary>

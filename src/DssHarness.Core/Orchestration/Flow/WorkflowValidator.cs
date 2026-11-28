@@ -421,6 +421,15 @@ public static class WorkflowValidator
                 }
             }
 
+            // A run keeps the file each of its own file inputs names in a directory of the input's name
+            // (OrchestratorLayout.InputCopy), and a file system that folds case holds one directory for two names that differ
+            // by case alone: such names are refused on every system alike, so a workflow that loads on one loads on all. A
+            // name written twice whole was refused where the file was read.
+            foreach (var alike in _definition.Inputs.GroupBy(input => input.Name, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1))
+            {
+                _problems.Add($"the inputs {string.Join(" and ", alike.Select(input => $"'{input.Name}'"))} differ by case alone, and a run keeps a file input's copy in a directory named for the input, which a file system that folds case - Windows', macOS's - holds once for both; name them apart");
+            }
+
             foreach (var parameter in _definition.Params)
             {
                 DeclaredNameRules(parameter.Name, "param");
@@ -431,9 +440,15 @@ public static class WorkflowValidator
                 }
             }
 
-            if (_definition.Advisor is { } advisor)
+            // V43: every question the engine raises is recommended by the advisor before a person is asked it, so the
+            // workflow a run is started of names one; a used workflow's own is optional, for the run's recommends for its
+            // steps where its use does not govern itself.
+            if (_definition.Advisor is null)
             {
-                AdvisorKinds(advisor, lead: string.Empty);
+                _problems.Add(
+                    "the workflow names no advisor; every question the engine raises is recommended by the advisor before a person is asked it, "
+                    + $"so a workflow a run is started of names one. Write the block init writes at the file's top level - {WorkflowTemplates.ShippedAdvisor} - "
+                    + $"with its agent's file and its prompt in the workflow's directory, as '{Hosts.ToolPackage.Command} {WorkflowExportService.CommandName} {WorkflowTemplates.ShippedWorkflowName} --shipped --to <dir>' writes them");
             }
         }
 
@@ -480,8 +495,8 @@ public static class WorkflowValidator
 
         /// <summary>
         /// V66: what a use that governs itself (<c>useParentLimits: false</c>) applies to its steps holds to every rule the
-        /// run's own key of that name does - its limits, its <c>maxInstances</c>, its advisor's tier, model, tries and
-        /// kinds, its answers, and the shape it gives the run's graph - for a use cannot declare what a run could not. Its
+        /// run's own key of that name does - its limits, its <c>maxInstances</c>, its advisor's tier, model and tries, its
+        /// answers, and the shape it gives the run's graph - for a use cannot declare what a run could not. Its
         /// budget and its reporter are carried and applied to nothing yet, so nothing is held of them here. Each refusal
         /// names the used workflow and the step that uses it.
         /// </summary>
@@ -500,7 +515,6 @@ public static class WorkflowValidator
                 ModelRules(advisor.Tier, advisor.Model, $"{lead}advisor");
                 Within(advisor.Retries, 1, 20, $"{lead}advisor.retries");
                 Within(advisor.BackoffSeconds, 1, WorkflowStep.MostBackoffSeconds, $"{lead}advisor.backoffSeconds");
-                AdvisorKinds(advisor, lead);
             }
 
             // Its answers are consulted for its steps' questions, after their own and before the run's: they answer as a
@@ -1542,7 +1556,7 @@ public static class WorkflowValidator
             }
 
             // V53: the graph a step asks is the run's own, made by a graphify-codebase step upstream of the step that
-            // asks it - or, in the recovery, ended before it - and a step that goes on with another's work asks the
+            // asks it - or, in the recovery and in a raised step, ended before it - and a step that goes on with another's work asks the
             // graph that step's conversation holds, saying none of its own. V54: each graph key only where it does
             // something - the cap and the pack's seed only where a pack is given, the narrowing of reads only under the
             // tool, and the tool only where the step's agent reads.
@@ -1559,6 +1573,8 @@ public static class WorkflowValidator
             {
                 AccessRules(entry, where);
             }
+
+            CommitRules(entry, where, resumesAnother);
 
             if (step.AskRounds is not null && step.Ask is not true)
             {
@@ -1591,7 +1607,7 @@ public static class WorkflowValidator
             {
                 if (step.In is not null)
                 {
-                    _problems.Add($"{where} reads and names 'in'; a reading step has no worktree to work in, and reads the main tree");
+                    _problems.Add($"{where} reads and names 'in'; a reading step works as an agent of its own that only reads, never in a worktree a create-agent step made");
                 }
 
                 if (step.Writes is not null)
@@ -1619,8 +1635,42 @@ public static class WorkflowValidator
         }
 
         /// <summary>
+        /// The commit a reason step's tree starts at (<c>commit</c>) is a reading step's alone: the tree it names is the one
+        /// the engine's own read-only agent is given, brought there as the step starts. A step that writes, or works in a
+        /// worktree a create-agent step made - by its own keys, or by those of the step whose work it goes on with, whose
+        /// agent it works as - works where its work is folded from, which nothing brings to a commit, and is refused naming
+        /// one rather than starting in a tree the key does not say.
+        /// </summary>
+        /// <param name="entry">The reason step.</param>
+        /// <param name="where">The step's path, as its problems name it.</param>
+        /// <param name="resumesAnother">Whether the step goes on with another step's work.</param>
+        private void CommitRules(Entry entry, string where, bool resumesAnother)
+        {
+            var step = entry.Step;
+
+            if (step.Commit is null)
+            {
+                return;
+            }
+
+            var root = resumesAnother ? ResumeChain.Root(_definition, entry.Path, step) : step;
+
+            if (root.Access != "write" && root.In is null)
+            {
+                return;
+            }
+
+            var does = root.Access == "write" ? "writes" : $"works in '{root.In}'";
+            var whose = resumesAnother ? $"goes on with the work of '{step.Resume}', which {does}," : does;
+
+            _problems.Add(
+                $"{where} {whose} and names commit; a tree starts at a commit only where its step only reads - the engine's own read-only "
+                + "agent's, brought there as the step starts - and a worktree a create-agent step made holds work that is folded, which no step brings to a commit");
+        }
+
+        /// <summary>
         /// V53 and V54 over a reason step's four graph keys: the graph a step asks is the run's own, made by a
-        /// graphify-codebase step upstream of it - or, in the recovery, declared (<see cref="GraphifyUpstream"/>) - and a
+        /// graphify-codebase step upstream of it - or, in the recovery and in a raised step, declared (<see cref="GraphifyUpstream"/>) - and a
         /// step that goes on with another's work asks the graph that step's conversation holds, its mode that step's,
         /// saying none of its own while it may say <c>graphFrom</c> and <c>graphPromptTokens</c> for its own pack; each
         /// key only where it does something, judged by the mode the run resolves - the pack's cap and seed only where a
@@ -1638,7 +1688,7 @@ public static class WorkflowValidator
 
             if (step.Graph is "map" or "tools" && !upstream)
             {
-                _problems.Add($"{where} says graph: {step.Graph}, and no graphify-codebase step is upstream of it; the graph a step asks is the run's own, made upstream of it - or, in the recovery, ended before it");
+                _problems.Add($"{where} says graph: {step.Graph}, and no graphify-codebase step is upstream of it; the graph a step asks is the run's own, made upstream of it - or, in the recovery and in a raised step, ended before it");
             }
 
             if (resumesAnother && step.Graph is not null)
@@ -1722,7 +1772,7 @@ public static class WorkflowValidator
         /// </summary>
         /// <param name="entry">The step.</param>
         private bool GraphifyUpstream(Entry entry)
-            => InRecovery(entry)
+            => FlowStepGraph.RunsWherever(_definition, entry.Path)
                 ? _entries.Any(other => other.Step.Type == "graphify-codebase")
                 : _entries.Where(other => other.Step.Type == "graphify-codebase").Any(other => FlowGraph.Waits(_definition, entry.Path, other.Path));
 
@@ -3105,8 +3155,6 @@ public static class WorkflowValidator
             return true;
         }
 
-        private static string IsAre(int count) => count == 1 ? "is" : "are";
-
         /// <summary>
         /// The roots of the run's own names that only a prompt reads, each with why: a step's own keys - its templates and
         /// its expressions - and a pull request's body, which the engine fills and no agent reads, read none of them; each
@@ -3182,38 +3230,6 @@ public static class WorkflowValidator
             AdvisorPrompt,
             StatusPrompt,
             AskPrompt,
-        }
-
-        /// <summary>
-        /// The kinds an advisor is asked about are question kinds; and V43: the advisor recommends on the questions the
-        /// engine raises itself, and two kinds are none of them: an agent that asks gives its own recommendation with its
-        /// question, and a run at its budget's reserve spends nothing more on reasoning, which the advisor is.
-        /// </summary>
-        /// <param name="advisor">The run's own advisor, or a governing use's.</param>
-        /// <param name="lead">What each refusal starts with: nothing for the run's own, the governing use for a use's.</param>
-        private void AdvisorKinds(FlowAdvisor advisor, string lead)
-        {
-            if (advisor.Kinds.Count == 0)
-            {
-                return;
-            }
-
-            var unknown = advisor.Kinds.Where(kind => !QuestionKinds.Contains(kind, StringComparer.Ordinal)).ToList();
-
-            if (unknown.Count > 0)
-            {
-                _problems.Add($"{lead}advisor.kinds names {string.Join(", ", unknown.Select(kind => $"'{kind}'"))}, which {IsAre(unknown.Count)} no question kind. Known: {string.Join(", ", QuestionKinds.Select(kind => $"'{kind}'"))}.");
-            }
-
-            if (advisor.Kinds.Contains("ask", StringComparer.Ordinal))
-            {
-                _problems.Add($"{lead}advisor is to recommend for 'ask': an agent that asks gives its own recommendation");
-            }
-
-            if (advisor.Kinds.Contains("runBudget", StringComparer.Ordinal))
-            {
-                _problems.Add($"{lead}advisor is to recommend for 'runBudget': a run at its budget's reserve spends nothing more on reasoning, and the advisor reasons");
-            }
         }
 
         /// <summary>

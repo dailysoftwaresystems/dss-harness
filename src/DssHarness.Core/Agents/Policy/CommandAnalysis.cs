@@ -1,3 +1,4 @@
+using DssHarness.Core.Git;
 using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Agents.Policy;
@@ -699,19 +700,19 @@ public static partial class CommandAnalysis
             // word stands as one word too. The options that take a value in the next word are the
             // ones git names for them, and an option git does not name is refused: dropping a word
             // that was the subcommand would read the command as one it is not.
-            if ((option.StartsWith("-C", StringComparison.Ordinal) && option.Length > 2) || (option.StartsWith("--", StringComparison.Ordinal) && option.Contains('=', StringComparison.Ordinal) && GitTakesValue(option.Split('=', 2)[0])))
+            if ((option.StartsWith("-C", StringComparison.Ordinal) && option.Length > 2) || (option.StartsWith("--", StringComparison.Ordinal) && option.Contains('=', StringComparison.Ordinal) && GitGlobalOptions.NamesValue(option.Split('=', 2)[0])))
             {
                 at++;
                 continue;
             }
 
-            if (option == "-C" || GitTakesValue(option))
+            if (GitGlobalOptions.TakesNextWord(option))
             {
                 at += 2;
                 continue;
             }
 
-            if (GitValueLess(option))
+            if (GitGlobalOptions.ValueLess(option))
             {
                 at++;
                 continue;
@@ -869,17 +870,6 @@ public static partial class CommandAnalysis
 
         return ([.. path, .. words.Skip(at)], [.. path.Select(_ => string.Empty), .. quoted.Skip(at)]);
     }
-
-    /// <summary>git's global options that take their value as the next word, read before its subcommand.</summary>
-    private static bool GitTakesValue(string option)
-        => option is "--git-dir" or "--work-tree" or "--namespace" or "--super-prefix" or "--attr-source" or "--shallow-file" or "--list-cmds";
-
-    /// <summary>git's global options that take no value, read before its subcommand.</summary>
-    private static bool GitValueLess(string option)
-        => option is "--bare" or "--no-optional-locks" or "--literal-pathspecs" or "--glob-pathspecs"
-            or "--noglob-pathspecs" or "--icase-pathspecs" or "--no-replace-objects" or "--no-lazy-fetch" or "--no-advice"
-            or "--html-path" or "--man-path" or "--info-path" or "--exec-path" or "-p" or "--paginate" or "-P" or "--no-pager"
-            or "-v" or "--version" or "-h" or "--help";
 
     /// <summary>
     /// Whether a <c>git -c</c> or <c>--config-env</c> setting configures git where it runs: any
@@ -1395,7 +1385,7 @@ public static partial class CommandAnalysis
             {
                 setting = option[2..];
             }
-            else if (option == "-C" || GitTakesValue(option))
+            else if (GitGlobalOptions.TakesNextWord(option))
             {
                 at++;
             }

@@ -65,6 +65,14 @@ public static class WorkflowStepTypes
         public bool IsCheck => FailOnDefault is not null;
 
         /// <summary>
+        /// The key whose expression reads what a step of the type judges, where that is a reason step's answer - a plan
+        /// check's <c>items</c>, a class closure's <c>record</c>: a reason step declared beside such a step, whose answer
+        /// that key reads, is handed the step as its answer's check, so what the step would find is put right in the
+        /// agent's own conversation (<see cref="FlowStepRun.AnswerChecks"/>). Null for a type that judges no answer.
+        /// </summary>
+        public string? JudgesAnswer { get; init; }
+
+        /// <summary>
         /// Whether the type checks something it answers in its output and never as a failure, so it takes no <c>failOn</c>:
         /// <c>validate-plan</c>. A check all the same, which <see cref="Checks"/> counts.
         /// </summary>
@@ -118,7 +126,7 @@ public static class WorkflowStepTypes
         new("answers", "answers this step gives to question kinds, beforehand") { Keys = AnswerKeys },
         new("on", "the ending of another step that raises this one; it is never started by the schedule") { Keys = OnKeys },
         new("then", "the step the run goes back to once this handler is done"),
-        new("maxVisits", "how often this handler may be raised in one scope, from 1 to 20; absent, 3; past it the run asks"),
+        new("maxVisits", "how often this handler may be raised in the scope its loop goes round in - its own, or, where its then sends the run back over a group around it, the scope that then goes back to - from 1 to 20; absent, 3; past it the run asks"),
     ];
 
     /// <summary>
@@ -181,15 +189,16 @@ public static class WorkflowStepTypes
                 new("outputs", "the JSON schema file the step's answer is held to") { Required = true },
                 new("access", "read (the default), or write: in an agent's worktree, with 'in' naming it"),
                 new("in", "the create-agent step whose agent's worktree the step works in, which it waits for through dependsOn; required where access is write"),
+                new("commit", "the commit the tree of a step that only reads starts at, in place of the main checkout's HEAD: a template filled as the step starts - '{orient.startCommit}', the commit the run began on, for one - whose value must name a commit of the repository, or the step fails with nothing changed; never on a step that writes or works in an agent's worktree"),
                 new("resume", "the reason step whose work this one goes on with"),
                 new("independent", "never given the author's work to go on with"),
                 new("restrictions", "restrictions the agent works under, beyond the workflow's own"),
                 new("search", "the sources of agentWebSearch the step's web_search asks, by name or tag, in the order its answer gives them; absent, agentWebSearch.defaults"),
-                new("graph", $"the step's use of the run's codebase graph: off, map (its context pack alone) or tools (the pack and the graph tool); absent, tools where a graph is made upstream and its agent reads - for a step of the recovery, where one of the run has ended done - map where one is and its agent does not, off where none is; a step that goes on with another's work uses that step's"),
+                new("graph", $"the step's use of the run's codebase graph: off, map (the run's repository map and its context pack pushed into its first message, its one way to see the graph) or tools (the graph tool, whose map and pack serve their pages when asked, from page 1 - nothing pushed unless graphPromptTokens says a size); absent, tools where a graph is made upstream and its agent reads - for a step of the recovery, where one of the run has ended done - map where one is and its agent does not, off where none is; a step that goes on with another's work uses that step's"),
                 new("graphFrom", $"where the step's context pack starts from: {WorkflowStep.GraphFromTask} (the default: what its task names, and the working sets of the work the run holds for it), {WorkflowStep.GraphFromChanges} (what its tree holds differently from its base), or the reason step - of its own scope or one around it - whose working set seeds it, its instance in the step's own work item and iteration; a step named {string.Join(" or ", WorkflowStep.GraphFromWords)} cannot be named as a seed; a step that goes on with another's work may say it, for its pack is its own"),
-                new("graphPromptTokens", $"the size of the first page of the step's context pack - the page its prompt is given - in estimated tokens, from 0 (no pack) to {WorkflowStep.MostGraphPromptTokens}; absent, {WorkflowStep.DefaultGraphPromptTokens}; nothing the pack reaches is left out: what passes the first page is on the pages after it, which the graph tool's pack operation reads by page; a step that goes on with another's work may say its own"),
+                new("graphPromptTokens", $"the size of the first page of the step's context pack pushed into its first message, in estimated tokens, from 0 (none pushed) to {WorkflowStep.MostGraphPromptTokens}; absent, {WorkflowStep.DefaultGraphPromptTokens} for a step at graph: map and 0 for one at tools, which asks the graph tool's pack for its pages from page 1, {WorkflowStep.DefaultGraphPromptTokens} a page where it pushes none; 0 on a step at map gives it no pack; nothing the pack reaches is left out: what passes the first page is on the pages after it, which the graph tool's pack operation reads by page; a step that goes on with another's work may say its own"),
                 new("graphReads", "whether the step's reads are narrowed to the graph: narrow (the default) or guide; the narrowing holds only a step given the tool (graph: tools)"),
-                new("writes", "the paths a writing step may write"),
+                new("writes", "the paths a writing step may write, each read from its worktree's root as a work item's ownedPaths are: a path names that one path, and what is beneath it only where it names a directory - one the run's start tree holds, or one ending in a separator - and a pattern is anchored at the root, ** for any depth; a write refused beneath an entry that names a file, or at a depth an entry of one name no longer reaches, says how to write what it meant"),
                 new("ask", "the step may put its questions to a person; one that may not writes its assumptions down"),
                 new("askRounds", "how often a step that asks may ask before it goes on with what it has, from 1 to 5; absent, 2"),
                 new("backoffSeconds", $"seconds the step waits before it is tried again after its agent failed, twice as long before each later try, at most {WorkflowStep.MostBackoffSeconds}; absent, the workflow's backoffSeconds"),
@@ -197,10 +206,10 @@ public static class WorkflowStepTypes
                 new("raised", $"{WorkflowStep.RaisedByPreExisting}: the step is raised once for each issue a step reports as there before the run, and never scheduled"),
                 new("onAddress", $"{WorkflowStep.Recover}: an issue the step decides to fix is given to the workflow's recover, which fixes it at its root; required beside raised"),
             ],
-            [],
+            ["commit"],
             null,
-            "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)",
-            ["read main", "write the agent's tree where its access is write"],
+            "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, a tree of its own), and each brings that tree to the main checkout's HEAD, or to the commit it names (IAgentService.ReadyAsync)",
+            ["read main", "write the tree of the agent it works in"],
             "maxReasoningAgents"),
         new("build", [.. LegKeys, KeepGoingKey], [], "red", "BuildStepRunner: IBuildLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
         new("test", [.. LegKeys, .. TestKeys, KeepGoingKey], ["exclude", "labels", "affected", "noTests"], "red", "TestStepRunner: ITestLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
@@ -274,7 +283,7 @@ public static class WorkflowStepTypes
             "PlanCheckRunner: PlanValidator with FlowRunPaths over IPathBudget.Check and CopyPathBudget",
             ["read main"],
             null,
-            ObjectOf(("ok", Flag), ("problems", ListOf(Text)), ("items", UntypedList))) { ChecksAsOutput = true },
+            ObjectOf(("ok", Flag), ("problems", ListOf(Text)), ("items", UntypedList))) { ChecksAsOutput = true, JudgesAnswer = "items" },
         new(
             "anchor-balance",
             [new("base", "the commit it measures from"), new("rows", "the row ids it is held to; absent, the whole tree"), new("failOn", "what a red finding does: red (the default) or never")],
@@ -310,7 +319,7 @@ public static class WorkflowStepTypes
             "ClassClosureStepRunner: ClassClosureRules over IAgentService.FoldAsync (dry), FoldLedger, AgentStreamCalls, AgentMeasureSupport.RecordOf, CodebaseGraphService.ReadOnlyAsync, ArmListingReader.DeclaredArmsAsync, IGitClient.CountTouchesAsync",
             ["read main", "read the agent's tree where in names one"],
             null,
-            ClassClosureOutput),
+            ClassClosureOutput) { JudgesAnswer = "record" },
         new(
             "route-findings",
             [
@@ -526,7 +535,7 @@ public static class WorkflowStepTypes
     [
         new("of", "the create-agent step whose agent the step works on, which it waits for through dependsOn") { Required = true },
         new("allow", "what it may carry, member for member the fold command's options") { Keys = AllowKeys },
-        new("within", "the paths, as patterns, its fold may write or delete in the main tree; a path outside them asks foldOutside, and the registries its rows change are never held to it"),
+        new("within", "the paths its fold may write or delete in the main tree, each read from its root as a reason step's writes are, against the run's start tree; a path outside them asks foldOutside, saying how to write what an entry meant where the reading from the root changed it, and the registries its rows change are never held to it"),
     ];
 
     /// <summary>What one <c>on</c> block takes.</summary>
@@ -577,7 +586,7 @@ public static class WorkflowStepTypes
 
     /// <summary>
     /// What an <c>orient</c> step answers: the run's branch and the one its pull request goes to, the commit it started
-    /// on, and what the repository has - a remote, legs and how each tests, anchors, CI, mutation arms - with what is
+    /// on, and what the repository has - a remote and whether it is on a forge, legs and how each tests, anchors, CI, mutation arms - with what is
     /// dirty, which agents are open and what is in flight.
     /// </summary>
     private static string OrientOutput => ObjectOf(
@@ -585,6 +594,7 @@ public static class WorkflowStepTypes
         ("baseBranch", TextOrNull),
         ("startCommit", Text),
         ("hasRemote", Flag),
+        ("onForge", Flag),
         ("hasLegs", Flag),
         ("legCount", WholeNumber),
         ("anchors", Flag),

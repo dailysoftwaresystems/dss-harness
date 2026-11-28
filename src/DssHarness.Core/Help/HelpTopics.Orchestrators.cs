@@ -32,6 +32,54 @@ namespace DssHarness.Core.Help;
 
 public static partial class HelpTopics
 {
+    /// <summary>What the orchestrators topic says of a session's output logs (<see cref="FlowOutputLogs"/>), held to the code by its tests.</summary>
+    internal static string OutputLogsSaid
+        => $"Output logs. {FlowService.RunCommand}, {FlowService.ResumeCommand} and {FlowService.AnswerCommand} given "
+            + $"{FlowOutputLogs.Option} <file> write one zip at <file> - read from the directory the shell stands in - holding "
+            + "everything needed to understand the run and to put right what it met; given none, they write none, and no "
+            + "configuration key asks for it. It is written at every end of the command - done, failed, paused on a question, "
+            + "stopped, refused before a run was reached or after, a failure the command caught - whole each time, through a file "
+            + "beside it that then replaces it, so a resumed run's zip holds the whole run and a crash never leaves half a zip; "
+            + $"and it is named as every record of a run is, the last line naming them ({FlowOutputLogs.Record}: <file>) and "
+            + $"{FlowReports.RecordsMember}.{FlowOutputLogs.Record} in --json. A path that is a directory, inside "
+            + $"{HarnessLayout.OrchestratorsDirectoryName}/, inside the repository's main checkout or one of its agents' trees "
+            + "where that tree does not ignore it - git's ignore rules read as a status reads them, a path the tree tracks never "
+            + "ignored: the zip would be one of the tree's uncommitted files, handed to every agent a run of it makes - or in a "
+            + $"directory that cannot be made is refused ({HarnessExit.Refused}) before anything runs, nothing started; any other "
+            + "work tree, another project's, a worktree of a bare repository or a repository at the home, is none a run hands or "
+            + "folds from, and takes the zip. "
+            + $"The zip holds {FlowOutputLogs.RunFolder}/ - the run's "
+            + $"whole directory, its folders kept - {FlowOutputLogs.ConfigName}, the configuration the run was read with, and "
+            + $"{FlowOutputLogs.ManifestName}, the place to start reading: what was run and the command line, the build and the "
+            + "system, how the command ended and why, the run's name, workflow, state and open questions, the command's own "
+            + "output - its --json document, and every line it wrote - every entry with its size, and what was left out and "
+            + "why. Left out, each named: every link and junction, never followed, for one could lead outside the run; every key "
+            + "store and dotenv file at any depth, and the shared copy of one an agent was handed; the run's "
+            + $"{HarnessLayout.OrchestratorTempDirectoryName}/; the caches of its codebase graph made again from the tree "
+            + $"({string.Join(", ", FlowOutputLogs.GraphCaches.Select(cache => $"{OrchestratorLayout.GraphDirectoryName}/{cache}"))}); "
+            + "and each agent's worktree, which is outside the run. Every byte of it is held to the mask this command's own "
+            + "sessions kept the run's records through, never built again at the end - every secret the configuration appoints "
+            + "that the key slot answers, as each session began; every form each web-search key a step was given is sent in; "
+            + "and every gh login token a step came to hold - each masked as itself and as its bytes in UTF-8 and in UTF-16 of "
+            + "either byte order, the configuration, the command line and the output among it. A resumed run's zip is masked "
+            + "by this command's sessions alone: an earlier session's records were masked as they were written, but a file it "
+            + "kept as it came may hold a secret since rotated out of the slot or taken out of the configuration, for nothing "
+            + "derived from a secret is kept from one session to the next. Where no session of the command built a mask - none "
+            + "began, as where an answer is handed to an engine running elsewhere or a resume is refused, or none could build "
+            + "it - every place the run's layout marks as holding files as they came, which no record's mask was applied to, "
+            + "is left out whole, each named with why: "
+            + $"{string.Join(", ", OrchestratorLayout.RunPlacesKeptAsTheyCame.Select(PlaceSaid))}; and in each attempt's "
+            + $"directory ({string.Join(", ", OrchestratorLayout.AttemptDirectories.Select(attempt => attempt + "/"))}): "
+            + $"{string.Join(", ", OrchestratorLayout.AttemptPlacesKeptAsTheyCame.Select(PlaceSaid))}. "
+            + "Nothing is capped or dropped: a file that could not be read whole is said "
+            + "so. A zip that could not be written is said in its place and named nowhere, and the command's code stands - save "
+            + $"a defect of this tool's, which ends it as one does ({HarnessExit.InternalError}). A command line the parser "
+            + "refuses writes none, for no command began.";
+
+    /// <summary>A place of a run's directory as the help names it: a directory with its trailing separator, a file as it is, and what it holds.</summary>
+    internal static string PlaceSaid(RunPlace place)
+        => $"{place.Path}{(place.IsFile ? string.Empty : "/")} ({place.Holds})";
+
     private static string RenderOrchestrators()
     {
         var builder = new StringBuilder();
@@ -61,9 +109,10 @@ public static partial class HelpTopics
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.EvidenceDirectoryName}/", "its evidence roots' files, kept when it is deleted"),
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/", "API clients only: one conversation with the provider, in the provider's own form"),
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it"),
-                ($"  {OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step of the run that no agent owns, the create-agent that makes an agent included; every step the run drew holds what its work measured (`measure` in step.json and flow.json: when it was ready, its waits by cause whole across sessions - the machine holding every leg of it still to run among them, a wait on its dispatch queue keeping the class of it and each tenant waited behind - its run time, its pause, a crash's among it, and one entry per attempt - each run of it, what served it, its spend by the model that served each part at the price copied as it was counted, the tokens by kind, the dollars, the turns, the tools with their failures and denials, the compactions, the pages past the first its graph calls asked for, a machine step's legs - with the advisor's spend beside them; the run's `spent` is the sum of its steps'), and an attempt a crash cut off is completed at the resume from the step's own records: a reason step's stored stream, charging only what its record had not, and a machine step's ledger in its directory, its legs and where its work stopped"),
+                ($"  {OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step of the run that no agent owns, the create-agent that makes an agent included; every step the run drew holds what its work measured (`measure` in step.json and flow.json: when it was ready, its waits by cause whole across sessions - the machine holding every leg of it still to run among them, a wait on its dispatch queue keeping the class of it and each tenant waited behind - its run time, its pause, a crash's among it, and one entry per attempt - each run of it, what served it, its spend by the model that served each part at the price copied as it was counted, the tokens by kind, the dollars, the turns, the tools with their failures and denials, the compactions, the pages past the first its graph calls asked for, a machine step's legs - with the advisor's spend beside them; the run's `spent` is the sum of its steps' and of what the advisor spent on the run's own question, its budget's - kept as `spent.advice`, its records under steps/run/advice/<n>/), and an attempt a crash cut off is completed at the resume from the step's own records: a reason step's stored stream, charging only what its record had not, and a machine step's ledger in its directory, its legs and where its work stopped"),
                 ($"  {HarnessLayout.OrchestratorTempDirectoryName}/<launch>/", "every temporary directory a run's launch and its children keep, one directory a launch - its children's and Claude Code's own process's beside it - made with the launch, held for the run's life and never in the user's own places; taken away whole with the run's directory"),
                 ($"  {HarnessLayout.OrchestratorArtifactsDirectoryName}/", "the run's artifacts, made with the run and kept for its life: read and copied wherever they are asked for while it runs, and taken away with the run's directory"),
+                ($"  {HarnessLayout.OrchestratorInputsDirectoryName}/<input>/", "the file one of the run's own file inputs named, copied as the run starts - committed or not - and kept for its life: what every step of every session reads for that input, whatever became of the file since, and every agent of the run reads; taken away with the run's directory"),
                 ($"  <step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}", "in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it"),
                 ($"  {OrchestratorLayout.FlowFileName}", "a run's state in one file - the truth a resume goes on from"),
                 ($"  {OrchestratorLayout.WorkflowStatusFileName}", "a run's status for a person: each step of its definition, its instances, progress and what it waits on"),
@@ -74,11 +123,12 @@ public static partial class HelpTopics
                 ($"  <step>/{OrchestratorLayout.StepPullRequestBodyFileName}", "a pull-request step that opened one: the body it opened it with"),
                 ($"  <step>/{OrchestratorLayout.StepFoldFileName}", "a fold, delete-agent, refresh or rebase step: what its dry run named and stood, the question it asked, each consent given by name, how its apply ended"),
                 ($"  <step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/", "a refresh or a rebase of others: what it did to each target, as above"),
-                ($"  <step>/{OrchestratorLayout.StepGraphFileName}", "a reason step that has a codebase graph: the line of its prompt - what its pack cost, or why none was given - one line for each call of the graph tool, and one for each escape of its narrowing of reads and each whole read that narrowing refused"),
+                ($"  <step>/{OrchestratorLayout.StepGraphFileName}", "a reason step that has a codebase graph: the line of its prompt - what its pack cost, or why none was given - one line for each call of the graph tool, and one for each escape of its narrowing of reads and each whole read that narrowing answered with the file's outline"),
                 ($"  <step>/{OrchestratorLayout.StepWorkingSetFileName}", "a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it ('help codebase-graph')"),
                 ($"  <step>/{Agents.AgentCallRecords.WebFileName}", "a step whose agent asks the web: each address its web_fetch and web_search decided before it was asked, what each answered, and each search source's part ('help web-search'); written by every client whose step has the web"),
                 ($"  <step>/{Agents.AgentCallRecords.DenialsFileName}", "a step whose agent's calls the engine decides, on every client: each call the policy refused, with its rule"),
                 ($"  <step>/{Agents.AgentCallRecords.ToolResultsDirectoryName}/{Pages.PageKey.CallPrefix}<digest>.txt", "a step whose agent's calls the engine decides, on every client: an answer longer than a page, whole, named by the digest of the call's id, which read_result gives a page at a time"),
+                ($"  <step>/{Agents.AgentCallRecords.ToolResultsDirectoryName}/{Pages.PageKey.CallPrefix}<digest>.txt{Pages.TextBlocks.Extension}", "beside an answer whose lines head blocks - a search's hits beneath their declaration's line: where the file holds each block, and the digest of its bytes, so a page that begins inside one gives its head again"),
                 ($"  {OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}", "the run's web search: what each source's lookups found, once for the run, and each query a source answered, which the same query again is answered from; written by every client whose step searches"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphManifestFileName}", "the run's codebase graph: the main checkout's manifest, every file it keeps with its blob, state and extract ('help codebase-graph')"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphSymbolsFileName}", "the graph's link result: every node and edge, with the digest of the manifest it was made from"),
@@ -100,19 +150,25 @@ public static partial class HelpTopics
             + $"{AnchorCellNames.Priority}{AgentRows.CellExtension} where it declares one, each read as write-anchor reads a cell file. "
             + "An agent's worktree is <worktrees.root>/<orchestrator>/<agent>, a git repository of its own that borrows the main "
             + "checkout's objects ('help worktrees'), which list-worktree and delete-worktree name "
-            + "orchestrator/agent; the copies hosts keep of it are named orchestrator--agent. An agent can also be made with no "
-            + $"worktree ({AgentService.CreateCommand} --no-worktree), reading the main tree and writing only its scratch: the engine "
-            + "makes one for a read-only reason step, and a person has no use for one by hand. It records no session - --session "
-            + "beside --no-worktree is a usage error - and delete-agent marks it deleted in one write, folding nothing, removing no "
-            + "worktree and looking for no transcript; --discard-uncommitted and the allowances have nothing to act on there, and "
-            + "it says so. Agents write their handoffs, pause "
+            + "orchestrator/agent; the copies hosts keep of it are named orchestrator--agent. An agent can also be made to only "
+            + $"read ({AgentService.CreateCommand} {AgentService.ReadsOnlyOption}): the engine makes one for a read-only reason step, and a "
+            + "person has no use for one by hand. Its tree is made as every agent's is, at the main checkout's HEAD, and as each of "
+            + "its steps starts the engine brings it to the main checkout's HEAD then, or to the commit the step names (commit, "
+            + "'help workflows') - a forced detached checkout of that commit "
+            + "and a clean of every file git does not track, ignored ones included - so whatever it wrote there before is gone; it "
+            + "may write its tree and its work directory, and nothing it writes is ever folded, committed or pushed. A record an "
+            + "older tool wrote, naming no tree, is given one as its next step starts. It records no session - --session beside "
+            + $"{AgentService.ReadsOnlyOption} is a usage error - and delete-agent removes its tree, folding nothing and looking for no "
+            + "transcript, and marks it deleted; --discard-uncommitted and the allowances have nothing to act on there, and it says "
+            + $"so. {AgentService.RetiredNoWorktreeOption}, which made an agent with no worktree, is retired, and refused naming "
+            + $"{AgentService.ReadsOnlyOption}. Agents write their handoffs, pause "
             + "and stop points as .md files in their own directory. Every command that writes an agent's records names where they are "
             + "on each way out once it has: its record, its seed, the directory of the bytes it shares where it keeps any, and the rows "
             + "its folds applied - each that is there.");
         builder.AppendLine();
         builder.AppendLine("Commands");
         builder.AppendLine($"  {command} {OrchestratorService.CreateCommand} <o> --model <id> [--parallel <n>] [--session <id>]");
-        builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty | --no-worktree] [--session <id>]");
+        builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty | {AgentService.ReadsOnlyOption}] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.SeedCommand} <o> <a> [--empty] [--force]");
         builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>... | {RefreshRequest.AllOption}] [{RefreshRequest.ExceptOption} <path>]...");
         builder.AppendLine($"      [{RefreshRequest.StaleOption} <path>]... [{FoldAllowances.MergeOption} <path>]... [--apply] [--json]");
@@ -128,9 +184,10 @@ public static partial class HelpTopics
         builder.AppendLine($"  {command} {OrchestratorService.ListCommand} [<o>] [--steps] [--questions] [--json]");
         builder.AppendLine($"  {command} {OrchestratorService.DeleteCommand} <o> [--delete-evidence]");
         builder.AppendLine($"  {command} {FlowService.RunCommand} <workflow> [--run <name>] [--input <k=v>]... [--json]");
-        builder.AppendLine($"  {command} {FlowService.ResumeCommand} <run> [--json]");
+        builder.AppendLine($"      [{FlowOutputLogs.Option} <file>]");
+        builder.AppendLine($"  {command} {FlowService.ResumeCommand} <run> [--json] [{FlowOutputLogs.Option} <file>]");
         builder.AppendLine($"  {command} {FlowService.AnswerCommand} <run> <answer> [--question <id>] [--text <text> | --text-file <file>]");
-        builder.AppendLine("      [--again] [--json]");
+        builder.AppendLine($"      [--again] [--json] [{FlowOutputLogs.Option} <file>]");
         builder.AppendLine($"  {command} {FlowService.PauseCommand} <run> [--all] [--json]");
         builder.AppendLine($"  {command} {FlowService.StopCommand} <run> [--now] [--json]");
         builder.AppendLine($"  {command} {FlowService.ReadReportCommand} <run> [--steps <instance>...] [--by step|agent|model|provider|type]");
@@ -141,8 +198,10 @@ public static partial class HelpTopics
             builder,
             $"{OrchestratorService.ListCommand} lists the orchestrators, or the one named, their agents and where each stands, "
             + "and the worktrees below an orchestrator's directory that no agent records; for a run, its own lines from flow.json "
-            + "and what its engine is doing - none, running, pausing while its handoffs are written, recording the machine steps a "
-            + "complete pause left running, or gone, an owner recorded whose process has ended - with each step instance (--steps: "
+            + "and what its engine is doing - none, starting, a session's claim taking the run up, running, pausing while its "
+            + "handoffs are written, recording the machine steps a "
+            + "complete pause left running, stopping, a stop it applied ending its session, or gone, an owner recorded whose "
+            + "process has ended - with each step instance (--steps: "
             + "its state, visit, attempt, agent and directory) and each question and what became of it (--questions). --json prints "
             + $"the listing as one JSON document. {StoppedDocument}");
         builder.AppendLine();
@@ -164,15 +223,21 @@ public static partial class HelpTopics
             + $"({FlowExit.Paused}), or paused or stopped on request ({HarnessExit.Cancelled}); it writes the run's report (report.md and "
             + "report.json) and names each record it wrote, in text and in --json, whichever way it ends. "
             + $"{FlowService.ResumeCommand} goes on with a run from its records alone, where it stood, under the definition it began "
-            + "with - refused where the repository's entry for it changed since, which is read in the main checkout whichever tree "
-            + "the command was typed in, as a start reads it - reclaiming the owner of an engine that has gone "
+            + "with - refused where what the repository's entry for it says changed since, which is read in the main checkout "
+            + "whichever tree the command was typed in, as a start reads it: the entry and the run's frozen "
+            + $"{OrchestratorLayout.DefinitionFileName} are compared each as this build reads it, so a run an earlier release "
+            + "began, which wrote its definition its own way, is no change, a key retired since that it froze is read and "
+            + "ignored, a key reshaped since is read in the shape it froze as this build reads the same words, and the digest "
+            + "its flow.json holds stays the record of what it began with - reclaiming the owner of an "
+            + "engine that has gone "
             + "and saying so: what a stop or a crash cut off, and a failure that ended the run, run again as new attempts, save a "
             + "failure an answer fail ended and a step a plan update ended in order, which stays ended; what that failure kept "
             + "from running is drawn again; what the run owed - a failure or "
             + "an ending a pause recorded, the triage of an issue, a redirect - is made first; and every question and answer the run "
             + "has is kept. It goes on beside a question still open, and is refused, having written nothing, only where nothing "
-            + "can run until one is answered - a session an answer began, or one whose budget question is open, pauses on it "
-            + "instead. A record the run is made with that is missing is refused by name. "
+            + "can run until one is answered - a question still owing its recommendation, deferred by a pause or a stop or left "
+            + "sought by a crash, has it sought, and a session an answer began, or one whose budget question is open, pauses on "
+            + "it instead. A record the run is made with that is missing is refused by name. "
             + $"{FlowService.AnswerCommand} answers a question: handed to the engine running the "
             + $"run through inbox.json, which it reads every {FlowTimings.Default.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s, "
             + "or else a session of its own; with --again it changes the last answer a person gave - the one set the command shows - "
@@ -190,17 +255,28 @@ public static partial class HelpTopics
             + "names - a new visit of it in the newest instance of that scope, ahead of everything else - and the run is held "
             + "while it plans: nothing starts outside that scope and what is in flight is untouched, the step's prompts read what "
             + "raised the change ({update.cause}, {update.since} and {update.work}), and its amend.then runs the check it names "
-            + "again by the redirect's machinery, until that scope has come to rest and the plan stands - or the step fails and "
-            + "its onFailure gives the update up, no plan holding the change. Once the plan stands, the pieces its amend.scope "
+            + "again by the redirect's machinery, until that scope has come to rest and the plan stands - a repeat around the "
+            + "step counting its own bound from the iteration the update is planned in, and the iterations granted past it "
+            + "since, so the update's planning is never refused by iterations the plan spent before it - or the step fails and "
+            + "its onFailure gives the update up, no plan holding the change, as does a plan the check amend.then names refuses "
+            + "where nothing around the planning plans it again, such as its loop accepted at its bound. Once the plan stands, the pieces its amend.scope "
             + "expression reads are placed: an added piece makes one more work item of the work-item group, and a changed or a "
             + "removed piece finds the instance that carries its work item - given the piece's item in the place of its own "
             + "where it waits, or withdrawn before it began; brought to rest, nothing more started in it, and visited again in "
             + "its place with its agent where it has begun - the instance it ends stays ended, its record saying so, no step "
             + "of it, at any depth of a group nested in it, is given a new attempt - one that fails, asks, passes its time "
             + "limit, or a pause or a stop stopped, ends stopped for the update, as each nested group does once the instance "
-            + "comes to rest - and no session after runs it again; one more work item of the group, with new agents, where it has "
+            + "comes to rest; what an ending of a step of it still owes - a failure a safe pause left owed, a handler it would "
+            + "raise - is given up with it, never decided or raised into it at rest - and no session after runs it again, a "
+            + "placement a crash cut off made whole by the next session's start before a stop pending is applied; one more "
+            + "work item of the group, with new agents, where it has "
             + "ended - and where the round it joins has not opened, the piece is owed to it and joins at the check that opens "
-            + "the round, over that round's own items and the owed ones as one list. Each item's instance is of one kind - "
+            + "the round, over that round's own items and the owed ones as one list; an update done that changes the work owed "
+            + "to a round whose check has joined it, before the round's work-item group expands, has that check run again, with "
+            + "what depends on it, so the round opens with what is owed it now; a removed piece naming work no instance "
+            + "carries withdraws what an earlier update owes a round under that name, so no round builds it, and that piece "
+            + "says it was withdrawn before it was built; one naming an item of the list the check that opens a round was "
+            + "opening it with takes it out of that list, and the round opens without it. Each item's instance is of one kind - "
             + "added, changed or removed - and the step its kind names runs in the place of the one amend.whenAddScope names, "
             + "under its name, the other two skipped saying why; the steps of the group read {piece.kind}, {piece.changed}, "
             + "{piece.keep}, {piece.undo}, {piece.instead} and {piece.before}, the engine's account of the work a piece that "
@@ -214,7 +290,8 @@ public static partial class HelpTopics
             + "as who was told what is, in updates.json and the report alike. A reason step ended in order is told its piece "
             + "first, as the lead of its handoff question. Where the round a piece joins has ended, the work is owed to the "
             + "loop's next iteration, which runs whatever its until says - a loop that ended done runs again for it; only where "
-            + "that loop is at its own bound is one iteration added for the update. With no loop around the work-item group, "
+            + "that loop is at its own bound is one iteration added for the update, and none while the iteration under way has "
+            + "its round still to open, which the work joins. With no loop around the work-item group, "
             + "a round of the group is added for the work: the group runs once more, through the check that opens a round and "
             + "every step between it and the group - the check handed the owed work with its own items as one list - and the "
             + "round carries the owed work alone; a change given while a round added waits to open, before the check that "
@@ -223,10 +300,13 @@ public static partial class HelpTopics
             + "owed to a loop at its bound where the run has none left to add is left to the question its bound asks, which "
             + "the loop reaches whatever its until says, the update's entry saying so once that question is asked, and no "
             + "later session runs again a loop its answer ended. An iteration "
-            + "or a round is added once per update and at most amend.maxAddedIterations over the run, published and said in "
+            + "or a round is added once per update and at most amend.maxAddedIterations over the run, and one whose owed work is "
+            + "all withdrawn before it opens is taken back and counts against no bound - a loop's iteration given no more, its "
+            + "bound asking again where work is owed past it, and a round added with no loop around the group closed again, "
+            + "what was drawn for it skipped saying why - each published and said in "
             + "the report and list-orchestrator - as is a loop's bound asked for the work - with every piece, where it was "
             + "carried out and how that ended - done, failed, "
-            + "skipped or never run, or that no instance carried it; where the run has none left to add, or a group around the "
+            + "skipped or never run, withdrawn before it was built, or that no instance carried it; where the run has none left to add, or a group around the "
             + "work-item group ended otherwise than done and draws nothing more, an update whose work only an added round would "
             + "carry is given up with why, its pieces never carried out. Updates are "
             + "taken one at a time: one that arrives "
@@ -247,10 +327,14 @@ public static partial class HelpTopics
             + "clock of its own: each agent is asked for its handoff in its own conversation and answers within the workflow's "
             + "handoffSeconds, and a build may take as long as it takes. The second stops the run where it stands - a "
             + $"step whose runner does not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s is recorded stopped all the same - and "
-            + $"the command ends within {PointOfNoReturn.HardStopBound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s whatever is left; "
+            + $"the command ends within {PointOfNoReturn.HardStopBound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s whatever is left - "
+            + $"given {FlowOutputLogs.Option}, once it has written the zip after that, with no bound of its own, for as long as packing the "
+            + "run's records takes, the run in it as the engine left it then; "
             + $"what is left then is what a crash leaves, and {FlowService.ResumeCommand} goes on from the records. The steps served so "
             + $"far are {string.Join(", ", FlowStepRunners.Served)} ('{ToolPackage.Command} help workflows'): a step of any other type "
             + "fails, saying no runner serves its type.");
+        builder.AppendLine();
+        AppendWrapped(builder, OutputLogsSaid);
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -259,26 +343,37 @@ public static partial class HelpTopics
             + $"{FlowService.AskCommand} a person's, both answered with the engine's facts, computed from the run's records and never "
             + "guessed: how the run stands and for how long, its engine and its pause; each step instance in progress with its type, "
             + "its agent, a reason step's model, its attempt and how long it has run; what it waits for - each open question with "
-            + "since when and the command that answers it, a plan update under way or queued, an instance waiting on another, on "
-            + "the resume or on room - a claim, the run to be quiet, a counter of its limits - a ci-wait reading the checks of the "
+            + "since when and its next step - its answer; its answer taken now, ending the asking, where a live engine's advisor "
+            + "seeks its recommendation or a live engine is starting, which seeks every one the run owes; or, where it still owes "
+            + "its recommendation, the pause's advice where a live engine's pause "
+            + "defers it, the resume, which seeks it first, where no engine runs the run, and the resume once the engine has gone "
+            + "where it is stopping - a plan update under way or queued, an instance waiting on another, on "
+            + "the resume, on room - a claim, the run to be quiet, a counter of its limits - or on the fix of an issue that holds a "
+            + "file its work item owns or that the item needs, a ci-wait reading the checks of the "
             + "commit the run last pushed; what is done, the failures a handler took and what was spent of the budget; what is left "
-            + "at least and at most - a stopped instance among it, for it runs again at the resume - with the bound that gave the "
+            + "at least and at most - at least what keeps the run from done, by the engine's own rule: a stopped instance among "
+            + "it, for it runs again at the resume, and what an ending owes the session that goes on, a failure owed and a raise "
+            + "an ending still owes, each named - a raise by the visit the resume raises, fix+2 where the scope holds fix, and "
+            + "never beside the visit it made, which is counted once, as itself - with the bound that gave the "
             + "most, by the engine's own bounds, so the most is a bound: each member of a scope still open not drawn yet, a loop's "
             + "iterations to its bound past the ones it made, a handler's visits to its maxVisits in each scope its source can "
-            + "still end in with the steps its then sends the run back over at each visit, and the recovery's visits to its "
+            + "still end in with the steps its then sends the run back over at each visit - where that then sends the run back "
+            + "over a group around it, in the scope it goes back to, as the engine counts them - and the recovery's visits to its "
             + "maxVisits for each step whose failure it can take with the steps it sends the run back over, each widened by every "
             + "more its bound was answered and every iteration a plan update added, and each piece of a plan update not carried "
             + "out; what no numeric bound holds - a forEach not yet expanded, a repeat with no numeric bound, a step whose "
-            + "pre-existing issues each raise a triage, a handler that sends the run back outside its own group, a plan update "
-            + "still to be planned - and a question open at a bound, whose more can grant past it, named - "
+            + "pre-existing issues each raise a triage, a plan update still to be planned - and a question open at a bound, "
+            + "whose more can grant past it, named - "
             + "and when it may finish, as a range that rests on this run alone: of each step of the definition that works, the "
             + "shortest and the longest time an instance of it took to end Done - a group's own span is its members' time, never "
             + "counted beside it - the lower end laying what is left along what depends on what, as the engine orders it, so work "
-            + "that runs side by side is counted once, the upper end summing every instance that is left and everything the run "
-            + "may still make, one after another; a step no instance of which has ended Done in this run is counted and named "
-            + "and in neither end, the time a person takes to answer and a wait for room are left out and said to be, and where "
-            + "nothing has ended or the run has ended - done or failed; a stopped run goes on at its resume - there is no "
-            + "estimate, and the facts say which. Where "
+            + "that runs side by side is counted once, the upper end summing every instance that is left - a handler owed its "
+            + "raise among them, timed by its step - and everything the run may still make, one after another; a step no "
+            + "instance of which has ended Done in this run is counted and named and in neither end, as a failure owed is, "
+            + "which its handlers, its policy or the recovery decide; the time a person takes to answer and a wait for room are "
+            + "left out and said to be, and where nothing has ended, nothing is left - nothing keeps the run from done - or the "
+            + "run has ended - done or failed; a stopped run goes on at its resume - there is no estimate, and the facts say "
+            + "which. Where "
             + "the workflow's reporter names an agent, its words follow the facts - it is the run's own reporter, offered the tools "
             + "that read and no other, reading the run's directory and nowhere else, its answer masked and what it costs the "
             + "person's, never the run's; each call keeps its own record under the run's asks/, the facts as given, the files of its "
@@ -298,10 +393,14 @@ public static partial class HelpTopics
         AppendWrapped(
             builder,
             $"The report of a run. {FlowService.ReadReportCommand} answers it from the run's records alone - the same bytes for "
-            + "the same records, whatever a model might say - and never asks one: what the run was and how it stands, with its "
+            + "the same records and the same state of its engine, which names each open question's next step, whatever a model "
+            + "might say - and never asks one: what the run was and how it stands, with its "
             + "sessions, its wall time, its active time (the union of every attempt's runs), its pause (the time between its "
-            + "sessions), its wait for a person and its budget; the totals of its tokens by kind and its dollars grouped "
-            + "(totals.dollarsBy: each part of an attempt by the model that served it, each advice by the advisor's); one row "
+            + "sessions, from one's end - its last record, or a crash's last event - to the next one's own first event, whatever its "
+            + "kind, by the session each event names, what is written between two ending none), its wait for a person and its "
+            + "budget; the totals of its tokens by kind and its dollars grouped "
+            + "(totals.dollarsBy: each part of an attempt by the model that served it, each advice by the advisor's - the "
+            + "run's own question's under run, where the dollars are grouped by step); one row "
             + "per step instance, in the order the run made them, with its state, its attempts, its waits by cause - a wait "
             + "on the machine's dispatch queue naming the class of it and each tenant waited behind, so a reader can tell "
             + "its own run's units from another repository's - its run "
@@ -320,7 +419,8 @@ public static partial class HelpTopics
             + "output no parser read, a review at its bound, a class reopened twice, a hotspot, spend that could not be "
             + "counted. Every row of a list holds an id of its own - a "
             + "failed attempt '<instance>@<attempt>', a signal '<kind>#<n>' - and notes say what the report could not read "
-            + $"(a torn last line of events.jsonl, a definition that does not read). Its thresholds are the keys of "
+            + $"(events.jsonl not read whole - a torn last line, or the lines from the first that holds a NUL on, what a "
+            + $"power loss left of a pass - a definition that does not read). Its thresholds are the keys of "
             + $"defaults.report in config.json: {string.Join("; ", FlowReportThresholds.Keys.Select(key => $"{key.Key} ({key.Takes}, {key.Default} where none is given)"))}. "
             + $"The rows can be kept to named instances (--steps; one the run does not hold is refused), the dollars grouped "
             + $"(--by {string.Join(", ", FlowRunReport.Groupings)}) and the signal lists bounded (--top). A run still going is "
@@ -406,9 +506,10 @@ public static partial class HelpTopics
             builder,
             $"--parallel, {OrchestratorRecord.DefaultParallel} unless given, is the most open agents at once - every agent with a "
             + "worktree not yet deleted, and every worktree git lists below the orchestrator's directory: create-agent refuses the "
-            + "next, naming them, and list-orchestrator counts them. An agent with no worktree is never open. Run again, "
-            + "create-orchestrator changes only the limit and the session, and create-agent records only the session, and nothing "
-            + "of an agent with no worktree; for an agent whose making stopped part way, it says so and names what finishes it. "
+            + "next, naming them, and list-orchestrator counts them. An agent that only reads is never open, its tree listed or "
+            + "not. Run again, create-orchestrator changes only the limit and the session, and create-agent records only the "
+            + "session, and nothing of an agent that only reads; for an agent whose making stopped part way, it says so and names "
+            + "what finishes it. "
             + "An agent's name is never used twice: a deleted agent's directory stays as its history.");
         builder.AppendLine();
         AppendWrapped(
@@ -709,11 +810,12 @@ public static partial class HelpTopics
             + "kept in it, and a mutation worker, each in its own words. delete-agent refuses to run from "
             + "inside the worktree it removes, and so does its dry run, "
             + "and an agent made under a worktrees root the configuration no longer names is refused with nothing touched. "
-            + "delete-orchestrator deletes the orchestrator once every agent of it with a worktree is deleted and no worktree is "
-            + "left below its directory, nor any directory holding a .git of its own that git records no worktree at - until then "
-            + $"it refuses ({HarnessExit.Refused}), naming each - and the evidence, transcripts, steps and sessions its agents "
-            + "kept, whatever their kind or state, only with --delete-evidence; an agent with no worktree holds nothing but "
-            + "records, and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever "
+            + "delete-orchestrator deletes the orchestrator once every agent of it whose work is folded is deleted and no worktree "
+            + "but a live read-only agent's is left below its directory, nor any directory holding a .git of its own that git "
+            + $"records no worktree at - until then it refuses ({HarnessExit.Refused}), naming each - and the evidence, "
+            + "transcripts, steps and sessions its agents kept, whatever their kind or state, only with --delete-evidence; an "
+            + "agent that only reads holds nothing but records and its tree, which is removed as delete-agent removes it, nothing "
+            + "folded, and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever "
             + "asked - goes with it and is never counted among what --delete-evidence guards, as does a copy of a commit a run's "
             + "sweep made in its directory and was cut off before taking away, git's record of it with it. It "
             + "removes the record last, so one that stops part way finishes when run again.");

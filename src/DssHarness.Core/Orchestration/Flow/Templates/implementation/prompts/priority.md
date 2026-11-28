@@ -41,3 +41,7 @@ Where a line says that a step left no output, that thing was not read or did not
 
 The title; the work, written as a request a person could have typed; why it comes first, with what you checked; the
 blockers, the most pressing first; and the stops, each with its choices and the one you recommend by the bar above.
+
+## Issues that were there before
+
+{text.issuesBefore}

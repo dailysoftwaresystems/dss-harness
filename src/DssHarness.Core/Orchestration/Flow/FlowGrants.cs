@@ -39,8 +39,9 @@ public static class FlowGrants
         };
 
     /// <summary>
-    /// Whether <paramref name="update"/> added an iteration to the repeat instance <paramref name="loop"/>: its
-    /// <c>addedIteration</c> is one of that loop's own, <c>&lt;loop&gt;#&lt;n&gt;</c>.
+    /// Whether <paramref name="update"/> added an iteration to the repeat instance <paramref name="loop"/> that stands: its
+    /// <c>addedIteration</c> is one of that loop's own, <c>&lt;loop&gt;#&lt;n&gt;</c>, and no later update took it back
+    /// before it was made (<see cref="FlowUpdateEntry.StandingIteration"/>).
     /// </summary>
     /// <param name="update">The plan update's entry.</param>
     /// <param name="loop">The repeat's own instance id.</param>
@@ -48,7 +49,7 @@ public static class FlowGrants
     {
         ArgumentNullException.ThrowIfNull(update);
 
-        return update.AddedIteration is { } added
+        return update.StandingIteration is { } added
             && added.LastIndexOf('#') is > 0 and var at
             && string.Equals(added[..at], loop, StringComparison.Ordinal);
     }

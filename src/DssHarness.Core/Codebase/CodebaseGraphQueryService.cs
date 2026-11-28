@@ -27,14 +27,20 @@ public sealed record CodebaseGraphQuery(string Run, string? Agent)
     /// <summary>A <c>related</c>'s relation (<see cref="GraphRelations.All"/>).</summary>
     public string? Relation { get; init; }
 
-    /// <summary>A <c>related</c>'s depth, 1 to 3.</summary>
+    /// <summary>A <c>related</c>'s depth, from 1.</summary>
     public int? Depth { get; init; }
 
     /// <summary>Whether <c>--outline</c> was given.</summary>
     public bool Outline { get; init; }
 
-    /// <summary>A <c>--outline</c>'s file or symbol; <see langword="null"/> for the repository's.</summary>
+    /// <summary>A <c>--outline</c>'s file, directory or symbol; <see langword="null"/> for the repository's.</summary>
     public string? OutlineOf { get; init; }
+
+    /// <summary>An <c>around</c>: the symbol whose place to give.</summary>
+    public string? Around { get; init; }
+
+    /// <summary>An <c>impact</c>: the symbol whose change's reach to give.</summary>
+    public string? Impact { get; init; }
 
     /// <summary>A <c>body</c>: the symbols to read, in the order given.</summary>
     public IReadOnlyList<string>? Body { get; init; }
@@ -93,13 +99,13 @@ public sealed class CodebaseGraphQueryService(
 
         if (query.OutlineOf is { } outline && string.IsNullOrWhiteSpace(outline))
         {
-            return CodebaseGraphQueryReports.Render(CommandOutcome.Usage("--outline's value is empty: give a file, a symbol, or nothing for the repository"), query.Run, null, null, op: "outline", json);
+            return CodebaseGraphQueryReports.Render(CommandOutcome.Usage("--outline's value is empty: give a file, a directory, a symbol, or nothing for the repository"), query.Run, null, null, op: "outline", json);
         }
 
         if (Input(query) is not { } chosen)
         {
             return CodebaseGraphQueryReports.Render(
-                CommandOutcome.Usage("give exactly one of --find, --node, --related, --outline, --body or --sites"),
+                CommandOutcome.Usage("give exactly one of --find, --node, --related, --outline, --around, --impact, --body or --sites"),
                 query.Run,
                 view: null,
                 head: null,
@@ -173,8 +179,8 @@ public sealed class CodebaseGraphQueryService(
 
         var queries = new CodebaseGraphQueries(read);
 
-        // --outline takes a file or a symbol: a file where the view holds one at it, or where it names no node and is written as
-        // a file is; a symbol otherwise.
+        // --outline takes a file, a directory or a symbol: a file where the view holds one at it; a path where it names no node
+        // and is written as a file is, or is a directory the view holds files under; a symbol otherwise.
         if (op == GraphOp.Outline && query.OutlineOf is { } outlineOf)
         {
             input.Remove("symbol");
@@ -183,7 +189,7 @@ public sealed class CodebaseGraphQueryService(
             {
                 input["path"] = file;
             }
-            else if (queries.Resolve(outlineOf) is GraphResolve.NotFound && CodebaseGraphQueries.NamesAFile(outlineOf))
+            else if (queries.Resolve(outlineOf) is GraphResolve.NotFound && (CodebaseGraphQueries.NamesAFile(outlineOf) || queries.FilesUnder(outlineOf, _platform.PathComparison) is not null))
             {
                 input["path"] = outlineOf;
             }
@@ -248,6 +254,16 @@ public sealed class CodebaseGraphQueryService(
             }
 
             chosen.Add((GraphOp.Outline, input));
+        }
+
+        if (query.Around is { } around)
+        {
+            chosen.Add((GraphOp.Around, new JsonObject { ["op"] = Name(GraphOp.Around), ["symbol"] = around }));
+        }
+
+        if (query.Impact is { } impact)
+        {
+            chosen.Add((GraphOp.Impact, new JsonObject { ["op"] = Name(GraphOp.Impact), ["symbol"] = impact }));
         }
 
         if (query.Body is { Count: > 0 } body)

@@ -20,10 +20,16 @@ run, proven on the base commit `{orient.startCommit}`, to fix at its root. Read 
 - What it is: {source.title}. {source.description}
 - Where: {source.where}
 - Its proof: {source.proof}
+- The issues whose triages found they share its root cause, joined to it, which this visit's fix settles too - each
+  with its id, title, description, where and proof; empty where none is: {source.joined}
+- Where its own triage joined it to another issue whose fix was already being diagnosed, or was done, that fix is done:
+  the issue, the visit that fixed it and the remedy items that visit built - start from the tree they left; empty
+  otherwise: {source.joinedTo}
 
 Its course is fix, or person where the fix needs what only a person can give; never retry, since nothing failed, and
 never report it in `preExisting` again. The
-first statement of each item's definition of done is then that the proof no longer shows the issue.
+first statement of each item's definition of done is then that the proof no longer shows the issue - nor the proof of
+any issue joined to it.
 
 This is the recovery's first visit for this step. Should what you decide not put it right - the step fails again, or
 the work you set out fails - you are asked again, with what happened, and you go on from here.
@@ -58,12 +64,13 @@ Where a line says that a step left no output, that thing was not read or did not
    the evidence whether you did.
 3. Decide the course by the cause:
    - **fix**: work items that put it right - at most four, each sized to one builder's cycle, with the paths it owns,
-     the tests that show the failure is gone, and its definition of done, of which the first statement is that
-     `{source.step}` would now pass; one whose change no test can show says why in noTests, and is tested on none.
+     the tests that show the failure is gone, and its definition of done, by the rule for a definition of done below,
+     the run's base commit being `{orient.startCommit}`, of which the first statement is that `{source.step}` would now
+     pass; one whose change no test can show says why in noTests, and is tested on none.
      Each item that changes a decision gives its class - its invariant, its one home, its sites, its searches, its
-     universe - and one that decides none says why in noClass; a machine check refuses an item without either. Reuse
-     what the repository has; change only what the cause needs. No file under two items; the code a fix corrects goes
-     under reuses, and replaces stays empty.
+     universe, which answers every axis with its values or why it does not apply - and one that decides none says why
+     in noClass; a machine check refuses an item without either. Reuse what the repository has; change only what the
+     cause needs. No file under two items; the code a fix corrects goes under reuses, and replaces stays empty.
    - **retry**: nothing to change, and why running the step again will pass where it did not.
    - **person**: what only a person can give, and the choices, at least two, each with what it leads to. Recommend
      none of them: the run's advisor does, by the repository's bar.
@@ -73,3 +80,11 @@ Where a line says that a step left no output, that thing was not read or did not
 
 The course; a summary a person who was not there can follow; the cause; the evidence; the work items where the course
 is fix, empty otherwise; the choices where the course is person, empty otherwise.
+
+## A definition of done
+
+{text.done}
+
+## Issues that were there before
+
+{text.issuesBefore}

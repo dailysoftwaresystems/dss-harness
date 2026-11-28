@@ -2943,19 +2943,42 @@ public sealed class GitClientProtocolTests
         Assert.All(indexed, request => Assert.Equal(["-c", "core.ignoreStat=false"], request.Arguments.Take(2)));
     }
 
+    /// <summary>
+    /// Every git the tool starts runs untranslated, under <c>LC_ALL=C</c>, set where git starts and never by a caller - a
+    /// question whose answer is matched by its words, a command that changes the repository, one that reaches a remote, and
+    /// the question that names the variables every other git is started without - but one git runs the repository's hooks
+    /// for, which keeps the person's locale whether it runs them or not: a commit, a commit that runs them on purpose, a
+    /// checkout behind git's own options, a worktree added, a push. A git that answered a question in the person's
+    /// language would answer a reading made in English with words it does not match; a hook made to run under C would
+    /// read anything outside ASCII as it never does in the person's shell.
+    /// </summary>
     [Fact]
-    public async Task RepositoryQueries_RunUntranslated_WhileOtherCommandsKeepTheUsersLocale()
+    public async Task EveryGitTheToolStarts_RunsUntranslated_ButOneGitRunsHooksFor()
     {
-        // The queries are matched against git's English messages. Everything else, hooks
-        // included, must keep the user's locale.
         var (git, requests) = Scripted(Exited(0, "/repo\n"));
         var cancellationToken = TestContext.Current.CancellationToken;
 
         await git.GetRepositoryRootAsync("/repo", cancellationToken);
+        await git.RunAsync("/repo", ["update-ref", "refs/heads/x", "HEAD"], cancellationToken: cancellationToken);
+        await git.RunAsync("/repo", ["worktree", "remove", "/repo/.worktrees/a"], cancellationToken: cancellationToken);
+        await git.RunRemoteAsync("/repo", ["ls-remote", "origin"], values: null, standardInput: null, cancellationToken);
         await git.RunAsync("/repo", ["commit", "-m", "x"], cancellationToken: cancellationToken);
+        await git.RunWithHooksAsync("/repo", ["commit", "-m", "y"], TimeSpan.FromMinutes(1), isolation: null, values: null, cancellationToken);
+        await git.RunAsync("/repo", ["-c", "advice.detachedHead=false", "checkout", "main"], cancellationToken: cancellationToken);
+        await git.RunAsync("/repo", ["worktree", "add", "/repo/.worktrees/b"], cancellationToken: cancellationToken);
+        await git.RunWithHooksAsync("/repo", ["push", "origin", "main"], TimeSpan.FromMinutes(1), isolation: null, values: null, cancellationToken);
 
-        Assert.Equal("C", requests[0].Environment["LC_ALL"]);
-        Assert.False(requests[1].Environment.ContainsKey("LC_ALL"));
+        Assert.Equal(
+            new string?[] { "C", "C", "C", "C", null, null, null, null, null },
+            requests.Select(request => request.Environment.GetValueOrDefault(GitOwnSettings.LocaleVariable)));
+        Assert.DoesNotContain(requests, request => request.Environment.ContainsKey("LANG"));
+
+        var asked = new List<ProcessRequest>();
+        var runner = Substitute.For<IProcessRunner>();
+        runner.RunAsync(Arg.Do<ProcessRequest>(asked.Add), Arg.Any<CancellationToken>()).Returns(Exited(0, "GIT_DIR\n"));
+
+        Assert.Equal(["GIT_DIR"], await new GitLocalVariables(runner).NamesAsync(_ => { }, cancellationToken));
+        Assert.Equal(("C", GitLocalVariables.QueryArguments), (Assert.Single(asked).Environment[GitOwnSettings.LocaleVariable], asked[0].Arguments));
     }
 
     /// <summary>
@@ -3407,6 +3430,77 @@ public sealed class GitClientProtocolTests
         File.Delete(marker);
     }
 
+    /// <summary>
+    /// The commands git's documentation of its hooks names as running them keep the person's locale, each by its
+    /// subcommand after git's own options, read by their one grammar - an option that takes the next word as its value,
+    /// <c>--git-dir</c> and <c>--config-env</c> among them, takes it with it - and a worktree's or git-p4's by the one
+    /// command of theirs that runs them; so does every command that runs the hooks on purpose, whatever its words; and
+    /// every other command runs under C: a hook is the person's code, and behaves as in their shell only in their locale.
+    /// </summary>
+    [Theory]
+    [InlineData(null, "am", "--3way", "patch")]
+    [InlineData(null, "commit", "-m", "x")]
+    [InlineData(null, "merge", "--no-ff", "topic")]
+    [InlineData(null, "pull", "--rebase")]
+    [InlineData(null, "rebase", "main")]
+    [InlineData(null, "cherry-pick", "abc")]
+    [InlineData(null, "revert", "abc")]
+    [InlineData(null, "checkout", "main")]
+    [InlineData(null, "switch", "main")]
+    [InlineData(null, "clone", "url", "dir")]
+    [InlineData(null, "worktree", "add", "dir")]
+    [InlineData(null, "push", "origin", "main")]
+    [InlineData(null, "receive-pack", "dir")]
+    [InlineData(null, "send-email", "patch")]
+    [InlineData(null, "gc", "--auto")]
+    [InlineData(null, "p4", "submit")]
+    [InlineData(null, "-C", "/r", "-c", "a=b", "commit")]
+    [InlineData(null, "-c", "x=y", "commit")]
+    [InlineData(null, "--git-dir", "/r/.git", "commit", "-m", "x")]
+    [InlineData(null, "--config-env", "core.x=E", "commit")]
+    [InlineData(null, "--work-tree", "/w", "--namespace", "n", "push", "origin")]
+    [InlineData("C", "--git-dir", "/r/.git", "status")]
+    [InlineData("C", "status", "--porcelain")]
+    [InlineData("C", "fetch", "origin")]
+    [InlineData("C", "worktree", "remove", "dir")]
+    [InlineData("C", "worktree", "list", "--porcelain")]
+    [InlineData("C", "update-ref", "refs/heads/x", "HEAD")]
+    [InlineData("C", "reset", "--mixed")]
+    [InlineData("C", "rev-parse", "--show-toplevel")]
+    [InlineData("C", "p4", "sync")]
+    [InlineData("C", "version")]
+    [InlineData("C", "commit-tree", "abc")]
+    [InlineData("C")]
+    public void TheCommandsGitRunsHooksFor_KeepThePersonsLocale_EveryOtherRunsUntranslated(string? locale, params string[] arguments)
+    {
+        foreach (var hooksRun in new[] { false, true })
+        {
+            var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+            GitOwnSettings.Apply(environment, PlatformId.Linux, arguments, hooksRun, "/r", pins: null);
+
+            // A command that runs the hooks on purpose keeps the person's locale whatever its words: its hooks run.
+            Assert.Equal(hooksRun ? null : locale, environment.GetValueOrDefault(GitOwnSettings.LocaleVariable));
+        }
+    }
+
+    /// <summary>
+    /// Whether a command's hooks are set to run nowhere reads its subcommand by the same grammar: a question behind an
+    /// option that takes the next word as its value is still the question, and answers where the hooks are as git runs them
+    /// for everyone else, while a command git runs hooks for behind one runs none of them.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "--git-dir", "/r/.git", "rev-parse", "--git-path", "hooks")]
+    [InlineData(true, "--config-env", "core.x=E", "config", "core.hooksPath")]
+    [InlineData(true, "-c", "x=y", "ls-files")]
+    [InlineData(false, "--git-dir", "/r/.git", "commit", "-m", "x")]
+    [InlineData(false, "--config-env", "core.x=E", "commit")]
+    [InlineData(false, "-c", "x=y", "commit")]
+    public void TheHooksOff_ReadTheSubcommandPastEveryOptionThatTakesTheNextWord(bool question, params string[] arguments)
+    {
+        Assert.Equal(question ? null : $"{GitHooks.PathKey}=/dev/null", GitHooks.Off(PlatformId.Linux, arguments));
+        Assert.Equal(!question, GitHooks.MayRun(arguments));
+    }
+
     /// <summary>The settings a git command that is no question runs with on <paramref name="system"/>.</summary>
     private static string? GitOwnSettingsOn(PlatformId system)
     {
@@ -3505,6 +3599,33 @@ internal sealed class CountingProcesses(IProcessRunner inner) : IProcessRunner
     }
 
     public string? FindExecutable(string command) => inner.FindExecutable(command);
+
+    /// <summary>
+    /// The program <paramref name="request"/> starts and its subcommand - its first argument that is no setting given
+    /// before it (<c>-c</c>, <c>-C</c> and their values, or an option of git's own): <c>git status</c>, <c>gh auth</c>.
+    /// </summary>
+    public static string Named(ProcessRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        for (var at = 0; at < request.Arguments.Count; at++)
+        {
+            var argument = request.Arguments[at];
+
+            if (argument is "-c" or "-C")
+            {
+                at++;
+                continue;
+            }
+
+            if (!argument.StartsWith('-'))
+            {
+                return $"{request.FileName} {argument}";
+            }
+        }
+
+        return request.FileName;
+    }
 }
 
 /// <summary>Runs every program through <paramref name="inner"/> but <c>git version</c>, which <paramref name="answer"/> answers.</summary>

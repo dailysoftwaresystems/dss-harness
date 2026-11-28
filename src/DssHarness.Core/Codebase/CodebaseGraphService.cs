@@ -332,11 +332,13 @@ public sealed class CodebaseGraphService(
     public const int ReadShare = 2;
 
     /// <summary>
-    /// What no graph lists, and so never serves - the credential slots and the tool's own state - as patterns relative
-    /// to a tree's root: the one list a sync leaves out and a read of the graph by hand refuses.
+    /// What no graph lists, and so never serves - the credential slots, the tool's own state, and the workflows' own files
+    /// (<see cref="HarnessLayout.WorkflowsDirectoryRelative"/>): their prompts and agents are the text every step is
+    /// given, so a pack seeded from a step's task would find them first and the repository's map would be theirs - as
+    /// patterns relative to a tree's root: the one list a sync leaves out and a read of the graph by hand refuses.
     /// </summary>
     /// <param name="worktreesRoot">The configured worktrees root, which the tool's state paths name.</param>
-    public static IReadOnlyList<string> NeverListed(string worktreesRoot) => [.. HarnessLayout.SecretSlots, .. HarnessLayout.StatePaths(worktreesRoot)];
+    public static IReadOnlyList<string> NeverListed(string worktreesRoot) => [.. HarnessLayout.SecretSlots, .. HarnessLayout.StatePaths(worktreesRoot), HarnessLayout.WorkflowsDirectoryRelative];
 
     /// <summary>What this process holds of each graph, by its directory.</summary>
     private readonly ConcurrentDictionary<string, Graph> _graphs = new(StringComparer.Ordinal);

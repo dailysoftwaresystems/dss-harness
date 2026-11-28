@@ -129,6 +129,32 @@ public sealed class AnalyzeReportTests
     }
 
     /// <summary>
+    /// The analyst is handed the report as the read verb answers it, what the run's engine is doing read with the records:
+    /// a live engine whose advisor seeks an open question's recommendation now is handed that question's answer, taken at
+    /// once, as its next step - never the resume, which the live owner refuses.
+    /// </summary>
+    [Fact]
+    public async Task TheAnalyst_IsHandedTheNextStepAsTheLiveEngineTakesIt()
+    {
+        var (harness, temp, analyst, service, run) = await AnalyzableAsync();
+        using var disposed = temp;
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), run);
+        var store = harness.OrchestrationStore;
+        var questions = store.ReadFlowQuestions(layout)!;
+        store.WriteFlowQuestions(layout, questions with { Questions = [questions.Questions[0] with { Recommendation = new FlowRecommendation("sought", Why: "a recommendation is being sought from the advisor") }] });
+        store.WriteOwner(layout, new RunOwner(harness.Identity.CurrentMachine, harness.Identity.CurrentId, DateTimeOffset.UtcNow, harness.Identity.Current));
+        analyst.Answer = step => new AgentRunResult(AgentRunStatus.Completed, StructuredOutput: Held);
+
+        Assert.Equal(HarnessExit.Success, (await service.AnalyzeReportAsync(temp.Path, run, json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
+
+        var kept = JsonNode.Parse(File.ReadAllText(Path.Combine(Assert.Single(analyst.Asked).RecordDirectory!, OrchestratorLayout.AnalysisReportFileName)))!;
+
+        Assert.Equal(
+            "question q1 (pause) is open: what now?; a recommendation is being sought from the advisor - its recommendation is being sought: answer with answer-orchestrator r1 <answer> --question q1, taken now and ending the asking",
+            Assert.Single(kept["leftForAPerson"]!.AsArray())!.GetValue<string>());
+    }
+
+    /// <summary>
     /// An analyst's client that throws after paid turns is refused with why, and what it spent is still said and kept:
     /// the run's spend and its model outlive the throw, so the cost names them, analysis.json is written with them, and
     /// the refusal names the directory its records are in - in the text and in the --json document alike - where the
@@ -621,13 +647,17 @@ public sealed class AnalyzeReportTests
                 "totals.retries: 1 retry / 2 retries",
                 "totals.fallbacks: 1 fallback / 2 fallbacks",
                 "totals.graph.steps: 1 step given a graph / 2 steps given a graph",
+                "totals.graph.pulled.map.pages: 1 map page pulled / 2 map pages pulled",
+                "totals.graph.pulled.pack.pages: 1 pack page pulled / 2 pack pages pulled",
+                "totals.graph.pulled.pack.nodes: 1 pulled pack node / 2 pulled pack nodes",
+                "totals.graph.pulled.pack.used: 1 pulled pack node used / 2 pulled pack nodes used",
                 "totals.graph.calls: 1 graph call / 2 graph calls",
                 "totals.graph.bodies: 1 body served / 2 bodies served",
                 "totals.graph.textHits: 1 text hit / 2 text hits",
                 "totals.graph.edits.made: 1 graph edit made / 2 graph edits made",
                 "totals.graph.edits.refused: 1 graph edit refused / 2 graph edits refused",
                 "totals.graph.wholeFileReads.count: 1 whole-file read / 2 whole-file reads",
-                "totals.graph.deniedReads: 1 denied read / 2 denied reads",
+                "totals.graph.outlinedReads.count: 1 outlined read / 2 outlined reads",
                 "totals.graph.escapes.count: 1 graph escape / 2 graph escapes",
                 "totals.graph.escapes.lowConfidence: 1 low-confidence escape / 2 low-confidence escapes",
                 "totals.graph.escapes.stated: 1 stated escape / 2 stated escapes",
@@ -636,13 +666,17 @@ public sealed class AnalyzeReportTests
                 "steps[].graph.pack.seeds: 1 pack seed / 2 pack seeds",
                 "steps[].graph.pack.nodes: 1 pack node / 2 pack nodes",
                 "steps[].graph.pack.used: 1 pack node used / 2 pack nodes used",
+                "steps[].graph.pulled.map.pages: 1 map page pulled / 2 map pages pulled",
+                "steps[].graph.pulled.pack.pages: 1 pack page pulled / 2 pack pages pulled",
+                "steps[].graph.pulled.pack.nodes: 1 pulled pack node / 2 pulled pack nodes",
+                "steps[].graph.pulled.pack.used: 1 pulled pack node used / 2 pulled pack nodes used",
                 "steps[].graph.calls: 1 graph call / 2 graph calls",
                 "steps[].graph.bodies: 1 body served / 2 bodies served",
                 "steps[].graph.textHits: 1 text hit / 2 text hits",
                 "steps[].graph.edits.made: 1 graph edit made / 2 graph edits made",
                 "steps[].graph.edits.refused: 1 graph edit refused / 2 graph edits refused",
                 "steps[].graph.wholeFileReads.count: 1 whole-file read / 2 whole-file reads",
-                "steps[].graph.deniedReads: 1 denied read / 2 denied reads",
+                "steps[].graph.outlinedReads.count: 1 outlined read / 2 outlined reads",
                 "steps[].graph.escapes.count: 1 graph escape / 2 graph escapes",
                 "steps[].graph.escapes.lowConfidence: 1 low-confidence escape / 2 low-confidence escapes",
                 "steps[].graph.escapes.stated: 1 stated escape / 2 stated escapes",
@@ -1028,8 +1062,9 @@ public sealed class AnalyzeReportTests
             TierConfig = tiers,
         });
         await harness.CommitAllAsync(temp.Path, "initial", Token);
-        temp.WriteFile(
-            $".harness-config/workflows/{Workflow}/{Workflow}.yml",
+        TestAdvice.WriteWorkflow(
+            temp,
+            Workflow,
             "name: flow\n"
             + "steps:\n"
             + "  - name: gate\n"
@@ -1046,7 +1081,7 @@ public sealed class AnalyzeReportTests
             harness.FileSystem,
             harness.OrchestrationStore,
             harness.Identity,
-            new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient),
+            new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform),
             new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform), DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
             new AskingRunner(),
             harness.OrchestrationLog,
@@ -1068,8 +1103,11 @@ public sealed class AnalyzeReportTests
     /// <summary>The agent runner as a fake, keeping every request it was asked and answering as a test says.</summary>
     private sealed class Agents : IAgentRunner
     {
-        /// <summary>Every request the runner built, in order.</summary>
+        /// <summary>Every request the runner built, in order, but the run's advisor's.</summary>
         public List<AgentStepRequest> Asked { get; } = [];
+
+        /// <summary>Every request of the run's advisor, asked of the questions the run raised, in order: kept apart, and recommending nothing.</summary>
+        public List<AgentStepRequest> Advised { get; } = [];
 
         /// <summary>How the run answers; a completed run with no output unless a test changes it.</summary>
         public Func<AgentStepRequest, AgentRunResult> Answer { get; set; } = _ => new AgentRunResult(AgentRunStatus.Completed);
@@ -1094,6 +1132,12 @@ public sealed class AnalyzeReportTests
 
         public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
         {
+            if (step.AgentDefinition == TestAdvice.Advisor.Agent)
+            {
+                Advised.Add(step);
+                return new AgentRunResult(AgentRunStatus.Completed);
+            }
+
             Asked.Add(step);
 
             foreach (var said in SaysFirst(step).Concat(Says))

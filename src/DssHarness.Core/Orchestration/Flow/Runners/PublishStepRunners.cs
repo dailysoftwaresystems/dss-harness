@@ -115,15 +115,16 @@ public sealed class PushStepRunner(
 /// A <c>pull-request</c> step (part 04): opens the pull request of the branch the main checkout is on, against the base
 /// its step names - filled from the run's inputs - else the branch the remote names its default
 /// (<see cref="FlowCheckout.BaseBranch"/>), on the repository the address of the remote the run's branch goes to names
-/// (<see cref="GitRemotes.ForgeAddress"/>) - on the host ssh's configuration gives an address over ssh, an alias for one
-/// account among several (<see cref="SshHostNames"/>), and where neither names one, the repository the forge's tool reads
-/// of the remotes itself - with its title filled and its body - the file it names, filled as the step
+/// (<see cref="FlowCheckout.Forge"/>) - on the host ssh's configuration gives an address over ssh, an alias for one
+/// account among several (<see cref="SshHostNames"/>), and where ssh's configuration names none, the repository the
+/// forge's tool reads of the remotes itself - with its title filled and its body - the file it names, filled as the step
 /// started - written to its directory for the forge's tool to read. One already open from that branch to that base is
 /// answered as it is, <c>created</c> false, so a step run again opens no second; its title and body are a person's then.
 /// It answers the pull request's number and address - one open from a fork's branch of the same name is none of the run's
 /// (<see cref="IGitPublisher.FindPullRequestAsync"/>). A title blank once filled fails it 12; HEAD detached, the main
-/// checkout on another branch than the run started on (<see cref="FlowRunPlace.OffItsBranch"/>), no remote or no base it
-/// can tell fails it 13, nothing opened; the forge's tool not there 14, saying no 20, not answering in time 21
+/// checkout on another branch than the run started on (<see cref="FlowRunPlace.OffItsBranch"/>), no remote, a remote that
+/// names no repository on a forge (<see cref="FlowCheckout.NotOnForge"/>) or no base it can tell fails it 13, nothing
+/// opened; the forge's tool not there 14, saying no 20, not answering in time 21
 /// (<see cref="Ci.GhProcess"/>). The run never merges what it opened.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
@@ -190,7 +191,12 @@ public sealed class PullRequestStepRunner(
             return Refused($"'{run.Instance}' would open a pull request from '{head}' to itself: the run's work is on a branch of its own, and its base is another. Nothing was opened.");
         }
 
-        var address = GitRemotes.ForgeAddress(await git.UrlAsync(tree, remote, cancellationToken).ConfigureAwait(false));
+        if (checkout.Forge is not { } forge)
+        {
+            return Refused($"'{run.Instance}' opens its pull request on a forge, and {checkout.NotOnForge}: push to a remote on a forge, or leave the step out of a run whose remote has no pull requests (the shipped flow runs it only where orient.onForge). Nothing was opened.");
+        }
+
+        var address = forge;
 
         if (address is { OverSsh: true })
         {

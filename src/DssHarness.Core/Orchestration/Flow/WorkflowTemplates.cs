@@ -86,7 +86,7 @@ public static class WorkflowTemplates
         "priority", "triage", "plan", "replan", "plan-update", "plan-audit", "item-audit",
         "anchors", "deferrals", "handoff",
         "self-audit", "pr-body",
-        "diagnose", "rediagnose", "redirect", "remedy-revise", "pre-existing",
+        "diagnose", "rediagnose", "redirect", "pre-existing",
         "recommend", "status", "ask",
     ];
 
@@ -202,9 +202,95 @@ public static class WorkflowTemplates
         .. Schemas.Select(schema => $"schemas/{schema}.schema.json"),
         "recommendations.md",
         "closure.md",
+        "done.md",
+        "issues-before.md",
+        "fixes.md",
         .. PipelineFiles,
         $"{ShippedWorkflowName}{HarnessLayout.WorkflowFileExtension}",
     ];
+
+    /// <summary>
+    /// The texts the implementation workflow declares, by name - each the markdown file a prompt reads as
+    /// <c>{text.&lt;name&gt;}</c> - read from this build's own embedded definition by the reader's own rules
+    /// (<see cref="WorkflowFileParser.TextsOf"/>), in the order of their names: what help says the shipped flow declares
+    /// (<see cref="WorkflowKeys.File"/>), so it names every one, and the one it lacks or adds is never said. Read once,
+    /// without the table of a file's keys, which the saying is part of.
+    /// </summary>
+    /// <exception cref="HarnessException">This build's own embedded definition is missing, or its texts do not read: exit 70.</exception>
+    public static IReadOnlyList<(string Name, string File)> ShippedTexts => ShippedTextsRead.Value;
+
+    /// <summary>The texts the implementation workflow declares, read once (<see cref="ShippedTexts"/>).</summary>
+    private static readonly Lazy<IReadOnlyList<(string Name, string File)>> ShippedTextsRead = new(() =>
+    {
+        var file = $"{ShippedWorkflowName}{HarnessLayout.WorkflowFileExtension}";
+
+        if (TextOf(file) is not { } definition)
+        {
+            throw new HarnessException(HarnessExit.InternalError, $"this build embeds no '{file}'; the implementation workflow is incomplete in it");
+        }
+
+        try
+        {
+            return [.. WorkflowFileParser.TextsOf(file, definition).OrderBy(text => text.Key, StringComparer.Ordinal).Select(text => (text.Key, text.Value))];
+        }
+        catch (HarnessException exception)
+        {
+            throw new HarnessException(HarnessExit.InternalError, $"this build's own implementation workflow does not read:{Environment.NewLine}{exception.Message}", exception);
+        }
+    });
+
+    /// <summary>
+    /// The advisor the implementation workflow names, as one line a workflow's file can hold at its top level - YAML's
+    /// flow style, each key the block gives in the order a file writes them: what the refusal of a workflow that names no
+    /// advisor gives as its fix, so the block it names is the one init writes, read from this build's own embedded
+    /// definition by the reader's own rules. Read once.
+    /// </summary>
+    /// <exception cref="HarnessException">This build's own embedded definition is missing, does not read, or names no advisor: exit 70.</exception>
+    public static string ShippedAdvisor => ShippedAdvisorRead.Value;
+
+    /// <summary>The advisor the implementation workflow names, said once (<see cref="ShippedAdvisor"/>).</summary>
+    private static readonly Lazy<string> ShippedAdvisorRead = new(() =>
+    {
+        var file = $"{ShippedWorkflowName}{HarnessLayout.WorkflowFileExtension}";
+
+        if (TextOf(file) is not { } definition)
+        {
+            throw new HarnessException(HarnessExit.InternalError, $"this build embeds no '{file}'; the implementation workflow is incomplete in it");
+        }
+
+        FlowAdvisor? advisor;
+
+        try
+        {
+            advisor = WorkflowFileParser.Parse(file, definition).Advisor;
+        }
+        catch (HarnessException exception)
+        {
+            throw new HarnessException(HarnessExit.InternalError, $"this build's own implementation workflow does not read:{Environment.NewLine}{exception.Message}", exception);
+        }
+
+        if (advisor is null)
+        {
+            throw new HarnessException(HarnessExit.InternalError, "this build's own implementation workflow names no advisor");
+        }
+
+        var effort = advisor.EffortByModel is { } byModel
+            ? $"{{{string.Join(", ", byModel.Select(entry => $"{entry.Key}: {entry.Value}"))}}}"
+            : advisor.Effort;
+        string?[] keys =
+        [
+            $"agent: {advisor.Agent}",
+            advisor.Tier is { } tier ? $"tier: {tier}" : null,
+            advisor.Model is { } model ? $"model: {model}" : null,
+            effort is { } level ? $"effort: {level}" : null,
+            advisor.Client is { } client ? $"client: {client}" : null,
+            $"prompt: {advisor.Prompt}",
+            advisor.Retries is { } retries ? $"retries: {retries.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : null,
+            advisor.BackoffSeconds is { } seconds ? $"backoffSeconds: {seconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : null,
+        ];
+
+        return $"advisor: {{{string.Join(", ", keys.OfType<string>())}}}";
+    });
 
     /// <summary>
     /// The implementation workflow's definition, read back from this build's own embedded set, parsed and held to

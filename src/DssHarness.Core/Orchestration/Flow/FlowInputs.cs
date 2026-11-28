@@ -1,4 +1,9 @@
+using DssHarness.Core.Agents;
+using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -7,7 +12,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// What a run's command line gives as text: the inputs a run is started with, <c>name=value</c> or <c>name=@file</c>,
 /// and the file an answer's text is read from. A file is read through the tool's own file system, relative to the
 /// directory the command acts on - its <c>--directory</c>, or where it was typed - and one that is not there is a usage
-/// error, said by its path. And what an input takes: the values a run starts with, resolved against its workflow.
+/// error, said by its path. And what an input takes: the values a run starts with, resolved against its workflow, the
+/// files its own inputs of the kind <c>file</c> name, opened and kept as it starts, and what its steps read for each.
 /// </summary>
 public static class FlowInputs
 {
@@ -134,6 +140,169 @@ public static class FlowInputs
     }
 
     /// <summary>
+    /// The values a run's steps read for its inputs - <c>{input.&lt;name&gt;}</c> in every prompt and every expression - from
+    /// the values the run takes (<see cref="Resolve"/>): each as it is, but, in a run that keeps its file inputs' copies -
+    /// every run this build makes, its records say so (<see cref="FlowRunContext.InputCopies"/>) - an input of the kind
+    /// <c>file</c> that is not empty, which reads the full path of the copy the run made of the file as it started
+    /// (<see cref="OrchestratorLayout.InputCopy"/>, <see cref="OpenFiles"/>). The one owner of what a step reads for an
+    /// input: every step of every session of the run - a resume's included - reads the file the run was started with,
+    /// whatever became of the person's file since, and every agent reads it, wherever its own tree was cut from. A run an
+    /// older build made kept no copy, and its steps read each file input as it was given, in every session as in the ones
+    /// that build ran, never a copy that was never made. The run's records keep the values as the person gave them.
+    /// </summary>
+    /// <param name="definition">The workflow the run runs.</param>
+    /// <param name="given">The inputs given, by name, as the run's records keep them; null where none was.</param>
+    /// <param name="run">The run, whose directory keeps the copies.</param>
+    /// <param name="copies">Whether the run keeps its file inputs' copies, as its records say (<see cref="FlowRunContext.InputCopies"/>).</param>
+    /// <returns>What the run's steps read, by input name.</returns>
+    public static IReadOnlyDictionary<string, string> AsRead(WorkflowDefinition definition, IReadOnlyDictionary<string, string>? given, OrchestratorLayout run, bool copies)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(run);
+
+        var values = Resolve(definition, given);
+        var read = new Dictionary<string, string>(values, StringComparer.Ordinal);
+
+        if (!copies)
+        {
+            return read;
+        }
+
+        foreach (var input in Files(definition, values))
+        {
+            read[input.Name] = run.InputCopy(input.Name, values[input.Name]);
+        }
+
+        return read;
+    }
+
+    /// <summary>
+    /// Opens the files a run of <paramref name="definition"/> keeps of its own inputs of the kind <c>file</c>, before
+    /// anything of the run is made: each such input whose value is not empty names a file inside the repository - by its
+    /// path from the main checkout's root, or an absolute one inside it - read from the main checkout as it stands,
+    /// committed or not. Every agent of the run reads the copy, so each is decided as an agent's read of it is, on the ground
+    /// the one builder of an agent's ground builds for it (<see cref="AgentStepGround.OfFileInputs"/>): held to the main
+    /// checkout by where it leads, every link on its way followed - the file's own and a directory's above it
+    /// (<see cref="ConfinedPaths"/>) - then kept from every place no agent's read reaches - every credential slot of the
+    /// tool, every Claude Code directory and every place the user keeps credentials in, <c>agentPolicy.hiddenPlaces</c> among
+    /// them - and from every read the configuration's restrictions refuse (<see cref="AgentPolicy"/>), and read through the
+    /// file as it was opened, where it stands decided again before a byte passes (<see cref="AgentFiles.OpenDecided(IFileSystem, string, Func{string, AgentPolicyAnswer.Denied?})"/>),
+    /// so the bytes the run keeps (<see cref="FlowInputFiles.Keep"/>) are those of the very file decided, whatever link
+    /// was put on its way since. Anything else is refused (13), naming the input and the path and saying that no run was
+    /// started, and what was opened before it is closed. A used workflow's file input is no part of this: it names a file
+    /// of that workflow's own directory, which the definition's check reads.
+    /// </summary>
+    /// <param name="fileSystem">Reads each file, and follows the links on its way.</param>
+    /// <param name="platform">The platform, whose spellings of a path are refused as an agent's are.</param>
+    /// <param name="definition">The workflow the run runs.</param>
+    /// <param name="values">The values the run takes, by input name (<see cref="Resolve"/>).</param>
+    /// <param name="ground">The ground each is decided on (<see cref="AgentStepGround.OfFileInputs"/>), whose working directory is the main checkout's root each path is read from.</param>
+    /// <returns>Each file opened, by input, in the order the workflow declares them; the caller keeps and closes them.</returns>
+    /// <exception cref="HarnessException">An input names no file inside the repository that an agent may read (<see cref="HarnessExit.Refused"/>).</exception>
+    public static FlowInputFiles OpenFiles(IFileSystem fileSystem, IHostPlatform platform, WorkflowDefinition definition, IReadOnlyDictionary<string, string> values, AgentPolicyGround ground)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentNullException.ThrowIfNull(platform);
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(values);
+        ArgumentNullException.ThrowIfNull(ground);
+
+        var opened = new FlowInputFiles();
+        var files = Files(definition, values).ToList();
+
+        if (files.Count == 0)
+        {
+            return opened;
+        }
+
+        // One ground for both deciders, read once: the paths held to its one root, and the policy asked inside it.
+        var mainCheckout = ground.WorkingDirectory;
+        var paths = new ConfinedPaths(fileSystem, platform, ground);
+        var policy = new AgentPolicy(fileSystem, platform, ground);
+
+        try
+        {
+            foreach (var input in files)
+            {
+                var given = values[input.Name];
+                var (content, why) = Opened(fileSystem, paths, policy, given);
+
+                if (why is not null)
+                {
+                    throw new HarnessException(
+                        HarnessExit.Refused,
+                        $"input '{input.Name}' is '{given}', {why}; a file input names a file inside the repository that an agent may read, by its path from the repository's root ('{mainCheckout}') or an absolute one inside it, and the run keeps a copy of it from its start. No run was started.");
+                }
+
+                opened.Add(input.Name, given, content!);
+            }
+        }
+        catch
+        {
+            opened.Dispose();
+            throw;
+        }
+
+        return opened;
+    }
+
+    /// <summary>The run's own inputs of the kind <c>file</c> whose value in <paramref name="values"/> is not empty, in the order the workflow declares them.</summary>
+    private static IEnumerable<FlowInput> Files(WorkflowDefinition definition, IReadOnlyDictionary<string, string> values)
+        => definition.Inputs.Where(input => input.Kind == FlowInput.FileKind && values.TryGetValue(input.Name, out var value) && value.Length > 0);
+
+    /// <summary>
+    /// The file <paramref name="given"/> names inside the main checkout, decided as an agent's read of it is and opened;
+    /// or why it names none an agent may read, as the refusal's clause after the path says it.
+    /// </summary>
+    private static (Stream? Content, string? Why) Opened(IFileSystem fileSystem, ConfinedPaths paths, AgentPolicy policy, string given)
+    {
+        var decided = paths.Read(given).Allowed(policy.Read);
+
+        if (decided.Full is not { } full)
+        {
+            return (null, RefusedAsAnAgentsRead(decided.Denied!));
+        }
+
+        PathKind kind;
+
+        try
+        {
+            kind = fileSystem.KindOf(full);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (null, $"and what is at '{full}' cannot be told: {ex.Message.TrimEnd('.')}");
+        }
+
+        if (kind == PathKind.None)
+        {
+            return (null, $"and '{full}' is not there");
+        }
+
+        if (kind == PathKind.Directory)
+        {
+            return (null, $"and '{full}' is a directory");
+        }
+
+        try
+        {
+            // Read through the file as it was opened, where it stands decided again: a link put on its way since the
+            // decision - the file's own, or a directory's above it - reaches nothing the decision refuses.
+            var (content, denied) = AgentFiles.OpenDecided(fileSystem, full, opened => paths.Opened(opened, write: false).Allowed(policy.Read).Denied);
+
+            return denied is null ? (content, null) : (null, RefusedAsAnAgentsRead(denied));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (null, $"and '{full}' could not be read: {ex.Message.TrimEnd('.')}");
+        }
+    }
+
+    /// <summary>The refusal's clause for a file input an agent's read of which is refused: the refusal in the deciders' own words.</summary>
+    private static string RefusedAsAnAgentsRead(AgentPolicyAnswer.Denied denied)
+        => $"which is refused as an agent's read of it would be: {denied.Reason}";
+
+    /// <summary>
     /// The text of the file <paramref name="path"/> names, relative to <paramref name="directory"/>; a file that is not
     /// there is a usage error naming <paramref name="option"/>.
     /// </summary>
@@ -153,5 +322,55 @@ public static class FlowInputs
         return fileSystem.KindOf(full) == PathKind.File
             ? (fileSystem.ReadAllText(full), null)
             : (null, $"'{full}' is not a file: {option} names the file whose text is given");
+    }
+}
+
+/// <summary>
+/// The files a run's own inputs of the kind <c>file</c> name, each opened as the run starts (<see cref="FlowInputs.OpenFiles"/>):
+/// kept in the run's directory once it is made (<see cref="Keep"/>), and closed.
+/// </summary>
+public sealed class FlowInputFiles : IDisposable
+{
+    private readonly List<(string Name, string Given, Stream Content)> _opened = [];
+
+    /// <summary>Holds the file <paramref name="content"/> opened for input <paramref name="name"/>, given as <paramref name="given"/>.</summary>
+    internal void Add(string name, string given, Stream content) => _opened.Add((name, given, content));
+
+    /// <summary>
+    /// Copies each file, a little at a time and never held whole, to the copy the run keeps of it
+    /// (<see cref="OrchestratorLayout.InputCopy"/>), written whole or not at all, its directory made where it is not there.
+    /// The bytes are read here for the first time: a file that cannot be read through - a share gone, a range locked - or a
+    /// copy that cannot be written - a full disk - stops the copying, refused (13) naming the input and why.
+    /// </summary>
+    /// <param name="fileSystem">Writes each copy.</param>
+    /// <param name="run">The run, made: its directory keeps the copies.</param>
+    /// <exception cref="HarnessException">A copy could not be made (<see cref="HarnessExit.Refused"/>); the copies made before it stand.</exception>
+    public void Keep(IFileSystem fileSystem, OrchestratorLayout run)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentNullException.ThrowIfNull(run);
+
+        foreach (var (name, given, content) in _opened)
+        {
+            try
+            {
+                fileSystem.WriteAtomic(run.InputCopy(name, given), copy => content.CopyTo(copy));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new HarnessException(HarnessExit.Refused, $"input '{name}' is '{given}', and the copy the run keeps of it could not be made: {ex.Message.TrimEnd('.')}", ex);
+            }
+        }
+    }
+
+    /// <inheritdoc/>
+    public void Dispose()
+    {
+        foreach (var (_, _, content) in _opened)
+        {
+            content.Dispose();
+        }
+
+        _opened.Clear();
     }
 }

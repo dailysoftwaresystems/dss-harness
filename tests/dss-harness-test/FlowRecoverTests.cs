@@ -84,6 +84,44 @@ public sealed class FlowRecoverTests
         return asked[0];
     }
 
+    /// <summary>
+    /// The recovery takes the failures of any number of steps, each its own: its maxVisits bounds the visits it makes
+    /// for one step's failures - the loop of that step and the recovery - and nothing counts the visits it makes for
+    /// different steps against one another, so a hundred and fifty steps of one scope that each fail once each take a
+    /// visit, and each runs again done.
+    /// </summary>
+    [Fact]
+    public async Task TheFailuresOfAHundredAndFiftyStepsOfOneScope_EachTakeAVisitOfTheRecovery()
+    {
+        const int count = 150;
+        var names = Enumerable.Range(1, count).Select(index => $"step-{index.ToString(System.Globalization.CultureInfo.InvariantCulture)}").ToList();
+        var definition = Parse(
+            "name: flow\nrecover:\n  onSuccess: failed-step\n  onFailure: pause\n  maxVisits: 1\n  steps:\n    - name: mend\n      type: orient\nsteps:\n"
+            + string.Concat(names.Select(name => $"  - name: {name}\n    type: orient\n    onFailure: recover\n")));
+        var runner = new FakeRunner().On("mend", FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        foreach (var name in names)
+        {
+            _ = runner.On(name, (FlowStepRun run) => run.Visit == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        }
+
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(60), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Empty(coordinator.OpenQuestions);
+
+        // One visit of the recovery for each step, each its first for that step, each done.
+        var visits = coordinator.Instances.Values.Where(instance => instance.Step.Name == FlowScope.Recovery).ToList();
+        Assert.Equal(names.Order(StringComparer.Ordinal), visits.Select(visit => visit.RaisedBy!.Step.Name).Order(StringComparer.Ordinal));
+        Assert.All(visits, visit => Assert.Equal((FlowInstanceState.Done, 1), (visit.State, visit.Visit)));
+        Assert.All(names, name => Assert.Equal(FlowInstanceState.Done, coordinator.Instances[$"{name}+2"].State));
+    }
+
     /// <summary>A failure whose onFailure says recover is given to the recovery, and the step that failed runs again from where it stopped.</summary>
     [Fact]
     public async Task AFailureSayingRecoverIsGivenToTheRecovery_AndTheFailedStepRunsAgain()
@@ -109,7 +147,7 @@ public sealed class FlowRecoverTests
                 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success))
             .On("mend", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -143,7 +181,7 @@ public sealed class FlowRecoverTests
         var runner = new FakeRunner()
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("diagnose", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var first = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -195,7 +233,7 @@ public sealed class FlowRecoverTests
             """);
         var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
         var first = One(coordinator.OpenQuestions, question => question.Kind == "pause");
@@ -242,7 +280,7 @@ public sealed class FlowRecoverTests
                 ? FlowStepResult.Ended(passed: true, HarnessExit.Success)
                 : FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("mend", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -271,7 +309,7 @@ public sealed class FlowRecoverTests
         var runner = new FakeRunner()
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("mend", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the remedy stayed red"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -307,7 +345,7 @@ public sealed class FlowRecoverTests
             .On("mend", asked => asked == 1
                 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the remedy stayed red")
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -343,7 +381,7 @@ public sealed class FlowRecoverTests
         var runner = new FakeRunner()
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("mend", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the remedy stayed red"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -379,7 +417,7 @@ public sealed class FlowRecoverTests
                 : FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success))
             .On("mend", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -419,7 +457,7 @@ public sealed class FlowRecoverTests
                 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
                 : FlowStepResult.Ended(passed: true, HarnessExit.Success))
             .On("mend", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -470,7 +508,7 @@ public sealed class FlowRecoverTests
                 handed.Add((run.Instance, run.DeclarationPath));
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success);
             });
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -495,7 +533,7 @@ public sealed class FlowRecoverTests
                 type: orient
             """);
         var runner = new FakeRunner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -529,7 +567,7 @@ public sealed class FlowRecoverTests
         var runner = new FakeRunner()
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("mend", FlowStepResult.Ended(passed: true, HarnessExit.Success));
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var first = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -545,5 +583,110 @@ public sealed class FlowRecoverTests
         Assert.Equal(FlowInstanceState.Skipped, coordinator.Instances["build+2"].State);
         Assert.Equal("skipped by the answer to its bound", coordinator.Instances["build+2"].SkippedBecause);
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["after"].State);
+    }
+
+    /// <summary>
+    /// A handler whose failure the recovery takes holds what depends on the step it answers while the recovery works, and
+    /// once the recovery is done runs again from where it stopped - a new visit raised by the ending it answers, for no
+    /// redirect resets a handler - which that ending then waits on: the step it answers counts handled once the new visit
+    /// has ended, never at the failed one's end.
+    /// </summary>
+    [Fact]
+    public async Task AHandlerTheRecoveryTakes_RunsAgainForItsEnding_WhatDependsOnItsSourceWaiting()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: fold
+                type: orient
+              - name: reconcile
+                type: orient
+                on: {step: fold, outcome: failure}
+                onFailure: recover
+              - name: after
+                type: orient
+                dependsOn: [fold]
+            """);
+        FlowCoordinator? coordinator = null;
+        FlowInstanceState? againAtAfter = null;
+        var runner = new FakeRunner()
+            .On("fold", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("reconcile", (FlowStepRun run) => run.Visit == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "its own work ended failed")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("after", (FlowStepRun _) =>
+            {
+                againAtAfter = coordinator!.Instances.TryGetValue("reconcile+2", out var again) ? again.State : null;
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal("done; 1 failure was handled: fold, by reconcile", end.Summary);
+        Assert.Equal(["fold", "reconcile", "recover.mend", "reconcile+2", "after"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, againAtAfter);
+        var again = coordinator.Instances["reconcile+2"];
+        Assert.Equal((FlowInstanceState.Done, 2), (again.State, again.Visit));
+        Assert.Same(coordinator.Instances["fold"], again.RaisedBy);
+        Assert.Equal("reconcile", coordinator.Instances["fold"].HandledBy);
+    }
+
+    /// <summary>
+    /// A rerun of what the recovery put right that an answer gave up stays given up: the redirect that would leave an agent
+    /// open asked, stay counted the step handled by the recovery, and the session that goes on - whose start makes every
+    /// rerun its records still owe - finds none owed, for the step's record says what took its failure, and the run ends
+    /// done without asking again.
+    /// </summary>
+    [Fact]
+    public async Task ARecoveryRerunGivenUpByStay_IsNeverOwedAgain_AtTheNextSessionsStart()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: round
+                onFailure: recover
+                steps:
+                  - name: worker
+                    type: create-agent
+                    agent: maker
+                  - name: check
+                    type: orient
+                    dependsOn: [worker]
+            """);
+        var runner = new FakeRunner()
+            .On("worker", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"agent": "a1"}""")))
+            .On("check", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var cancel = TestContext.Current.CancellationToken;
+
+        var paused = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, paused.Status);
+        var asked = One(coordinator.OpenQuestions, question => question.Kind == "openAgents");
+        Assert.Equal("recover", asked.Instance);
+        Assert.True(coordinator.TryAnswer(asked.Id, "stay", out _));
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Empty(coordinator.OpenQuestions);
+        Assert.Equal("recover", coordinator.Instances["round"].HandledBy);
+        Assert.Equal(["round.worker", "round.check", "recover.mend"], runner.Started);
+        Assert.DoesNotContain(coordinator.Instances.Keys, id => id == "round+2");
     }
 }

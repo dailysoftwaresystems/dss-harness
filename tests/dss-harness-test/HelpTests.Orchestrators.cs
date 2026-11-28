@@ -58,14 +58,178 @@ public sealed partial class HelpTests
             "In the terminal a session runs in, the first Ctrl+C - and off Windows SIGTERM or a hang-up - asks the safe pause, which starts no "
                 + "clock of its own: each agent is asked for its handoff in its own conversation and answers within the workflow's handoffSeconds, "
                 + "and a build may take as long as it takes. The second stops the run where it stands - a step whose "
-                + "runner does not end within 90 s is recorded stopped all the same - and the command ends within 120 s whatever is left;",
+                + "runner does not end within 90 s is recorded stopped all the same - and the command ends within 120 s whatever is left - given "
+                + "--output-logs, once it has written the zip after that, with no bound of its own, for as long as packing the run's records takes, "
+                + "the run in it as the engine left it then;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("which it reads every 2 s", prose, StringComparison.Ordinal);
         Assert.Contains(
+            "what it waits for - each open question with since when and its next step - its answer; its answer taken now, ending the asking, where a live "
+                + "engine's advisor seeks its recommendation or a live engine is starting, which seeks every one the run owes; or, where it still owes its "
+                + "recommendation, the pause's advice where a live engine's pause defers it, "
+                + "the resume, which seeks it first, where no engine runs the run, and the resume once the engine has gone where it is stopping - a plan update "
+                + "under way or queued",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
             $"waits while the engine runs, for as long as that is, saying so every {DssHarness.Core.Waiting.Waits.SaidEvery.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - its own Ctrl+C ends the wait, the stop staying asked - "
                 + "and --now ends its process: only on this machine, and only the process its owner names by its start.",
             prose,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrators topic, the README and the architecture say the output logs as the code has them: the three commands
+    /// that take the option, where the zip is named, what it holds and leaves out, the refusals and their code, and the
+    /// types and members the architecture names.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_TheReadme_AndTheArchitecture_SayTheOutputLogs()
+    {
+        var result = HelpText.Of("orchestrators");
+        var prose = Prose.Words(result.StandardOutput);
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Equal([FlowService.RunCommand, FlowService.ResumeCommand, FlowService.AnswerCommand], FlowOutputLogs.Commands);
+        Assert.Contains($"  {ToolPackage.Command} {FlowService.RunCommand} <workflow> [--run <name>] [--input <k=v>]... [--json]{Environment.NewLine}      [--output-logs <file>]", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"  {ToolPackage.Command} {FlowService.ResumeCommand} <run> [--json] [--output-logs <file>]", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("      [--again] [--json] [--output-logs <file>]", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "Output logs. run-orchestrator, resume-orchestrator and answer-orchestrator given --output-logs <file> write one zip at <file> - read "
+                + "from the directory the shell stands in - holding everything needed to understand the run and to put right what it met; given "
+                + "none, they write none, and no configuration key asks for it.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("the last line naming them (outputLogs: <file>) and records.outputLogs in --json.", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "A path that is a directory, inside .orchestrators/, inside the repository's main checkout or one of its agents' trees where that tree does not "
+                + "ignore it - git's ignore rules read as a status reads them, a path the tree tracks never ignored: the zip would be one of the tree's "
+                + "uncommitted files, handed to every agent a run of it makes - or in a directory that cannot be made is refused (13) before anything runs, "
+                + "nothing started; any other work tree, another project's, a worktree of a bare repository or a repository at the home, is none a run hands "
+                + "or folds from, and takes the zip.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("The zip holds run/ - the run's whole directory, its folders kept - config.json, the configuration the run was read with, and manifest.json,", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "the run's temp/; the caches of its codebase graph made again from the tree (graph/graph.json, graph/symbols.jsonl, graph/extracts, "
+                + "graph/views); and each agent's worktree, which is outside the run.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Every byte of it is held to the mask this command's own sessions kept the run's records through, never built again at the end - every secret "
+                + "the configuration appoints that the key slot answers, as each session began; every form each web-search key a step was given is sent in; "
+                + "and every gh login token a step came to hold - each masked as itself and as its bytes in UTF-8 and in UTF-16 of either byte order, the "
+                + "configuration, the command line and the output among it. A resumed run's zip is masked by this command's sessions alone: an earlier "
+                + "session's records were masked as they were written, but a file it kept as it came may hold a secret since rotated out of the slot or "
+                + "taken out of the configuration, for nothing derived from a secret is kept from one session to the next. Where no session of the command "
+                + "built a mask - none began, as where an answer is handed to an engine running elsewhere or a resume is refused, or none could build it - "
+                + "every place the run's layout marks as holding files as they came, which no record's mask was applied to, is left out whole, each named "
+                + "with why: logs/*/ (each agent's Claude transcripts, copied as they are), work/ (each agent's scratch and task files), plans/ (the plans, "
+                + "the orchestrator's and each agent's), inputs/ (the files the run's file inputs were given, copied), artifacts/ (the run's artifacts), "
+                + "remote-workflows/ (the remote workflows' files, as they were fetched), agents/*/shared/ (the bytes of each file an agent was handed from "
+                + "the main tree), agents/*/rows/ (the anchor rows an agent files), agents/*/evidence/ (what an agent's worktree's evidence roots held, "
+                + "copied), agents/*/sessions/ (an agent's conversations with an API client, the provider's messages as they came); and in each attempt's "
+                + "directory (steps/*/, agents/*/steps/*/, steps/*/advice/*/, agents/*/steps/*/advice/*/, asks/*/, analysis/*/): logs/ (each red leg's "
+                + "phase log and each red CI job's log, copied), measures/*/logs/ (each red leg's phase log a measure call kept), handed/ (what the "
+                + "attempt's agent was handed to read: its skills, and the copies its continuation record names), work/ (a side agent's work directory), "
+                + "sessions/ (a side agent's conversations with an API client, the provider's messages as they came), "
+                + $"{Path.GetRelativePath(".", DssHarness.Core.Agents.AgentCallRecords.ResultFile(".", DssHarness.Core.Agents.Runtime.KeptResults.ContinuationId)).Replace('\\', '/')} "
+                + "(the continuation record, which quotes red legs' lines as they came).",
+            prose,
+            StringComparison.Ordinal);
+
+        // Every place the layout marks is named where the README lists them: the help and the README say the one set.
+        foreach (var place in OrchestratorLayout.RunPlacesKeptAsTheyCame.Concat(OrchestratorLayout.AttemptPlacesKeptAsTheyCame))
+        {
+            var names = place.Path.Split('/');
+            var said = place.IsFile ? $"`{names[0]}/`" : names[^1] == "*" ? $"`{place.Path}/`" : $"`{names[^1]}/`";
+
+            Assert.Contains(said, readme, StringComparison.Ordinal);
+        }
+        Assert.Contains(
+            "A zip that could not be written is said in its place and named nowhere, and the command's code stands - save a defect of this "
+                + "tool's, which ends it as one does (70). A command line the parser refuses writes none, for no command began.",
+            prose,
+            StringComparison.Ordinal);
+
+        foreach (var row in new[]
+        {
+            "| `run-orchestrator <workflow> [--run <name>] [--input k=v]... [--json] [--output-logs <file>]` |",
+            "| `resume-orchestrator <run> [--json] [--output-logs <file>]` |",
+            "| `answer-orchestrator <run> <answer> [--question <id>] [--text <text> \\| --text-file <file>] [--again] [--json] [--output-logs <file>]` |",
+        })
+        {
+            Assert.Contains(row, readme, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            $"Given `{FlowOutputLogs.Option} <file>` - and only then: no configuration key asks for it - each of the three writes one zip at `<file>`, read "
+                + "from the directory the shell stands in,",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"`{FlowOutputLogs.RunFolder}/`, the run's whole directory with its folders kept; `{FlowOutputLogs.ConfigName}`, the configuration the run "
+                + $"was read with; and `{FlowOutputLogs.ManifestName}`, the place to start reading",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains($"it is named in the text (`{FlowOutputLogs.Record}: <file>`) and in `--json` (`{FlowReports.RecordsMember}.{FlowOutputLogs.Record}`).", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            $"A path that is a directory, inside `{HarnessLayout.OrchestratorsDirectoryName}/`, inside the repository's main checkout or one of its agents' "
+                + $"trees where that tree does not ignore it - it would be handed to the run's agents as uncommitted state - or in a directory that cannot be "
+                + $"made is refused ({HarnessExit.Refused}) before anything runs.",
+            readme,
+            StringComparison.Ordinal);
+
+        Assert.Contains($"A session's output logs are one Core service, `{nameof(FlowOutputLogs)}`,", architecture, StringComparison.Ordinal);
+
+        foreach (var named in new[]
+        {
+            $"`{nameof(DssHarness.Core.Application.SessionOptions)}.{nameof(DssHarness.Core.Application.SessionOptions.OutputLogs)}`, an `{nameof(DssHarness.Core.Application.OutputLogsRequest)}`",
+            $"(`{nameof(DssHarness.Core.Application.CommandSession)}`)",
+            $"`{nameof(IFileSystem)}.{nameof(IFileSystem.WriteAtomic)}`",
+            $"(`{nameof(FlowRunReached)}`)",
+            $"`{nameof(CapturedHarnessOutput)}`",
+            $"`{nameof(OutputCapture)}`",
+            $"(`{nameof(IFileSystem)}.{nameof(IFileSystem.Hold)}`, `{nameof(HeldDirectory)}`)",
+            $"(`{nameof(FlowOutputLogs)}.{nameof(FlowOutputLogs.GraphCaches)}`)",
+            $"(`{nameof(ReasonLaunch)}.{nameof(ReasonLaunch.Mask)}`)",
+            $"(`{nameof(SessionMasks)}`, an owner of the engine's session)",
+            $"`{nameof(FlowRunReached)}`, whose `{nameof(FlowRunReached.Masks)}` the zip reads",
+            $"(`{nameof(GrowingMask)}`)",
+            $"(`{nameof(OrchestratorLayout)}.{nameof(OrchestratorLayout.IsKeptAsItCame)}`)",
+            $"(`{nameof(OrchestratorLayout)}.{nameof(OrchestratorLayout.RunPlacesKeptAsTheyCame)}`",
+            $"(`{nameof(OrchestratorLayout)}.{nameof(OrchestratorLayout.AttemptDirectories)}`:",
+            $"`{nameof(OrchestratorLayout)}.{nameof(OrchestratorLayout.AttemptPlacesKeptAsTheyCame)}`",
+            "this command's sessions alone: a resumed run's zip holds the records of earlier sessions too",
+            $"(`{nameof(IGitClient)}.{nameof(IGitClient.IsIgnoredAsync)}`)",
+            $"`{nameof(ActionValues)}.{nameof(ActionValues.ReadByteForByte)}`",
+            $"(`{nameof(ILineMask)}.{nameof(ILineMask.Cut)}`)",
+            $"(`{nameof(DssHarness.Core.Application.IDocumentFacts)}`)",
+            $"(`{FlowOutputLogs.Record}: <file>`) and `{FlowReports.RecordsMember}.{FlowOutputLogs.Record}`",
+        })
+        {
+            Assert.Contains(named, architecture, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>Each of the three commands that take the option says it in its own help.</summary>
+    [Theory]
+    [InlineData(FlowService.RunCommand)]
+    [InlineData(FlowService.ResumeCommand)]
+    [InlineData(FlowService.AnswerCommand)]
+    public async Task EachCommandThatTakesTheOutputLogs_SaysItInItsOwnHelp(string command)
+    {
+        var result = await CliRunner.RunAsync([command, "--help"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains(
+            "--output-logs <file> Write one zip at <file> holding everything needed to understand the run and to put right what it met: the "
+                + "run's whole directory, the configuration it was read with and manifest.json - what was run, how it ended and why, its open "
+                + "questions and this command's own output - rewritten whole at every end, refused or not, and named in the text and in --json. "
+                + "Read relative to the directory the shell stands in.",
+            Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
     }
 
@@ -251,8 +415,8 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The orchestrators topic says that delete-orchestrator refuses while a directory below the orchestrator's holds a
-    /// .git of its own that git records no worktree at, as it does while a worktree is left there, and that an agent with
-    /// no worktree never stands in its way.
+    /// .git of its own that git records no worktree at, as it does while a worktree is left there, and that an agent that
+    /// only reads never stands in its way, its tree removed as delete-agent removes it.
     /// </summary>
     [Fact]
     public async Task OrchestratorsTopic_SaysDeleteOrchestratorRefuses_WhileADirectoryGitRecordsNoWorktreeAtIsBelowIt()
@@ -260,11 +424,12 @@ public sealed partial class HelpTests
         var result = HelpText.Of("agents");
 
         Assert.Contains(
-            "delete-orchestrator deletes the orchestrator once every agent of it with a worktree is deleted and no worktree is left "
-                + "below its directory, nor any directory holding a .git of its own that git records no worktree at - until then it "
-                + $"refuses ({HarnessExit.Refused}), naming each - and the evidence, transcripts, steps and sessions its agents kept, "
-                + "whatever their kind or state, only with --delete-evidence; an agent with no worktree holds nothing but records, "
-                + "and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever asked - "
+            "delete-orchestrator deletes the orchestrator once every agent of it whose work is folded is deleted and no worktree "
+                + "but a live read-only agent's is left below its directory, nor any directory holding a .git of its own that git "
+                + $"records no worktree at - until then it refuses ({HarnessExit.Refused}), naming each - and the evidence, "
+                + "transcripts, steps and sessions its agents kept, whatever their kind or state, only with --delete-evidence; an "
+                + "agent that only reads holds nothing but records and its tree, which is removed as delete-agent removes it, nothing "
+                + "folded, and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever asked - "
                 + "goes with it and is never counted among what --delete-evidence guards, as does a copy of a commit a run's sweep made "
                 + "in its directory and was cut off before taking away, git's record of it with it.",
             Prose.Words(result.StandardOutput),
@@ -272,25 +437,36 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The orchestrators topic says what an agent with no worktree is to the verbs a person types: never open, so the
-    /// limit leaves it out; nothing recorded of it when create-agent runs again; no session, --session beside
-    /// --no-worktree refused; and a deletion that is one write, saying what has nothing to act on.
+    /// The orchestrators topic says what an agent that only reads is to the verbs a person types: its tree made as every
+    /// agent's is, brought to the main checkout's HEAD as each of its steps starts by a forced checkout and a clean of what
+    /// git does not track, never folded; a record naming no tree given one; never open, so the limit leaves it out;
+    /// nothing recorded of it when create-agent runs again; no session, --session beside --reads-only refused; a deletion
+    /// that removes its tree, saying what has nothing to act on; and the retired option refused, naming its replacement.
     /// </summary>
     [Fact]
-    public async Task OrchestratorsTopic_SaysWhatTheVerbsDoWithAnAgentWithNoWorktree()
+    public async Task OrchestratorsTopic_SaysWhatTheVerbsDoWithAnAgentThatOnlyReads()
     {
         var text = Prose.Words(HelpText.Of("agents").StandardOutput);
 
         foreach (var said in new[]
         {
-            "It records no session - --session beside --no-worktree is a usage error - and delete-agent marks it deleted in one "
-                + "write, folding nothing, removing no worktree and looking for no transcript; --discard-uncommitted and the "
-                + "allowances have nothing to act on there, and it says so.",
+            "An agent can also be made to only read (create-agent --reads-only): the engine makes one for a read-only reason "
+                + "step, and a person has no use for one by hand. Its tree is made as every agent's is, at the main checkout's "
+                + "HEAD, and as each of its steps starts the engine brings it to the main checkout's HEAD then, or to the commit the "
+                + "step names (commit, 'help workflows') - a forced detached "
+                + "checkout of that commit and a clean of every file git does not track, ignored ones included - so whatever it "
+                + "wrote there before is gone; it may write its tree and its work directory, and nothing it writes is ever folded, "
+                + "committed or pushed. A record an older tool wrote, naming no tree, is given one as its next step starts.",
+            "It records no session - --session beside --reads-only is a usage error - and delete-agent removes its tree, folding "
+                + "nothing and looking for no transcript, and marks it deleted; --discard-uncommitted and the allowances have "
+                + "nothing to act on there, and it says so. --no-worktree, which made an agent with no worktree, is retired, and "
+                + "refused naming --reads-only.",
+            "create-agent <o> <a> --model <id> [--empty | --reads-only] [--session <id>]",
             $"--parallel, {OrchestratorRecord.DefaultParallel} unless given, is the most open agents at once - every agent with a "
                 + "worktree not yet deleted, and every worktree git lists below the orchestrator's directory: create-agent refuses "
-                + "the next, naming them, and list-orchestrator counts them. An agent with no worktree is never open. Run again, "
-                + "create-orchestrator changes only the limit and the session, and create-agent records only the session, and "
-                + "nothing of an agent with no worktree;",
+                + "the next, naming them, and list-orchestrator counts them. An agent that only reads is never open, its tree "
+                + "listed or not. Run again, create-orchestrator changes only the limit and the session, and create-agent records "
+                + "only the session, and nothing of an agent that only reads;",
         })
         {
             Assert.Contains(said, text, StringComparison.Ordinal);
@@ -323,9 +499,12 @@ public sealed partial class HelpTests
     {
         Assert.Contains(
             $"The report of a run. {FlowService.ReadReportCommand} answers it from the run's records alone - the same bytes for "
-                + "the same records, whatever a model might say - and never asks one: what the run was and how it stands, with its "
+                + "the same records and the same state of its engine, which names each open question's next step, whatever a model "
+                + "might say - and never asks one: what the run was and how it stands, with its "
                 + "sessions, its wall time, its active time (the union of every attempt's runs), its pause (the time between its "
-                + "sessions), its wait for a person and its budget; the totals of its tokens by kind",
+                + "sessions, from one's end - its last record, or a crash's last event - to the next one's own first event, whatever its "
+                + "kind, by the session each event names, what is written between two ending none), its wait for a person and its "
+                + "budget; the totals of its tokens by kind",
             Prose.Words(HelpText.Of("orchestrators").StandardOutput),
             StringComparison.Ordinal);
     }

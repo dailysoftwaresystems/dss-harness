@@ -175,7 +175,12 @@ public static partial class HelpTopics
             + "record carried before the person's next message; an attempt compacted again is reduced whole again, its earlier "
             + "records never copied into the next, and a later launch's first message is read as its task alone, never the "
             + "record it carried; a claude-code child is started "
-            + "with DISABLE_COMPACT=1, so it never compacts by itself and a full context ends the step ContextExhausted.");
+            + "with DISABLE_COMPACT=1, so it never compacts by itself and a full context ends the step ContextExhausted, and "
+            + $"with {string.Join(" and ", Agents.Policy.ClaudeSettings.CacheTtlVariables)} at agentClients.claude-code.cacheTtl "
+            + $"({string.Join(" or ", Agents.ClaudeApi.ClaudeApiRequest.CacheTtls)}, {Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes} where nothing is said), "
+            + "the one say on its caching - every other name Claude Code caches by set off, as below - "
+            + "so a login's own hour - a Claude subscription's main conversation caches an hour by default, each write priced "
+            + "at the hour's rate - is never paid for requests that come seconds apart.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -345,9 +350,24 @@ public static partial class HelpTopics
         builder.AppendLine("Write(Gemfile.lock), Write(composer.json), Write(composer.lock). Turning them off");
         builder.AppendLine("takes this tool's refusal away; Claude Code's own guard stays Claude Code's. A step's");
         builder.AppendLine("writes is the one source that narrows: where a step has them, a write under its");
-        builder.AppendLine("worktree that matches none of their patterns is denied, and the reporter's reads are");
-        builder.AppendLine("narrowed to the run's directory alone, with no command, no write and no web at all. For");
-        builder.AppendLine("Claude Code the same policy is rendered, never re-decided, into the launch's settings: an");
+        builder.AppendLine("worktree that matches none of their patterns is denied, and so is a delete - but of what");
+        builder.AppendLine("the step made itself, a path of its worktree git does not track that was not there when");
+        builder.AppendLine("the step's run began, as its first start records the worktree's untracked paths");
+        builder.AppendLine($"({OrchestratorLayout.StepUntrackedFileName} in its directory, which every later attempt, answer and");
+        builder.AppendLine("resume reads): what its own commands made anywhere in its worktree it may take back - by");
+        builder.AppendLine("delete_file, by delete_directory where all a directory holds is that, and from a move's");
+        builder.AppendLine("source - while a path git tracks or ignores, or one that was there, stays narrowed, and so");
+        builder.AppendLine("does a write over the step's own making, which leaves a path standing outside them; and");
+        builder.AppendLine("the reporter's reads are narrowed to the run's directory alone, with no command, no write");
+        builder.AppendLine("and no web at all. A step's writes are read from its worktree's root, as a work item's");
+        builder.AppendLine("ownedPaths are ('help workflows'): a name with no separator is the root's own, and a path");
+        builder.AppendLine("names what is beneath it only where it names a directory, one the run's start tree holds -");
+        builder.AppendLine("the tree of the commit the run started from, which no fold changes - or one ending in a");
+        builder.AppendLine("separator; a write refused beneath an entry that names a file says a directory to be made");
+        builder.AppendLine("is written with a trailing separator, and one at a depth an entry of one name no longer");
+        builder.AppendLine("reaches says '**/' reaches any depth; where the entry names a file because the start tree");
+        builder.AppendLine("could not be read, the refusal says why. For Claude Code the same policy is rendered, never re-decided, into");
+        builder.AppendLine("the launch's settings: an");
         builder.AppendLine("ask rule for every tool the launch has, and the restriction rules as deny rules, absolute");
         builder.AppendLine("once for each root in the POSIX form Claude Code matches (//c/x for C:\\x), a Write rule as");
         builder.AppendLine("the Edit rule Claude Code holds its file tools' writes to, a read of each credential slot");

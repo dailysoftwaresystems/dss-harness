@@ -103,15 +103,18 @@ public static class JsonStateFile
     /// The records of a log a writer appends to a line at a time (<see cref="Agents.AppendLog"/>), each whole line one
     /// record read by <see cref="LineOptions"/>, read a line at a time: a last line no line feed ended is a writer's torn
     /// line - half an append, or a whole record whose line feed never reached the disk - set aside and given back, never
-    /// read as a record and never repaired; none where there is no file.
+    /// read as a record and never repaired; and, for a log written a batch at a time, the first line that holds a NUL - a
+    /// byte no record's line holds, where a power loss left of a batch never put on the disk begins - is set aside the same,
+    /// with every line after it. None where there is no file.
     /// </summary>
     /// <typeparam name="T">What each line holds.</typeparam>
     /// <param name="fileSystem">The file system it is read through.</param>
     /// <param name="path">The log.</param>
     /// <param name="problem">Why a record read does not stand where it does, given the records before it; null where it does.</param>
     /// <param name="refused">The refusal of a whole line that is no record, by its number from 1 and why.</param>
-    /// <returns>Each record in order, and the torn line set aside where there was one.</returns>
-    public static (IReadOnlyList<T> Records, string? Torn) ReadLog<T>(IFileSystem fileSystem, string path, Func<T, IReadOnlyList<T>, string?> problem, Func<int, string, Exception> refused)
+    /// <param name="batched">Whether the log's lines are put on the disk a batch at a time (<see cref="Agents.AppendLog.Open"/>).</param>
+    /// <returns>Each record in order, and the torn line set aside where there was one - up to its NUL, and holding it, where a NUL began it.</returns>
+    public static (IReadOnlyList<T> Records, string? Torn) ReadLog<T>(IFileSystem fileSystem, string path, Func<T, IReadOnlyList<T>, string?> problem, Func<int, string, Exception> refused, bool batched = false)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -128,6 +131,12 @@ public static class JsonStateFile
         // A line at a time: a log grows with what writes it.
         foreach (var (text, ended) in FileLines.Read(fileSystem, path))
         {
+            // A NUL first, whether its line ended or not: from it on, nothing of the batch reached the disk whole.
+            if (batched && text.IndexOf('\0', StringComparison.Ordinal) is var nul and >= 0)
+            {
+                return (records, text[..(nul + 1)]);
+            }
+
             if (!ended)
             {
                 return (records, text);
