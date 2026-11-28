@@ -5390,7 +5390,8 @@ the run's records, and a handler a redirect leaves before it ended marked `left`
 record, for it took nothing: the ending it was raised for is abandoned, settled by none of its handlers
 and never rebuilt by a resume - so a crash between any two writes leaves records the next session completes: an
 answer written is carried out once, a configured answer never written is given, a handler is never
-raised twice, and an ending whose handlers all ended is settled. An ending the records leave waiting is rebuilt as its
+raised twice, and an ending whose handlers all ended is settled. An ending the records leave waiting - a handler's own
+among them, which the ending it answers waits on, and each raise it still owes made - is rebuilt as its
 raise made it, from its source's record: the visit of each handler that record holds `raised` - the newest raised for
 that ending, so a visit made again in a failed one's place is the one waited on - in the order the
 workflow declares them (`FlowCoordinator.EndingOf`) - never a triage of an issue the source reported nor a visit of the

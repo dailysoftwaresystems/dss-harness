@@ -496,42 +496,37 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
         => IsLeft(state, endedFor) || failure is FlowFailure.Owed;
 
     /// <summary>
-    /// The raises an ending of the visit <paramref name="source"/> of <paramref name="step"/> still owes the session that
-    /// goes on, each by the id the resume raises it as, as its own record holds where each handler stands
-    /// (<paramref name="handlers"/>), where the ending is of a step the schedule draws: each handler written owed - by a
-    /// pause, which raises nothing while it records what it left running, or by a crash between the ending's record and the
-    /// raise - or written raised with no visit of it recorded, for the source's record says a raise before the visit's first
-    /// record is written and a crash came between the two; never one whose visit this ending raised is recorded
-    /// (<paramref name="raised"/>) - an older build's record left such a raise owed beside the visit it made - for that raise
-    /// is made, and its visit is counted as itself; and none for an ending of a handler, which its own source's settling
-    /// decides. Each is named the next visit of the handler beside its source - one more than the visits its scope holds
-    /// (<paramref name="visits"/>), as the engine makes a member (<see cref="FlowInstanceId.OfVisit"/>): <c>fix+2</c> where
-    /// the scope holds <c>fix</c>. The one reading of them: the resume raises them, and what is left of a run counts them -
-    /// the engine's (<c>FlowCoordinator.Unended</c>) and the status of a run's records alike (<see cref="IsUnended"/>).
+    /// The raises an ending of the visit <paramref name="source"/> still owes the session that goes on, each by the id the
+    /// resume raises it as, as its own record holds where each handler stands (<paramref name="handlers"/>) - the ending of
+    /// a handler among them, which the ending it answers waits on while its failure is its own handlers' to settle: each
+    /// handler written owed - by a pause, which raises nothing while it records what it left running, or by a crash between
+    /// the ending's record and the raise - or written raised with no visit of it recorded, for the source's record says a
+    /// raise before the visit's first record is written and a crash came between the two; never one whose visit this ending
+    /// raised is recorded (<paramref name="raised"/>) - an older build's record left such a raise owed beside the visit it
+    /// made - for that raise is made, and its visit is counted as itself. Each is named the next visit of the handler beside
+    /// its source - one more than the visits its scope holds (<paramref name="visits"/>), as the engine makes a member
+    /// (<see cref="FlowInstanceId.OfVisit"/>): <c>fix+2</c> where the scope holds <c>fix</c>. The one reading of them: the
+    /// resume raises them, and what is left of a run counts them - the engine's (<c>FlowCoordinator.Unended</c>) and the
+    /// status of a run's records alike (<see cref="IsUnended"/>).
     /// </summary>
-    /// <param name="step">The visit's declaration.</param>
     /// <param name="source">The visit's id.</param>
     /// <param name="handlers">Where each handler of its ending stands, as its record names it.</param>
     /// <param name="raised">Whether a visit of the handler, by its name, that this ending raised is recorded.</param>
     /// <param name="visits">How many visits of the handler, by its name, the scope beside the visit holds: the highest it names, 0 for none.</param>
     public static IEnumerable<(string Handler, string Id)> RaisesOwed(
-        WorkflowStep step,
         string source,
         IEnumerable<FlowHandlerState> handlers,
         Func<string, bool> raised,
         Func<string, int> visits)
     {
-        ArgumentNullException.ThrowIfNull(step);
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
         ArgumentNullException.ThrowIfNull(handlers);
         ArgumentNullException.ThrowIfNull(raised);
         ArgumentNullException.ThrowIfNull(visits);
 
-        return step.On is not null
-            ? []
-            : handlers
-                .Where(handler => handler.State is "owed" or "raised" && !raised(handler.Handler))
-                .Select(handler => (handler.Handler, FlowInstanceId.OfVisit(FlowInstanceId.SiblingOf(source, handler.Handler), visits(handler.Handler) + 1)));
+        return handlers
+            .Where(handler => handler.State is "owed" or "raised" && !raised(handler.Handler))
+            .Select(handler => (handler.Handler, FlowInstanceId.OfVisit(FlowInstanceId.SiblingOf(source, handler.Handler), visits(handler.Handler) + 1)));
     }
 
     /// <summary>
@@ -2149,7 +2144,7 @@ public sealed class FlowCoordinator
     private IEnumerable<string> RaisesOwedBy(FlowInstance source)
         => source.DeclaredScope is not { } scope
             ? []
-            : FlowInstance.RaisesOwed(source.Step, source.Id, source._handlers, handler => RaisedFor(source, handler, scope) is not null, handler => scope.Visits.GetValueOrDefault(handler))
+            : FlowInstance.RaisesOwed(source.Id, source._handlers, handler => RaisedFor(source, handler, scope) is not null, handler => scope.Visits.GetValueOrDefault(handler))
                 .Select(raise => raise.Id);
 
     /// <summary>
@@ -17162,7 +17157,7 @@ public sealed class FlowCoordinator
                 FailGroup(member.GroupOf!, member.Exit ?? HarnessExit.InternalError, member.Error, member.Path);
             }
 
-            foreach (var source in _created.Where(created => created.Step is { On: null } && created._handlers.Any(handler => handler.State is "owed" or "raised")))
+            foreach (var source in _created.Where(created => created._handlers.Any(handler => handler.State is "owed" or "raised")))
             {
                 // A raise an older build's record left owed beside the visit it made - a crash between the visit's first
                 // record and the source's - is read raised, as this build writes it: the source's record says the raise
@@ -17183,7 +17178,8 @@ public sealed class FlowCoordinator
                 {
                     // An ending whose handlers were raised and not all done: the run goes on waiting for them - the visits
                     // of its own handlers, as its raise made them (EndingOf), never a triage of an issue it reported nor a
-                    // visit of the recovery, which name it as what raised them too.
+                    // visit of the recovery, which name it as what raised them too. A handler's own ending among them, for
+                    // the ending it answers waits on it while its failure is its handlers' to settle.
                     _pendingEndings[source.Id] = EndingOf(source, declared);
                     source.FailureSettled = source.State != FlowInstanceState.Failed;
                 }
