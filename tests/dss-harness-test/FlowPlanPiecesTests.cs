@@ -428,6 +428,114 @@ public sealed class FlowPlanPiecesTests
     }
 
     /// <summary>
+    /// Placing a removed or changed piece against a waiting instance is durable as one step too: whichever write the
+    /// process ends at - every write of the run's state, its questions and its updates from the one that decides the
+    /// update's pieces to the one that says the update done, each tried in its turn - the session that takes the run up
+    /// places the update once and runs to its end as the run would have: the removed item withdrawn before it began,
+    /// the changed item given the piece's item and its probe asking of the piece, nothing of either made twice.
+    /// </summary>
+    [Theory]
+    [InlineData("removed")]
+    [InlineData("changed")]
+    public async Task APlacementAgainstAWaitingInstanceTheProcessEndsInTheMiddleOf_IsCompletedByTheResume_AtEveryWriteItMakes(string kind)
+    {
+        var points = new List<string>();
+        var failed = new List<string>();
+        var differently = Item("two");
+        differently["title"] = "The two item, done differently";
+
+        for (var point = 0; points.LastOrDefault() != "done"; point++)
+        {
+            using var temp = new TempDirectory();
+            var definition = OneAgentAtATime();
+            var (harness, layout, records) = Records("r1", temp.Path, definition);
+            var runner = new FakeRunner()
+                .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"), Item("two"))))
+                .On("item-check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+                {
+                    ["ok"] = true,
+                    ["problems"] = new JsonArray(),
+                    ["items"] = run.Read!["items"]!.ToNode()!.DeepClone(),
+                }))
+                .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: kind == "removed"
+                    ? Concluded(new JsonArray(Piece("removed", Item("two"), "the second item is withdrawn")), Item("one"))
+                    : Concluded(new JsonArray(Piece("changed", differently.DeepClone(), "the two item is done differently")), Item("one"), differently.DeepClone())));
+            var decided = false;
+            var writes = 0;
+            string? crashedAt = null;
+            var crashing = new CrashingRecords(
+                records,
+                updates =>
+                {
+                    decided |= updates.Updates.Any(update => update is { State: FlowUpdateStates.UnderWay, Pieces: not null });
+                    return At(() => updates.Updates.Any(update => update.State == FlowUpdateStates.Done) ? "done" : "updates");
+                },
+                picksRun: _ => At(() => "state"),
+                picksQuestions: _ => At(() => "questions"));
+
+            bool At(Func<string> what)
+            {
+                if (!decided || writes++ != point)
+                {
+                    return false;
+                }
+
+                crashedAt = what();
+                return true;
+            }
+
+            using (records)
+            {
+                var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+                _ = await coordinator.RunAsync(Token);
+                Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+                _ = await coordinator.RunAsync(Token);
+                var firstProbe = coordinator.OpenQuestions.Single().Id;
+                Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("leave the second item out", "amend-orchestrator-request", out var problem), problem ?? "taken");
+                Assert.True(coordinator.TryAnswer(firstProbe, "go", null, out _));
+                _ = await coordinator.RunAsync(Token);
+                Assert.True(crashing.Ended, $"the process never ended at write {point}: {string.Join(",", points)}");
+            }
+
+            points.Add(crashedAt!);
+
+            try
+            {
+                var (_, _, again) = Records("r1", temp.Path, definition);
+
+                using (again)
+                {
+                    var resumed = CoordinatorOf(definition, runner, again, harness, layout, ResumeOf(harness, layout, definition));
+                    var end = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+
+                    if (kind == "changed")
+                    {
+                        Assert.Equal("changed|the two item is done differently|", resumed.OpenQuestions.Single().Problem);
+                        Assert.True(resumed.TryAnswer(resumed.OpenQuestions.Single().Id, "go", null, out _));
+                        end = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+                    }
+
+                    Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+                }
+
+                var update = UpdatesOf(harness, layout).Updates.Single();
+                Assert.Equal(FlowUpdateStates.Done, update.State);
+                var piece = update.ThePieces.Single();
+                Assert.Equal(kind == "removed" ? ("removed", "rounds.items[1]", "withdrawn before it began") : ("changed", "rounds.items[1]", "done"), (piece.Kind, piece.Placed, piece.Ended));
+                var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+                Assert.Equal(kind == "removed" ? nameof(FlowInstanceState.Skipped) : nameof(FlowInstanceState.Done), steps["rounds.items[1]"].State);
+                Assert.DoesNotContain("rounds.items[2]", steps.Keys);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                failed.Add($"write {point} ({crashedAt}): {ex.Message}");
+            }
+        }
+
+        Assert.True(failed.Count == 0, string.Join(Environment.NewLine, failed) + " | " + string.Join(",", points));
+    }
+
+    /// <summary>
     /// A removed piece against a waiting instance is withdrawn before it began: the instance is Skipped with the
     /// reason, nothing of it runs, and the piece is recorded as needing no step beyond that.
     /// </summary>
