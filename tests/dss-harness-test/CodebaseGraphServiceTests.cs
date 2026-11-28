@@ -1532,6 +1532,13 @@ public sealed class CodebaseGraphServiceTests
     {
         using var graph = await Graph.CreateAsync();
         graph.Write("b.toy", "class B\n");
+
+        // The base's file is dated an hour back, so the time the view's file takes from it below never falls in the second
+        // the worktree's checkout wrote that file in. Git for Windows holds a file's time to its index entry's only to the
+        // second, and takes the file's time of creation, which a rewrite keeps, for its time of change: a file of the same
+        // size dated into that second is one it finds clean, whatever the file holds, once the worktree's index was written
+        // in a later second.
+        File.SetLastWriteTimeUtc(Path.Combine(graph.Tree, "b.toy"), DateTime.UtcNow.AddHours(-1));
         await graph.CommitAsync();
         var worktree = await graph.WorktreeAsync("w");
         await graph.SyncViewAsync("w", worktree);
