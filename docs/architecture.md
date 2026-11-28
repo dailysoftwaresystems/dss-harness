@@ -4964,7 +4964,12 @@ does the update's entry name the then (`FlowUpdateEntry.Then`, which `FlowCoordi
 before the redirect's write leaves the then undecided, the question written without it withdrawn by the replay as one
 asking of nothing, and the session that takes the run up decides it again, asking anew; one between the two leaves the
 redirect owed, which the replay reads as the then decided and the session's start writes into the entry
-(`FlowCoordinator.ReadTheThen`), so a `stay` that gives the redirect up never has it decided again; and an entry an older
+(`FlowCoordinator.ReadTheThen`), so a `stay` that gives the redirect up never has it decided again. The question the
+redirect asked, open or answered, is read as the then decided whatever the entry says - a `stay` takes the redirect out
+of the records at once, before the entry names the then (one the workflow's `answers` give, taken as the question is
+raised, or a person's taken before a session's start has written the entry), and leaves its question as all there is of
+the decision - for no question is answered before its redirect is written, and one written without it is withdrawn by
+the replay before the then is read; and an entry an older
 build wrote naming the then before a redirect the process never wrote - nothing of it in the records: no redirect owed,
 no visit it left, no visit of the step it names since the planning step, no question it asked open or answered - reads
 as undecided, and the then is decided again. So the plan never stands on a check that never ran on it. Once that scope

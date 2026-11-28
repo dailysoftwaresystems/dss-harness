@@ -269,9 +269,10 @@ public sealed record FlowNotDelivered(string For, string Why);
 /// </param>
 /// <param name="Then">
 /// The step the <c>amend</c> block's <c>then</c> names, written once the update's redirect to it is decided - after the
-/// redirect's own write, which is the decision: a resume that finds the redirect owed and this null reads the then decided
-/// and writes it, and one an older build wrote here before a redirect it never wrote is read as undecided; null until one
-/// was, and where the block names none.
+/// redirect's own write, which is the decision: a resume that finds the redirect owed, or the question it asked of open
+/// agents open or answered - a <c>stay</c> that gave it up before this was written among them - and this null reads the
+/// then decided and writes it, and one an older build wrote here before a redirect it never wrote is read as undecided;
+/// null until one was, and where the block names none.
 /// </param>
 /// <param name="Text">The text given with a changed answer, where its question takes one; null where none was.</param>
 /// <param name="Pieces">

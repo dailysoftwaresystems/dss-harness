@@ -866,11 +866,12 @@ public sealed class FlowPlanUpdateTests
     /// <summary>
     /// The first session of a run of <paramref name="definition"/> over <paramref name="crashing"/>, until the process ends
     /// where it says: the run is paused at its gate once the planning has run, an amendment is handed over and the gate
-    /// answered, and the session begins the update - its planning step ends done, and its <c>then</c> is decided.
+    /// answered, and the session begins the update - its planning step ends done, and its <c>then</c> is decided. The
+    /// workflow's files are read through <paramref name="workflowFile"/> where it is given, and none are read where not.
     /// </summary>
-    private static async Task UntilTheThenIsDecidedAsync(WorkflowDefinition definition, IFlowRecords crashing, HarnessFactory harness, OrchestratorLayout layout)
+    private static async Task UntilTheThenIsDecidedAsync(WorkflowDefinition definition, IFlowRecords crashing, HarnessFactory harness, OrchestratorLayout layout, Func<string?, string, string>? workflowFile = null)
     {
-        var coordinator = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+        var coordinator = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, workflowFile: workflowFile, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
 
         _ = await coordinator.RunAsync(Token);
         Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
@@ -1020,6 +1021,87 @@ public sealed class FlowPlanUpdateTests
         Assert.Equal(
             anew ? ["withdrawn", "answered"] : ["answered"],
             harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions.Where(question => question.Kind == "openAgents").Select(question => question.State));
+    }
+
+    /// <summary>The flow of <see cref="Reviewed"/> whose workflow answers the question of open agents beforehand: <c>stay</c>, taken at once as it is raised.</summary>
+    private const string ReviewedStaying = Reviewed + """
+
+        answers:
+          openAgents: stay
+        """;
+
+    /// <summary>
+    /// A <c>stay</c> that gave up the redirect an update's <c>then</c> decided, before the update's entry named the then,
+    /// leaves the then decided all the same: no redirect is owed any more and the entry names none, and the question the
+    /// redirect asked, answered, is the decision - so the session that takes the run up never decides the then again, never
+    /// asking a second time of the agents it would leave open, nor making the redirect the stay gave up. The stay is one the
+    /// workflow's <c>answers</c> give, taken at once as the question is raised, the process ending as the entry is written
+    /// after it; or a person's, given between two sessions - the process having ended as the entry was written, the
+    /// question's recommendation said not obtained, for the bar it is sought by cannot be read - and taken before the next
+    /// session's start, whose own writes the process ends before making.
+    /// </summary>
+    /// <param name="stayBy">Who gave the stay, and when.</param>
+    [Theory]
+    [InlineData("the configuration, at once")]
+    [InlineData("a person, before the next session's start")]
+    public async Task TheThenOfAnUpdateAStayGaveUpBeforeItsEntryNamedIt_IsNeverDecidedAgain(string stayBy)
+    {
+        using var temp = new TempDirectory();
+        var configured = stayBy == "the configuration, at once";
+        var definition = configured ? Parse(ReviewedStaying) : Parse(Reviewed) with { Recommendations = "bar.md" };
+        Func<string?, string, string> workflowFile = (_, named) => named == "bar.md"
+            ? throw new HarnessException(HarnessExit.ConfigInvalid, $"'{named}', a workflow file, is not at '.harness-config/workflows/flow/{named}'; write it there, beside the definition that names it")
+            : "Plan the work.";
+        var inputs = new Dictionary<string, string> { ["request"] = "build the tool" };
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        // The process ends at the update's entry naming the then, before that write lands: the question and the redirect
+        // asking it are written, and - where the workflow answers it - the stay that gave the redirect up.
+        var crashing = new CrashingRecords(records, updates => updates.Updates.Any(update => update.Then is not null), lands: false);
+
+        using (records)
+        {
+            await UntilTheThenIsDecidedAsync(definition, crashing, harness, layout, workflowFile);
+            Assert.True(crashing.Ended);
+        }
+
+        if (!configured)
+        {
+            // Between two sessions a person answers stay, taken before the next session's start, and the process ends
+            // before that start makes its writes.
+            var (_, _, between) = Records("r1", temp.Path, definition);
+
+            using (between)
+            {
+                var answering = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), inputs: inputs, records: between, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), workflowFile: workflowFile, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+                var asked = Assert.Single(answering.OpenQuestions);
+                Assert.Equal(("openAgents", "planning.planupdate"), (asked.Kind, asked.Instance));
+                Assert.True(answering.TryAnswer(asked.Id, "stay", null, out var problem, "answer-orchestrator"), problem);
+            }
+        }
+
+        // What either way of giving the stay leaves on disk, where only the question says the then was decided: the stay
+        // given, the redirect it gave up gone, the update under way and its entry naming no then.
+        var stayed = Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents");
+        Assert.Equal(("answered", "stay"), (stayed.State, stayed.Answers[^1].Answer));
+        Assert.Empty(harness.OrchestrationStore.ReadFlow(layout)!.Redirects ?? []);
+        Assert.Equal((FlowUpdateStates.UnderWay, (string?)null), (harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().State, harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single().Then));
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = TestAdvice.Coordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), inputs: inputs, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition), workflowFile: workflowFile, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            Assert.Equal(FlowRunStatus.Done, (await resumed.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        // The plan stood as the stay left it, the update done naming its then, and nothing asked of the agents again.
+        var done = harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates.Single();
+        Assert.Equal((FlowUpdateStates.Done, "check"), (done.State, done.Then));
+        Assert.Equal(
+            [stayed.Id],
+            harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions.Where(question => question.Kind == "openAgents").Select(question => question.Id));
+        Assert.DoesNotContain(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.LeftBy == "planning.planupdate");
     }
 
     /// <summary>
