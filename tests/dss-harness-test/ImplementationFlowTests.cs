@@ -532,7 +532,12 @@ public sealed class ImplementationFlowTests
             await Task.Delay(Poll, Token);
         }
 
-        Assert.True(done(), $"{said?.Invoke() ?? "what was waited for did not happen"} within {Bound}");
+        // The diagnostic is read only once the wait has failed: read on every wait, it reads the run's files while the
+        // engine writes them and can fail a wait that was met.
+        if (!done())
+        {
+            Assert.Fail($"{said?.Invoke() ?? "what was waited for did not happen"} within {Bound}");
+        }
     }
 
     /// <summary>The scripted agents: every request kept, answering by the definition each step works as.</summary>
