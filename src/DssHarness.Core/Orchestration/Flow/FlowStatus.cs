@@ -451,29 +451,22 @@ public static class FlowStatus
     internal static bool HasEnded(string status)
         => status is nameof(FlowRunStatus.Done) or nameof(FlowRunStatus.Failed);
 
-    /// <summary>The states an instance has not ended in: a stopped one among them, which runs again at the resume.</summary>
-    private static readonly IReadOnlyList<string> LeftStates =
-        [nameof(FlowInstanceState.NotStarted), nameof(FlowInstanceState.Running), nameof(FlowInstanceState.Paused), nameof(FlowInstanceState.Stopped)];
-
-    /// <summary>The states an instance has ended in.</summary>
-    private static readonly IReadOnlyList<string> EndedStates =
-        [nameof(FlowInstanceState.Done), nameof(FlowInstanceState.Failed), nameof(FlowInstanceState.Skipped), nameof(FlowInstanceState.NotRun)];
-
     /// <summary>
-    /// Whether <paramref name="step"/> has not ended: one in a state an instance has not ended in, save a visit a plan
-    /// update ended - stopped for the update, its work done again or taken back in the instance visited in its place -
-    /// which no session runs again, and which has ended. The one rule what is left, what waits and what is done read.
+    /// Whether <paramref name="step"/> has not ended - not started, in flight, paused, or stopped by a pause or a stop, which
+    /// runs it again at the resume; never a visit a plan update ended, its work done again or taken back in the instance
+    /// visited in its place - by the engine's own rule of what is left of a run (<see cref="FlowInstance.IsLeft"/>), read of
+    /// the step's record. The one rule what is left, what waits and what is done read.
     /// </summary>
     private static bool IsLeft(FlowStepRecord step)
-        => LeftStates.Contains(step.State) && !EndedForAnUpdate(step);
+        => StateOf(step) is { } state && FlowInstance.IsLeft(state, step.EndedFor);
 
-    /// <summary>Whether <paramref name="step"/> has ended: in a state an instance has ended in, or a visit a plan update ended.</summary>
+    /// <summary>Whether <paramref name="step"/> has ended: done, failed, skipped, never run, or a visit a plan update ended - every state that is not left (<see cref="IsLeft"/>).</summary>
     private static bool IsEnded(FlowStepRecord step)
-        => EndedStates.Contains(step.State) || EndedForAnUpdate(step);
+        => StateOf(step) is { } state && !FlowInstance.IsLeft(state, step.EndedFor);
 
-    /// <summary>Whether <paramref name="step"/> is a visit a plan update ended: stopped for the update, never run again - the engine's own rule (<see cref="FlowInstance.IsStoppedForAnUpdate"/>), read of the step's record.</summary>
-    private static bool EndedForAnUpdate(FlowStepRecord step)
-        => Enum.TryParse<FlowInstanceState>(step.State, out var state) && FlowInstance.IsStoppedForAnUpdate(state, step.EndedFor);
+    /// <summary>The state <paramref name="step"/>'s record names, by the one strict reader of the engine's names (<see cref="FlowRecordNames"/>); null where it names none.</summary>
+    private static FlowInstanceState? StateOf(FlowStepRecord step)
+        => FlowRecordNames.Is<FlowInstanceState>(step.State) ? FlowRecordNames.Of<FlowInstanceState>(step.State) : null;
 
     /// <summary>The rows under the header: each label once, its lines under it, the rest indented to the label's width.</summary>
     private static IReadOnlyList<string> Rows(IReadOnlyList<(string Label, IReadOnlyList<string> Lines)> rows)

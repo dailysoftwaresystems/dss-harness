@@ -983,7 +983,11 @@ cancelled and what it left running - with no end time while a step still runs, w
 stop makes the run's status, and never saying the run is running where no step runs: a group stands
 open over its members, and one whose member waits on a question runs nothing. A session that ends in
 order records the standing it ends with - paused on a question asked inside a group as well - and a
-run is never said done while a step of it is left to start. A person answers a question
+run is never said done while a step of it is left to start or to run again - one a pause or a stop
+stopped, which runs again at the resume - or a failure or a handler's raise is owed to its next
+session: not by a session, and not by the engine that takes the run up before its session, so an
+amendment queued, or an answer changed, between two sessions is never refused as given to a run
+with nothing left to go back to. A person answers a question
 recommended: `answer-orchestrator` to a question still owing its recommendation that no advisor seeks
 now - between sessions, or while a pause defers it - is refused (13), nothing answered, and `abort` is
 taken; `resume-orchestrator` seeks it first. The run's report, `ask-orchestrator-status` and every refusal of an
