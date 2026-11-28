@@ -552,6 +552,13 @@ public sealed class FlowCoordinator
     /// <summary>Held while a pause is asked for, so two asks at once merge into one request and neither is lost.</summary>
     private readonly Lock _pauseAsks = new();
 
+    /// <summary>
+    /// Held while the run's records are written - a write made at once, the hold made, and the start's mark taken back as a
+    /// stop or a pause is asked of it from another thread (<see cref="TakeBackTheStartsMark"/>) - so the mark's taking back,
+    /// which reads the run's state and writes it again, never meets a write half made nor writes over one made since.
+    /// </summary>
+    private readonly Lock _writing = new();
+
     /// <summary>Every agent name the session gave, a spent one's among them: never given again, though no step holds it any more.</summary>
     private readonly HashSet<string> _agentNamesGiven = new(StringComparer.Ordinal);
 
@@ -1034,6 +1041,9 @@ public sealed class FlowCoordinator
                 : new FlowPauseRequest(cause, all);
         }
 
+        // A start under way refuses from here on what it is handed for the advice it would have sought, and the run's
+        // state says so at once.
+        TakeBackTheStartsMark();
         WakeTheLoop();
     }
 
@@ -1106,8 +1116,35 @@ public sealed class FlowCoordinator
         }
 
         DropPauseRequest();
+        TakeBackTheStartsMark();
         CancelHandoffTurns();
         WakeTheLoop();
+    }
+
+    /// <summary>
+    /// Takes the mark of this engine's start back from the run's state at once, where a stop or a pause is asked of the
+    /// start under way (<see cref="StartUnderWay"/>): from that moment the start refuses an answer handed to it to a question
+    /// owing the recommendation it would have sought (<see cref="StartTakesAnswers"/>), so the run's state never says the
+    /// engine is starting past it - neither the claim's mark (<see cref="FlowRunOwner.Claim"/>) nor a write the start made at
+    /// once before it, which nothing the start holds would reach until the hold is made, and no held write made after it
+    /// either (<see cref="AsWritten"/>). Written outside the hold, as a session's release takes the mark back
+    /// (<see cref="IFlowRecords.Unmark"/>), and inside the one section every write of the run's records is made in, so it
+    /// never meets one half made nor writes over one made since.
+    /// </summary>
+    private void TakeBackTheStartsMark()
+    {
+        if (_records is null)
+        {
+            return;
+        }
+
+        lock (_writing)
+        {
+            if (StartUnderWay)
+            {
+                _records.Unmark();
+            }
+        }
     }
 
     /// <summary>
@@ -2835,11 +2872,18 @@ public sealed class FlowCoordinator
     /// (<see cref="StartUnderWay"/>) and goes on to seek them - no stop asked of it, after which it seeks none, and no pause,
     /// which defers each (<see cref="SeekAdvice"/>). The one owner of both what an answer handed to the start meets
     /// (<see cref="WaitsForTheStartsAdvice"/>) and whether the run's state says its engine is starting
-    /// (<see cref="FlowFile.Starting"/>, written by every write the start makes while it holds), so a reader names the answer
-    /// taken as the start seeks its recommendation (<see cref="FlowAnswerRules.NextStepOf"/>) exactly where the start takes
-    /// it - never where a stop or a pause asked of the start will refuse it.
+    /// (<see cref="FlowFile.Starting"/>, written by every write the start makes while it holds, and taken back at once where a
+    /// stop or a pause is asked of it - <see cref="TakeBackTheStartsMark"/>), so a reader names the answer taken as the start
+    /// seeks its recommendation (<see cref="FlowAnswerRules.NextStepOf"/>) exactly where the start takes it - never where a
+    /// stop or a pause asked of the start will refuse it.
     /// </summary>
-    private bool StartTakesAnswers => StartUnderWay && !_hardStop && _stoppingSince is null && !_pausing && _pauseRequest is null;
+    private bool StartTakesAnswers => StartUnderWay && !AskedToStopOrPause;
+
+    /// <summary>
+    /// Whether a stop or a pause is asked of the run - its hard stop, a stop applied, a pause under way, or one asked the loop
+    /// has not taken yet - after which a start seeks no advice for what it is handed (<see cref="StartTakesAnswers"/>).
+    /// </summary>
+    private bool AskedToStopOrPause => _hardStop || _stoppingSince is not null || _pausing || _pauseRequest is not null;
 
     /// <summary>
     /// Whether <paramref name="offer"/>, an answer handed over now, waits for the advice the session's start seeks
@@ -11077,7 +11121,7 @@ public sealed class FlowCoordinator
 
         var snapshot = Snapshot();
         var (id, state, attempt) = (instance.Id, instance.State.ToString(), instance.Attempt);
-        Put(records => records.Write(FlowChangeKind.Step, snapshot, id, state, state, attempt));
+        Put(records => records.Write(FlowChangeKind.Step, AsWritten(snapshot), id, state, state, attempt));
     }
 
     /// <summary>
@@ -15668,8 +15712,17 @@ public sealed class FlowCoordinator
 
         var snapshot = Snapshot();
         var id = instance?.Id;
-        Put(records => records.Write(kind, snapshot, id, from?.ToString(), to?.ToString(), attempt, detail));
+        Put(records => records.Write(kind, AsWritten(snapshot), id, from?.ToString(), to?.ToString(), attempt, detail));
     }
+
+    /// <summary>
+    /// <paramref name="snapshot"/> as it is written now: saying the engine is starting only while the start still takes what
+    /// it is handed - a write a start held from before a stop or a pause was asked of it, made once the hold is, says it is
+    /// not, as the run's state has said from the moment that was asked (<see cref="TakeBackTheStartsMark"/>). Everything else
+    /// is the run as it stood when the change was taken.
+    /// </summary>
+    private FlowSnapshot AsWritten(FlowSnapshot snapshot)
+        => snapshot.Starting && AskedToStopOrPause ? snapshot with { Starting = false } : snapshot;
 
     /// <summary>
     /// Every write of the run's records goes through here: made at once, or - while a session's start is held - kept,
@@ -15686,7 +15739,10 @@ public sealed class FlowCoordinator
             return;
         }
 
-        write(_records!);
+        lock (_writing)
+        {
+            write(_records!);
+        }
     }
 
     /// <summary>
@@ -15704,16 +15760,19 @@ public sealed class FlowCoordinator
         _held = null;
         var made = 0;
 
-        try
+        lock (_writing)
         {
-            for (; made < held.Count; made++)
+            try
             {
-                held[made].Write(_records!);
+                for (; made < held.Count; made++)
+                {
+                    held[made].Write(_records!);
+                }
             }
-        }
-        finally
-        {
-            Drop(held.Skip(made));
+            finally
+            {
+                Drop(held.Skip(made));
+            }
         }
     }
 

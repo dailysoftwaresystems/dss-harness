@@ -68,6 +68,18 @@ public interface IFlowRecords
     void Flush()
     {
     }
+
+    /// <summary>
+    /// Takes the mark of the engine's start back from the run's state where it still holds it (<see cref="FlowFile.Starting"/>),
+    /// at once and outside any hold: a stop or a pause is asked of the start under way, which from then on refuses an answer
+    /// handed to it to a question owing the recommendation it would have sought, so no reader is to name that answer taken
+    /// as the start seeks it. Nothing else of the state changes, and nothing is thrown at whoever asked: what cannot be
+    /// written is said, and the start's next write says the engine is not starting. A run held in memory alone has no state
+    /// to take it back from.
+    /// </summary>
+    void Unmark()
+    {
+    }
 }
 
 /// <summary>
@@ -526,6 +538,19 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         if (_store.ReadAffectedTests(_layout) is null)
         {
             _store.WriteAffectedTests(_layout, new FlowAffectedTestsFile(1, _context.Run, _clock.GetUtcNow(), []));
+        }
+    }
+
+    /// <inheritdoc/>
+    void IFlowRecords.Unmark()
+    {
+        try
+        {
+            _store.Unmark(_layout);
+        }
+        catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+        {
+            _warn?.Invoke($"'{_layout.FlowFile}' could not be told the engine's start no longer takes answers, a stop or a pause asked of it: {ex.Message.TrimEnd('.')}; the start's next write tells it");
         }
     }
 

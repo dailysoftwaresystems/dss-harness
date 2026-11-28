@@ -4731,7 +4731,9 @@ other state - one owner, so the status, the report and the engine's refusal agre
 erasing the run's history - until the start's own end, a `startEnded` change written once the start has made what it
 held, sought every recommendation the run owes and weighed what waited for them, so a session that then writes nothing
 for as long as an advice or room takes never leaves the state saying it starts; or until the start takes an abort, which
-is the stop it applies at once (`Carry`, `stoppingSince` from the abort's own record on). The order of the reads is the
+is the stop it applies at once (`Carry`, `stoppingSince` from the abort's own record on); or until a stop or a pause is
+asked of the start, which takes the mark back from `flow.json` at once, outside its held writes, and none of those says
+`starting` once it is made (`FlowCoordinator.TakeBackTheStartsMark`, `FlowCoordinator.AsWritten`). The order of the reads is the
 rule's too: every reader of a run's engine reads its owner, then `flow.json`, then its owner again, and judges the state
 only beside an owner that stood across its read, reading again where it changed (`OrchestratorService.EngineOf`, the one
 path `list-orchestrator`, the report, the status and the advisor's facts take); and a session's release removes the owner
@@ -5360,7 +5362,13 @@ the start seeks, is weighed once that advice is under way (`FlowCoordinator.Weig
 the asking; only a start that seeks none for it - a stop asked as it began, after which it seeks none, or a pause, which
 defers it - refuses it, naming the resume once the engine has gone or the pause once it is complete. Whether the start
 takes such an answer is one rule (`FlowCoordinator.StartTakesAnswers`), which also decides whether the start's writes
-say `starting`. What became of a waiting answer is kept with what it is settled with, its why among it (`FlowWeighed`),
+say `starting` - each as it is made, so a write the start held from before a stop or a pause was asked of it says it is
+not once the hold is made (`FlowCoordinator.AsWritten`) - and a stop or a pause asked of a start under way takes the
+claim's mark back from `flow.json` at once, outside the hold, as a release does (`FlowCoordinator.TakeBackTheStartsMark`,
+`IFlowRecords.Unmark`, `OrchestrationStore.Unmark`, the one write of it), inside the one section every write of the run's
+records is made in, so it never meets one half made: the run's state never says `starting` once the start no longer
+takes such an answer, though the start writes nothing else until its hold is made. What became of a waiting answer is
+kept with what it is settled with, its why among it (`FlowWeighed`),
 and said once the start has weighed it: `answer-orchestrator`'s own answer so refused is the command's refusal (13) with
 the run's why, read from `questions.json` under its entry's id - whatever the session it began went on to do, its own
 end, line and code, said after it and kept beside the command's in `--json`'s `session` (`FlowRunResult.Session`) - by

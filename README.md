@@ -999,9 +999,11 @@ a start that seeks none for it - a stop or a pause asked as it began - refuses i
 start has weighed it: `answer-orchestrator`'s own answer so refused is the command's refusal (13) with the run's why,
 whatever the session went on to do, as an answer any session refused is - on every exit of the session, a refusal it
 meets after its start among them, the session's own end said after it and kept in `--json`'s `session` - one taken is
-said taken, one never settled is said to stay in `inbox.json`, and an inbox entry's line says it was taken or why not. A live engine's state says `starting` only while its start takes such an answer - no stop or pause asked of it -
-until the start's own end is written, once it has sought every recommendation the run owes; a reader judges that state
-only beside an owner it found live before reading it and still after, and a session's release removes its owner before
+said taken, one never settled is said to stay in `inbox.json`, and an inbox entry's line says it was taken or why not. A
+live engine's state says `starting` only while its start takes such an answer - no stop or pause asked of it: one asked
+takes the claim's mark back from `flow.json` at once, outside the start's held writes, none of which says `starting`
+once it is made - until the start's own end is written, once it has sought every recommendation the run owes; a reader
+judges that state only beside an owner it found live before reading it and still after, and a session's release removes its owner before
 it takes its start's mark back. The budget's own question is recommended too: once the
 budget's pause is complete, before the session ends, the advisor is asked of the run as a whole - its
 records under `steps/run/advice/<n>/`, `{question.step}` reading `run`, `{question.record}` the

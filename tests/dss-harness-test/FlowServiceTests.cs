@@ -1973,6 +1973,67 @@ public sealed class FlowServiceTests
         Assert.Equal(((DateTimeOffset?)null, (FlowPauseRecord?)null), (flow.StoppingSince, flow.Pause));
     }
 
+    /// <summary>The next step a question owing its recommendation is said to take where the engine is stopping: the resume once it has gone - the report's wording and the status's.</summary>
+    private static readonly (string Report, string Status) ResumeOnceGone = (
+        "its recommendation is still owed - the stop under way seeks none, and resume-orchestrator r1 seeks it first once the engine has gone; answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now",
+        "its recommendation is still owed - the stop under way seeks none, and 'dssharness resume-orchestrator r1' seeks it first once the engine has gone; answer with 'dssharness answer-orchestrator r1 <answer> --question q1' then, and 'dssharness answer-orchestrator r1 abort --question q1' is taken now");
+
+    /// <summary>The next step a question owing its recommendation is said to take where the engine's pause defers it: the pause's advice, then its answer - the report's wording and the status's.</summary>
+    private static readonly (string Report, string Status) AfterThePause = (
+        "its recommendation is still owed - the run seeks it once its pause is complete; answer with answer-orchestrator r1 <answer> --question q1 then, and answer-orchestrator r1 abort --question q1 is taken now",
+        "its recommendation is still owed - the run seeks it once its pause is complete; answer with 'dssharness answer-orchestrator r1 <answer> --question q1' then, and 'dssharness answer-orchestrator r1 abort --question q1' is taken now");
+
+    /// <summary>
+    /// A stop or a pause asked as a resume's start begins - <c>stop-orchestrator</c>'s or <c>pause-orchestrator</c>'s, read
+    /// by its first poll before anything the start holds is written - is one that start refuses an answer handed to it
+    /// over, and the claim's mark of the start is taken back from the run's state at once: while the start goes on, the
+    /// run's state never says the engine is starting, and the status and the report name the step the stop or the pause
+    /// leaves the question - never its answer taken now, which the start would refuse.
+    /// </summary>
+    /// <param name="stop">Whether a stop is asked, after a session that ended stopped past its pause; else a pause, after one whose pause was complete.</param>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AStopOrAPauseAskedAsAResumesStartBegins_TakesTheClaimsMarkBackAtOnce_SoNoReaderNamesTheAnswerTakenNow(bool stop)
+    {
+        var (repository, runner) = await RepositoryAsync(WaitedAt);
+        using var disposed = repository;
+
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, fileSystem: files);
+        var store = repository.Harness.OrchestrationStore;
+
+        Assert.Equal(FlowExit.Paused, (await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
+
+        // The session before ended stopped once its pause was complete, or paused, the question's recommendation deferred.
+        var run = RunOf(repository);
+        var at = DateTimeOffset.UtcNow;
+        StoppedPastItsPause(store, run);
+
+        if (!stop)
+        {
+            store.WriteFlow(run, store.ReadFlow(run)! with { StoppingSince = null });
+        }
+
+        // As the resume looks at its inbox - holding the run, its state taken up - the stop or the pause is asked, and the
+        // run is read as the first poll, the request taken, reads the inbox.
+        (bool? Starting, (string Report, string Status, string Header) Next)? seen = null;
+
+        files.AfterLookingAt(run.InboxFile, () =>
+        {
+            store.WriteStopFile(run, stop ? new FlowStopFile(1, Stop: new FlowStopStop(at)) : new FlowStopFile(1, Pause: new FlowStopPause(All: false, at)));
+            files.AfterLookingAt(run.InboxFile, () => seen = (store.ReadFlow(run)!.Starting, NextStepOfQ1Async(service, repository).GetAwaiter().GetResult()));
+        });
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Cancelled, resumed.ExitCode);
+        Assert.NotNull(seen);
+        Assert.Null(seen.Value.Starting);
+        Assert.Equal(stop ? ResumeOnceGone : AfterThePause, (seen.Value.Next.Report, seen.Value.Next.Status));
+        Assert.DoesNotContain(" is starting", seen.Value.Next.Header, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// An answer a past engine left in the inbox, to a question a crash left with its recommendation sought, is met by the
     /// next person's resume as the session begins: it waits for the recommendation the start seeks first - said so - and

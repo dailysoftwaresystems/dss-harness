@@ -441,7 +441,8 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
     /// what the session before left the state saying of its engine - a stop it ended with, the pause it was left under -
     /// stops being read as the live owner's, so a reader that finds the owner live - and reads the state after it, as every
     /// reader does (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout)"/>) - reads
-    /// the engine as starting until the start's own writes say otherwise. Everything else the state says stands as written,
+    /// the engine as starting until the start's own writes say otherwise, or a stop or a pause asked of the start takes the
+    /// mark back at once (<see cref="IFlowRecords.Unmark"/>). Everything else the state says stands as written,
     /// and a run whose state is not there yet - one no session has written - is left so; a state that does not read refuses
     /// the claim, the owner file left as it was.
     /// </summary>
@@ -497,9 +498,9 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
         {
             _ = _store.AcrossRuns(layout, () =>
             {
-                if (_store.ReadOwner(layout) is null && _store.ReadFlow(layout) is { Starting: true } marked)
+                if (_store.ReadOwner(layout) is null)
                 {
-                    _store.WriteFlow(layout, marked with { Starting = null });
+                    _store.Unmark(layout);
                 }
 
                 return true;
