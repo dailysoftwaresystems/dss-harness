@@ -1825,7 +1825,7 @@ public sealed class FlowHandlerTests
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            $"What a visit of the recovery that ended done puts right runs again as decided from the records, once: the visit's done record starts the list of what it sent the run back to (`{JsonNamingPolicy.CamelCase.ConvertName(nameof(FlowStepRecord.Reruns))}`), and each redirect it decides puts the step in that list in the redirect's own write - with the question the redirect asks where it would leave an agent open, so no crash and no answer taken at once loses the question - and the rerun is owed until that record names it; for a handler, until a visit is raised again for the same ending in its place. A crash between the visit's done record and the rerun's leaves it to the resume, which makes it once; whatever becomes of the redirect after - made, given up by a `stay`, or dropped, its question withdrawn, with a work item a plan update brings to rest (`FlowCoordinator.DropWhatItOwes`) - no session decides it again, for that one fact is what is read. A visit an older build recorded names no list: that build decided its redirect in the write after the visit's done record and never again at a resume - and a handler's not at all, for no redirect resets a handler - so whether it decided is read from what that redirect left in the records: the redirect still owed, a question it asked of the agents it would leave open - which a `stay` that gave it up answered - or the step inside a work item a plan update is bringing or brought to rest, which dropped it; one made left the step, which no rerun goes back over. None of those is the crash between the two writes, which leaves the rerun undecided, and the resume sends the run back once. Whether a rerun is decided has that one owner, which the rerun of a failed step and of a reporter both ask (`FlowCoordinator.RerunDecided`). A reporter of an issue a visit fixed runs again by the same fact of the visit that fixed it last, once - a `stay` an older build's visit was given is never asked again when another triage of the reporter ends - and never into a work item a plan update is bringing or brought to rest, whose work is done again in the item visited in its place (`FlowCoordinator.RerunOwed`, `FlowCoordinator.RunTheReporterAgain`, `FlowCoordinator.GoOnFromTheRecovery`). An answer the records hold and the session never carried out - a `stay` written before a crash - finds its redirect's question restored with the redirect, and is carried out on it at the resume. A redirect and the question it asks are one fact: a redirect dropped - with a work item a plan update brings to rest, or with a visit a redirect leaves, whose redirects still owed go with it, never left asking a question withdrawn (`FlowCoordinator.Leave`) - leaves the run's records in one write before its question is withdrawn (`FlowCoordinator.DropRedirectsOf`, the one owner of dropping a redirect), so a crash between the two leaves a question that asks of no owed redirect, which the resume withdraws; a redirect whose record names a question withdrawn - an older build withdrew the question before it wrote the drop, or left the redirect of a visit a redirect left owed - is never made; and one whose record names no question in play while the question its handler asked for it is open - the process ended between that question's write and the record that would name it: an older build's first ask, which it named only in the write after, or a question asked again after `retry` - waits on that question. A handler group made again for a retry is made before its failure stops standing - a crash between the two writes leaves that failure beside the new visit, which is the retry made - while a group the schedule draws says its retry in the very write that settles its failure (`{JsonNamingPolicy.CamelCase.ConvertName(nameof(FlowStepRecord.Retried))}`): the schedule, the one owner of drawing a group - its dependencies, its `when`, what holds it back - draws the new visit from that record, so a crash before the draw leaves the retry owed, which the resume's schedule draws, never a failure gone with no new visit owed for it; and a visit of the recovery answered `retry` is taken again only while it is still the newest taken for what it puts right (`FlowCoordinator.Retry`). A handler's visit a raise made that a failure's `stop` left NotRun before it started - the run ended before it - is put back by the resume that goes on with no failure standing to stop it, not started again under the same id and raised by the same ending, where that ending still waits on it: the schedule never draws a handler, and the visit never ran, held nothing and wrote nothing but its place in that ending (`FlowCoordinator.RedrawWhatTheStopLeft`).",
+            $"What a visit of the recovery that ended done puts right runs again as decided from the records, once: the visit's done record starts the list of what it sent the run back to (`{JsonNamingPolicy.CamelCase.ConvertName(nameof(FlowStepRecord.Reruns))}`), and each redirect it decides puts the step in that list in the redirect's own write - with the question the redirect asks where it would leave an agent open, so no crash and no answer taken at once loses the question - and the rerun is owed until that record names it; for a handler, until a visit is raised again for the same ending in its place. A crash between the visit's done record and the rerun's leaves it to the resume, which makes it once; whatever becomes of the redirect after - made, given up by a `stay`, or dropped, its question withdrawn, with a work item a plan update brings to rest (`FlowCoordinator.DropWhatItOwes`) - no session decides it again, for that one fact is what is read. A visit an older build recorded names no list: that build decided its redirect in the write after the visit's done record and never again at a resume - and a handler's not at all, for no redirect resets a handler - so whether it decided is read from what that redirect left in the records: the redirect still owed, a question it asked of the agents it would leave open - which a `stay` that gave it up answered - or the step inside a work item a plan update is bringing or brought to rest, which dropped it; one made left the step, which no rerun goes back over. None of those is the crash between the two writes, which leaves the rerun undecided, and the resume sends the run back once. The visit's own record tells those shapes apart, never a question's state: that build wrote the question a redirect asks before the redirect, so a crash between the two leaves the question open naming the visit and no redirect owed, and the resume, withdrawing it as one that asks of nothing, starts the visit's list, empty - written at the session's start before the withdrawal (`FlowCoordinator.WriteTheListsStarted`) - so the rerun is decided again, asking anew, never read as decided by the question withdrawn; and a drop of such a visit's redirect starts its list in the drop's own write, naming what the redirect sent back. Nothing is sent back into a work item a plan update is bringing or brought to rest, whichever way the visit's record says what it decided. Whether a rerun is decided has that one owner, which the rerun of a failed step and of a reporter both ask (`FlowCoordinator.RerunDecided`). A reporter of an issue a visit fixed runs again by the same fact of the visit that fixed it last, once - a `stay` an older build's visit was given is never asked again when another triage of the reporter ends - and never into a work item a plan update is bringing or brought to rest, whose work is done again in the item visited in its place (`FlowCoordinator.RerunOwed`, `FlowCoordinator.RunTheReporterAgain`, `FlowCoordinator.GoOnFromTheRecovery`). An answer the records hold and the session never carried out - a `stay` written before a crash - finds its redirect's question restored with the redirect, and is carried out on it at the resume. A redirect and the question it asks are one fact: a redirect dropped - with a work item a plan update brings to rest, or with a visit a redirect leaves, whose redirects still owed go with it, never left asking a question withdrawn (`FlowCoordinator.Leave`) - leaves the run's records in one write before its question is withdrawn (`FlowCoordinator.DropRedirectsOf`, the one owner of dropping a redirect), so a crash between the two leaves a question that asks of no owed redirect, which the resume withdraws; a redirect whose record names a question withdrawn - an older build withdrew the question before it wrote the drop, or left the redirect of a visit a redirect left owed - is never made; and one whose record names no question in play while the question its handler asked for it is open - the process ended between that question's write and the record that would name it: an older build's first ask, which it named only in the write after, or a question asked again after `retry` - waits on that question. A handler group made again for a retry is made before its failure stops standing - a crash between the two writes leaves that failure beside the new visit, which is the retry made - while a group the schedule draws says its retry in the very write that settles its failure (`{JsonNamingPolicy.CamelCase.ConvertName(nameof(FlowStepRecord.Retried))}`): the schedule, the one owner of drawing a group - its dependencies, its `when`, what holds it back - draws the new visit from that record, so a crash before the draw leaves the retry owed, which the resume's schedule draws, never a failure gone with no new visit owed for it; and a visit of the recovery answered `retry` is taken again only while it is still the newest taken for what it puts right (`FlowCoordinator.Retry`). A handler's visit a raise made that a failure's `stop` left NotRun before it started - the run ended before it - is put back by the resume that goes on with no failure standing to stop it, not started again under the same id and raised by the same ending, where that ending still waits on it: the schedule never draws a handler, and the visit never ran, held nothing and wrote nothing but its place in that ending (`FlowCoordinator.RedrawWhatTheStopLeft`).",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -3157,6 +3157,104 @@ public sealed class FlowHandlerRecordsTests
         }
 
         Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents");
+    }
+
+    /// <summary>
+    /// A redirect a visit of the recovery an older build recorded decided asks of the agent it would leave open, and that
+    /// build wrote the question before the redirect that names it: the process ended between the two leaves the visit done
+    /// keeping no list of reruns, the question open naming the visit, and no redirect owed. The question asks of nothing
+    /// the run owes and the resume withdraws it, and the visit's own record tells that shape apart, never the question's
+    /// state: the resume starts the visit's list, written before the withdrawal, so the rerun reads as undecided - never as
+    /// decided by the question it withdrew, the step left failed and what depends on it never run - and is decided again,
+    /// asking anew; a stay given to that question lets what depends on the step run. A crash between the list's write and
+    /// the withdrawal's leaves the next resume to read the same.
+    /// </summary>
+    /// <param name="crashAtTheWithdrawal">Whether the session that takes the run up ends at the write that withdraws the question, and another takes it up after.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnOlderBuildsRedirectWhoseQuestionWasWrittenFirst_IsDecidedAgain_NeverReadAsDecidedByTheQuestionWithdrawn(bool crashAtTheWithdrawal)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: round
+                onFailure: recover
+                steps:
+                  - name: worker
+                    type: create-agent
+                    agent: maker
+                  - name: check
+                    type: orient
+                    dependsOn: [worker]
+              - name: after
+                type: orient
+                dependsOn: [round]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new Runner().On("check", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            // The process ends at the write of the question, before the record of the redirect that asks it.
+            var crashing = new CrashingRecords(records, _ => false, picksQuestions: questions => questions.Any(question => question.Kind == "openAgents"));
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(crashing.Ended);
+        }
+
+        // The records as the older build left them: the visit's record keeps no list of reruns, the question is open, and
+        // no redirect is owed.
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        harness.OrchestrationStore.WriteFlow(layout, flow with { Steps = [.. flow.Steps.Select(step => step with { Reruns = null })] });
+        harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile("recover"), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("recover"))! with { Reruns = null });
+        Assert.True(flow.Redirects is null or []);
+        var first = Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents");
+        Assert.Equal("open", first.State);
+
+        if (crashAtTheWithdrawal)
+        {
+            using var crashed = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock);
+            var crashing = new CrashingRecords(crashed, _ => false, picksQuestions: questions => questions.Any(question => question.Id == first.Id && question.State == "withdrawn"));
+            _ = await TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, records: crashing, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition)).RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(crashing.Ended);
+
+            // The visit's list was written before the question's withdrawal, which the process ended at.
+            Assert.Empty(Assert.IsAssignableFrom<IReadOnlyList<string>>(harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("recover"))!.Reruns));
+        }
+
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition));
+
+            // The rerun is decided again: the redirect back to the group asks anew, the question the process cut off withdrawn.
+            var paused = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            var asked = Assert.Single(resumed.OpenQuestions);
+            Assert.Equal(("openAgents", "recover"), (asked.Kind, asked.Instance));
+            Assert.NotEqual(first.Id, asked.Id);
+            Assert.True(resumed.TryAnswer(asked.Id, "stay", out var problem), problem);
+
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+            Assert.Equal(["after"], again.Started);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "round+2");
+        }
+
+        // The question cut off stands withdrawn beside the one the rerun asked, and the visit's list says the rerun decided.
+        Assert.Equal(
+            [(true, "withdrawn"), (false, "answered")],
+            harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions.Where(question => question.Kind == "openAgents").Select(question => (question.Id == first.Id, question.State)));
+        Assert.Equal<IEnumerable<string>>(["round"], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("recover"))!.Reruns!);
     }
 
     /// <summary>

@@ -5430,7 +5430,14 @@ done record and never again at a resume - and a handler's not at all, for no red
 decided is read from what that redirect left in the records: the redirect still owed, a question it asked of the agents
 it would leave open - which a `stay` that gave it up answered - or the step inside a work item a plan update is bringing
 or brought to rest, which dropped it; one made left the step, which no rerun goes back over. None of those is the crash
-between the two writes, which leaves the rerun undecided, and the resume sends the run back once. Whether a rerun is decided has that one owner, which the rerun of a failed step and of a
+between the two writes, which leaves the rerun undecided, and the resume sends the run back once. The visit's own record
+tells those shapes apart, never a question's state: that build wrote the question a redirect asks before the redirect,
+so a crash between the two leaves the question open naming the visit and no redirect owed, and the resume, withdrawing
+it as one that asks of nothing, starts the visit's list, empty - written at the session's start before the withdrawal
+(`FlowCoordinator.WriteTheListsStarted`) - so the rerun is decided again, asking anew, never read as decided by the
+question withdrawn; and a drop of such a visit's redirect starts its list in the drop's own write, naming what the
+redirect sent back. Nothing is sent back into a work item a plan update is bringing or brought to rest, whichever way
+the visit's record says what it decided. Whether a rerun is decided has that one owner, which the rerun of a failed step and of a
 reporter both ask (`FlowCoordinator.RerunDecided`). A reporter of an issue a visit fixed runs again by the same fact of
 the visit that fixed it last, once - a `stay` an older build's visit was given is never asked again when another triage
 of the reporter ends - and never into a work item a plan update is bringing or brought to rest, whose work is done again

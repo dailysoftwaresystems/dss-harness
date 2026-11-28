@@ -969,6 +969,14 @@ public sealed class FlowCoordinator
     /// </summary>
     private readonly List<FlowInstance> _attemptsRead = [];
 
+    /// <summary>
+    /// The visits of the recovery an older build recorded whose list of reruns the replay started, empty, as it withdrew a
+    /// question of theirs that asks of no redirect the run owes (<see cref="Replay"/>): each is written into its own record
+    /// at the session's start, with the attempts read and before that withdrawal (<see cref="WriteTheListsStarted"/>), so
+    /// no crash leaves the question withdrawn beside a visit keeping no list, which would read the rerun as decided.
+    /// </summary>
+    private readonly List<FlowInstance> _listsStarted = [];
+
     /// <summary>The redirects the run owes, in the order they were decided: each is made in its turn, once nothing it resets is running.</summary>
     private readonly List<PendingRedirect> _redirects = [];
 
@@ -1876,11 +1884,12 @@ public sealed class FlowCoordinator
             // The attempt a raise an older build recorded answered, read as the resume took the run up, is the first thing
             // the start writes - before anything it decides rewrites the raise's source.
             WriteTheAttemptsRead();
+            WriteTheListsStarted();
 
             if (_withdrawnByTheReplay)
             {
                 // A question the replay found asking of no redirect the run owes is withdrawn on disk too, as the drop the
-                // process ended in would have written it.
+                // process ended in would have written it - after the list of reruns it started for an older build's visit.
                 _withdrawnByTheReplay = false;
                 WriteQuestions();
             }
@@ -1972,6 +1981,7 @@ public sealed class FlowCoordinator
             _starting = false;
             MakeTheHold();
             _attemptsRead.Clear();
+            _listsStarted.Clear();
 
             // The advice each open question still owes is sought once it is known the session goes on - a question
             // owing one is what keeps a resume beside it from being refused above, and a resume refused there owes
@@ -12652,6 +12662,15 @@ public sealed class FlowCoordinator
             handler.WaitingQuestion = null;
         }
 
+        if (IsRecovery(handler) && handler.Reruns is null)
+        {
+            // A visit of the recovery an older build recorded keeps no list of what it sent the run back to: the drop's own
+            // write starts it, naming what each redirect dropped sent back, so the rerun reads as decided from the visit's
+            // record alone - never from the question withdrawn after, which a crash may leave open asking of nothing, and a
+            // resume withdraws as one whose redirect was never written (Replay).
+            handler.Reruns = [.. dropped.Select(SentBackBy).OfType<FlowInstance>().Select(sent => sent.Id).Distinct(StringComparer.Ordinal)];
+        }
+
         Record(FlowChangeKind.Step, handler, detail: $"the run was not sent to '{string.Join("', '", dropped.Select(redirect => redirect.Target))}': {why}");
         var withdrawn = false;
 
@@ -12665,6 +12684,15 @@ public sealed class FlowCoordinator
             WriteQuestions();
         }
     }
+
+    /// <summary>
+    /// The instance <paramref name="redirect"/> sends the run back to: its target's visit in the scope it resets, which a
+    /// visit of the recovery's redirect runs again as what it put right; null where that step has no visit.
+    /// </summary>
+    private static FlowInstance? SentBackBy(PendingRedirect redirect)
+        => redirect.Set.FirstOrDefault(entry => entry.Declaration.Name == redirect.Target) is { Scope: { } scope }
+            ? scope.Members.GetValueOrDefault(redirect.Target)
+            : null;
 
     /// <summary>Marks a group failed with a member's code: nothing more of it starts, and it ends when its members in flight have ended.</summary>
     private void FailGroup(FlowInstance group, int exit, string? error, string failed)
@@ -13722,9 +13750,13 @@ public sealed class FlowCoordinator
     /// redirect since. A visit an older build recorded keeps no such list: that build decided the redirect as the visit
     /// ended, in the write after its done record, and never again at a resume, and a handler's not at all - its redirect
     /// reset nothing, for no redirect resets a handler - so what its redirect left in the records says it was decided: the
-    /// redirect still owed by the visit; a question it asked of the agents it would leave open (<c>openAgents</c>, raised by
-    /// the visit), in whatever state - a <c>stay</c> that gave the redirect up answered it; or the step inside a work item a
-    /// plan update is bringing or brought to rest, which dropped the redirect (<see cref="EndedForAnUpdateAround"/>). A
+    /// redirect still owed by the visit; or a question it asked of the agents it would leave open (<c>openAgents</c>, raised
+    /// by the visit) - a <c>stay</c> that gave the redirect up answered it. The record tells the shapes apart, never the
+    /// question's state: one that build wrote before the redirect asking it, which the process ended between, asks of no
+    /// redirect owed, and the resume withdraws it and starts the visit's list (<see cref="Replay"/>); a drop of such a
+    /// visit's redirect starts its list in its own write (<see cref="DropRedirectsOf"/>). Either way, nothing is sent back
+    /// into a work item a plan update is bringing or brought to rest, which dropped what it owed
+    /// (<see cref="EndedForAnUpdateAround"/>). A
     /// redirect made left the step, which each caller holds every rerun to besides: a step the schedule draws its scope's
     /// current visit in a scope still live, a reporter neither left by a redirect nor reset by one owed. None of those is a
     /// crash between the visit's done record and the redirect's write, which left the rerun undecided, and the resume
@@ -13739,11 +13771,14 @@ public sealed class FlowCoordinator
             return visit.Reruns is null || !ReferenceEquals(RaisedFor(source, rerun.Step.Name, scope, rerun.RaisedByAttempt), rerun);
         }
 
-        return visit.Reruns is { } decided
-            ? decided.Contains(rerun.Id, StringComparer.Ordinal)
-            : _redirects.Any(redirect => ReferenceEquals(redirect.Handler, visit))
-                || _questions.Any(asked => asked.Kind == "openAgents" && string.Equals(asked.Instance, visit.Id, StringComparison.Ordinal))
-                || EndedForAnUpdateAround(rerun);
+        // Nothing is ever sent back into a work item a plan update is bringing or brought to rest, whichever way the visit's
+        // record says what it decided: such an item dropped what it owed, and its work is done again in the item visited in
+        // its place - a list the resume started for an older build's visit says nothing of that.
+        return (visit.Reruns is { } decided
+                ? decided.Contains(rerun.Id, StringComparer.Ordinal)
+                : _redirects.Any(redirect => ReferenceEquals(redirect.Handler, visit))
+                    || _questions.Any(asked => asked.Kind == "openAgents" && string.Equals(asked.Instance, visit.Id, StringComparison.Ordinal)))
+            || EndedForAnUpdateAround(rerun);
     }
 
     /// <summary>
@@ -16943,6 +16978,27 @@ public sealed class FlowCoordinator
         }
     }
 
+    /// <summary>
+    /// Writes each visit of the recovery whose list of reruns the replay started (<see cref="_listsStarted"/>) into its own
+    /// record, among the first of the session's start's writes and before the questions the replay withdrew: held with them,
+    /// so a start refused writes neither and the next start reads the same records; and made first, so a crash between the
+    /// two leaves the list written beside the question still open - which the next resume withdraws again - never the
+    /// question withdrawn beside a visit keeping no list, whose rerun would read as decided by it.
+    /// </summary>
+    private void WriteTheListsStarted()
+    {
+        foreach (var started in _listsStarted)
+        {
+            Record(
+                FlowChangeKind.Step,
+                started,
+                from: started.State,
+                to: started.State,
+                attempt: started.Attempt,
+                detail: "its list of reruns started, empty, as the resume read it: the build that recorded the visit kept none, and the question its redirect asked was written without the redirect, which it decides again");
+        }
+    }
+
     /// <summary>Drops what a session's start held and will never write: each held answer handed back, as one the loop never read is.</summary>
     private static void Drop(IEnumerable<HeldWrite> held)
     {
@@ -18042,6 +18098,18 @@ public sealed class FlowCoordinator
                 // question's withdrawal after it was not (DropRedirectsOf), or the process ended between the question's write
                 // and the first record of the redirect asking it, which its handler decides again. Withdrawn, as the drop
                 // would have withdrawn it - no answer of it does anything - and the session's start writes it.
+                if (_instances.GetValueOrDefault(asked.Instance) is { } asking && IsRecovery(asking) && asking.Reruns is null)
+                {
+                    // Asked by a visit of the recovery an older build recorded, which keeps no list of reruns: that build
+                    // wrote the question before the redirect that asks it, and the process ended between the two - a drop
+                    // of such a visit's redirect starts its list in its own write. The visit's record tells the shapes
+                    // apart, never the question's state: its list is started empty, so the rerun reads as undecided and is
+                    // decided again (RerunDecided), never as decided by the question withdrawn here - and the session's
+                    // start writes the list before the withdrawal (WriteTheListsStarted).
+                    asking.Reruns = [];
+                    _listsStarted.Add(asking);
+                }
+
                 _withdrawnByTheReplay |= Withdrawn(asked.Id);
             }
 

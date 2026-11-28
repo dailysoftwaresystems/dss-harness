@@ -1487,11 +1487,14 @@ public sealed class FlowPlanPiecesTests
     /// resume asks nothing of the dropped redirect and never makes it - nothing is reset for it - and the one question it
     /// asked stands withdrawn; nor is it refused over the item's own probe, whose question the placement withdraws after
     /// the drop: the item's record said it was being ended for the update before the drop was written, so the resume
-    /// brings it to rest, withdrawing that question with it.
+    /// brings it to rest, withdrawing that question with it. Records an older build left read the same: v0.6.18 to v0.6.23
+    /// dropped the redirect and left its question open, the visit keeping no list of reruns, and the resume, withdrawing the
+    /// question and starting that list empty, still sends nothing back into the item being brought to rest.
     /// </summary>
     [Theory]
     [InlineData("the question's withdrawal")]
     [InlineData("the drop")]
+    [InlineData("the drop, as an older build left it")]
     public async Task ARedirectAPlanUpdateDrops_LeavesTheRecordsBeforeItsQuestionIsWithdrawn_AndTheResumeNeverMakesIt(string crashAfter)
     {
         using var temp = new TempDirectory();
@@ -1501,7 +1504,7 @@ public sealed class FlowPlanPiecesTests
         // The process ends at the write that withdraws the redirect's question, or at the first write of the run's state
         // that no longer holds the redirect once it was owed asking.
         var owed = false;
-        var crashing = crashAfter == "the drop"
+        var crashing = crashAfter.StartsWith("the drop", StringComparison.Ordinal)
             ? new CrashingRecords(records, _ => false, picksRun: run =>
             {
                 var held = run.Redirects?.Any(redirect => redirect.Handler == "rounds.items[0].recover") == true;
@@ -1513,10 +1516,19 @@ public sealed class FlowPlanPiecesTests
         await UntilThePlacementCrashesAsync(definition, records, crashing, harness, layout);
 
         // On disk: the redirect is gone, and its question withdrawn or still open as the crash left it.
-        Assert.True(harness.OrchestrationStore.ReadFlow(layout)!.Redirects is null or []);
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        Assert.True(flow.Redirects is null or []);
         Assert.Equal(
-            crashAfter == "the drop" ? "open" : "withdrawn",
+            crashAfter.StartsWith("the drop", StringComparison.Ordinal) ? "open" : "withdrawn",
             Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents").State);
+
+        if (crashAfter == "the drop, as an older build left it")
+        {
+            // The records as the older build left them: the visit's record keeps no list of reruns.
+            harness.OrchestrationStore.WriteFlow(layout, flow with { Steps = [.. flow.Steps.Select(step => step with { Reruns = null })] });
+            var visitFile = Path.Combine(layout.InstanceDirectory("rounds.items[0].recover", flow.Steps.Single(step => step.Instance == "rounds.items[0].recover").Agent), OrchestratorLayout.StepRecordFileName);
+            harness.OrchestrationStore.WriteStepRecord(visitFile, harness.OrchestrationStore.ReadStepRecord(visitFile)! with { Reruns = null });
+        }
 
         var (_, _, again) = Records("r1", temp.Path, definition);
 
@@ -1652,18 +1664,80 @@ public sealed class FlowPlanPiecesTests
     }
 
     /// <summary>
+    /// A redirect a visit of the recovery an older build recorded owes, asking, which a plan update then drops with the work
+    /// item it brings to rest, is said decided by the visit's own record in the drop's own write: the drop starts the list
+    /// that visit kept none of, naming what the redirect sent back - so a crash between the drop and the question's
+    /// withdrawal leaves a question asking of nothing beside a visit whose record says what it decided, never one the
+    /// resume would read as a rerun its redirect never wrote. The session that takes the run up after asks nothing of it
+    /// and sends nothing back into the item, which comes to rest and is visited again.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderBuildsRedirectAPlanUpdateDrops_IsSaidDecidedByItsVisitsRecord_InTheDropsOwnWrite()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(WithAGroupTheRecoverySendsBack()) with { MaxOpenAgents = 3 };
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        // The first session is stopped while the update's plan is checked, the redirect owed asking.
+        await UntilThePlacementCrashesAsync(definition, records, new CrashingRecords(records, _ => false), harness, layout, planStands: false);
+
+        // The records as the older build left them: the visit's record keeps no list of reruns.
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        Assert.True(flow.Redirects is [{ Handler: "rounds.items[0].recover", Question: not null }]);
+        harness.OrchestrationStore.WriteFlow(layout, flow with { Steps = [.. flow.Steps.Select(step => step with { Reruns = null })] });
+        var visitFile = Path.Combine(layout.InstanceDirectory("rounds.items[0].recover", flow.Steps.Single(step => step.Instance == "rounds.items[0].recover").Agent), OrchestratorLayout.StepRecordFileName);
+        harness.OrchestrationStore.WriteStepRecord(visitFile, harness.OrchestrationStore.ReadStepRecord(visitFile)! with { Reruns = null });
+
+        // The session that takes the run up places the piece once the plan stands, and the process ends at the drop's write.
+        var (_, _, second) = Records("r1", temp.Path, definition);
+        var owed = false;
+        var crashing = new CrashingRecords(second, _ => false, picksRun: run =>
+        {
+            var held = run.Redirects?.Any(redirect => redirect.Handler == "rounds.items[0].recover") == true;
+            owed |= held;
+            return owed && !held;
+        });
+
+        using (second)
+        {
+            _ = await CoordinatorOf(definition, ChangingOne(), crashing, harness, layout, ResumeOf(harness, layout, definition)).RunAsync(Token).WaitAsync(Bound, Token);
+            Assert.True(crashing.Ended);
+        }
+
+        // The drop's own write said the rerun decided, in the visit's record; the question it asked is open still.
+        Assert.Equal<IEnumerable<string>>(["rounds.items[0].fixit"], harness.OrchestrationStore.ReadStepRecord(visitFile)!.Reruns!);
+        Assert.Equal("open", Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents").State);
+
+        var (_, _, third) = Records("r1", temp.Path, definition);
+
+        using (third)
+        {
+            var resumed = CoordinatorOf(definition, ChangingOne(), third, harness, layout, ResumeOf(harness, layout, definition));
+            _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+            Assert.Equal("rounds.items[1].probe", Assert.Single(resumed.OpenQuestions).Instance);
+            Assert.Null(resumed.Instances["rounds.items[0].fixit"].LeftBy);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "rounds.items[0].fixit+2");
+        }
+
+        Assert.Equal("withdrawn", Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents").State);
+        Assert.Equal<IEnumerable<string>>(["rounds.items[0].fixit"], harness.OrchestrationStore.ReadStepRecord(visitFile)!.Reruns!);
+    }
+
+    /// <summary>
     /// The first session of a run of <see cref="WithAGroupTheRecoverySendsBack"/>, over <paramref name="crashing"/>, until
     /// the process ends where they say: the item's group fails to the recovery, whose visit puts it right while the plan
     /// update the session is offered is being checked - its redirect back to the group, which would leave the group's agent
     /// open, asks - beside the item's probe, which asks, and its tidy, which runs on; then the plan stands, and its one
-    /// piece is placed against the item, under way, which is brought to rest.
+    /// piece is placed against the item, under way, which is brought to rest. Or, where the plan is not to stand, the session
+    /// is stopped there, the redirect owed asking and the plan still being checked.
     /// </summary>
     /// <param name="definition">The run's definition, which holds one agent more than the item's.</param>
     /// <param name="records">The run's records, closed once the session has ended.</param>
     /// <param name="crashing">The records the session writes through, which end the process.</param>
     /// <param name="harness">The run's services.</param>
     /// <param name="layout">The run's layout.</param>
-    private static async Task UntilThePlacementCrashesAsync(WorkflowDefinition definition, FlowRunRecords records, CrashingRecords crashing, HarnessFactory harness, OrchestratorLayout layout)
+    /// <param name="planStands">Whether the plan stands in the session, or the session is stopped while it is checked.</param>
+    private static async Task UntilThePlacementCrashesAsync(WorkflowDefinition definition, FlowRunRecords records, CrashingRecords crashing, HarnessFactory harness, OrchestratorLayout layout, bool planStands = true)
     {
         var mended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var checkedAgain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1713,8 +1787,12 @@ public sealed class FlowPlanPiecesTests
             await checking.Task.WaitAsync(Bound, Token);
             mended.TrySetResult();
             _ = await UntilAsync(harness, layout, flow => flow.Redirects is [{ Handler: "rounds.items[0].recover", Question: not null }]);
-            checkedAgain.TrySetResult();
-            _ = await UntilAsync(harness, layout, _ => crashing.Ended);
+
+            if (planStands)
+            {
+                checkedAgain.TrySetResult();
+                _ = await UntilAsync(harness, layout, _ => crashing.Ended);
+            }
 
             coordinator.RequestStop();
             _ = await session.WaitAsync(Bound, Token);
