@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Application;
 using DssHarness.Core.Configuration;
@@ -5525,7 +5526,7 @@ public sealed class FlowServiceTests
         using var disposed = repository;
 
         var run = RunOf(repository);
-        var (outcome, asked) = await AskedAsTheSessionEndsAsync(repository, runner, command, answered: true);
+        var (outcome, asked) = await AskedAsTheSessionEndsAsync(repository, runner, command, answer: "go");
         var flow = repository.Harness.OrchestrationStore.ReadFlow(run)!;
         var what = command == FlowService.StopCommand ? "stop" : "pause";
 
@@ -5566,7 +5567,7 @@ public sealed class FlowServiceTests
         using var disposed = repository;
 
         var run = RunOf(repository);
-        var (outcome, asked) = await AskedAsTheSessionEndsAsync(repository, runner, command, answered: false);
+        var (outcome, asked) = await AskedAsTheSessionEndsAsync(repository, runner, command, answer: null);
         var flow = repository.Harness.OrchestrationStore.ReadFlow(run)!;
         var what = command == FlowService.StopCommand ? "stop" : "pause";
 
@@ -5583,6 +5584,104 @@ public sealed class FlowServiceTests
         Assert.Equal("open", Assert.Single(repository.Harness.OrchestrationStore.ReadFlowQuestions(run)!.Questions).State);
         Assert.False(File.Exists(run.StopFile));
     }
+
+    /// <summary>
+    /// A pause asked as the session ended, beside the answer <c>abort</c> to the question the session pauses on: the session's
+    /// last poll hands the pause to the engine, then takes the abort, which stops the run and lets go of the pause - so the
+    /// line names what the engine stands on, the stop in the pause's place, which the drive the answer begins takes as it
+    /// begins; the run ends stopped with no pause of its own, and the pause asked is told nothing was paused - never a line
+    /// that the next session takes the pause beside an end that says stopped.
+    /// </summary>
+    [Fact]
+    public async Task APauseAskedAsTheSessionEnded_BesideAnAbort_IsSaidReplacedByTheStopTheNextDriveTakes()
+    {
+        var (repository, runner) = await RepositoryAsync(HeldBeforeItsQuestion);
+        using var disposed = repository;
+
+        var run = RunOf(repository);
+        var (outcome, asked) = await AskedAsTheSessionEndsAsync(repository, runner, FlowService.PauseCommand, answer: "abort");
+        var flow = repository.Harness.OrchestrationStore.ReadFlow(run)!;
+
+        Assert.Equal((HarnessExit.Cancelled, "stopped"), (outcome.ExitCode, outcome.Message));
+        Assert.Contains("the answer 'abort' handed over for question 'q1' was taken from the inbox", outcome.Details ?? []);
+        Assert.Equal([ReplacedByTheStop], AsksSaid(outcome));
+        Assert.Equal((HarnessExit.Refused, "run 'r1' is stopped; its engine took the pause and left, so nothing was paused"), (asked.ExitCode, asked.Message));
+        Assert.Equal(["first"], runner.Started);
+        Assert.Equal((nameof(FlowRunStatus.Stopped), true, (FlowPauseRecord?)null), (flow.Status, flow.StoppingSince is not null, flow.Pause));
+        Assert.False(File.Exists(run.StopFile));
+        Assert.False(File.Exists(run.InboxFile));
+    }
+
+    /// <summary>
+    /// A pause asked as the session ended, beside an answer to the question the session pauses on, after a stop its poller
+    /// handed to the engine on its last tick - the session's end said already, its poller not yet stopped: the engine holds
+    /// the stop, which keeps no pause asked after it, so the line names the stop in the pause's place, which the drive the
+    /// answer begins takes as it begins - never the pause - and the run ends stopped, the stop asked told so and the pause
+    /// asked told nothing was paused.
+    /// </summary>
+    [Fact]
+    public async Task APauseAskedAsTheSessionEnded_AfterAStopItsPollerHandedOn_IsSaidReplacedByThatStop()
+    {
+        var (repository, runner) = await RepositoryAsync(HeldBeforeItsQuestion);
+        using var disposed = repository;
+
+        // The poller's wait alone is held by the clock: it polls at once, and then only where the test moves the clock.
+        var poll = TimeSpan.FromHours(1);
+        var clock = new TimerClock([poll]);
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, clock, new FlowTimings(poll, TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30)), fileSystem: files);
+        var stops = new Signalling(repository.Harness.FileSystem);
+        var pauses = new Signalling(repository.Harness.FileSystem);
+        var run = RunOf(repository);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<CommandOutcome>? stopping = null;
+        Task<CommandOutcome>? pausing = null;
+
+        runner.Holds("first", release.Task);
+
+        var driving = service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token);
+        await runner.WaitStartedAsync("first");
+        await clock.WaitingAsync().WaitAsync(Bound, Token);
+
+        // Once the session's end is on the disk - its poller still polling - a stop is asked and the poller's last tick hands
+        // it to the engine, which has armed its next wait once it has; then a pause is asked, and an answer to q1 handed over,
+        // for the session's last poll to take.
+        files.AfterFlushing(run.EventsFile, $"\"{FlowEvent.KindOf(FlowChangeKind.SessionEnded)}\"", () =>
+        {
+            stopping = Task.Run(() => Service(repository.Harness, runner, fileSystem: stops).StopAsync(repository.Path, "r1", now: false, json: false, Token));
+            stops.Written(run.StopFile).WaitAsync(Bound, Token).GetAwaiter().GetResult();
+            clock.Advance(poll);
+            clock.WaitingAsync().WaitAsync(Bound, Token).GetAwaiter().GetResult();
+
+            pausing = Task.Run(() => Service(repository.Harness, runner, fileSystem: pauses).PauseAsync(repository.Path, "r1", all: false, json: false, Token));
+            pauses.Written(run.StopFile).WaitAsync(Bound, Token).GetAwaiter().GetResult();
+            repository.Harness.OrchestrationStore.AddToInbox(run, new FlowInboxAnswer(FlowInboxAnswer.NewId(), "q1", "go", DateTimeOffset.UtcNow));
+        });
+
+        _ = release.TrySetResult();
+
+        var outcome = await driving.WaitAsync(Bound, Token);
+        var stopped = await stopping!.WaitAsync(Bound, Token);
+        var paused = await pausing!.WaitAsync(Bound, Token);
+        var flow = repository.Harness.OrchestrationStore.ReadFlow(run)!;
+
+        Assert.Equal((HarnessExit.Cancelled, "stopped"), (outcome.ExitCode, outcome.Message));
+        Assert.Contains("the answer 'go' handed over for question 'q1' was taken from the inbox", outcome.Details ?? []);
+        Assert.Equal([ReplacedByTheStop], AsksSaid(outcome));
+        Assert.Equal((HarnessExit.Success, "run 'r1' is stopped"), (stopped.ExitCode, stopped.Message));
+        Assert.Equal((HarnessExit.Refused, "run 'r1' is stopped; its engine took the pause and left, so nothing was paused"), (paused.ExitCode, paused.Message));
+        Assert.Equal(["first"], runner.Started);
+        Assert.Equal((nameof(FlowRunStatus.Stopped), true, (FlowPauseRecord?)null), (flow.Status, flow.StoppingSince is not null, flow.Pause));
+        Assert.False(File.Exists(run.StopFile));
+        Assert.False(File.Exists(run.InboxFile));
+    }
+
+    /// <summary>What a session says of a pause asked as it ended where the engine holds a stop in its place.</summary>
+    private const string ReplacedByTheStop = "a pause asked as the session ended was handed to the engine, and a stop asked of it replaces it: the session the run is driven on with takes the stop as it begins";
+
+    /// <summary>Every line a session said of a pause or a stop asked as it ended, in order.</summary>
+    private static IEnumerable<string> AsksSaid(CommandOutcome outcome)
+        => (outcome.Details ?? []).Where(line => line.StartsWith("a pause asked as the session ended", StringComparison.Ordinal) || line.StartsWith("a stop asked as the session ended", StringComparison.Ordinal));
 
     /// <summary>A run whose first step is held, so what is asked as it runs comes after the poller's one read, then its question.</summary>
     private const string HeldBeforeItsQuestion = """
@@ -5602,11 +5701,11 @@ public sealed class FlowServiceTests
 
     /// <summary>
     /// Runs <see cref="HeldBeforeItsQuestion"/> with a poller that reads once, at the session's start, and asks of it after
-    /// that read, while its first step is held: an answer to q1 where <paramref name="answered"/>, then the stop or the pause
+    /// that read, while its first step is held: <paramref name="answer"/> to q1 where one is given, then the stop or the pause
     /// through <paramref name="command"/>, its file written before the step is let go and the session goes on to its end.
     /// </summary>
     /// <returns>What the session answered, and what the command that asked answered.</returns>
-    private static async Task<(CommandOutcome Outcome, CommandOutcome Asked)> AskedAsTheSessionEndsAsync(Repository repository, SteppedRunner runner, string command, bool answered)
+    private static async Task<(CommandOutcome Outcome, CommandOutcome Asked)> AskedAsTheSessionEndsAsync(Repository repository, SteppedRunner runner, string command, string? answer)
     {
         var files = new Signalling(repository.Harness.FileSystem);
         var service = Service(repository.Harness, runner, timings: new FlowTimings(TimeSpan.FromHours(1), TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30)), fileSystem: files);
@@ -5617,9 +5716,9 @@ public sealed class FlowServiceTests
         var driving = service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token);
         await runner.WaitStartedAsync("first");
 
-        if (answered)
+        if (answer is not null)
         {
-            repository.Harness.OrchestrationStore.AddToInbox(run, new FlowInboxAnswer(FlowInboxAnswer.NewId(), "q1", "go", DateTimeOffset.UtcNow));
+            repository.Harness.OrchestrationStore.AddToInbox(run, new FlowInboxAnswer(FlowInboxAnswer.NewId(), "q1", answer, DateTimeOffset.UtcNow));
         }
 
         var written = files.Written(run.StopFile);
@@ -6740,7 +6839,7 @@ public sealed class FlowServiceTests
         }
     }
 
-    /// <summary>A file system that says when a file is written or deleted, and can be made to meet a defect reading one.</summary>
+    /// <summary>A file system that says when a file is written or deleted, can be made to meet a defect reading one, and acts where a test asks between two changes.</summary>
     private sealed class Signalling(IFileSystem inner) : PassThroughFileSystem(inner)
     {
         private readonly ConcurrentDictionary<string, TaskCompletionSource> _written = new(StringComparer.OrdinalIgnoreCase);
@@ -6753,9 +6852,77 @@ public sealed class FlowServiceTests
         private readonly ConcurrentDictionary<string, Action> _afterLooking = new(StringComparer.OrdinalIgnoreCase);
         private readonly Lock _changing = new();
         private (HashSet<string> Paths, Action What)? _afterChanging;
+        private readonly Lock _flushing = new();
+        private (string Path, string Holding, Action What)? _afterFlushing;
 
         /// <summary>Does <paramref name="what"/> once, right after the next look at whether <paramref name="path"/> is there: as another process writing it just after this one looked.</summary>
         public void AfterLookingAt(string path, Action what) => _afterLooking[Path.GetFullPath(path)] = what;
+
+        /// <summary>
+        /// Does <paramref name="what"/> once, on the writer's own thread, right after the next flush that puts on the disk a
+        /// line of <paramref name="path"/> - a log appended a batch at a time - holding <paramref name="holding"/>: as another
+        /// process acting between that flush and whatever the writer does next, which waits for it.
+        /// </summary>
+        public void AfterFlushing(string path, string holding, Action what)
+        {
+            lock (_flushing)
+            {
+                _afterFlushing = (Path.GetFullPath(path), holding, what);
+            }
+        }
+
+        /// <summary>Does what <see cref="AfterFlushing"/> asked, where <paramref name="path"/> is its log and <paramref name="flushed"/> holds its text.</summary>
+        private void Flushed(string path, string flushed)
+        {
+            Action? what = null;
+
+            lock (_flushing)
+            {
+                if (_afterFlushing is { } armed && string.Equals(armed.Path, path, StringComparison.OrdinalIgnoreCase) && flushed.Contains(armed.Holding, StringComparison.Ordinal))
+                {
+                    what = armed.What;
+                    _afterFlushing = null;
+                }
+            }
+
+            what?.Invoke();
+        }
+
+        public override IAppendFile OpenForAppend(string path) => new Flushing(base.OpenForAppend(path), Path.GetFullPath(path), this);
+
+        /// <summary>The real file, which tells the disk what each flush put on the disk.</summary>
+        private sealed class Flushing(IAppendFile file, string path, Signalling disk) : IAppendFile
+        {
+            private readonly StringBuilder _unflushed = new();
+
+            public long Length => file.Length;
+
+            public void ReadExactlyAt(long position, Span<byte> buffer) => file.ReadExactlyAt(position, buffer);
+
+            public void TruncateTo(long length) => file.TruncateTo(length);
+
+            public void AppendFlushed(ReadOnlySpan<byte> bytes)
+            {
+                file.AppendFlushed(bytes);
+                disk.Flushed(path, Encoding.UTF8.GetString(bytes));
+            }
+
+            public void Append(ReadOnlySpan<byte> bytes)
+            {
+                file.Append(bytes);
+                _ = _unflushed.Append(Encoding.UTF8.GetString(bytes));
+            }
+
+            public void Flush()
+            {
+                file.Flush();
+                var flushed = _unflushed.ToString();
+                _ = _unflushed.Clear();
+                disk.Flushed(path, flushed);
+            }
+
+            public void Dispose() => file.Dispose();
+        }
 
         /// <summary>
         /// Does <paramref name="what"/> once, right after the first of <paramref name="paths"/> is next written whole or

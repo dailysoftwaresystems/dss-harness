@@ -1465,10 +1465,49 @@ public sealed class FlowCoordinator
 
         var was = _startsStanding;
 
-        return stop ? new FlowStartsStanding(was is { Pause: null } ? was.At : _clock.GetUtcNow(), null)
-            : pause is { } asked ? new FlowStartsStanding(was is { Pause: not null } ? was.At : _clock.GetUtcNow(), asked)
-            : pausing && was is { Pause: not null } ? was
-            : null;
+        return AskedOf(stop, pause) switch
+        {
+            FlowAsked.Stop => new FlowStartsStanding(was is { Pause: null } ? was.At : _clock.GetUtcNow(), null),
+            FlowAsked.Pause => new FlowStartsStanding(was is { Pause: not null } ? was.At : _clock.GetUtcNow(), pause),
+            _ => pausing && was is { Pause: not null } ? was : null,
+        };
+    }
+
+    /// <summary>
+    /// Which ask a start stands on, of a stop and a pause asked of its engine: the stop, over a pause asked beside it - a stop
+    /// lets go of every pause not yet taken up (<see cref="BeginHardStop"/>), and keeps none asked after it
+    /// (<see cref="RequestPause"/>) - the pause where no stop is asked, and null where neither is. The one rule of it, for the
+    /// start under way (<see cref="StandingAsked"/>) and the next one alike (<see cref="AskedOfTheNextStart"/>).
+    /// </summary>
+    /// <param name="stop">Whether a stop is asked.</param>
+    /// <param name="pause">The pause asked and not taken up; null where none is.</param>
+    private static FlowAsked? AskedOf(bool stop, FlowPauseRequest? pause)
+        => stop ? FlowAsked.Stop : pause is not null ? FlowAsked.Pause : null;
+
+    /// <summary>
+    /// Whether a stop is asked that no session has applied: one the session under way applies where it stands, and - between
+    /// two sessions - one the next session's start applies before anything else (<see cref="SessionAsync"/>), an abort answered
+    /// then or a stop handed to the engine after its loop had ended among them. A stop a session applied is that session's,
+    /// and ends with it.
+    /// </summary>
+    private bool StopNotApplied => _hardStop && !_stopApplied;
+
+    /// <summary>
+    /// What the next session's start stands on, of what is asked of the engine between two sessions: the stop no session has
+    /// applied (<see cref="StopNotApplied"/>) - a pause asked before it let go of, and one asked after it never kept - or the
+    /// pause asked and not taken up, by the one rule a start takes its standing by (<see cref="AskedOf"/>); null where neither
+    /// is, for the next start finds no pause under way. So whoever hands an ask to the engine between two sessions says what
+    /// the next one takes of it, never only what it handed. Read between sessions, by the caller that drives them.
+    /// </summary>
+    internal FlowAsked? AskedOfTheNextStart
+    {
+        get
+        {
+            lock (_pauseAsks)
+            {
+                return AskedOf(StopNotApplied, _pauseRequest);
+            }
+        }
     }
 
     /// <summary>
@@ -1707,7 +1746,7 @@ public sealed class FlowCoordinator
         // A stop the last session applied has ended that session, and this one is its resume: the run goes on. One
         // asked since - between sessions, by an abort answered then - is applied before anything else, and this
         // session says so over what it finds.
-        var stopPending = _hardStop && !_stopApplied;
+        var stopPending = StopNotApplied;
 
         if (!stopPending)
         {
@@ -1875,7 +1914,7 @@ public sealed class FlowCoordinator
 
                 CheckBudget();
 
-                if (_hardStop && !_stopApplied)
+                if (StopNotApplied)
                 {
                     // A stop asked while the loop was parked - between two waits, or while the handoff turns ran -
                     // is applied here, by the one who owns the graph.

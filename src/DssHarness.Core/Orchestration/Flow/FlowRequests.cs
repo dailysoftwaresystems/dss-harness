@@ -33,6 +33,20 @@ public sealed record FlowStopFile(int Schema, FlowStopPause? Pause = null, FlowS
 }
 
 /// <summary>
+/// Which of the two asks that end a session out of turn is meant: what <c>stop.json</c> asks of the engine, and what a
+/// session's start stands on of what is asked of it (<see cref="FlowCoordinator.AskedOfTheNextStart"/>). Its name, lower
+/// case, is the word a session's line says it by.
+/// </summary>
+internal enum FlowAsked
+{
+    /// <summary>The safe pause (<see cref="FlowCoordinator.RequestPause"/>).</summary>
+    Pause,
+
+    /// <summary>The hard stop (<see cref="FlowCoordinator.RequestStop"/>), the answer <c>abort</c>'s among them: no pause is kept beside it.</summary>
+    Stop,
+}
+
+/// <summary>
 /// One answer on its way to an engine that is running the run, in <c>inbox.json</c>: weighed by the engine, what became
 /// of it written into <c>questions.json</c> under its id - the answer taken, or its refusal - and removed from the inbox
 /// by its id once it has been - so two answers handed in the same second are two entries, each removed alone, and an

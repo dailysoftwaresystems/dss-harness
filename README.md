@@ -1016,8 +1016,9 @@ taken it yet, so the stop never stands beside the pause it replaced - and a star
 wrote over and, once it has ended, stands for nothing asked of its engine after it; the standing is its session's, let go
 as the session ends, so what is asked between two sessions - a pause or a stop the session's last poll finds in
 `stop.json` among it, handed to the engine as every poll hands one, so the session an answer that poll takes drives the
-run on with takes it as it begins - is stood on only by the next session's start - until the
-start's own end is written, once it has sought every recommendation the run owes; a reader
+run on with takes what the engine then stands on as it begins: a stop asked of it, by an `abort` that poll took or
+before it, in the place of the pause asked beside it, which the session's line says the stop replaces - is stood on only
+by the next session's start - until the start's own end is written, once it has sought every recommendation the run owes; a reader
 judges that state only beside an owner it found live before reading it and still after, and a session's release removes its owner before
 it takes its start's mark back. The budget's own question is recommended too: once the
 budget's pause is complete, before the session ends, the advisor is asked of the run as a whole - its
