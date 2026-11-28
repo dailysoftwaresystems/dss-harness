@@ -4713,12 +4713,20 @@ force (`StillRunning`, the one owner of what still runs, which the loop waits on
 names). A group is only bookkeeping over its members, and one whose member waits on a question runs nothing, so a run
 left with no step running is never said `Running` beside its end time. A session that ends in order records the
 standing it ends with, its end set before its last record is written (`Finish`), and the run's status is `Done` only
-where nothing of it is left unended (`Unended`, the one owner of what keeps a run from done, `Finish`'s too): work left
+where nothing of it is left unended (`Unended`, the one owner of what keeps a run from done, `Finish`'s too): an
+instance left - not started, in flight, paused, or stopped where it stood by a pause or a stop, which runs it again at
+the resume, never one a plan update ended (`FlowInstance.IsLeft`, the one rule of what is left, which the status of a
+run's records reads too) - a failure owed to the next session and each handler an ending owes a raise, as the records
+hold them and the resume makes them (`FlowFailure.Owed`, `HandlersOwed`), and a step its scope still draws. Work left
 with nothing running is the session's to go on with while one drives the run, which is `Running`, and stands `Paused`
-between sessions - so no gate of a plan update takes a run with work left for one with nothing to go back to
-(`FlowUpdateGates`). What the steps a token-ended session leaves running answer as it ends is kept for the coordinator's
-next session (`HandBackWhatIsLeft`); one its token ends during its start writes nothing, as a refused start does, and
-one a defect ends leaves what a crash leaves - nothing more written, each question it was advising still marked sought.
+between sessions - an engine built from a resume reads it so before its session, which rebuilds no pause and no stop of
+the session before - so no gate of a plan update takes a run with work left for one with nothing to go back to
+(`FlowUpdateGates`): an amendment queued while no engine ran, or an answer changed, that the engine taking the run up
+weighs before its session runs what a pause or a stop left, is never refused as given to a run that is done, and
+nothing that weighing writes says the run done.
+What the steps a token-ended session leaves running answer as it ends is kept for the coordinator's next session
+(`HandBackWhatIsLeft`); one its token ends during its start writes nothing, as a refused start does, and one a defect
+ends leaves what a crash leaves - nothing more written, each question it was advising still marked sought.
 A stop is in the run's state from the moment it is applied - the hard stop by `ApplyTheStop`, a stop once the pause is complete
 as the loop takes it, recorded on its own (`StopApplied`) where the pause said all already - as `flow.json`'s
 `stoppingSince`, kept by the session's end and written out by the first write of the session that goes on, so a reader tells a
@@ -4930,9 +4938,10 @@ the instance's own records - ended for the update (`FlowStepRecord.EndedFor`), t
 instance it was visited again in place of (`AgainOf`) - so no session after runs an instance an update ended, a resume
 goes on bringing one to rest, and the pieces are placed once from the update's entry however often a crash makes the
 engine meet its plan standing, an instance an earlier update visited again among them. A visit an update ended waits on
-nothing and is counted ended by the status, by the engine's own rule (`FlowInstance.IsStoppedForAnUpdate`, read by
-`FlowStatus.IsLeft`). Every instance of the group is of one kind, and the step its kind names runs in the place of the one
-`whenAddScope` names - under its name, with its dependencies and its `when` (`FlowCoordinator.DrawWorkItemPlace`) - the
+nothing and is counted ended by the engine and the status alike, by the engine's own rule of what is left
+(`FlowInstance.IsLeft`, over `FlowInstance.IsStoppedForAnUpdate`; read by `Unended` and by `FlowStatus.IsLeft`), where one
+a pause or a stop stopped is left, to run again at the resume. Every instance of the group is of one kind, and the step
+its kind names runs in the place of the one `whenAddScope` names - under its name, with its dependencies and its `when` (`FlowCoordinator.DrawWorkItemPlace`) - the
 other two alternatives skipped in its instance, saying why; a read of the add step (`{add.latest}`) or a resume of it
 follows whichever ran (`FlowCoordinator.EndedDoneLastOf`, which `<step>.latest` reads for every step that goes on with
 another's work: the newest answer among the step and every visit whose `resume`, resolved in its own scope or one
@@ -5314,7 +5323,9 @@ record, for it took nothing: the ending it was raised for is abandoned, settled 
 and never rebuilt by a resume - so a crash between any two writes leaves records the next session completes: an
 answer written is carried out once, a configured answer never written is given, a handler is never
 raised twice, and an ending whose handlers all ended is settled. A session is never said done over a
-step that never ended, nor one its scope never drew. What the session's start writes is held, in the
+step that never ended, nor one its scope never drew, and a run is never said done - by a session, or by the engine that
+takes it up before its session - over a step a pause or a stop stopped, which runs again at the resume, nor over a
+failure or a handler's raise owed to the next session. What the session's start writes is held, in the
 order made and each with the run as it stood, until it is known the session goes on: a resume beside
 an open question is refused only where nothing can run until a question is answered, and then it has
 written nothing - no event, no attempt, no state; a session an answer began, one whose budget

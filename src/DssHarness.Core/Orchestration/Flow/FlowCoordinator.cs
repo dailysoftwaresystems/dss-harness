@@ -440,12 +440,29 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>
     /// Whether a visit in <paramref name="state"/>, ended for <paramref name="endedFor"/>, was stopped for a plan update,
     /// and is over: stopped, and ended for one. The one owner of that rule: the engine reads it of its instances, and
-    /// the status of a run's records.
+    /// what is left of a run reads it (<see cref="IsLeft"/>) - the engine's and the status of a run's records alike.
     /// </summary>
     /// <param name="state">How the visit stands.</param>
     /// <param name="endedFor">The update a piece of which ended the visit in order, as its record holds it; null where none did.</param>
     public static bool IsStoppedForAnUpdate(FlowInstanceState state, string? endedFor)
         => state is FlowInstanceState.Stopped && endedFor is not null;
+
+    /// <summary>Whether this visit is left of its run, not ended (<see cref="IsLeft"/>).</summary>
+    internal bool Left => IsLeft(State, EndedFor);
+
+    /// <summary>
+    /// Whether a visit in <paramref name="state"/>, ended for <paramref name="endedFor"/>, is left of its run - it has not
+    /// ended: not started yet, in flight, paused on a question, or stopped where it stood by a pause or a stop, which runs it
+    /// again at the resume - never one a plan update stopped, whose visit is over (<see cref="IsStoppedForAnUpdate"/>), nor
+    /// one done, failed, skipped or never run. The one owner of that rule: the engine reads it of its instances for what
+    /// keeps a run from done and for whether a scope's work is over, and the status of a run's records for what is left,
+    /// what waits and what has ended.
+    /// </summary>
+    /// <param name="state">How the visit stands.</param>
+    /// <param name="endedFor">The update a piece of which ended the visit in order, as its record holds it; null where none did.</param>
+    public static bool IsLeft(FlowInstanceState state, string? endedFor)
+        => state is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused
+            || state is FlowInstanceState.Stopped && !IsStoppedForAnUpdate(state, endedFor);
 
     /// <summary>The item or iteration scope this instance is the group instance of; null for every member of a scope.</summary>
     internal Scope? ScopeOf;
@@ -980,8 +997,10 @@ public sealed class FlowCoordinator
             }
 
             // Nothing runs, nothing is asked and no failure ended the run: it is done only where nothing of it is left -
-            // the session's end says no other - so a step not started yet, a group standing open or a step still to be
-            // drawn keeps it from done, which no gate of a plan update then takes for a run with nothing to go back to.
+            // the session's end says no other - so a step not started yet, a group standing open, a step a pause or a
+            // stop stopped, which runs again at the resume, a failure or a handler's raise owed to the session that goes
+            // on, or a step still to be drawn keeps it from done, which no gate of a plan update then takes for a run with
+            // nothing to go back to - an engine built from a resume, before its session, among them.
             return !Unended().Any() ? FlowRunStatus.Done : _inSession ? FlowRunStatus.Running : FlowRunStatus.Paused;
         }
     }
@@ -1643,19 +1662,34 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// What of the run is left unended, by id in the order made: an instance never started, still open or paused - a group
-    /// standing open over its members among them - then a step never drawn though its scope still draws. A handler is
-    /// drawn by its source's ending and a triage step by an issue, never by the schedule, so neither is owed a drawing. The
-    /// one owner of what keeps a run from done: a session never ends done over any of it (<see cref="Finish"/>), and the
-    /// run's status is never done while any is left (<see cref="Status"/>).
+    /// What of the run is left unended, by id in the order made: each instance left (<see cref="FlowInstance.Left"/>) -
+    /// never started, still open, paused, or stopped where it stood by a pause or a stop, which runs it again at the
+    /// resume; a group standing open over its members among them - and what an ending owes the session that goes on, as
+    /// its own record holds it and the resume makes it (<see cref="GoOnWhereTheRunStood"/>): a failure owed
+    /// (<see cref="FlowFailure.Owed"/>), which its handlers, its policy or the recovery still decide, and each handler the
+    /// ending owes a raise (<see cref="HandlersOwed"/>); then a step never drawn though its scope still draws. A handler
+    /// is drawn by its source's ending and a triage step by an issue, never by the schedule, so neither is owed a drawing.
+    /// The one owner of what keeps a run from done: a session never ends done over any of it (<see cref="Finish"/>), and
+    /// the run's status is never done while any is left (<see cref="Status"/>) - in a session, and between two, where an
+    /// engine built from a resume reads it before its session runs what a pause or a stop left.
     /// </summary>
     private IEnumerable<string> Unended()
         => _created
-            .Where(instance => instance.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused)
-            .Select(instance => instance.Id)
+            .SelectMany(instance => (instance.Left || instance.Failure is FlowFailure.Owed ? [instance.Id] : Enumerable.Empty<string>())
+                .Concat(HandlersOwed(instance).Select(handler => instance.DeclaredScope is { } scope ? MemberId(scope, handler) : handler)))
             .Concat(_scopes.SelectMany(scope => DeclarationsOf(scope)
                 .Where(declaration => declaration.On is null && declaration.Raised is null && !IsPlannerOf(scope, declaration) && !scope.Instantiated.Contains(declaration.Name) && Draws(scope, declaration))
                 .Select(declaration => MemberId(scope, declaration))));
+
+    /// <summary>
+    /// The handlers <paramref name="instance"/>'s ending owes a raise, by name, as its own record holds them: written owed -
+    /// by a pause, which raises nothing while it records what it left running, or by a crash between the ending's record
+    /// and the raise - where the ending is of a step the schedule draws, whose owed raise the session that goes on makes
+    /// (<see cref="GoOnWhereTheRunStood"/>). The one reading of them: the resume raises them, and what is left of the run
+    /// counts them (<see cref="Unended"/>).
+    /// </summary>
+    private static IEnumerable<string> HandlersOwed(FlowInstance instance)
+        => instance.Step.On is null ? instance._handlers.Where(handler => handler.State == "owed").Select(handler => handler.Handler) : [];
 
     /// <summary>
     /// What a session its cancellation token ended says of itself, as its last record words it: <c>cancelled</c>, with the
@@ -1815,7 +1849,7 @@ public sealed class FlowCoordinator
             HandleFailure(owed);
         }
 
-        foreach (var owed in _created.Where(instance => instance.Step.On is null && instance.WaitingQuestion is null && instance._handlers.Any(handler => handler.State == "owed")).ToList())
+        foreach (var owed in _created.Where(instance => instance.WaitingQuestion is null && HandlersOwed(instance).Any()).ToList())
         {
             if (owed.State == FlowInstanceState.Failed)
             {
@@ -4906,7 +4940,7 @@ public sealed class FlowCoordinator
                 continue;
             }
 
-            if (member.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped)
+            if (member.Left)
             {
                 return false;
             }
@@ -13516,7 +13550,7 @@ public sealed class FlowCoordinator
             && DeclarationsOf(scope).All(declaration => scope.Instantiated.Contains(declaration.Name) || RunsAfterItsGroup(declaration, scope) || IsPlannerOf(scope, declaration) || ResumedInstead(scope, declaration))
             && scope.Members.Values.All(member => member.State is FlowInstanceState.NotStarted && RunsAfterItsGroup(member.Step, scope)
                 || member.WaitingQuestion is null
-                    && (member.State is not (FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped) || member.StoppedForAnUpdate)
+                    && !member.Left
                     && member.Failure is not FlowFailure.EndedRun
                     && member.NotRunCause is not FlowNotRunCause.RunEnded);
 
