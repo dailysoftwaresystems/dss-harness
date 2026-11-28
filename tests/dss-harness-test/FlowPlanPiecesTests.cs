@@ -1485,7 +1485,9 @@ public sealed class FlowPlanPiecesTests
     /// asking nothing - and a crash between the two, the drop written and the withdrawal not, leaves a question that asks of
     /// no redirect, which the resume withdraws, never one left open for a person to answer to no effect. Either way the
     /// resume asks nothing of the dropped redirect and never makes it - nothing is reset for it - and the one question it
-    /// asked stands withdrawn.
+    /// asked stands withdrawn; nor is it refused over the item's own probe, whose question the placement withdraws after
+    /// the drop: the item's record said it was being ended for the update before the drop was written, so the resume
+    /// brings it to rest, withdrawing that question with it.
     /// </summary>
     [Theory]
     [InlineData("the question's withdrawal")]
@@ -1495,6 +1497,174 @@ public sealed class FlowPlanPiecesTests
         using var temp = new TempDirectory();
         var definition = Parse(WithAGroupTheRecoverySendsBack()) with { MaxOpenAgents = 3 };
         var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        // The process ends at the write that withdraws the redirect's question, or at the first write of the run's state
+        // that no longer holds the redirect once it was owed asking.
+        var owed = false;
+        var crashing = crashAfter == "the drop"
+            ? new CrashingRecords(records, _ => false, picksRun: run =>
+            {
+                var held = run.Redirects?.Any(redirect => redirect.Handler == "rounds.items[0].recover") == true;
+                owed |= held;
+                return owed && !held;
+            })
+            : new CrashingRecords(records, _ => false, picksQuestions: questions => questions.Any(question => question is { Kind: "openAgents", State: "withdrawn" }));
+
+        await UntilThePlacementCrashesAsync(definition, records, crashing, harness, layout);
+
+        // On disk: the redirect is gone, and its question withdrawn or still open as the crash left it.
+        Assert.True(harness.OrchestrationStore.ReadFlow(layout)!.Redirects is null or []);
+        Assert.Equal(
+            crashAfter == "the drop" ? "open" : "withdrawn",
+            Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents").State);
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            // The resume asks nothing of the dropped redirect, and nothing the placement withdrew: the item's own records
+            // said it was being brought to rest before the drop, so the resume brings it to rest - its probe's question
+            // withdrawn with the step that asked it - and its visit again in its place is what asks.
+            var resumed = CoordinatorOf(definition, ChangingOne(), again, harness, layout, ResumeOf(harness, layout, definition));
+            _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+            Assert.Equal("rounds.items[1].probe", Assert.Single(resumed.OpenQuestions).Instance);
+
+            // No redirect was made for the one dropped: the group it would reset stands as it was, its agent never left open
+            // by a reset no one answered.
+            Assert.Null(resumed.Instances["rounds.items[0].fixit"].LeftBy);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "rounds.items[0].fixit+2");
+        }
+
+        Assert.Equal("withdrawn", Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents").State);
+        Assert.DoesNotContain(
+            FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Select(read => read.Detail),
+            detail => detail?.StartsWith("the run was sent to 'fixit'", StringComparison.Ordinal) == true);
+    }
+
+    /// <summary>
+    /// Placing a plan update's piece against a work item under way is durable as one step: whichever write the process
+    /// ends at - every write of the run's state, its questions and its updates from the one that decides the update's
+    /// pieces to the one that says the update done, each tried in its turn - the session that takes the run up neither
+    /// refuses nor asks a question the placement withdrew. The item's own record says first that it is being ended for
+    /// the update, so a resume after that write completes what bringing it to rest does - the probe's question withdrawn
+    /// with the step that asked it, the recovery's redirect dropped with the question it asked - and one before it finds
+    /// the placement not begun and makes it. Either way the update is placed once, and the item is brought to rest once
+    /// and visited again once, whose own probe is what the run then asks.
+    /// </summary>
+    [Fact]
+    public async Task APlacementTheProcessEndsInTheMiddleOf_IsCompletedByTheResume_AtEveryWriteItMakes()
+    {
+        var points = new List<string>();
+        var failed = new List<string>();
+
+        for (var point = 0; points.LastOrDefault() != "the update done"; point++)
+        {
+            using var temp = new TempDirectory();
+            var definition = Parse(WithAGroupTheRecoverySendsBack()) with { MaxOpenAgents = 3 };
+            var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+            // The process ends at the point-th write of the run's records counted from the one that decides the update's
+            // pieces, which is the 0th: of its state, its questions or its updates, each a write of its own - the item
+            // marked where the state says it is being ended for the update while the redirect it owed is still owed.
+            var decided = false;
+            var writes = 0;
+            string? crashedAt = null;
+            var crashing = new CrashingRecords(
+                records,
+                updates =>
+                {
+                    decided |= updates.Updates.Any(update => update is { State: FlowUpdateStates.UnderWay, Pieces: not null });
+                    return At(() => updates.Updates.Any(update => update.State == FlowUpdateStates.Done) ? "the update done" : "the update's pieces");
+                },
+                picksRun: run => At(() => run.Steps.Single(step => step.Instance == "rounds.items[0]").EndedFor is not null && run.Redirects is [_, ..]
+                    ? "the item marked"
+                    : "the run's state"),
+                picksQuestions: _ => At(() => "the run's questions"));
+
+            bool At(Func<string> what)
+            {
+                if (!decided || writes++ != point)
+                {
+                    return false;
+                }
+
+                crashedAt = what();
+                return true;
+            }
+
+            await UntilThePlacementCrashesAsync(definition, records, crashing, harness, layout);
+            points.Add(crashedAt!);
+
+            try
+            {
+                var (_, _, again) = Records("r1", temp.Path, definition);
+
+                using (again)
+                {
+                    // Never refused, and nothing withdrawn is asked again: the one question open is the visit again's probe.
+                    var resumed = CoordinatorOf(definition, ChangingOne(), again, harness, layout, ResumeOf(harness, layout, definition));
+                    _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+                    Assert.Equal("rounds.items[1].probe", Assert.Single(resumed.OpenQuestions).Instance);
+                    Assert.Equal(FlowInstanceState.Stopped, resumed.Instances["rounds.items[0]"].State);
+                    Assert.Equal("u1", resumed.Instances["rounds.items[0]"].EndedFor);
+
+                    // What the crash cut off in an item its records say is being ended for the update is stopped for it,
+                    // its one attempt over; before the item was marked, it is drawn again as a new attempt, which the
+                    // placement then skips before it starts.
+                    var tidy = resumed.Instances["rounds.items[0].tidy"];
+                    Assert.Equal(
+                        point == 0 ? (FlowInstanceState.Skipped, 2, null) : (FlowInstanceState.Stopped, 1, "u1"),
+                        (tidy.State, tidy.Attempt, tidy.EndedFor));
+
+                    // Nothing is sent back into the item, and it is visited again once.
+                    Assert.Null(resumed.Instances["rounds.items[0].fixit"].LeftBy);
+                    Assert.DoesNotContain(resumed.Instances.Keys, id => id is "rounds.items[0].fixit+2" or "rounds.items[2]");
+                }
+
+                var questions = harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions;
+                Assert.Equal("withdrawn", Assert.Single(questions, question => question.RaisedBy?.Step == "rounds.items[0].probe").State);
+                Assert.Equal("withdrawn", Assert.Single(questions, question => question.Kind == "openAgents").State);
+
+                // The update is placed once: done, its one piece placed against the item and visited again in its place.
+                var update = Assert.Single(harness.OrchestrationStore.ReadFlowUpdates(layout)!.Updates);
+                Assert.Equal(FlowUpdateStates.Done, update.State);
+                var piece = Assert.Single(update.ThePieces);
+                Assert.Equal(("rounds.items[0]", "rounds.items[1]"), (piece.Placed, piece.Again));
+
+                // The item was ended for the update once and visited again once, whichever session did each.
+                var details = FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Select(read => read.Detail).ToList();
+                _ = Assert.Single(details, detail => detail?.StartsWith("ended for update u1:", StringComparison.Ordinal) == true);
+                _ = Assert.Single(details, detail => detail?.StartsWith("visited again in its place for update u1:", StringComparison.Ordinal) == true);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Every crash point is tried, and each one the resume does not complete is named.
+                failed.Add($"write {point.ToString(System.Globalization.CultureInfo.InvariantCulture)} ({crashedAt}): {ex.Message}");
+            }
+        }
+
+        Assert.True(failed.Count == 0, string.Join(Environment.NewLine, failed));
+
+        // Every write the placement makes was a crash point, in the order it makes them: the update's pieces decided; the
+        // item's own record saying it is being ended for the update, before anything it owed is dropped; the redirect's
+        // drop and its question's withdrawal; the probe's question withdrawn and the probe skipped; the update done.
+        Assert.Equal(["the update's pieces", "the item marked", "the run's state", "the run's questions", "the run's questions", "the run's state", "the update done"], points);
+    }
+
+    /// <summary>
+    /// The first session of a run of <see cref="WithAGroupTheRecoverySendsBack"/>, over <paramref name="crashing"/>, until
+    /// the process ends where they say: the item's group fails to the recovery, whose visit puts it right while the plan
+    /// update the session is offered is being checked - its redirect back to the group, which would leave the group's agent
+    /// open, asks - beside the item's probe, which asks, and its tidy, which runs on; then the plan stands, and its one
+    /// piece is placed against the item, under way, which is brought to rest.
+    /// </summary>
+    /// <param name="definition">The run's definition, which holds one agent more than the item's.</param>
+    /// <param name="records">The run's records, closed once the session has ended.</param>
+    /// <param name="crashing">The records the session writes through, which end the process.</param>
+    /// <param name="harness">The run's services.</param>
+    /// <param name="layout">The run's layout.</param>
+    private static async Task UntilThePlacementCrashesAsync(WorkflowDefinition definition, FlowRunRecords records, CrashingRecords crashing, HarnessFactory harness, OrchestratorLayout layout)
+    {
         var mended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var checkedAgain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var checking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1528,18 +1698,6 @@ public sealed class FlowPlanPiecesTests
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success);
             });
 
-        // The process ends at the write that withdraws the redirect's question, or at the first write of the run's state
-        // that no longer holds the redirect once it was owed asking.
-        var owed = false;
-        var crashing = crashAfter == "the drop"
-            ? new CrashingRecords(records, _ => false, picksRun: run =>
-            {
-                var held = run.Redirects?.Any(redirect => redirect.Handler == "rounds.items[0].recover") == true;
-                owed |= held;
-                return owed && !held;
-            })
-            : new CrashingRecords(records, _ => false, picksQuestions: questions => questions.Any(question => question is { Kind: "openAgents", State: "withdrawn" }));
-
         using (records)
         {
             var coordinator = CoordinatorOf(definition, runner, crashing, harness, layout);
@@ -1561,35 +1719,6 @@ public sealed class FlowPlanPiecesTests
             coordinator.RequestStop();
             _ = await session.WaitAsync(Bound, Token);
         }
-
-        // On disk: the redirect is gone, and its question withdrawn or still open as the crash left it.
-        Assert.True(harness.OrchestrationStore.ReadFlow(layout)!.Redirects is null or []);
-        Assert.Equal(
-            crashAfter == "the drop" ? "open" : "withdrawn",
-            Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents").State);
-
-        var (_, _, again) = Records("r1", temp.Path, definition);
-
-        using (again)
-        {
-            // The resume asks nothing of the dropped redirect: what is open is the item's own probe, which the process ended
-            // before the item's placement withdrew; a person answers it, and the run goes on.
-            var resumed = CoordinatorOf(definition, ChangingOne(), again, harness, layout, ResumeOf(harness, layout, definition));
-            var probe = Assert.Single(resumed.OpenQuestions);
-            Assert.Equal(("pause", "rounds.items[0].probe"), (probe.Kind, probe.Instance));
-            Assert.True(resumed.TryAnswer(probe.Id, "go", null, out var problem), problem);
-            _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
-
-            // No redirect was made for the one dropped: the group it would reset stands as it was, its agent never left open
-            // by a reset no one answered.
-            Assert.Null(resumed.Instances["rounds.items[0].fixit"].LeftBy);
-            Assert.DoesNotContain(resumed.Instances.Keys, id => id == "rounds.items[0].fixit+2");
-        }
-
-        Assert.Equal("withdrawn", Assert.Single(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents").State);
-        Assert.DoesNotContain(
-            FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Select(read => read.Detail),
-            detail => detail?.StartsWith("the run was sent to 'fixit'", StringComparison.Ordinal) == true);
     }
 
     /// <summary>

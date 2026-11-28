@@ -5017,7 +5017,15 @@ join holds it (`PlanValidator.CheckPieces`: a removed piece's item joins the rou
 the instance's own records - ended for the update (`FlowStepRecord.EndedFor`), the piece it carries (`PieceOf`) and the
 instance it was visited again in place of (`AgainOf`) - so no session after runs an instance an update ended, a resume
 goes on bringing one to rest, and the pieces are placed once from the update's entry however often a crash makes the
-engine meet its plan standing, an instance an earlier update visited again among them. A visit an update ended waits on
+engine meet its plan standing, an instance an earlier update visited again among them. Placing a piece against an
+instance under way is durable as one step: the placement's first write of it is the instance's own record saying it is
+being ended for the update, before anything it owed is dropped or anything in it skipped, so a crash anywhere among the
+writes that follow leaves a session that takes the run up to complete them before anything runs - what it owed dropped,
+a redirect with the question it asks, and what never started in it or waits on a question skipped, the question
+withdrawn (`FlowCoordinator.EndWhatItHolds`, the one owner the placement and the resume go through) - and a crash before
+it leaves the piece unplaced, which that session places; neither is refused over a question the placement withdraws, for
+an update under way that moves on without a step - its plan standing among it - is something that can run
+(`FlowCoordinator.NextOfTheUpdate`). A visit an update ended waits on
 nothing and is counted ended by the engine and the status alike, by the engine's own rule of what is left
 (`FlowInstance.IsLeft`, over `FlowInstance.IsStoppedForAnUpdate`; read by `Unended` and by `FlowStatus.IsLeft`), where one
 a pause or a stop stopped is left, to run again at the resume. Every instance of the group is of one kind, and the step
@@ -5458,7 +5466,10 @@ step that never ended, nor one its scope never drew, and a run is never said don
 takes it up before its session - over a step a pause or a stop stopped, which runs again at the resume, nor over a
 failure or a handler's raise owed to the next session. What the session's start writes is held, in the
 order made and each with the run as it stood, until it is known the session goes on: a resume beside
-an open question is refused only where nothing can run until a question is answered, and then it has
+an open question is refused only where nothing can run until a question is answered - no step that starts, no redirect
+owed that can be made, no plan update under way that moves on without a step (its planning step raised where a crash
+cut the raise off, its end, its `then`, or its pieces placed where its plan stands, `FlowCoordinator.NextOfTheUpdate`,
+the one owner of when an update moves on, which `SettleUpdates` carries out) - and then it has
 written nothing - no event, no attempt, no state; a session an answer began, one whose budget
 question is open, and one beside a question still owing its recommendation - deferred by a stop or by a
 pause a stop cut short, left sought by a crash, or never sought in a questions file an earlier build wrote

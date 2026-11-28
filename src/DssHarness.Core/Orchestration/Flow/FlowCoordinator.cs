@@ -1947,16 +1947,18 @@ public sealed class FlowCoordinator
 
             // A resume beside an open question is not refused where something can run - a step that starts, a
             // redirect the run owes that can be made now, which draws its steps again and may take the question back,
-            // or the recommendation an open question still owes, which a person is never left to answer without; it
-            // is refused only where nothing can until the question is answered - before anything of its own is
-            // written, for the held writes are never made. A session an answer began goes on, as does one whose budget
-            // question is open: it is paused again on that question, which a person answers.
+            // a plan update under way that moves on without a step - its plan standing, whose pieces placed may take the
+            // question back (NextOfTheUpdate) - or the recommendation an open question still owes, which a person is never
+            // left to answer without; it is refused only where nothing can until the question is answered - before
+            // anything of its own is written, for the held writes are never made. A session an answer began goes on, as
+            // does one whose budget question is open: it is paused again on that question, which a person answers.
             if (_resume is not null
                 && _sessions == 1
                 && !_answeredAtStart
                 && OpenBudgetQuestion is null
                 && NextIds().Count == 0
                 && RedirectToMake() is null
+                && !(UnderWayUpdate is { } underWay && NextOfTheUpdate(underWay, PlannerOf(underWay)) != UpdateNext.Waits)
                 && !OpenQuestions.Any(asked => OwesAdvice(asked) && _answerable.ContainsKey(asked.Id))
                 && _created.FirstOrDefault(instance => instance.WaitingQuestion is not null) is { } waitsOnOne)
             {
@@ -2332,9 +2334,10 @@ public sealed class FlowCoordinator
     {
         // An instance a plan update was bringing to rest when the session before ended goes on being brought to rest:
         // what was in flight in it ended with that session, and what a pause or a stop stopped in it, each stopped for
-        // the update - its visit is over, never given a new attempt - and what had not started in it is skipped, so it
-        // comes to rest and is visited again in its place. A step of a group nested in it, at any depth, is one of its
-        // steps (StepsWithin).
+        // the update - its visit is over, never given a new attempt - and what it owed is dropped and what had not started
+        // in it, or waits on a question, is skipped, as its placement does (EndWhatItHolds) - a crash among the
+        // placement's writes left the rest of them to this session - so it comes to rest and is visited again in its
+        // place. A step of a group nested in it, at any depth, is one of its steps (StepsWithin).
         foreach (var item in _scopes.Where(scope => scope.EndingFor is not null).ToList())
         {
             var (update, piece) = item.EndingFor!.Value;
@@ -2359,7 +2362,7 @@ public sealed class FlowCoordinator
                 }
             }
 
-            SkipWhatNeverStartedIn(item, update);
+            EndWhatItHolds(item);
         }
 
         // What a pause or a stop stopped, runs again: a new attempt of its visit, as a retry is, its handoff
@@ -5288,7 +5291,7 @@ public sealed class FlowCoordinator
     /// has come to rest - the step ended, what <c>then</c> set going has ended, and a <c>repeat</c> it is in has ended
     /// its iteration - the updated plan stands and the update is <c>done</c>: what was owed is made, and the steps that
     /// start from here on resolve every name anew. One update at a time: the next one queued is taken as each is
-    /// settled, in the order given.
+    /// settled, in the order given. What the update takes at each turn is decided once (<see cref="NextOfTheUpdate"/>).
     /// </summary>
     /// <returns>Whether anything followed, so the pass goes round again.</returns>
     private bool SettleUpdates()
@@ -5297,9 +5300,8 @@ public sealed class FlowCoordinator
 
         while (UnderWayUpdate is { } update)
         {
-            var planner = _heldPlanner is { } held && held.RaisedByUpdate == update.Id
-                ? held
-                : _created.FirstOrDefault(visit => visit.RaisedByUpdate == update.Id);
+            var planner = PlannerOf(update);
+            var next = NextOfTheUpdate(update, planner);
 
             if (planner is null)
             {
@@ -5311,10 +5313,7 @@ public sealed class FlowCoordinator
 
             _heldPlanner = planner;
 
-            if (planner.State is FlowInstanceState.Failed or FlowInstanceState.Skipped
-                && planner.FailureSettled
-                && !_pendingEndings.Values.Any(pending => ReferenceEquals(pending.Source, planner))
-                && !_questions.Any(asked => asked.Instance == planner.Id && _open.Contains(asked.Id)))
+            if (next == UpdateNext.GivenUp)
             {
                 var what = update.Cause == FlowUpdateCauses.ChangedAnswer ? "answer" : update.Cause == FlowUpdateCauses.PlanCheck ? "update" : "request";
                 GiveUpUpdate(update, $"its planning step '{planner.Id}' ended {planner.State.ToString().ToLowerInvariant()}: the {what} is recorded and no plan holds it");
@@ -5322,101 +5321,150 @@ public sealed class FlowCoordinator
                 continue;
             }
 
-            if (planner.State == FlowInstanceState.Done)
+            if (next == UpdateNext.ItsThen)
             {
-                if (_definition.Amend?.Then is { } target
-                    && update.Then is null
-                    && !_redirects.Any(redirect => ReferenceEquals(redirect.Handler, planner))
-                    && !_created.Any(visit => visit.LeftBy == planner.Id))
-                {
-                    // The redirect then names is decided once, written into the update's entry before the machinery
-                    // that makes it: a crash between the two leaves the entry to say it was decided, and a visit the
-                    // redirect left says it was made.
-                    PutUpdate(update with { Then = target });
-                    DecideTheThen(planner, target);
-                    return true;
-                }
+                // The redirect then names is decided once, written into the update's entry before the machinery
+                // that makes it: a crash between the two leaves the entry to say it was decided, and a visit the
+                // redirect left says it was made.
+                var target = _definition.Amend!.Then!;
+                PutUpdate(update with { Then = target });
+                DecideTheThen(planner, target);
+                return true;
+            }
 
-                if (PlansNoMore(planner))
-                {
-                    // The check the then names refused the plan, and no loop around the planning goes round again - one
-                    // accepted at its bound as it stood, or none there is: no plan of this update will ever stand, so it
-                    // is given up, the run going on with the plan as it was, never held for ever on it.
-                    var what = update.Cause == FlowUpdateCauses.ChangedAnswer ? "answer" : update.Cause == FlowUpdateCauses.PlanCheck ? "update" : "request";
-                    GiveUpUpdate(update, $"'{_definition.Amend!.Then}' refused its plan, and nothing around its planning step '{planner.Id}' plans it again: the {what} is recorded and no plan holds it");
-                    changed = true;
-                    continue;
-                }
+            if (next == UpdateNext.PlansNoMore)
+            {
+                // The check the then names refused the plan, and no loop around the planning goes round again - one
+                // accepted at its bound as it stood, or none there is: no plan of this update will ever stand, so it
+                // is given up, the run going on with the plan as it was, never held for ever on it.
+                var what = update.Cause == FlowUpdateCauses.ChangedAnswer ? "answer" : update.Cause == FlowUpdateCauses.PlanCheck ? "update" : "request";
+                GiveUpUpdate(update, $"'{_definition.Amend!.Then}' refused its plan, and nothing around its planning step '{planner.Id}' plans it again: the {what} is recorded and no plan holds it");
+                changed = true;
+                continue;
+            }
 
-                if (PlanStands(planner))
+            if (next == UpdateNext.ItsPlan)
+            {
+                // The updated plan stands, and only now is its scope read: until it passed what the flow has it
+                // pass, nothing is placed and nobody is told anything. What it decided is written into the update's
+                // entry before anything is placed, as its then is, so a session that takes the update up again
+                // places what was decided, once, never reading the scope a second time.
+                if (update.Pieces is null)
                 {
-                    // The updated plan stands, and only now is its scope read: until it passed what the flow has it
-                    // pass, nothing is placed and nobody is told anything. What it decided is written into the update's
-                    // entry before anything is placed, as its then is, so a session that takes the update up again
-                    // places what was decided, once, never reading the scope a second time.
-                    if (update.Pieces is null)
+                    if (PiecesOf(planner, out var unread) is not { } pieces)
                     {
-                        if (PiecesOf(planner, out var unread) is not { } pieces)
-                        {
-                            var what = update.Cause == FlowUpdateCauses.ChangedAnswer ? "answer" : update.Cause == FlowUpdateCauses.PlanCheck ? "update" : "request";
-                            GiveUpUpdate(update, $"its scope '{_definition.Amend!.Scope}' {unread}: the {what} is recorded and no plan holds it");
-                            changed = true;
-                            continue;
-                        }
-
-                        update = update with { Pieces = pieces };
-                        PutUpdate(update);
-                    }
-
-                    if (NoRoundForTheWork(update) is { } nowhere)
-                    {
-                        // Its work would be owed to a work-item group that has run every round it may: nothing is
-                        // placed, and the update is given up with why, as nothing would carry it out.
-                        GiveUpUpdate(update, nowhere);
+                        var what = update.Cause == FlowUpdateCauses.ChangedAnswer ? "answer" : update.Cause == FlowUpdateCauses.PlanCheck ? "update" : "request";
+                        GiveUpUpdate(update, $"its scope '{_definition.Amend!.Scope}' {unread}: the {what} is recorded and no plan holds it");
                         changed = true;
                         continue;
                     }
 
-                    // What the updates owe the round that opens next, as it stood before this one placed anything: a check
-                    // that joined it to a round not yet expanded is drawn again where this update changes what it joined.
-                    var owedBefore = OwedSaid();
-                    var placed = PlaceThePieces(update);
-                    var told = TellThePieces(update, placed);
+                    update = update with { Pieces = pieces };
+                    PutUpdate(update);
+                }
 
-                    _heldPlanner = null;
-                    PutUpdate(update with { State = FlowUpdateStates.Done, Pieces = placed, Told = told.Told, NotConcerned = told.NotConcerned, NotDelivered = told.NotDelivered });
-                    Record(
-                        FlowChangeKind.Answer,
-                        detail: placed.Count == 0
-                            ? $"update {update.Id} is done: its plan stands, and nothing of its scope changes"
-                            : $"update {update.Id} is done: its plan stands, {placed.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} piece(s) placed, and the steps that start from here on read it");
-
-                    // An iteration or a round an earlier update added that nothing is owed any more, its work withdrawn
-                    // before it opened, is taken back first - so what this update owes is counted as if it had never
-                    // been added; then what the update owes a loop is carried to the loop's next iteration, whatever its
-                    // until says - an iteration added at the bound where the loop has none of its own - and what it owes
-                    // a work-item group with no loop around it, by a round of the group added for it.
-                    TakeBackWhatOwesNothing(update.Id);
-                    CarryWhatTheLoopsOwe();
-                    AddARoundOwed(update);
-
-                    // A check that had joined work this update withdrew or changed to a round not yet expanded is drawn
-                    // again, so the round opens with what the updates owe it now.
-                    CheckAgainWhatWasJoined(update.Id, owedBefore);
-
-                    // The check that raised it runs again on the list as it now is, before any queued update is
-                    // taken: its round opens from what that visit finds.
-                    _ = RetryTheWaitingChecks();
-                    _ = TakeQueuedUpdates();
+                if (NoRoundForTheWork(update) is { } nowhere)
+                {
+                    // Its work would be owed to a work-item group that has run every round it may: nothing is
+                    // placed, and the update is given up with why, as nothing would carry it out.
+                    GiveUpUpdate(update, nowhere);
                     changed = true;
                     continue;
                 }
+
+                // What the updates owe the round that opens next, as it stood before this one placed anything: a check
+                // that joined it to a round not yet expanded is drawn again where this update changes what it joined.
+                var owedBefore = OwedSaid();
+                var placed = PlaceThePieces(update);
+                var told = TellThePieces(update, placed);
+
+                _heldPlanner = null;
+                PutUpdate(update with { State = FlowUpdateStates.Done, Pieces = placed, Told = told.Told, NotConcerned = told.NotConcerned, NotDelivered = told.NotDelivered });
+                Record(
+                    FlowChangeKind.Answer,
+                    detail: placed.Count == 0
+                        ? $"update {update.Id} is done: its plan stands, and nothing of its scope changes"
+                        : $"update {update.Id} is done: its plan stands, {placed.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} piece(s) placed, and the steps that start from here on read it");
+
+                // An iteration or a round an earlier update added that nothing is owed any more, its work withdrawn
+                // before it opened, is taken back first - so what this update owes is counted as if it had never
+                // been added; then what the update owes a loop is carried to the loop's next iteration, whatever its
+                // until says - an iteration added at the bound where the loop has none of its own - and what it owes
+                // a work-item group with no loop around it, by a round of the group added for it.
+                TakeBackWhatOwesNothing(update.Id);
+                CarryWhatTheLoopsOwe();
+                AddARoundOwed(update);
+
+                // A check that had joined work this update withdrew or changed to a round not yet expanded is drawn
+                // again, so the round opens with what the updates owe it now.
+                CheckAgainWhatWasJoined(update.Id, owedBefore);
+
+                // The check that raised it runs again on the list as it now is, before any queued update is
+                // taken: its round opens from what that visit finds.
+                _ = RetryTheWaitingChecks();
+                _ = TakeQueuedUpdates();
+                changed = true;
+                continue;
             }
 
             break;
         }
 
         return changed;
+    }
+
+    /// <summary>The visit of the planning step <paramref name="update"/> raised: the one the run is held for, or the one its records name; null where its raise was cut off.</summary>
+    /// <param name="update">The update under way.</param>
+    private FlowInstance? PlannerOf(FlowUpdateEntry update)
+        => _heldPlanner is { } held && held.RaisedByUpdate == update.Id
+            ? held
+            : _created.FirstOrDefault(visit => visit.RaisedByUpdate == update.Id);
+
+    /// <summary>
+    /// What the plan update under way takes next, as its planning step stands: the one owner of when an update moves on
+    /// without a step of the run starting - its planning step raised where a crash cut its raise off, its end where that
+    /// step's failure is settled, the redirect its <c>then</c> names, its end where no plan of it will stand, its pieces
+    /// placed where its plan stands - which <see cref="SettleUpdates"/> carries out at every pass, and which a resume's
+    /// start reads: an update that takes anything goes on in the session's first pass, so a resume beside an open question
+    /// is never refused over it - it may place the pieces whose placement withdraws that question.
+    /// </summary>
+    /// <param name="update">The update under way.</param>
+    /// <param name="planner">The visit of the planning step it raised (<see cref="PlannerOf"/>); null where its raise was cut off.</param>
+    private UpdateNext NextOfTheUpdate(FlowUpdateEntry update, FlowInstance? planner)
+        => planner is null ? UpdateNext.ItsPlanner
+            : planner.State is FlowInstanceState.Failed or FlowInstanceState.Skipped
+                && planner.FailureSettled
+                && !_pendingEndings.Values.Any(pending => ReferenceEquals(pending.Source, planner))
+                && !_questions.Any(asked => asked.Instance == planner.Id && _open.Contains(asked.Id)) ? UpdateNext.GivenUp
+            : planner.State != FlowInstanceState.Done ? UpdateNext.Waits
+            : _definition.Amend?.Then is not null
+                && update.Then is null
+                && !_redirects.Any(redirect => ReferenceEquals(redirect.Handler, planner))
+                && !_created.Any(visit => visit.LeftBy == planner.Id) ? UpdateNext.ItsThen
+            : PlansNoMore(planner) ? UpdateNext.PlansNoMore
+            : PlanStands(planner) ? UpdateNext.ItsPlan
+            : UpdateNext.Waits;
+
+    /// <summary>What the plan update under way takes next (<see cref="NextOfTheUpdate"/>).</summary>
+    private enum UpdateNext
+    {
+        /// <summary>Nothing until a step of the run moves: its planning step, or what its <c>then</c> set going, is at work or waits.</summary>
+        Waits,
+
+        /// <summary>Its planning step, whose raise a crash cut off after the update's entry was written.</summary>
+        ItsPlanner,
+
+        /// <summary>Its end, given up: its planning step failed or was skipped, and nothing more decides that failure.</summary>
+        GivenUp,
+
+        /// <summary>The redirect the <c>amend</c> block's <c>then</c> names, decided once.</summary>
+        ItsThen,
+
+        /// <summary>Its end, given up: the check its <c>then</c> names refused its plan, and nothing around its planning plans it again.</summary>
+        PlansNoMore,
+
+        /// <summary>Its plan, which stands: its scope read where it was not, and its pieces placed.</summary>
+        ItsPlan,
     }
 
     /// <summary>Gives the update under way up: <c>failed</c>, nothing placed, nobody told, the hold ended - the run goes on with the plan as it was, and the next one queued is taken.</summary>
@@ -5732,20 +5780,22 @@ public sealed class FlowCoordinator
             {
                 // What was built is under way: the instance is brought to rest and visited again, in its place and
                 // with its agent, as the piece's kind - the hold does not wait for it to come to rest. Its own record
-                // says it is being ended for the update from now on, so a session that takes the run up goes on
-                // bringing it to rest, and never runs it again.
+                // says it is being ended for the update from now on, in the placement's first write of it - before
+                // anything it owed is dropped or anything in it is skipped - so a session that takes the run up after a
+                // crash anywhere among the writes that follow completes them (EndWhatItHolds), goes on bringing it to
+                // rest, and never runs it again; and a crash before it leaves the piece unplaced, which that session
+                // places, never a placement half made that nothing reads as begun.
                 instance.EndingFor = (update.Id, piece);
                 instance.WorkItemKind = piece.Kind;
                 instance.Piece = piece;
                 instance.PieceOf = update.Id;
                 instance.GroupInstance!.EndedFor = update.Id;
-                DropWhatItOwes(instance);
-                SkipWhatNeverStartedIn(instance, update.Id);
-                placed.Add(piece with { Placed = instance.GroupInstance!.Id });
                 Record(
                     FlowChangeKind.Step,
                     instance.GroupInstance!,
                     detail: $"ended for update {update.Id}: its work item '{piece.ItemName()}' is {(piece.Kind == FlowUpdatePieceKinds.Changed ? "done again" : "taken back")}, and it is visited again in its place");
+                EndWhatItHolds(instance);
+                placed.Add(piece with { Placed = instance.GroupInstance!.Id });
                 continue;
             }
 
@@ -6162,6 +6212,23 @@ public sealed class FlowCoordinator
         return (round is null ? $"the round '{group}' when it opens"
             : loop is not null ? $"the next iteration of '{loop.Step.Name}'"
             : RoundAddedTo(group), loop);
+    }
+
+    /// <summary>
+    /// What bringing <paramref name="item"/> to rest for a plan update ends of it at once, its own record saying already
+    /// that it is being ended for the update: what it owed is dropped (<see cref="DropWhatItOwes"/>) - a redirect with the
+    /// question it asks among it - and what never started in it, or waits on a question, is skipped
+    /// (<see cref="SkipWhatNeverStartedIn"/>), the question withdrawn. The one owner the placement and the resume go
+    /// through: the placement makes it after the write that marks the instance, and a session that takes the run up with
+    /// an instance being brought to rest makes it again before anything runs - a crash anywhere among the placement's
+    /// writes left the rest to it, and what was made already is found made, so nothing is dropped, withdrawn or skipped
+    /// twice, and no question the placement withdrew is left for a person to answer.
+    /// </summary>
+    /// <param name="item">The item scope of the work-item group being ended for an update.</param>
+    private void EndWhatItHolds(Scope item)
+    {
+        DropWhatItOwes(item);
+        _ = SkipWhatNeverStartedIn(item, item.EndingFor!.Value.Update);
     }
 
     /// <summary>
