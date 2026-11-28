@@ -1865,6 +1865,111 @@ public sealed class FlowHandlerRecordsTests
         Assert.Equal([new FlowHandlerState("fix", "done")], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build"))!.Handlers);
     }
 
+    /// <summary>
+    /// No write of the run's state holds a raise owed beside the visit it raised, across a crash and the resume that goes on
+    /// from it: an ending with two handlers, cut off after the first one's visit was recorded, is taken up - the raise made
+    /// written raised in the first write the resume makes of its source, the other raised said before its visit is - and
+    /// both handlers run once, the failure handled.
+    /// </summary>
+    [Fact]
+    public async Task NoWriteHoldsARaiseOwedBesideTheVisitItRaised_AcrossACrashAndItsResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+              - name: note
+                type: orient
+                on: {step: build, outcome: failure}
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var runner = new Runner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+        var both = new List<string>();
+
+        // Each write is looked at whole: a source's handler written owed while a visit of it that source raised is in the
+        // same write.
+        void Look(FlowSnapshot run)
+        {
+            foreach (var source in run.Steps.Where(step => step.Handlers is not null))
+            {
+                both.AddRange(source.Handlers!
+                    .Where(handler => handler.State == "owed" && run.Steps.Any(visit => visit.RaisedBy == source.Instance && FlowInstanceId.PathOf(visit.Instance) == handler.Handler))
+                    .Select(handler => $"{source.Instance}: {handler.Handler}"));
+            }
+        }
+
+        var crashing = new CrashingRecords(new Inspected(records, Look), _ => false, picksStep: (instance, _) => instance == "fix");
+
+        using (records)
+        {
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
+            Assert.True(crashing.Ended);
+        }
+
+        Assert.Equal([new FlowHandlerState("note", "owed"), new FlowHandlerState("fix", "raised")], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("build"))!.Handlers);
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(definition);
+        var again = new Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: new Inspected(resumedRecords, Look), resume: taken);
+            var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["fix", "note", "after"], again.Started);
+        }
+
+        Assert.Empty(both);
+    }
+
+    /// <summary>The run's records, each write passed on after the test has looked at the run it writes whole.</summary>
+    private sealed class Inspected(IFlowRecords inner, Action<FlowSnapshot> look) : IFlowRecords
+    {
+        /// <inheritdoc/>
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+        {
+            look(snapshot);
+            inner.Write(kind, snapshot, instance, from, to, attempt, detail);
+        }
+
+        /// <inheritdoc/>
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+            => inner.Question(questions, refused);
+
+        /// <inheritdoc/>
+        public void Updates(FlowUpdatesFile updates)
+            => inner.Updates(updates);
+
+        /// <inheritdoc/>
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+            => inner.AffectedTests(entries);
+
+        /// <inheritdoc/>
+        public string NameAgent(IReadOnlyCollection<string> recorded)
+            => inner.NameAgent(recorded);
+
+        /// <inheritdoc/>
+        public void Flush()
+            => inner.Flush();
+
+        /// <inheritdoc/>
+        public void Stand(FlowStartsStanding standing, IReadOnlyCollection<string> leftSought)
+            => inner.Stand(standing, leftSought);
+
+        /// <inheritdoc/>
+        public void Unstand()
+            => inner.Unstand();
+    }
+
     /// <summary>The run's records, made whole in <paramref name="directory"/> under run <paramref name="run"/>.</summary>
     private static (HarnessFactory Harness, OrchestratorLayout Layout, FlowRunRecords Records, ManualClock Clock) Records(string run, string directory, WorkflowDefinition definition)
     {

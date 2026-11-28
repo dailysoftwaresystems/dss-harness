@@ -285,16 +285,18 @@ public sealed class WorkflowStatusTests
     }
 
     /// <summary>
-    /// A failure whose visit of the recovery is paused on a person - the visit ended failed and asks what its failure does,
-    /// whose retry takes the failure again - shows Recovering, by the engine's own rule of a visit at work
-    /// (<see cref="FlowInstance.IsAtWork"/>), as the engine holds the visit at work: never Failed as though nothing worked
-    /// on it, which the status said while it read only the states of a visit still running.
+    /// A failure whose visit of the recovery the engine holds at work shows Recovering, by the engine's own rule of a visit
+    /// at work (<see cref="FlowInstance.IsAtWork"/>): a visit a pause or a stop stopped - which runs again at the resume, as
+    /// an older build's pause left a visit stopped and the session that takes it up holds it stopped until its start goes
+    /// on - is at work, where the status read only the states of a visit still running and showed the failure Failed; a
+    /// visit a plan update ended, in a work item it brought to rest, is over, and the failure shows Failed.
     /// </summary>
-    [Fact]
-    public async Task AFailureWhoseRecoveryVisitIsPausedOnAPerson_ShowsRecovering()
+    [Theory]
+    [InlineData(null, "Recovering", 1)]
+    [InlineData("u1", "Failed", 0)]
+    public void AFailureWhoseRecoveryVisitIsStopped_ShowsRecoveringWhileTheVisitIsAtWork(string? endedFor, string shown, int recovering)
     {
-        using var temp = new TempDirectory();
-        var clock = new ManualClock();
+        var at = new DateTimeOffset(2026, 11, 27, 10, 0, 0, TimeSpan.Zero);
         var definition = Parse("""
             name: flow
             recover:
@@ -309,25 +311,59 @@ public sealed class WorkflowStatusTests
                 type: orient
                 onFailure: recover
             """);
-        var (harness, layout, records) = Records("r1", temp.Path, definition, clock);
-        var runner = new DoneRunner()
-            .On("build", _ => FlowStepResult.Ended(passed: false, DssHarness.Core.Results.HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
-            .On("mend", _ => FlowStepResult.Ended(passed: false, DssHarness.Core.Results.HarnessExit.CommandFailed, error: "the mend did not hold"));
+        var snapshot = new FlowSnapshot(
+            FlowRunStatus.Paused,
+            null,
+            new FlowBudgetRecord(0, 0, 0),
+            0,
+            null,
+            [
+                SnapshotStep("build", "build", "orient", group: false, FlowInstanceState.Failed, at, at),
+                SnapshotStep("recover", FlowScope.Recovery, null, group: true, FlowInstanceState.Stopped, at, null, raisedBy: "build", endedFor: endedFor),
+                SnapshotStep("recover.mend", "recover.mend", "orient", group: false, FlowInstanceState.Stopped, at, null, endedFor: endedFor),
+            ],
+            [],
+            []);
 
-        using (records)
-        {
-            var end = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records).RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        var status = WorkflowStatusWriter.StatusOf(FlowRunContext.Of("r1", definition, startedAt: at), snapshot, at);
 
-            Assert.Equal(FlowRunStatus.Paused, end.Status);
-            Assert.Equal(["recover"], end.OpenQuestions.Select(question => question.Instance));
-        }
-
-        var status = harness.OrchestrationStore.ReadWorkflowStatus(layout)!;
-
-        Assert.Equal("Recovering", status.Steps["build"].Status);
-        Assert.Equal(new WorkflowInstanceStatus("Recovering", 1, 1, 1, clock.GetUtcNow(), clock.GetUtcNow(), 0, new WorkflowRecovery(1, 2, "fix")), status.Steps["build"].Instances["build"]);
-        Assert.Equal(1, status.Progress.Recovering);
+        Assert.Equal(shown, status.Steps["build"].Status);
+        Assert.Equal(
+            new WorkflowInstanceStatus(shown, 1, 1, 1, at, at, 0, recovering == 1 ? new WorkflowRecovery(1, 2, "fix") : null),
+            status.Steps["build"].Instances["build"]);
+        Assert.Equal(recovering, status.Progress.Recovering);
     }
+
+    /// <summary>One instance as the engine's snapshot holds it, with what a test of the status sets and nothing else.</summary>
+    private static FlowSnapshotStep SnapshotStep(string instance, string step, string? type, bool group, FlowInstanceState state, DateTimeOffset started, DateTimeOffset? finished, string? raisedBy = null, string? endedFor = null)
+        => new(
+            instance,
+            step,
+            type,
+            group,
+            state,
+            Attempt: 1,
+            Visit: 1,
+            started,
+            finished,
+            Exit: null,
+            Error: null,
+            SkippedBecause: null,
+            NotRunBecause: null,
+            Failure: null,
+            EndedByQuestion: null,
+            Agent: null,
+            Made: null,
+            Question: null,
+            Handoff: null,
+            Output: null,
+            FlowValue.Missing,
+            Index: null,
+            Iteration: null,
+            Answers: [],
+            WaitsOn: [],
+            RaisedBy: raisedBy,
+            EndedFor: endedFor);
 
     /// <summary>A resume rewrites the status from the run's state and its step records before it goes on, so after a crash it is never behind.</summary>
     [Fact]
