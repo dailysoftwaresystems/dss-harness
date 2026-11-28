@@ -1401,7 +1401,7 @@ public sealed class WorkflowTemplatesTests
         var architecture = Prose.Document("docs", "architecture.md");
 
         Assert.Contains(
-            "An issue sent to fix is the recovery's at once, its visit beside any other at work - save one a step of a visit of the recovery reported, which waits for that visit to end, for the recovery never calls itself, and one a visit at work fixes already for another step it stopped, which waits for that visit, or for the one it joined to - so one defect has one fix at a time: a visit that ended failed is at work until what its failure does is answered, and answered retry, the fix waits for its next visit; a step two issues stop runs again once, after both are settled. "
+            "An issue sent to fix is the recovery's at once, its visit beside any other at work - save one a step of a visit of the recovery reported, which waits for that visit to end, for the recovery never calls itself, and one a visit at work fixes already for another step it stopped, which waits for that visit, or for the one it joined to - so one defect has one fix at a time: a visit that ended failed is at work until what its failure does is answered, and answered retry, the fix waits for its next visit; one a plan update ended, in a work item it brought to rest, is over, and the fix that waited for it is taken; a step two issues stop runs again once, after both are settled. "
                 + "From the moment it is sent to fix until its visit ends, the issue holds the files its triage's where names - each a path from the repository's root, never a command - and, once a check of its visit has read the remedy items its diagnosis gives, the paths those items own: an instance of the work-item group that has not begun and owns one of them, or whose item names the issue's id in its needs - the fix it builds on - starts once that visit has ended, building on the tree the fix leaves,",
             help,
             StringComparison.Ordinal);
@@ -1410,7 +1410,7 @@ public sealed class WorkflowTemplatesTests
             Prose.Words(DssHarness.Core.Help.HelpTopics.Render("orchestrators")),
             StringComparison.Ordinal);
         Assert.Contains(
-            "An issue sent to fix is the recovery's at once, its fix beside any other at work - save one that a step of the recovery itself reported, which waits for that visit to end, and one a fix at work already mends for another step, which waits for that fix, as one joined to that fix's issue does: one defect has one fix at a time, and a fix whose failure is put to a person is at work until it is answered - on retry, the waiting one waits for its next visit; a step two issues stop runs again once, after both are settled.",
+            "An issue sent to fix is the recovery's at once, its fix beside any other at work - save one that a step of the recovery itself reported, which waits for that visit to end, and one a fix at work already mends for another step, which waits for that fix, as one joined to that fix's issue does: one defect has one fix at a time, and a fix whose failure is put to a person is at work until it is answered - on retry, the waiting one waits for its next visit - and a visit a plan update ended, in a work item it brought to rest, is over, so the fix that waited for it is taken; a step two issues stop runs again once, after both are settled.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
