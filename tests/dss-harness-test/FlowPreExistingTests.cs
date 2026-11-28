@@ -5415,6 +5415,190 @@ public sealed class FlowPreExistingTests
         Assert.Single(store.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents");
     }
 
+    /// <summary>
+    /// A visit of the recovery an older build recorded, which fixed an issue that stops its reporter, keeps no list of what
+    /// it sent the run back to - that build sent the reporter back as the visit ended, in the write after its done record,
+    /// and never again at a resume - so the rerun is read from what that redirect left: the process ended between the two
+    /// writes, the reporter neither left nor reset by a redirect owed, and no question asked of the agents the redirect would
+    /// leave open, leaves it undecided, and the resume sends the run back to the reporter, once, what depends on it after -
+    /// never the reporter of a fixed issue left as the issue stopped it.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderBuildsFixThatEndedDoneBeforeItsReportersRedirect_SendsTheRunBackToTheReporter_AtTheResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: after
+                type: orient
+                dependsOn: [think]
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var runner = new FakeRunner()
+            .On("think", asked => asked == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser", blocks: true)])
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("triage", run => Course("fix", run.Issue!.Title));
+        var harness = new HarnessFactory();
+        var store = new OrchestrationStore(harness.FileSystem, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new ManualClock();
+        var cancel = TestContext.Current.CancellationToken;
+
+        using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            // The process ends at the write of the fix's done record, before the redirect back to the reporter.
+            var crashing = new CrashingRecords(records, _ => false, picksStep: (instance, to) => instance == "recover" && to == nameof(FlowInstanceState.Done));
+            _ = await TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.True(crashing.Ended);
+        }
+
+        // The records as the older build left them: the visit's record keeps no list of reruns.
+        var flow = store.ReadFlow(layout)!;
+        store.WriteFlow(layout, flow with { Steps = [.. flow.Steps.Select(step => step with { Reruns = null })] });
+        RewriteRecord(store, layout, flow, "recover", record => record with { Reruns = null });
+        Assert.True(flow.Redirects is null or []);
+        Assert.Null(flow.Steps.Single(step => step.Instance == "think").LeftBy);
+
+        var again = new FakeRunner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(store, layout, harness.FileSystem).Load(definition));
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+            Assert.Equal(["think+2", "after+2"], again.Started.Select(started => started.Instance));
+            Assert.Equal("recover", resumed.Instances["think"].LeftBy);
+        }
+
+        Assert.Equal(["think"], store.ReadStepRecord(RecordOf(layout, flow, "recover"))!.Reruns);
+    }
+
+    /// <summary>
+    /// A reporter's rerun a visit of the recovery an older build recorded gave up by <c>stay</c> is decided, though that
+    /// build sent the reporter back as the visit ended, while another issue the reporter reported was still to be triaged,
+    /// and its record keeps no list of reruns: the question it asked of the agents it would leave open says so. So when that
+    /// other issue's triage ends, settling the last issue that stops the reporter, the question is not asked again and
+    /// nothing is reset - the run ends as the stay left it.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderBuildsReporterRerunGivenUpByStay_IsNotAskedAgain_WhenAnotherTriageOfTheReporterEnds()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: round
+                dependsOn: [think]
+                steps:
+                  - name: worker
+                    type: create-agent
+                    agent: maker
+                  - name: check
+                    type: orient
+                    dependsOn: [worker]
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var runner = new FakeRunner()
+            .On("think", asked => asked == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser", blocks: true)])
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("triage", run => Course("fix", run.Issue!.Title));
+        runner.Hold("mend");
+        var harness = new HarnessFactory();
+        var store = new OrchestrationStore(harness.FileSystem, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new ManualClock();
+        var cancel = TestContext.Current.CancellationToken;
+
+        using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            // The fix ends once the group that depends on the reporter has made its agent and ended: the redirect would
+            // leave that agent open, and asks; the answer stay gives it up.
+            var watched = new Watched(records, run => run.Steps.Any(step => step is { Instance: "round", State: FlowInstanceState.Done }));
+            _ = watched.Seen.ContinueWith(_ => runner.Release("mend"), TaskScheduler.Default);
+            var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+
+            var paused = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            var asked = Assert.Single(coordinator.OpenQuestions);
+            Assert.Equal(("openAgents", "recover"), (asked.Kind, asked.Instance));
+            Assert.True(coordinator.TryAnswer(asked.Id, "stay", out var problem), problem);
+        }
+
+        // The records as the older build left them: the visit's record keeps no list of reruns, and another issue that
+        // stops the reporter is still owed its triage, which that build's redirect at the fix's end did not wait for.
+        var flow = store.ReadFlow(layout)!;
+        var other = Issue("a second hole in the parser", blocks: true);
+        store.WriteFlow(layout, flow with
+        {
+            Steps = [.. flow.Steps.Select(step => step.Instance == "think" ? step with { IssuesOwed = [other] } : step with { Reruns = null })],
+        });
+        RewriteRecord(store, layout, flow, "recover", record => record with { Reruns = null });
+        RewriteRecord(store, layout, flow, "think", record => record with { IssuesOwed = [other] });
+
+        var again = new FakeRunner().On("triage", run => Course("list", run.Issue!.Title));
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: new FlowResume(store, layout, harness.FileSystem).Load(definition));
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.True(FlowRunStatus.Done == end.Status, $"{end.Summary} | asked: {string.Join("; ", resumed.OpenQuestions.Select(question => $"{question.Kind}: {question.Problem}"))}");
+            Assert.Equal([("triage+2", "a second hole in the parser")], again.Started);
+            Assert.DoesNotContain(resumed.Instances.Keys, id => id is "think+2" or "round+2");
+            Assert.Null(resumed.Instances["think"].LeftBy);
+        }
+
+        // One question asked over the whole run: the stay the older build was given stands.
+        Assert.Single(store.ReadFlowQuestions(layout)!.Questions, question => question.Kind == "openAgents");
+    }
+
+    /// <summary>The own record file of <paramref name="instance"/>, as <paramref name="flow"/> places it: in its agent's directory where it has one.</summary>
+    private static string RecordOf(OrchestratorLayout layout, FlowFile flow, string instance)
+        => Path.Combine(layout.InstanceDirectory(instance, flow.Steps.Single(step => step.Instance == instance).Agent), OrchestratorLayout.StepRecordFileName);
+
+    /// <summary>Rewrites the own record of <paramref name="instance"/> as <paramref name="change"/> makes it: the record as another build left it.</summary>
+    private static void RewriteRecord(OrchestrationStore store, OrchestratorLayout layout, FlowFile flow, string instance, Func<FlowStepRecord, FlowStepRecord> change)
+    {
+        var file = RecordOf(layout, flow, instance);
+        store.WriteStepRecord(file, change(store.ReadStepRecord(file)!));
+    }
+
     /// <summary>A work item of a plan, shaped as the real plan check reads one, owning paths of its own and reusing the repository's one file.</summary>
     private static JsonObject WorkItem(string name)
         => new()

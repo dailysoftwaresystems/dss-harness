@@ -972,6 +972,13 @@ public sealed class FlowCoordinator
     /// <summary>The redirects the run owes, in the order they were decided: each is made in its turn, once nothing it resets is running.</summary>
     private readonly List<PendingRedirect> _redirects = [];
 
+    /// <summary>
+    /// Whether the replay withdrew a question that asks of no redirect the run owes (<see cref="Replay"/>): the session's
+    /// start writes the questions so, once, held with its other writes - the drop that took the redirect out of the run's
+    /// records was written and the withdrawal after it was not.
+    /// </summary>
+    private bool _withdrawnByTheReplay;
+
     /// <summary>The alone step waiting for quiet, while it waits: nothing new is admitted until it has started.</summary>
     private FlowInstance? _barrier;
 
@@ -1869,6 +1876,14 @@ public sealed class FlowCoordinator
             // The attempt a raise an older build recorded answered, read as the resume took the run up, is the first thing
             // the start writes - before anything it decides rewrites the raise's source.
             WriteTheAttemptsRead();
+
+            if (_withdrawnByTheReplay)
+            {
+                // A question the replay found asking of no redirect the run owes is withdrawn on disk too, as the drop the
+                // process ended in would have written it.
+                _withdrawnByTheReplay = false;
+                WriteQuestions();
+            }
 
             foreach (var (waiting, asked) in _carryAtStart.ToList())
             {
@@ -6151,10 +6166,10 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// What the instance being brought to rest for an update owed is dropped: a raise whose ending is inside it, a
-    /// redirect whose handler is - with the question it asks - and the retry a step of it waits for - they were owed to
-    /// work that is now done again or taken back. A step whose retry is dropped ends stopped for the update, never given
-    /// its next attempt; and what the recovery would send back in it is never decided again (<see cref="RerunOwed"/>,
-    /// <see cref="RunTheReporterAgain"/>).
+    /// redirect whose handler is - with the question it asks (<see cref="DropRedirectsOf"/>) - and the retry a step of it
+    /// waits for - they were owed to work that is now done again or taken back. A step whose retry is dropped ends stopped
+    /// for the update, never given its next attempt; and what the recovery would send back in it is never decided again
+    /// (<see cref="RerunDecided"/>).
     /// </summary>
     /// <param name="item">The item scope of the work-item group being ended for an update.</param>
     private void DropWhatItOwes(Scope item)
@@ -6175,19 +6190,12 @@ public sealed class FlowCoordinator
             }
         }
 
-        foreach (var redirect in _redirects.Where(redirect => Inside(redirect.Handler, item)).ToList())
+        foreach (var handler in _redirects.Where(redirect => Inside(redirect.Handler, item)).Select(redirect => redirect.Handler).Distinct().ToList())
         {
-            // The question it asks before it goes asks of nothing now: it is withdrawn with it. A rerun a visit of the
-            // recovery decided stays decided - its record said it with the redirect (FlowInstance.Reruns) - so no session
-            // decides it again.
-            _ = _redirects.Remove(redirect);
-
-            if (redirect.Asking is { } asking)
-            {
-                Withdraw(asking);
-            }
-
-            Record(FlowChangeKind.Step, redirect.Handler, detail: $"the run was not sent to '{redirect.Target}': its handler's instance ends for a plan update, and what it was owed is dropped");
+            // Each is dropped with the question it asks before it goes, which asks of nothing now (DropRedirectsOf). A rerun
+            // a visit of the recovery decided stays decided - its record said it with the redirect (FlowInstance.Reruns) -
+            // so no session decides it again.
+            DropRedirectsOf(handler, "its handler's instance ends for a plan update, and what it was owed is dropped");
         }
 
         static bool Inside(FlowInstance instance, Scope item)
@@ -10159,13 +10167,15 @@ public sealed class FlowCoordinator
     /// stops it is settled - no triage of one still to answer, no fix of one waiting or at work (<see cref="MayStillFix"/>)
     /// - and where a visit of the recovery fixed one of them (<see cref="FixesOf"/>), that visit the last to end being the
     /// redirect's handler, as a visit that ends sends back the step it took. Never while a fix of another still runs, and
-    /// never twice: the rerun decided is a fact of that visit's own record, written in the redirect's own write
-    /// (<see cref="FlowInstance.Reruns"/>) - the one fact read, whatever became of the redirect since: made, given up by a
-    /// <c>stay</c>, dropped with a work item brought to rest, or resetting nothing; nor is a reporter a redirect left
-    /// already, or one a redirect the run owes resets, sent again, for it runs again by that one; nor one in a work item a
-    /// plan update is bringing or brought to rest, whose work is done again or taken back in the item visited in its place
-    /// (<see cref="EndedForAnUpdateAround"/>, as <see cref="DropWhatItOwes"/> drops what such an item owed). A reporter
-    /// whose issues were all settled with none fixed stays as it ended.
+    /// never twice: whether that visit decided the rerun has one owner (<see cref="RerunDecided"/>) - a fact of the visit's
+    /// own record, written in the redirect's own write (<see cref="FlowInstance.Reruns"/>), whatever became of the
+    /// redirect since: made, given up by a <c>stay</c>, dropped with a work item brought to rest, or resetting nothing; and
+    /// for a visit an older build recorded, which sent its reporter back at its end, what that redirect left in the
+    /// records - so a <c>stay</c> it was given is never asked again when another triage of the reporter ends; nor is a
+    /// reporter a redirect left already, or one a redirect the run owes resets, sent again, for it runs again by that one;
+    /// nor one in a work item a plan update is bringing or brought to rest, whose work is done again or taken back in the
+    /// item visited in its place (<see cref="EndedForAnUpdateAround"/>, as <see cref="DropWhatItOwes"/> drops what such an
+    /// item owed). A reporter whose issues were all settled with none fixed stays as it ended.
     /// </summary>
     private void RunTheReporterAgain(FlowInstance reporter)
     {
@@ -10176,7 +10186,7 @@ public sealed class FlowCoordinator
 
         if (stopping.Any(MayStillFix)
             || stopping.SelectMany(FixesOf).Where(visit => visit.State == FlowInstanceState.Done).MaxBy(visit => visit.EndedIn) is not { } fixedLast
-            || fixedLast.Reruns?.Contains(reporter.Id, StringComparer.Ordinal) == true
+            || RerunDecided(fixedLast, reporter)
             || EndedForAnUpdateAround(reporter)
             || reporter.LeftBy is not null
             || _redirects.Any(redirect => redirect.Set.Any(entry => ReferenceEquals(entry.Scope, reporter.DeclaredScope) && entry.Declaration.Name == reporter.Step.Name)))
@@ -12264,7 +12274,7 @@ public sealed class FlowCoordinator
                 // The visit left says so in its own record, so a resume draws the next one from the records alone
                 // whatever came after: the redirect leaves the run's records only once each visit it resets says it.
                 current.LeftBy = redirect.Handler.Id;
-                Leave(current, because);
+                Leave(current, because, making: redirect);
                 WriteStepRecordOf(current);
             }
 
@@ -12282,13 +12292,26 @@ public sealed class FlowCoordinator
     /// Leaves one visit a redirect resets: a question it, or anything open inside it, waits on is withdrawn - to be
     /// asked anew by the new visit if it comes to that - a step that never started or waits on a question is skipped,
     /// and a group still open is skipped with all that is open in it, so nothing of the old visit runs. A visit that
-    /// had ended stands as it ended.
+    /// had ended stands as it ended, and what it decided that the run has not made goes with it: each redirect it owes is
+    /// dropped with the question it asks (<see cref="DropRedirectsOf"/>), never left owed asking a question withdrawn - which
+    /// would hold it and every redirect after it for ever, and a resume would make it from a visit the run left - for the
+    /// new visit decides again if it comes to that. The redirect being made is never among them.
     /// </summary>
-    private void Leave(FlowInstance visit, string because)
+    /// <param name="visit">The visit left.</param>
+    /// <param name="because">Why, as each visit skipped says it.</param>
+    /// <param name="making">The redirect that leaves it, being made; null where none is.</param>
+    private void Leave(FlowInstance visit, string because, PendingRedirect? making = null)
     {
+        var waited = visit.WaitingQuestion is not null;
+        DropRedirectsOf(visit, $"its handler '{visit.Id}' is left - {because}", making);
+
         if (visit.WaitingQuestion is { } question)
         {
             Withdraw(question);
+        }
+
+        if (waited)
+        {
             GiveUpTheEnding(visit);
         }
 
@@ -12296,7 +12319,7 @@ public sealed class FlowCoordinator
         {
             foreach (var member in ScopesOf(visit).SelectMany(inner => inner.Members.Values).ToList())
             {
-                Leave(member, because);
+                Leave(member, because, making);
             }
 
             foreach (var child in visit.Children.Select(child => child.GroupInstance).Where(child => child is { State: FlowInstanceState.Running }))
@@ -12503,9 +12526,23 @@ public sealed class FlowCoordinator
     /// <summary>Withdraws a question the run no longer waits on: its entry in questions.json says so, and the step's record says why.</summary>
     private void Withdraw(string question)
     {
+        if (Withdrawn(question))
+        {
+            WriteQuestions();
+        }
+    }
+
+    /// <summary>
+    /// What withdrawing <paramref name="question"/> changes, before it is written: it is no longer open nor answerable, and
+    /// the step that waited on it waits on it no more. The one change of a withdrawal, which <see cref="Withdraw"/> writes
+    /// at once and the replay makes of a question that asks of no redirect, for its session's start to write
+    /// (<see cref="_withdrawnByTheReplay"/>). Whether the run holds the question.
+    /// </summary>
+    private bool Withdrawn(string question)
+    {
         if (_questions.FirstOrDefault(asked => asked.Id == question) is not { } asked)
         {
-            return;
+            return false;
         }
 
         asked.State = "withdrawn";
@@ -12516,7 +12553,50 @@ public sealed class FlowCoordinator
             waiting.WaitingQuestion = null;
         }
 
-        WriteQuestions();
+        return true;
+    }
+
+    /// <summary>
+    /// Drops every redirect <paramref name="handler"/> decided that the run owes and has not made, save
+    /// <paramref name="making"/>, with the question each asks before it goes: a redirect and its question are one fact. The
+    /// run's records lose the redirects first, in one write that says why and in which the handler waits on none of their
+    /// questions, and only then are the questions withdrawn - so a crash between the two leaves a question no owed redirect
+    /// names, which the next session withdraws, never a redirect naming a question withdrawn, made as if someone had
+    /// answered it. The one owner of dropping a redirect: what a work item a plan update brings to rest owed
+    /// (<see cref="DropWhatItOwes"/>) and what a visit a redirect leaves decided (<see cref="Leave"/>).
+    /// </summary>
+    /// <param name="handler">The instance that decided them.</param>
+    /// <param name="why">Why they are dropped, as the handler's record says it.</param>
+    /// <param name="making">A redirect being made, which is never dropped here; null for none.</param>
+    private void DropRedirectsOf(FlowInstance handler, string why, PendingRedirect? making = null)
+    {
+        var dropped = _redirects.Where(redirect => ReferenceEquals(redirect.Handler, handler) && !ReferenceEquals(redirect, making)).ToList();
+
+        if (dropped.Count == 0)
+        {
+            return;
+        }
+
+        var asking = dropped.Select(redirect => redirect.Asking).OfType<string>().ToList();
+        _ = _redirects.RemoveAll(dropped.Contains);
+
+        if (handler.WaitingQuestion is { } waiting && asking.Contains(waiting, StringComparer.Ordinal))
+        {
+            handler.WaitingQuestion = null;
+        }
+
+        Record(FlowChangeKind.Step, handler, detail: $"the run was not sent to '{string.Join("', '", dropped.Select(redirect => redirect.Target))}': {why}");
+        var withdrawn = false;
+
+        foreach (var question in asking)
+        {
+            withdrawn |= Withdrawn(question);
+        }
+
+        if (withdrawn)
+        {
+            WriteQuestions();
+        }
     }
 
     /// <summary>Marks a group failed with a member's code: nothing more of it starts, and it ends when its members in flight have ended.</summary>
@@ -13486,10 +13566,11 @@ public sealed class FlowCoordinator
     /// one where it did not block its reporter: the run goes on. The rerun is decided from the records, owed until its
     /// decision is written (<see cref="RerunOwed"/>, <see cref="RunTheReporterAgain"/>): the visit's end writes its done
     /// record first, so a crash between the two leaves it to the session that goes on, whose start decides it
-    /// (<see cref="GoOnWhereTheRunStood"/>) - once, for the decision is a fact of the visit's own record written in the
-    /// decision's own write (<see cref="FlowInstance.Reruns"/>), whatever became of it since: a redirect made, one a
-    /// <c>stay</c> gave up, one a plan update dropped with the work item it was in, one that found nothing to reset. The one
-    /// owner of that rerun, the visit's end and every session's start alike.
+    /// (<see cref="GoOnWhereTheRunStood"/>) - once, for whether it is decided has one owner (<see cref="RerunDecided"/>):
+    /// a fact of the visit's own record written in the decision's own write (<see cref="FlowInstance.Reruns"/>), whatever
+    /// became of it since - a redirect made, one a <c>stay</c> gave up, one a plan update dropped with the work item it was
+    /// in, one that found nothing to reset - and, for a visit an older build recorded, which keeps no such list, what that
+    /// build's redirect left in the records. The one owner of that rerun, the visit's end and every session's start alike.
     /// </summary>
     /// <param name="visit">The visit of the recovery that ended done, which names what it put right.</param>
     private void GoOnFromTheRecovery(FlowInstance visit)
@@ -13502,13 +13583,6 @@ public sealed class FlowCoordinator
             // Fixed in its place: {run.preExisting} says each issue in the order it was taken, whichever of the visits
             // side by side ended first.
             _tally[at] = _tally[at] with { State = "fixed" };
-        }
-
-        if (visit.Reruns is null)
-        {
-            // A visit an older build's record holds decided what its end owed as it ended, and kept none of it in its
-            // record: it is read as that build read it, never decided again at a session's start.
-            return;
         }
 
         var (rerun, issue, _) = RecoveryOf(again);
@@ -13540,39 +13614,69 @@ public sealed class FlowCoordinator
     /// The rerun of the failed step <paramref name="visit"/>, a visit of the recovery that ended done, put right - as the
     /// run's records hold it, while it is owed: the step's own declaration in its scope, and whether it is a handler, run
     /// again as a new visit raised by the ending it answers (<see cref="RaiseAgain"/>), or a step the schedule draws, run
-    /// again by a redirect the visit decides (<see cref="DecideRedirectOf"/>). Owed until its decision is written: for a
-    /// handler, until the visit put right is no longer the newest raised for that ending (<see cref="RaisedFor"/>) - the new
-    /// visit's first record, which names that ending, is the decision; for any other step, until the visit's own record
-    /// names it among what it sent the run back to (<see cref="FlowInstance.Reruns"/>), written in the redirect's own write -
-    /// the one fact read, whatever became of the redirect since: made, given up by a <c>stay</c>, or dropped with a work item
-    /// a plan update brings to rest (<see cref="DropWhatItOwes"/>) - and never for a step no longer its scope's current
-    /// visit, which something else sent back, nor into a scope that is no longer live: one an earlier redirect left, or a
-    /// work item at rest. A visit in a work item being brought to rest never ends done - it ends stopped for the update
-    /// with the item - so none decides a rerun there. Null where nothing is owed: an issue the visit fixed, whose reporters
-    /// run again by their own rule; a rerun decided; and every rerun of a visit an older build's record holds, which
-    /// decided its reruns as it ended.
+    /// again by a redirect the visit decides (<see cref="DecideRedirectOf"/>). Owed until it is decided, by the one owner of
+    /// that (<see cref="RerunDecided"/>), and never for a step no longer its scope's current visit, which something else
+    /// sent back, nor into a scope that is no longer live: one an earlier redirect left, or a work item at rest. A visit in a
+    /// work item being brought to rest never ends done - it ends stopped for the update with the item - so none of this
+    /// build decides a rerun there. Null where nothing is owed: an issue the visit fixed, whose reporters run again by their
+    /// own rule (<see cref="RunTheReporterAgain"/>), and a rerun decided.
     /// </summary>
     /// <param name="visit">The visit of the recovery, done, which names what it put right.</param>
     private (Scope Scope, WorkflowStep Declaration, bool Handler)? RerunOwed(FlowInstance visit)
     {
-        if (visit.Reruns is not { } decided
-            || visit.RaisedBy is not { } again
-            || RecoveryOf(again) is not { Issue: null, Rerun: { DeclaredScope: { } scope } rerun })
+        if (visit.RaisedBy is not { } again
+            || RecoveryOf(again) is not { Issue: null, Rerun: { DeclaredScope: { } scope } rerun }
+            || RerunDecided(visit, rerun))
         {
             return null;
         }
 
-        if (rerun is { Step.On: not null, RaisedBy: { } source })
+        if (rerun is { Step.On: not null, RaisedBy: not null })
         {
-            return ReferenceEquals(RaisedFor(source, rerun.Step.Name, scope, rerun.RaisedByAttempt), rerun) ? (scope, rerun.Step, true) : null;
+            return (scope, rerun.Step, true);
         }
 
-        return !decided.Contains(rerun.Id, StringComparer.Ordinal)
-            && ScopeLive(scope)
+        return ScopeLive(scope)
             && ReferenceEquals(scope.Members.GetValueOrDefault(rerun.Step.Name), rerun)
             && ResolveStep(scope, rerun.Step.Name) is { } declaration
                 ? (scope, declaration, false)
                 : null;
+    }
+
+    /// <summary>
+    /// Whether the run being sent back to <paramref name="rerun"/> - the step that gave <paramref name="visit"/>, a visit of
+    /// the recovery that ended done, its failure, or a reporter of an issue it fixed - is decided: the one owner of that
+    /// question, which the rerun of a failed step (<see cref="RerunOwed"/>) and of a reporter
+    /// (<see cref="RunTheReporterAgain"/>) both ask, at the visit's end and at every session's start. A handler whose
+    /// failure the visit took is made again as a new visit raised by the ending it answers (<see cref="RaiseAgain"/>), whose
+    /// first record is the decision: decided once the visit put right is no longer the newest raised for that ending
+    /// (<see cref="RaisedFor"/>). Every other rerun, by the visit's own record of what it sent the run back to
+    /// (<see cref="FlowInstance.Reruns"/>), written in the redirect's own write - the one fact read, whatever became of the
+    /// redirect since. A visit an older build recorded keeps no such list: that build decided the redirect as the visit
+    /// ended, in the write after its done record, and never again at a resume, and a handler's not at all - its redirect
+    /// reset nothing, for no redirect resets a handler - so what its redirect left in the records says it was decided: the
+    /// redirect still owed by the visit; a question it asked of the agents it would leave open (<c>openAgents</c>, raised by
+    /// the visit), in whatever state - a <c>stay</c> that gave the redirect up answered it; or the step inside a work item a
+    /// plan update is bringing or brought to rest, which dropped the redirect (<see cref="EndedForAnUpdateAround"/>). A
+    /// redirect made left the step, which each caller holds every rerun to besides: a step the schedule draws its scope's
+    /// current visit in a scope still live, a reporter neither left by a redirect nor reset by one owed. None of those is a
+    /// crash between the visit's done record and the redirect's write, which left the rerun undecided, and the resume
+    /// decides it - once, in this build's way.
+    /// </summary>
+    /// <param name="visit">The visit of the recovery, done.</param>
+    /// <param name="rerun">What it would send the run back to: the step it put right, or a reporter of an issue it fixed.</param>
+    private bool RerunDecided(FlowInstance visit, FlowInstance rerun)
+    {
+        if (ReferenceEquals(visit.RaisedBy, rerun) && rerun is { Step.On: not null, RaisedBy: { } source, DeclaredScope: { } scope })
+        {
+            return visit.Reruns is null || !ReferenceEquals(RaisedFor(source, rerun.Step.Name, scope, rerun.RaisedByAttempt), rerun);
+        }
+
+        return visit.Reruns is { } decided
+            ? decided.Contains(rerun.Id, StringComparer.Ordinal)
+            : _redirects.Any(redirect => ReferenceEquals(redirect.Handler, visit))
+                || _questions.Any(asked => asked.Kind == "openAgents" && string.Equals(asked.Instance, visit.Id, StringComparison.Ordinal))
+                || EndedForAnUpdateAround(rerun);
     }
 
     /// <summary>
@@ -17835,12 +17939,23 @@ public sealed class FlowCoordinator
                     ?? throw new HarnessException(
                         HarnessExit.Refused,
                         $"the run owes a redirect by '{owed.Handler}', which its state holds no record of; the run's state is not whole, and a record is never guessed at");
+
+                if (owed.Question is { } dropped && _questions.FirstOrDefault(asked => asked.Id == dropped) is { State: "withdrawn" })
+                {
+                    // A redirect and its question are one fact: one whose question the file holds withdrawn was dropped with
+                    // it - an older build withdrew the question first and wrote the drop after, or left the redirect of a
+                    // visit a redirect left owed beside the question it withdrew - and it is never made, for no one answered.
+                    continue;
+                }
+
                 // One asking before it goes waits on its question while it is open, and on the answer the questions file
                 // holds and the session's start carries out (_carryAtStart) - a crash came between the answer's write and
-                // the change it makes - so that answer finds it: a stay given is never lost to a redirect made instead.
+                // the change it makes - so that answer finds it: a stay given is never lost to a redirect made instead. And
+                // one whose record the process ended before it named the question its handler had just asked for it waits
+                // on that question all the same (AskedBeforeItsRecord).
                 var redirect = new PendingRedirect(handler, owed.Target)
                 {
-                    Asking = owed.Question is { } question && (_open.Contains(question) || _carryAtStart.Any(carried => carried.Asked.Id == question)) ? question : null,
+                    Asking = owed.Question is { } question && InPlay(question) ? question : AskedBeforeItsRecord(owed, handler),
                 };
 
                 foreach (var id in owed.Steps)
@@ -17852,6 +17967,15 @@ public sealed class FlowCoordinator
 
                 FrozenOf(redirect);
                 _redirects.Add(redirect);
+            }
+
+            foreach (var asked in _questions.Where(asked => asked.Kind == "openAgents" && _open.Contains(asked.Id) && !_redirects.Any(redirect => redirect.Asking == asked.Id)).ToList())
+            {
+                // An open question that asks of no redirect the run owes: the write that dropped its redirect was made and the
+                // question's withdrawal after it was not (DropRedirectsOf), or the process ended between the question's write
+                // and the first record of the redirect asking it, which its handler decides again. Withdrawn, as the drop
+                // would have withdrawn it - no answer of it does anything - and the session's start writes it.
+                _withdrawnByTheReplay |= Withdrawn(asked.Id);
             }
 
             if (resume.File.Hold is { } hold)
@@ -17905,6 +18029,30 @@ public sealed class FlowCoordinator
         // Every name a record holds is read by the one strict reader of the engine's names, never guessed at.
         static FlowInstanceState StateOf(FlowStepRecord record)
             => FlowRecordNames.Of<FlowInstanceState>(record.State);
+
+        // Whether a question is still in play for what waits on it: open, or answered with the answer still to be carried
+        // out at the session's start.
+        bool InPlay(string question)
+            => _open.Contains(question) || _carryAtStart.Any(carried => carried.Asked.Id == question);
+
+        // The question an owed redirect's handler asked for it that its record does not name, still in play: the process
+        // ended between the question's write and the redirect's record that would name it - a question asked again once
+        // the one the record names was answered retry, or, by a handler that decides one redirect alone (a handler's then,
+        // or a visit of the recovery an older build recorded, which decided one rerun), an older build's first ask, which it
+        // named only in the write after the ask. Never a question another owed redirect names, and null for none.
+        string? AskedBeforeItsRecord(FlowRedirectRecord owed, FlowInstance handler)
+        {
+            var cut = owed.Question is { } named
+                ? _questions.FirstOrDefault(asked => asked.Id == named) is { Kind: "openAgents", State: "answered", Given: [.., { Answer: "retry" }] }
+                : !IsRecovery(handler) || handler.Reruns is null;
+
+            return cut
+                ? _questions.LastOrDefault(asked => asked.Kind == "openAgents"
+                    && string.Equals(asked.Instance, handler.Id, StringComparison.Ordinal)
+                    && InPlay(asked.Id)
+                    && !(resume.File.Redirects ?? []).Any(other => string.Equals(other.Question, asked.Id, StringComparison.Ordinal)))?.Id
+                : null;
+        }
 
         // What one id a redirect's record resets names: a visit the state holds, or - for a step not drawn yet - the
         // declaration its first visit would be, under the scope its id names.
