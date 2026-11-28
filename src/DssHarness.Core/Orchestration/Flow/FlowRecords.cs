@@ -154,10 +154,10 @@ public sealed record FlowEvent(
 /// <param name="Item">The work item of the <c>forEach</c> this instance is one of; null outside every one.</param>
 /// <param name="Index">The item's index, from 0; null outside every <c>forEach</c>.</param>
 /// <param name="Iteration">The iteration of the <c>repeat</c> this instance is one of, from 1; null outside every one.</param>
-/// <param name="Handlers">What the ending of this step owes and owes no longer: each handler declared beside it, and where it stands - <c>owed</c>, <c>raised</c>, <c>done</c> or <c>passed</c>.</param>
+/// <param name="Handlers">What the ending of this step owes and owes no longer: each handler declared beside it, and where it stands - <c>owed</c>, <c>raised</c>, <c>done</c>, <c>passed</c> or <c>left</c> (<see cref="FlowHandlerState.States"/>).</param>
 /// <param name="HandledBy">The handler that took this step's failure, where one did: its name; the question whose answer accepted its ending at a bound, where it did that.</param>
 /// <param name="Leftover">What a repeat that ended with its until still false says it left, as its leftover expression read it; null where the loop names none.</param>
-/// <param name="RaisedBy">The instance whose ending raised this one - a handler's source, the step whose failure a recovery took; null for every step the schedule starts.</param>
+/// <param name="RaisedBy">The instance whose ending raised this one - a handler's source; the step whose failure a visit of the recovery took, or the triage whose issue it fixes; the step that reported the issue a triage triages - null for every step the schedule starts. Only a handler is one its source's ending waits on: the source's <paramref name="Handlers"/> name it.</param>
 /// <param name="Direction">The fix a person gave for the failure this instance's recovery works on, where recoveryBound was answered direct; null on every other visit.</param>
 /// <param name="NotRunCause">
 /// Which kind of reason the step is NotRun for, one of <see cref="FlowNotRunCause"/>'s names exactly: a resume runs one
@@ -1685,7 +1685,7 @@ public sealed record FlowStartsStanding(DateTimeOffset At, FlowPauseRequest? Pau
 /// <param name="Handlers">What the ending of this step owes and owes no longer: each handler declared beside it, and where it stands.</param>
 /// <param name="HandledBy">The handler that took this step's failure, where one did; null where none did.</param>
 /// <param name="Leftover">What a repeat that ended with its until still false says it left; null where the loop names none.</param>
-/// <param name="RaisedBy">The instance whose ending raised this one; null for every step the schedule starts.</param>
+/// <param name="RaisedBy">The instance whose ending raised this one - a handler's source, what a visit of the recovery puts right, the reporter of a triage's issue; null for every step the schedule starts.</param>
 /// <param name="Direction">The fix a person gave for the failure this instance's recovery works on; null on every other visit.</param>
 /// <param name="NotRunCause">Which kind of reason the step is NotRun for, where it is; null otherwise.</param>
 /// <param name="Issue">The pre-existing issue this instance was raised to triage; null for every step the schedule starts.</param>

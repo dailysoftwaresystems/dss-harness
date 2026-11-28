@@ -5380,7 +5380,11 @@ the run's records, and a handler a redirect leaves before it ended marked `left`
 record, for it took nothing: the ending it was raised for is abandoned, settled by none of its handlers
 and never rebuilt by a resume - so a crash between any two writes leaves records the next session completes: an
 answer written is carried out once, a configured answer never written is given, a handler is never
-raised twice, and an ending whose handlers all ended is settled. A session is never said done over a
+raised twice, and an ending whose handlers all ended is settled. An ending the records leave waiting is rebuilt as its
+raise made it, from its source's record: the visit of each handler that record holds `raised`, in the order the
+workflow declares them (`FlowCoordinator.EndingOf`) - never a triage of an issue the source reported nor a visit of the
+recovery, which name the source as what raised them too - so what depends on the source waits for its handlers alone,
+as it does within a session, and the source's record names only them as the ending settles. A session is never said done over a
 step that never ended, nor one its scope never drew, and a run is never said done - by a session, or by the engine that
 takes it up before its session - over a step a pause or a stop stopped, which runs again at the resume, nor over a
 failure or a handler's raise owed to the next session. What the session's start writes is held, in the

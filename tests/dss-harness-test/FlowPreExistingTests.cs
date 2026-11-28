@@ -4154,6 +4154,128 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
+    /// An ending a pause or a crash left waiting on its handlers is rebuilt by the resume as its raise made it: the visit of
+    /// each handler its source's record holds raised - never the triage of an issue the source reported, which names the
+    /// source as what raised it too. So a reviewer's failure is settled once its handler ends, as it is within a session,
+    /// and what depends on the reviewer goes on while the triage still waits on its question; and the reviewer's record
+    /// names its handler alone, then and once the triage has ended.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnEndingAResumeRebuilds_WaitsForItsHandlersAlone_NeverForATriageItsSourceRaised(bool crashed)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: review
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: fix
+                type: orient
+                on: {step: review, outcome: failure}
+              - name: after
+                type: orient
+                dependsOn: [review]
+              - name: triage
+                type: reason
+                ask: true
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+
+        // The triage asks until it is answered, and then finds its issue unproven.
+        FakeRunner Runner() => new FakeRunner()
+            .On("review", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the change is wrong", preExisting: [Issue("a broken test")]))
+            .On("triage", run => run.Answers.Count == 0
+                ? FlowStepResult.Asking(new FlowQuestion("q0", "ask", run.Instance, "the agent asked", ["answer", "decide", "abort"])
+                {
+                    AgentQuestions = [new AgentQuestion("is it the parser's?", "two places hold it", "the file", "where the fix goes", ["the parser", "the lexer"], "the parser", "the proof reads it there")],
+                })
+                : Course("unproven", run.Issue!.Title));
+        var first = Runner();
+        first.Hold("fix");
+        var harness = new HarnessFactory();
+        var store = new OrchestrationStore(harness.FileSystem, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new ManualClock();
+        var cancel = TestContext.Current.CancellationToken;
+
+        // A step's own record, in the directory of the agent it works in where it works in one.
+        FlowStepRecord RecordOf(string instance)
+            => store.ReadStepRecord(Path.Combine(layout.InstanceDirectory(instance, store.ReadFlow(layout)!.Steps.Single(step => step.Instance == instance).Agent), OrchestratorLayout.StepRecordFileName))!;
+
+        // The handler is at work and the triage waits on its question when the session ends: paused, or cut off by a crash
+        // at the write that holds both, nothing after it reaching the disk.
+        static bool BothAtWork(FlowSnapshot run)
+            => run.Steps.Any(step => step.Instance == "fix" && step.State == FlowInstanceState.Running)
+                && run.Steps.Any(step => step.Instance == "triage" && step.State == FlowInstanceState.Paused);
+
+        using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var crashing = new CrashingRecords(records, _ => false, picksRun: crashed ? BothAtWork : null);
+            var watched = new Watched(crashing, BothAtWork);
+            var coordinator = TestAdvice.Coordinator(definition, first, new RunnerFacts(), clock, records: watched);
+            var session = coordinator.RunAsync(cancel);
+
+            await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            if (crashed)
+            {
+                Assert.True(crashing.Ended);
+                Assert.True(first.Release("fix"));
+            }
+            else
+            {
+                coordinator.RequestPause("interrupt", all: true);
+            }
+
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+        }
+
+        // On disk: the reviewer's failure waits on its one handler, raised, beside the triage it raised for its issue.
+        Assert.Equal([new FlowHandlerState("fix", "raised")], RecordOf("review").Handlers);
+        Assert.Equal("review", RecordOf("triage").RaisedBy);
+
+        var taken = new FlowResume(store, layout, harness.FileSystem).Load(definition);
+        var again = Runner();
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = TestAdvice.Coordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+
+            // The handler's end settles the failure, and what depends on the reviewer runs while the triage still waits.
+            Assert.Equal(FlowRunStatus.Paused, (await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+            Assert.Equal([("fix", null), ("after", null)], again.Started);
+            Assert.Equal("fix", resumed.Instances["review"].HandledBy);
+            Assert.Equal(FlowInstanceState.Done, resumed.Instances["after"].State);
+            Assert.Equal(FlowInstanceState.Paused, resumed.Instances["triage"].State);
+            Assert.Equal([new FlowHandlerState("fix", "done")], RecordOf("review").Handlers);
+
+            // The triage, answered, ends on its own: the reviewer's ending had settled, and its end settles nothing of it.
+            Assert.True(resumed.TryAnswer(resumed.OpenQuestions.Single().Id, "answer", "the parser's", out var refused), refused);
+            var end = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal("done; 1 failure was handled: review, by fix", end.Summary);
+            Assert.Equal([("fix", null), ("after", null), ("triage", "a broken test")], again.Started);
+        }
+
+        Assert.Equal([new FlowHandlerState("fix", "done")], RecordOf("review").Handlers);
+    }
+
+    /// <summary>
     /// A join is read again from the records at a resume: the issue joined to one whose visit a pause stopped goes with
     /// that visit still, takes no visit of its own, and is fixed with it once the visit ends in the next session.
     /// </summary>
