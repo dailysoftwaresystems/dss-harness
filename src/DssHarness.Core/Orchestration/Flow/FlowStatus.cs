@@ -16,8 +16,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <para>
 /// What is left counts at least what keeps the run from done, by the engine's own rule of it
 /// (<see cref="FlowInstance.IsUnended"/>): the instances that exist and have not ended - a stopped one among them, which
-/// runs again at the resume - and what an ending owes the session that goes on, each failure owed and each handler an
-/// ending owes a raise, named; and at most those and everything the run may still make by the engine's own bounds and rules
+/// runs again at the resume - and what an ending owes the session that goes on, each failure owed and each raise an ending
+/// still owes, named - a raise by the visit the resume raises (<see cref="FlowInstance.RaisesOwed"/>), never beside the
+/// visit it made; and at most those and everything the run may still make by the engine's own bounds and rules
 /// (<see cref="FlowComing"/>): each member of a scope still open not drawn yet, each loop's iterations, each handler's
 /// visits with the steps its <c>then</c> sends the run back over, and each visit the recovery can still make for a
 /// failure with the steps it sends the run back over - each bound widened by what the run's answers and plan updates
@@ -211,6 +212,7 @@ public static class FlowStatus
 
         if (raises.Count > 0)
         {
+            // Each named by the visit the resume raises, never beside the visit a raise made, which is among what is left.
             line += $"; {Count(raises.Count, "handler")} an ending owes a raise{Named([.. raises.Select(step => step.Instance)])}";
         }
 
@@ -498,15 +500,20 @@ public static class FlowStatus
 
     /// <summary>
     /// What an ending owes the session that goes on, as the run's records hold it, by the engine's own rule of what keeps a
-    /// run from done (<see cref="FlowInstance.IsUnended"/>, <see cref="FlowInstance.HandlersOwed"/>) - the rest of it,
+    /// run from done (<see cref="FlowInstance.IsUnended"/>, <see cref="FlowInstance.RaisesOwed"/>) - the rest of it,
     /// each instance left, is <see cref="IsLeft"/>'s: each instance that ended with its failure owed, which its handlers,
-    /// its policy or the recovery decide, in the order the records hold them; and each handler an ending owes a raise, as
-    /// the instance the resume raises it as - its id the source's sibling, its step the handler's declaration, not started.
+    /// its policy or the recovery decide, in the order the records hold them; and each raise an ending still owes, as the
+    /// instance the resume raises - its id the next visit of the handler beside its source, its step the handler's
+    /// declaration, not started - never one whose visit the ending raised is in the records, which is counted as itself.
     /// </summary>
     private static (IReadOnlyList<FlowStepRecord> Failures, IReadOnlyList<FlowStepRecord> Raises) Owed(WorkflowDefinition definition, FlowFile flow)
     {
         var failures = new List<FlowStepRecord>();
         var raises = new List<FlowStepRecord>();
+
+        // The records of each scope's members by name, as the engine holds a scope's visits: which visit of a handler an
+        // ending raised, and how many visits of it the scope holds.
+        var members = flow.Steps.ToLookup(step => MemberKey(step.Instance));
 
         foreach (var step in flow.Steps)
         {
@@ -520,26 +527,35 @@ public static class FlowStatus
                 continue;
             }
 
-            foreach (var handler in FlowInstance.HandlersOwed(declared.Step, handlers))
+            var beside = MemberKey(step.Instance).Scope;
+
+            foreach (var (handler, id) in FlowInstance.RaisesOwed(
+                declared.Step,
+                step.Instance,
+                handlers,
+                handler => members[(beside, handler)].Any(visit => string.Equals(visit.RaisedBy, step.Instance, StringComparison.Ordinal)),
+                handler => members[(beside, handler)].Select(visit => FlowInstanceId.VisitOf(visit.Instance)).DefaultIfEmpty(0).Max()))
             {
                 raises.Add(new FlowStepRecord(
-                    SiblingOf(step.Instance, handler),
-                    SiblingOf(step.Step, handler),
+                    id,
+                    FlowInstanceId.SiblingOf(step.Step, handler),
                     Group: false,
                     nameof(FlowInstanceState.NotStarted),
                     Attempt: 1,
-                    Visit: 1,
+                    Visit: FlowInstanceId.VisitOf(id),
                     Answers: [],
                     WaitsOn: []));
             }
         }
 
         return (failures, raises);
-    }
 
-    /// <summary><paramref name="name"/> beside <paramref name="of"/>: in the scope an instance's id or a step's path names, as a handler is its source's sibling.</summary>
-    private static string SiblingOf(string of, string name)
-        => of.LastIndexOf('.') is >= 0 and var dot ? $"{of[..dot]}.{name}" : name;
+        static (string Scope, string Name) MemberKey(string instance)
+        {
+            var (scope, name, _) = FlowInstanceId.MemberOf(instance);
+            return (scope, name);
+        }
+    }
 
     /// <summary>The failures owed to the session that goes on, counted, as the facts say them.</summary>
     private static string FailuresOwed(int count)
