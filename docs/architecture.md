@@ -4784,7 +4784,10 @@ held before it, nor does an asker's later taking write another moment over it; t
 the loop carries it out. The standing is its session's: the session's end, however it ends - in order, refused, by its
 token or by a defect - lets it go once its last write is made (`FlowCoordinator.LetTheSessionsStandingGo`), so a stop or
 a pause asked of an engine between two of its sessions writes nothing until the next session's start takes it, at the
-moment that start begins, whether or not an earlier start took a standing. A start that never goes on - refused, or ended before its hold is made - puts back what the
+moment that start begins, whether or not an earlier start took a standing. Only then is the session's drive over: the
+engine drives one session at a time over the whole of a drive, from its call to that letting go, and a second drive
+asked while one is under way - from another thread, or as the first's end is still being made - is refused in its own
+task, changing nothing of the session driven (`FlowCoordinator.Drive`). A start that never goes on - refused, or ended before its hold is made - puts back what the
 standing wrote over, as it writes nothing else of itself (`IFlowRecords.Unstand`), and ends at once, inside the one
 section every standing is taken and every write made in, before anything is put back
 (`FlowCoordinator.EndTheStartThatNeverWentOn`): a stop or a pause asked after it - by a poll still under way, an

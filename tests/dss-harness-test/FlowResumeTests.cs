@@ -1007,10 +1007,11 @@ public sealed class FlowResumeTests
     /// A start that never goes on - refused, for nothing of the run can run until its question, its advice sought already, is
     /// answered - stands for nothing once it has ended: a pause or a stop asked of its engine after that, while its caller
     /// still holds it bound - a poll under way, an interrupt or the session's token, until its drive ends - writes nothing
-    /// over the run's state, which keeps the complete pause the session before left and says no stop; and where the start
-    /// took a pause as it began, a stop asked as that standing is put back - from inside the putting back, before anything
-    /// else of the start's end - stands for nothing either. So the status, the pause command and the next resume read the
-    /// pause the run was left in, never one no engine will carry out.
+    /// over the run's state, which keeps the complete pause the session before left and says no stop, whether it is asked
+    /// as the session's end is still under way, before its drive lets go of anything, or once the drive has returned; and
+    /// where the start took a pause as it began, a stop asked as that standing is put back - from inside the putting back,
+    /// before anything else of the start's end - stands for nothing either. So the status, the pause command and the next
+    /// resume read the pause the run was left in, never one no engine will carry out.
     /// </summary>
     /// <param name="askedOfTheStart">Whether a pause was asked of the start as it began, its standing put back as the start ended.</param>
     [Theory]
@@ -1053,8 +1054,19 @@ public sealed class FlowResumeTests
                 kept.AfterPuttingBack = resumed.RequestStop;
             }
 
+            // Asked once the start has ended, as the session's end is still under way - before the drive lets go of what
+            // the start stood on, where a start that stood on nothing has nothing to let go of.
+            var asked = 0;
+            resumed.BeforeTheDriveEnds = () =>
+            {
+                resumed.RequestPause("command");
+                resumed.RequestStop();
+                asked++;
+            };
+
             var refused = await Assert.ThrowsAsync<HarnessException>(() => resumed.RunAsync(Token).WaitAsync(Bound, Token));
             Assert.Equal((HarnessExit.Refused, "nothing of this run can run until the question of step 'holding' is answered; answer-orchestrator answers it"), (refused.ExitCode, refused.Message));
+            Assert.Equal(1, asked);
 
             // Asked once the start has ended, as the engine's caller still holds it bound.
             resumed.RequestPause("command");
