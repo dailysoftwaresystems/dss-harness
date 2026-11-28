@@ -74,6 +74,12 @@ public static class FlowRecordNames
 /// <param name="To">The state the instance stands in now; null where none applies.</param>
 /// <param name="Attempt">Which attempt of the instance's visit the event tells of; null for the run's own events.</param>
 /// <param name="Detail">What the event says in words, where the kinds alone cannot.</param>
+/// <param name="Session">
+/// The run's session the event belongs to, from 1, one more for each session the run's engines drive: what its start wrote
+/// - held, or at once before the session was driven - among it, and what was written after its end and before the next
+/// session's, which the time between the two runs over (<see cref="FlowRunReport"/>); null in an event an older build wrote,
+/// which named none.
+/// </param>
 public sealed record FlowEvent(
     int Seq,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At,
@@ -83,7 +89,8 @@ public sealed record FlowEvent(
     string? From = null,
     string? To = null,
     int? Attempt = null,
-    string? Detail = null)
+    string? Detail = null,
+    int? Session = null)
 {
     /// <summary>Every kind of event a run appends: one for each kind of change the coordinator hands the records, and no other.</summary>
     public static readonly IReadOnlyList<string> Kinds = [.. Enum.GetValues<FlowChangeKind>().Select(KindOf)];
@@ -100,6 +107,7 @@ public sealed record FlowEvent(
         => Seq < 1 ? $"its seq is {Seq.ToString(CultureInfo.InvariantCulture)}, and the first event of a run is 1"
             : !Kinds.Contains(Kind, StringComparer.Ordinal) ? $"'{Kind}' is not an event a run writes"
             : !FlowInstanceId.IsWellFormed(Instance ?? "step") && Instance is not null ? $"'{Instance}' is not an instance id"
+            : Session is < 1 ? $"its session is {Session.Value.ToString(CultureInfo.InvariantCulture)}, and a run's first session is 1"
             : null;
 }
 
@@ -640,8 +648,9 @@ public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnly
 /// <param name="StoppingSince">
 /// When a stop was applied that the session which applied it ends with - the run's hard stop, or a stop once its pause
 /// was complete - every step in flight stopped, every advice under way ended and none started after it: written as the
-/// stop is applied, before anything it stops is touched - one asked as a session starts, by an abort the start takes, as
-/// it is taken, for the start applies it before anything else - and kept by the session's end, so a reader of a live
+/// stop is applied, before anything it stops is touched - one asked of a session's start, a stop or an abort the start
+/// takes, at once as it is asked, over what the session before left, for the start stands on it from then on
+/// (<see cref="FlowStartsStanding"/>) - and kept by the session's end, so a reader of a live
 /// engine's run tells a stop under way from a pause whose advice is still to come (<see cref="OrchestratorService.EngineOf(OrchestrationStore, FlowRunOwner, OrchestratorLayout)"/>);
 /// left out where no stop was applied, and from the next session's first write on. Between, the next session's claim
 /// marks the run <see cref="Starting"/>, which no reader takes a stop the session before ended with for.
@@ -650,9 +659,9 @@ public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnly
 /// True while the live engine is taking the run up and takes an answer handed to it as it seeks the recommendation the
 /// question owes: written by its session's claim, before the owner is (<see cref="FlowRunOwner.Claim"/>), and by every
 /// write its start makes while no stop or pause is asked of it, after which it seeks no advice for such an answer and
-/// refuses it - the mark taken back from this file the moment one is asked, outside the start's hold
-/// (<see cref="IFlowRecords.Unmark"/>), no write made after that moment saying it, and <see cref="StoppingSince"/> saying a
-/// stop once it is applied - until the start's own end
+/// refuses it - the mark written over the moment one is asked, outside the start's hold, by what the start stands on then,
+/// the stop applied (<see cref="StoppingSince"/>) or the pause asked (<see cref="Pause"/>), which no write made after that
+/// moment fails to say (<see cref="FlowStartsStanding"/>, <see cref="IFlowRecords.Stand"/>) - until the start's own end
 /// (<see cref="FlowChangeKind.StartEnded"/>), written once it has made what it held, sought every recommendation the run
 /// owes and weighed what was handed over meanwhile; left out by every write after it, by the release of a session that
 /// ended before its own writes said what its engine did (<see cref="FlowRunOwner.Release"/>), and by a run an older build
@@ -1543,6 +1552,11 @@ public enum FlowChangeKind
 /// </param>
 /// <param name="StoppingSince">When the stop the session ends with was applied - its hard stop, or a stop once its pause was complete; null where none was (<see cref="FlowFile.StoppingSince"/>).</param>
 /// <param name="Starting">Whether the change was taken while the engine's start was under way and took what it was handed, no stop and no pause asked of it (<see cref="FlowFile.Starting"/>) - and, for a write a start held, still so as it is made.</param>
+/// <param name="Session">
+/// Which of its engine's sessions took the change, from 1: its first for what it writes before driving one, one more for
+/// each it drives, and between two the one that ended - which the records name the run's session by
+/// (<see cref="FlowEvent.Session"/>).
+/// </param>
 public sealed record FlowSnapshot(
     FlowRunStatus Status,
     DateTimeOffset? EndedAt,
@@ -1558,7 +1572,88 @@ public sealed record FlowSnapshot(
     IReadOnlyList<PreExistingIssue>? Issues = null,
     IReadOnlyList<FlowNextIssue>? NextRound = null,
     DateTimeOffset? StoppingSince = null,
-    bool Starting = false);
+    bool Starting = false,
+    int Session = 1);
+
+/// <summary>
+/// What an engine stands on once a stop or a pause is asked of its start under way - the one owner of what the run's state
+/// says of the engine from that moment, written at once over the state the start found, outside its hold
+/// (<see cref="IFlowRecords.Stand"/>), and by every write the session makes after it, a write the start held from before it
+/// among them, until the loop's own record of the stop or the pause says it: the stop applied from the moment it was asked
+/// (<see cref="FlowFile.StoppingSince"/>), after which the start seeks no advice and the engine ends its session, or the
+/// pause asked then, begun and not complete (<see cref="FlowFile.Pause"/>), which defers each advice to the pause's end - and
+/// never that the engine is starting (<see cref="FlowFile.Starting"/>), for from that moment the start refuses an answer
+/// handed to it to a question owing the recommendation it would have sought; with it, at once, each question the session
+/// before left sought is written deferred, as the start defers it, for no advisor of this engine seeks it
+/// (<see cref="On(FlowQuestionsFile, IReadOnlyCollection{string})"/>). So a reader of the run's state names the step
+/// the engine takes for such a question - the resume once it has gone, or the pause once it is complete
+/// (<see cref="FlowAnswerRules.NextStepOf"/>) - exactly as the engine's refusal names it, whatever the session before it
+/// left the state saying.
+/// </summary>
+/// <param name="At">When the stop or the pause was asked of the start.</param>
+/// <param name="Pause">The pause asked, by its cause and whether it stops the machine steps too; null for a stop.</param>
+public sealed record FlowStartsStanding(DateTimeOffset At, FlowPauseRequest? Pause)
+{
+    /// <summary>The pause asked, as the run's state holds it: begun as it was asked, no handoff written yet, not complete; null for a stop.</summary>
+    public FlowPauseRecord? Paused => Pause is { } asked ? new FlowPauseRecord(asked.Cause, asked.All, At, [], null) : null;
+
+    /// <summary>
+    /// The run's state as the standing says it, written at once: never starting, and the stop applied - the pause the state
+    /// holds kept as the run's record of where it stood, which a stop is read before - or the pause asked, in the place of a
+    /// stop and of a pause that began before it, which the session before left. Everything else stands as written.
+    /// </summary>
+    /// <param name="flow">The run's state as it stands.</param>
+    public FlowFile On(FlowFile flow)
+    {
+        ArgumentNullException.ThrowIfNull(flow);
+
+        return Pause is null
+            ? flow with { Starting = null, StoppingSince = At }
+            : flow with { Starting = null, StoppingSince = null, Pause = PauseOver(flow.Pause) };
+    }
+
+    /// <summary>
+    /// A change as it is written while the standing holds: never starting, and the stop applied from the moment it was asked
+    /// where the change was taken before the loop applied it - a write the start held among them - or the pause asked where
+    /// the change holds none the engine began since (<see cref="FlowFile.Pause"/>). The loop begins the pause it takes up, and
+    /// applies the stop, at the standing's own moment, so its own records say what the standing said.
+    /// </summary>
+    /// <param name="snapshot">The run as it stood when the change was taken.</param>
+    public FlowSnapshot On(FlowSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        return Pause is null
+            ? snapshot with { Starting = false, StoppingSince = snapshot.StoppingSince ?? At }
+            : snapshot with { Starting = false, Pause = PauseOver(snapshot.Pause) };
+    }
+
+    /// <summary>
+    /// The run's questions as the standing says them, written at once with the state: each open one the session before left
+    /// sought (<paramref name="leftSought"/>), which no advisor of this engine seeks, deferred as the start defers every advice
+    /// it owes under a stop or a pause (<see cref="FlowRecommendation.Withheld"/>) - so no reader takes it for one the engine's
+    /// advisor seeks now. Every other question stands as written.
+    /// </summary>
+    /// <param name="questions">The run's questions as they stand.</param>
+    /// <param name="leftSought">The ids of the questions the session before left sought, which the start found so.</param>
+    public FlowQuestionsFile On(FlowQuestionsFile questions, IReadOnlyCollection<string> leftSought)
+    {
+        ArgumentNullException.ThrowIfNull(questions);
+        ArgumentNullException.ThrowIfNull(leftSought);
+
+        return questions.Questions.Any(question => Withholds(question, leftSought))
+            ? questions with { Questions = [.. questions.Questions.Select(question => Withholds(question, leftSought) ? question with { Recommendation = FlowRecommendation.Withheld } : question)] }
+            : questions;
+    }
+
+    /// <summary>Whether <paramref name="question"/> is one the standing defers: open, and still as the session before left it, sought.</summary>
+    private static bool Withholds(FlowQuestionEntry question, IReadOnlyCollection<string> leftSought)
+        => question is { State: "open", Recommendation.State: "sought" } && leftSought.Contains(question.Id);
+
+    /// <summary>The pause the run is under once the pause is asked: one begun since it was asked - the loop's, which takes it up - else the one asked.</summary>
+    private FlowPauseRecord? PauseOver(FlowPauseRecord? held)
+        => held is { } own && own.At >= At ? own : Paused;
+}
 
 /// <summary>One step instance as the snapshot holds it: everything its own record and the index say of it.</summary>
 /// <param name="Instance">The instance's id.</param>

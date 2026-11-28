@@ -757,7 +757,8 @@ public sealed partial class HelpTests
                 + "answer-orchestrator's own answer so refused its refusal (13) with the run's why on every exit of the session, whatever the session "
                 + "went on to do or met, the session's own end said after it and kept in --json's session (its summary and exitCode), and every other "
                 + "said with what became of it - and a live engine's state says it is starting only while its start takes such an answer, a stop or a "
-                + "pause asked of the start taking the claim's mark back at once, until the start's own end is written.",
+                + "pause asked of the start writing over the mark at once what the start stands on - the stop applied, or the pause asked, and the "
+                + "questions the past session left sought deferred - which every write of the session says after it, until the start's own end is written.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(

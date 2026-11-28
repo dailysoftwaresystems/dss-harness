@@ -32,12 +32,20 @@ public sealed class FlowEventLog : IDisposable
 
     private int _seq;
 
-    private FlowEventLog(AppendLog log, int seq, string? setAside)
+    private FlowEventLog(AppendLog log, int seq, int sessions, string? setAside)
     {
         _log = log;
         _seq = seq;
+        Sessions = sessions;
         SetAside = setAside;
     }
+
+    /// <summary>
+    /// The sessions of the run the log told of as it was opened (<see cref="SessionsOf"/>): what the sessions the engine that
+    /// opened it drives are counted on from, so each of its events names the run's session it belongs to
+    /// (<see cref="FlowEvent.Session"/>).
+    /// </summary>
+    public int Sessions { get; }
 
     /// <summary>The log's path.</summary>
     public string File => _log.FilePath;
@@ -63,7 +71,24 @@ public sealed class FlowEventLog : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(file);
 
         var (events, setAside) = Read(fileSystem, file);
-        return new FlowEventLog(AppendLog.Open(fileSystem, file, batched: true), events.Count > 0 ? events[^1].Seq : 0, setAside);
+        return new FlowEventLog(AppendLog.Open(fileSystem, file, batched: true), events.Count > 0 ? events[^1].Seq : 0, SessionsOf(events), setAside);
+    }
+
+    /// <summary>
+    /// The sessions of a run its events tell of: the highest session an event names - one whose engine wrote events and never
+    /// recorded its beginning, its start refused or a crash ending it, among them - and no fewer than the sessions whose
+    /// beginning they record, as an older build's events, which name none, tell of theirs; 0 for a run with none.
+    /// </summary>
+    /// <param name="events">The run's events, in the order written.</param>
+    public static int SessionsOf(IReadOnlyList<FlowEvent> events)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+
+        string[] beginnings = [FlowEvent.KindOf(FlowChangeKind.SessionBegan), FlowEvent.KindOf(FlowChangeKind.Resumed)];
+
+        return Math.Max(
+            events.Select(@event => @event.Session ?? 0).DefaultIfEmpty(0).Max(),
+            events.Count(@event => beginnings.Contains(@event.Kind, StringComparer.Ordinal)));
     }
 
     /// <summary>
@@ -78,13 +103,14 @@ public sealed class FlowEventLog : IDisposable
     /// <param name="to">The state the instance stands in now.</param>
     /// <param name="attempt">Which attempt the event tells of.</param>
     /// <param name="detail">What the event says in words, where the kinds alone cannot.</param>
-    public FlowEvent Append(DateTimeOffset at, FlowChangeKind kind, string? instance = null, string? step = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+    /// <param name="session">The run's session the event belongs to (<see cref="FlowEvent.Session"/>); null where none is named.</param>
+    public FlowEvent Append(DateTimeOffset at, FlowChangeKind kind, string? instance = null, string? step = null, string? from = null, string? to = null, int? attempt = null, string? detail = null, int? session = null)
     {
         FlowEvent written;
 
         lock (_gate)
         {
-            written = new FlowEvent(_seq + 1, at, FlowEvent.KindOf(kind), instance, step, from, to, attempt, detail);
+            written = new FlowEvent(_seq + 1, at, FlowEvent.KindOf(kind), instance, step, from, to, attempt, detail, session);
 
             if (written.Problem() is { } problem)
             {

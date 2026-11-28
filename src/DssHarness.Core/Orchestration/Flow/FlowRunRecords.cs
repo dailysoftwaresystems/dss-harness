@@ -70,14 +70,31 @@ public interface IFlowRecords
     }
 
     /// <summary>
-    /// Takes the mark of the engine's start back from the run's state where it still holds it (<see cref="FlowFile.Starting"/>),
-    /// at once and outside any hold: a stop or a pause is asked of the start under way, which from then on refuses an answer
-    /// handed to it to a question owing the recommendation it would have sought, so no reader is to name that answer taken
-    /// as the start seeks it. Nothing else of the state changes, and nothing is thrown at whoever asked: what cannot be
-    /// written is said, and the start's next write says the engine is not starting. A run held in memory alone has no state
-    /// to take it back from.
+    /// Writes what the engine stands on once a stop or a pause is asked of its start under way over the run's state, at once
+    /// and outside any hold (<see cref="FlowStartsStanding.On(FlowFile)"/>): from then on the start refuses an answer handed to
+    /// it to a question owing the recommendation it would have sought, so every reader is to name the step the engine takes
+    /// for it - never the answer taken as the start seeks it, nor what the session before left the state saying. Nothing
+    /// else of the state changes, and nothing is thrown at whoever asked: what cannot be written is said, and the session's
+    /// next write says the standing. A run held in memory alone has no state to write it over.
     /// </summary>
-    void Unmark()
+    /// <param name="standing">What the engine stands on.</param>
+    /// <param name="leftSought">
+    /// The open questions the session before left sought, which no advisor of this engine seeks: written deferred with the
+    /// state, as the start defers them (<see cref="FlowStartsStanding.On(FlowQuestionsFile, IReadOnlyCollection{string})"/>);
+    /// empty once the start's own writes say what became of them.
+    /// </param>
+    void Stand(FlowStartsStanding standing, IReadOnlyCollection<string> leftSought)
+    {
+    }
+
+    /// <summary>
+    /// Puts back what the run's state and its questions said before <see cref="Stand"/> wrote over them - the stop and the
+    /// pause the session before left, and each recommendation it left sought - where the start that took the standing never
+    /// went on, refused or ended before its hold was made: a start that never goes on writes nothing of itself. Nothing of a
+    /// file the session wrote since, which is then its own, nor where no standing was written. A run held in memory alone
+    /// has nothing to put back.
+    /// </summary>
+    void Unstand()
     {
     }
 }
@@ -447,6 +464,20 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     /// <summary>The next round's issues last written, as the issues are.</summary>
     private IReadOnlyList<FlowNextIssue>? _nextRoundWritten;
 
+    /// <summary>
+    /// What the run's state said of its engine - its stop and its pause - before a start's standing was first written over it
+    /// (<see cref="IFlowRecords.Stand"/>), for a start that never goes on to put back (<see cref="IFlowRecords.Unstand"/>); null
+    /// where none was written, and once the session writes the state, which is then its own.
+    /// </summary>
+    private (DateTimeOffset? StoppingSince, FlowPauseRecord? Pause)? _beforeTheStanding;
+
+    /// <summary>
+    /// Each recommendation the session before left sought, by question, as the run's questions held it before a start's
+    /// standing deferred it (<see cref="IFlowRecords.Stand"/>), for a start that never goes on to put back; emptied once the
+    /// session writes its questions, which are then its own.
+    /// </summary>
+    private readonly Dictionary<string, FlowRecommendation?> _soughtBeforeTheStanding = new(StringComparer.Ordinal);
+
     /// <summary>One writer of the run's status, and of nothing else.</summary>
     public WorkflowStatusWriter Status => _status;
 
@@ -542,15 +573,83 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     }
 
     /// <inheritdoc/>
-    void IFlowRecords.Unmark()
+    void IFlowRecords.Stand(FlowStartsStanding standing, IReadOnlyCollection<string> leftSought)
     {
+        ArgumentNullException.ThrowIfNull(standing);
+        ArgumentNullException.ThrowIfNull(leftSought);
+
+        var asked = standing.Pause is null ? "stop" : "pause";
+
         try
         {
-            _store.Unmark(_layout);
+            if (_store.Rewrite(_layout, standing.On) is { } found)
+            {
+                // What the state said before the first standing over it is what a start that never goes on puts back.
+                _beforeTheStanding ??= (found.StoppingSince, found.Pause);
+            }
         }
         catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
         {
-            _warn?.Invoke($"'{_layout.FlowFile}' could not be told the engine's start no longer takes answers, a stop or a pause asked of it: {ex.Message.TrimEnd('.')}; the start's next write tells it");
+            _warn?.Invoke($"'{_layout.FlowFile}' could not be told the {asked} asked of the engine's start: {ex.Message.TrimEnd('.')}; the session's next write tells it");
+        }
+
+        if (leftSought.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_store.RewriteFlowQuestions(_layout, questions => standing.On(questions, leftSought)) is { } found)
+            {
+                // Each recommendation the session before left sought, as it left it, for a start that never goes on.
+                foreach (var question in found.Questions.Where(question => leftSought.Contains(question.Id) && !_soughtBeforeTheStanding.ContainsKey(question.Id)))
+                {
+                    _soughtBeforeTheStanding[question.Id] = question.Recommendation;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+        {
+            _warn?.Invoke($"'{_layout.QuestionsFile}' could not be told the {asked} asked of the engine's start defers what the session before left sought: {ex.Message.TrimEnd('.')}; the session's next write of it tells it");
+        }
+    }
+
+    /// <inheritdoc/>
+    void IFlowRecords.Unstand()
+    {
+        if (_beforeTheStanding is { } before)
+        {
+            _beforeTheStanding = null;
+
+            try
+            {
+                _ = _store.Rewrite(_layout, flow => flow with { StoppingSince = before.StoppingSince, Pause = before.Pause });
+            }
+            catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+            {
+                _warn?.Invoke($"'{_layout.FlowFile}' could not be given back what it said of the engine before its start, which never went on, took a stop or a pause: {ex.Message.TrimEnd('.')}; it says the stop or the pause asked");
+            }
+        }
+
+        if (_soughtBeforeTheStanding.Count == 0)
+        {
+            return;
+        }
+
+        var sought = new Dictionary<string, FlowRecommendation?>(_soughtBeforeTheStanding, StringComparer.Ordinal);
+        _soughtBeforeTheStanding.Clear();
+
+        try
+        {
+            _ = _store.RewriteFlowQuestions(_layout, questions => questions with
+            {
+                Questions = [.. questions.Questions.Select(question => sought.TryGetValue(question.Id, out var was) ? question with { Recommendation = was } : question)],
+            });
+        }
+        catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+        {
+            _warn?.Invoke($"'{_layout.QuestionsFile}' could not be given back what it said of the recommendations the session before left sought, which a start that never went on deferred: {ex.Message.TrimEnd('.')}; it says them deferred");
         }
     }
 
@@ -566,6 +665,9 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     {
         ArgumentNullException.ThrowIfNull(questions);
         _store.WriteFlowQuestions(_layout, new FlowQuestionsFile(1, _context.Run, _clock.GetUtcNow(), questions, refused is { Count: > 0 } ? refused : null));
+
+        // The questions are the session's own from here on: nothing a standing deferred is put back after it.
+        _soughtBeforeTheStanding.Clear();
     }
 
     /// <inheritdoc/>
@@ -613,8 +715,10 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             WriteStepFiles(step);
         }
 
-        // Then the run's state in one file, then its status, then its issues where the change listed one.
+        // Then the run's state in one file, then its status, then its issues where the change listed one. The state is the
+        // session's own from here on: nothing a standing wrote over is put back after it.
         _store.WriteFlow(_layout, FlowOf(snapshot));
+        _beforeTheStanding = null;
         _status.Write(snapshot, at);
 
         if (snapshot.Issues is { } issues && (_issuesWritten is null || !issues.SequenceEqual(_issuesWritten)))
@@ -638,7 +742,9 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             from,
             kind is FlowChangeKind.SessionEnded ? snapshot.Status.ToString() : to,
             step?.Attempt ?? attempt,
-            detail);
+            detail,
+            // The run's session: its engine's own, counted on from the sessions the log told of as this engine opened it.
+            _events.Sessions + snapshot.Session);
     }
 
     /// <summary>The run's state in one file, from the coordinator's snapshot.</summary>

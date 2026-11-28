@@ -688,6 +688,366 @@ public sealed class FlowResumeTests
         Assert.Null(harness.OrchestrationStore.ReadFlow(layout)!.Starting);
     }
 
+    /// <summary>A run of two machine steps that a crash ended with both running, and the next session's claim of its state: what each test of a start that takes a stop or a pause resumes.</summary>
+    private static async Task<(HarnessFactory Harness, OrchestratorLayout Layout, WorkflowDefinition Definition)> CrashedWithBothRunningAsync(TempDirectory temp)
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+              - name: two
+                type: orient
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var watched = new Watched(records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner().Hold("one").Hold("two"), new RunnerFacts(), records: watched);
+            _ = coordinator.RunAsync(Token);
+
+            // The crash, with both steps running.
+            await watched.SeenAsync(snapshot => snapshot.Steps.Count(step => step.State == FlowInstanceState.Running) == 2).WaitAsync(Bound, Token);
+        }
+
+        // The next session's claim marks the run's state as its start.
+        harness.OrchestrationStore.WriteFlow(layout, harness.OrchestrationStore.ReadFlow(layout)! with { Starting = true });
+        return (harness, layout, definition);
+    }
+
+    /// <summary>
+    /// A stop or a pause asked while a resume's start is under way - its writes held, here as it completes the attempts a crash
+    /// cut off - is what the start stands on from that moment, in the run's state at once and in every write the session
+    /// makes after it, a write the start held from before it among them: the stop applied at the moment it was asked, or the
+    /// pause asked then, which the loop begins at that moment - so no write says the engine starting, nor running with no
+    /// stop and no pause, while the start refuses what it is handed for the advice it would have sought.
+    /// </summary>
+    /// <param name="stop">Whether a stop is asked; else a pause.</param>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AStopOrAPauseAskedWhileAStartIsUnderWay_IsSaidByEveryWriteFromThen_ItsHeldOnesAmongThem(bool stop)
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, definition) = await CrashedWithBothRunningAsync(temp);
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var clock = new ManualClock();
+        var asked = clock.GetUtcNow();
+        FlowCoordinator? resumed = null;
+        FlowFile? stood = null;
+
+        // Asked as the second cut attempt is completed, the first's record held already; the clock moves on after it.
+        var account = new AskingAtTheSecondCut(() =>
+        {
+            if (stop)
+            {
+                resumed!.RequestStop();
+            }
+            else
+            {
+                resumed!.RequestPause("command");
+            }
+
+            stood = harness.OrchestrationStore.ReadFlow(layout);
+            clock.Advance(TimeSpan.FromMinutes(1));
+        });
+
+        using (again)
+        {
+            var kept = new Standings(again);
+            resumed = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, resume: TakeUp(harness, layout, definition), records: kept, runName: "r1", streamAccount: account);
+
+            Assert.Equal(stop ? FlowRunStatus.Stopped : FlowRunStatus.Paused, (await resumed.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(2, account.Asked);
+
+            // The first cut attempt's own record was held before the ask, and is written after it; every write says the
+            // standing, at the moment it was asked.
+            Assert.Contains(kept.Written, write => write.Kind == FlowChangeKind.Step);
+            Assert.All(kept.Written, write => Assert.Equal(
+                (false, stop ? asked : (DateTimeOffset?)null, stop ? null : asked),
+                (write.Starting, write.StoppingSince, write.Pause?.At)));
+        }
+
+        // The state said it as it was asked, before anything the start held was written.
+        Assert.Equal(
+            ((bool?)null, stop ? asked : (DateTimeOffset?)null, stop ? null : "command", stop ? null : asked),
+            (stood!.Starting, stood.StoppingSince, stood.Pause?.Cause, stood.Pause?.At));
+    }
+
+    /// <summary>
+    /// A stop asked once a start has made what it held - each held write saying the engine starting, its own end not written
+    /// yet - is what the engine stands on in the run's state at once: the state may still say starting, which the start no
+    /// longer is, so the stop is written over it then, never left until the start's end.
+    /// </summary>
+    [Fact]
+    public async Task AStopAskedAfterAStartMadeWhatItHeld_BeforeItsOwnEnd_IsInTheStateAtOnce()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, definition) = await CrashedWithBothRunningAsync(temp);
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        FlowCoordinator? resumed = null;
+        FlowFile? stood = null;
+
+        using (again)
+        {
+            var kept = new Standings(again);
+
+            // Asked once the first held write saying the engine starting is made, from inside the making of the hold.
+            kept.AfterAWrite = (kind, starting) =>
+            {
+                if (starting && stood is null)
+                {
+                    resumed!.RequestStop();
+                    stood = harness.OrchestrationStore.ReadFlow(layout);
+                }
+            };
+
+            resumed = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: kept, runName: "r1");
+
+            Assert.Equal(FlowRunStatus.Stopped, (await resumed.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+
+            // The hold said starting until the stop, and nothing after it did.
+            var written = kept.Written;
+            var first = written.FindIndex(write => write.Starting);
+            Assert.True(first >= 0);
+            Assert.All(written.Skip(first + 1), write => Assert.Equal((false, true), (write.Starting, write.StoppingSince is not null)));
+            Assert.Contains(written, write => write.Kind == FlowChangeKind.StartEnded);
+        }
+
+        Assert.Equal(((bool?)null, true), (stood!.Starting, stood.StoppingSince is not null));
+    }
+
+    /// <summary>
+    /// A stop asked of an engine between two of its sessions - before the next one's start is under way, as a session's token
+    /// already ended asks it as the session is driven - is what that start stands on from its beginning: the run's state says
+    /// the stop at once, before anything the start holds is written, and every write of the session says it at that moment.
+    /// </summary>
+    [Fact]
+    public async Task AStopAskedBeforeASessionsStartIsUnderWay_IsWhatThatStartStandsOn_AtOnce()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var clock = new ManualClock();
+
+        using (records)
+        {
+            var kept = new Standings(records, () => harness.OrchestrationStore.ReadFlow(layout));
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, records: kept, runName: "r1");
+
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Empty(kept.Stood);
+
+            // Between the sessions: the stop is asked, and the next session is driven a while after.
+            coordinator.RequestStop();
+            Assert.Empty(kept.Stood);
+            clock.Advance(TimeSpan.FromMinutes(1));
+            var driven = clock.GetUtcNow();
+            var before = kept.Written.Count;
+
+            Assert.Equal(FlowRunStatus.Stopped, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+
+            // The state said the stop as the start began, before the session's first write.
+            var stood = Assert.Single(kept.Stood);
+            Assert.Equal((before, (bool?)null, (DateTimeOffset?)driven), (stood.Writes, stood.Flow.Starting, stood.Flow.StoppingSince));
+            Assert.All(kept.Written.Skip(before), write => Assert.Equal((false, (DateTimeOffset?)driven), (write.Starting, write.StoppingSince)));
+        }
+    }
+
+    /// <summary>
+    /// A start that takes a stop and then never goes on - a defect ends it before its hold is made - writes nothing of
+    /// itself: what its standing wrote at once over the run's state and its questions - the stop applied, and the question
+    /// the crashed session left sought deferred as the start defers it - is put back as the claim found them.
+    /// </summary>
+    [Fact]
+    public async Task AStartThatTookAStopAndNeverWentOn_PutsBackWhatItsStandingWroteOver()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            steps:
+              - name: asker
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: one
+                type: orient
+              - name: two
+                type: orient
+            """);
+        var advisor = new HeldAdvisor();
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var store = harness.OrchestrationStore;
+
+        using (records)
+        {
+            var watched = new Watched(records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner().On("asker", _ => FlowStepResult.AtLimit("turns", "12 turns")).Hold("one").Hold("two"), new RunnerFacts(), records: watched, advisor: advisor);
+            _ = coordinator.RunAsync(Token);
+
+            // The crash, while the advisor seeks q1 and both machine steps run.
+            await advisor.Begun.Task.WaitAsync(Bound, Token);
+            await watched.SeenAsync(snapshot => snapshot.Steps.Count(step => step.State == FlowInstanceState.Running) == 2).WaitAsync(Bound, Token);
+        }
+
+        // The next session's claim marks the run's state as its start.
+        store.WriteFlow(layout, store.ReadFlow(layout)! with { Starting = true });
+        var left = (store.ReadFlow(layout)!.StoppingSince, store.ReadFlowQuestions(layout)!.Of("q1")!.Recommendation);
+        Assert.Equal("sought", left.Recommendation!.State);
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        FlowCoordinator? resumed = null;
+        (DateTimeOffset? StoppingSince, FlowRecommendation? Recommendation)? stood = null;
+
+        // The stop is asked as the second cut attempt is completed, and a defect ends the start there.
+        var account = new AskingAtTheSecondCut(() =>
+        {
+            resumed!.RequestStop();
+            stood = (store.ReadFlow(layout)!.StoppingSince, store.ReadFlowQuestions(layout)!.Of("q1")!.Recommendation);
+            throw new InvalidOperationException("a defect of the test's");
+        });
+
+        using (again)
+        {
+            resumed = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again, runName: "r1", streamAccount: account, advisor: new HeldAdvisor());
+
+            Assert.Equal("a defect of the test's", (await Assert.ThrowsAsync<InvalidOperationException>(() => resumed.RunAsync(Token).WaitAsync(Bound, Token))).Message);
+        }
+
+        // The standing was written at once, and put back as the start ended.
+        Assert.Equal((true, FlowRecommendation.Withheld), (stood!.Value.StoppingSince is not null, stood.Value.Recommendation));
+        Assert.Equal(left, (store.ReadFlow(layout)!.StoppingSince, store.ReadFlowQuestions(layout)!.Of("q1")!.Recommendation));
+    }
+
+    /// <summary>
+    /// Every event of a run names the run's session it belongs to, one more for each session its engines drive: what is
+    /// written after a session's end and before the next's - an answer given between them - is the ended session's, and what
+    /// an engine writes before it drives its first session - an answer it takes as it begins - is that session's; a later
+    /// engine counts on from the sessions the run's events tell of.
+    /// </summary>
+    [Fact]
+    public async Task ARunsEvents_NameTheSessionEachBelongsTo()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: first
+                type: pause
+                question: what first?
+                options: [stay, go]
+              - name: second
+                type: pause
+                question: what second?
+                options: [stay, go]
+                dependsOn: [first]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        int written;
+
+        using (records)
+        {
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), records: records, runName: "r1");
+
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.True(coordinator.TryAnswer("q1", "go", out var none), none);
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            written = FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Count;
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again, runName: "r1");
+
+            Assert.True(resumed.TryAnswer("q2", "go", out var none), none);
+            Assert.Equal(FlowRunStatus.Done, (await resumed.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var events = FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events;
+        var sessions = events.Select(read => read.Session ?? 0).ToArray();
+        var firstEnd = events.ToList().FindIndex(read => read.Kind == FlowEvent.KindOf(FlowChangeKind.SessionEnded));
+
+        // In order, each session's events together: the first engine's two sessions, then the resume's.
+        Assert.Equal(sessions.Order(), sessions);
+        Assert.Equal([1, 2, 3], sessions.Distinct());
+
+        // What the answer between the first engine's sessions wrote is the first's; what the resume wrote as it took its own
+        // answer, before it drove its session, the third's.
+        var between = events.ToList().FindIndex(read => read.Detail == "'q1' answered 'go'");
+        var taken = events.ToList().FindIndex(read => read.Detail == "'q2' answered 'go'");
+        Assert.InRange(between, firstEnd + 1, written - 1);
+        Assert.All(sessions[(firstEnd + 1)..(between + 1)], session => Assert.Equal(1, session));
+        Assert.Equal(2, sessions[between + 1]);
+        Assert.Equal(2, sessions[written - 1]);
+        Assert.InRange(taken, written, events.Count - 1);
+        Assert.All(sessions[written..], session => Assert.Equal(3, session));
+        Assert.Equal(FlowEvent.KindOf(FlowChangeKind.SessionBegan), events.Skip(taken).First(read => read.Kind is "sessionBegan" or "resumed").Kind);
+    }
+
+    /// <summary>
+    /// A crash leaves no last record, and the resume's start writes what it takes up - the attempts the crash cut off, run
+    /// again - before it records that it began: the run's report counts its pause from the crashed session's last event to
+    /// the resume's first, the hour between them, never the instant before the record of the resume's beginning.
+    /// </summary>
+    [Fact]
+    public async Task AfterACrash_TheReportsPause_RunsToTheResumesFirstEvent()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+              - name: two
+                type: orient
+            """);
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new ManualClock();
+
+        using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var watched = new Watched(records);
+            var coordinator = TestAdvice.Coordinator(definition, new Runner().Hold("one").Hold("two"), new RunnerFacts(), clock, records: watched);
+            _ = coordinator.RunAsync(Token);
+
+            // The crash, with both steps running.
+            await watched.SeenAsync(snapshot => snapshot.Steps.Count(step => step.State == FlowInstanceState.Running) == 2).WaitAsync(Bound, Token);
+        }
+
+        clock.Advance(TimeSpan.FromHours(1));
+
+        using (var again = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var kept = new Standings(again);
+            var resumed = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, resume: TakeUp(harness, layout, definition), records: kept, runName: "r1");
+
+            Assert.Equal(FlowRunStatus.Done, (await resumed.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+
+            // The resume's first write is a step's, before the record of its beginning.
+            Assert.Equal(FlowChangeKind.Step, kept.Written[0].Kind);
+        }
+
+        var events = FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events;
+        var run = FlowRunReport.Of(new FlowRunReportSource(layout, harness.OrchestrationStore.ReadFlow(layout)!, Events: events))["theRun"]!;
+
+        Assert.Equal((2, 3600.0), (run["sessions"]!.GetValue<int>(), run["pausedSeconds"]!.GetValue<double>()));
+    }
+
     /// <summary>
     /// An abort a session's start takes - the command's own answer, given as the session begins - is the stop that start
     /// applies before anything else, and it seeks no advice after it: the run's state says the engine is stopping from the
@@ -5277,8 +5637,90 @@ public sealed class FlowResumeTests
             _ = Flushed.TrySetResult();
         }
 
-        public void Unmark()
-            => inner.Unmark();
+        public void Stand(FlowStartsStanding standing, IReadOnlyCollection<string> leftSought)
+            => inner.Stand(standing, leftSought);
+
+        public void Unstand()
+            => inner.Unstand();
+    }
+
+    /// <summary>
+    /// The run's records, each change written through and kept with what its snapshot says of the engine - then told to the
+    /// test (<see cref="AfterAWrite"/>) - and each standing a start takes written through and kept with the run's state as it
+    /// left it.
+    /// </summary>
+    /// <param name="inner">The records written through.</param>
+    /// <param name="read">Reads the run's state; null where the test keeps none.</param>
+    private sealed class Standings(IFlowRecords inner, Func<FlowFile?>? read = null) : IFlowRecords
+    {
+        private readonly List<(FlowChangeKind Kind, bool Starting, DateTimeOffset? StoppingSince, FlowPauseRecord? Pause)> _written = [];
+        private readonly List<(int Writes, FlowFile Flow)> _stood = [];
+
+        /// <summary>What is done once a change is written through: its kind, and whether it said the engine is starting.</summary>
+        public Action<FlowChangeKind, bool>? AfterAWrite { get; set; }
+
+        /// <summary>Every change written so far, in order, with what it said of the engine.</summary>
+        public List<(FlowChangeKind Kind, bool Starting, DateTimeOffset? StoppingSince, FlowPauseRecord? Pause)> Written
+        {
+            get
+            {
+                lock (_written)
+                {
+                    return [.. _written];
+                }
+            }
+        }
+
+        /// <summary>Each standing written, with how many changes were written before it and the run's state as it left it.</summary>
+        public List<(int Writes, FlowFile Flow)> Stood
+        {
+            get
+            {
+                lock (_written)
+                {
+                    return [.. _stood];
+                }
+            }
+        }
+
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+        {
+            lock (_written)
+            {
+                _written.Add((kind, snapshot.Starting, snapshot.StoppingSince, snapshot.Pause));
+            }
+
+            inner.Write(kind, snapshot, instance, from, to, attempt, detail);
+            AfterAWrite?.Invoke(kind, snapshot.Starting);
+        }
+
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+            => inner.Question(questions, refused);
+
+        public void Updates(FlowUpdatesFile updates)
+            => inner.Updates(updates);
+
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+            => inner.AffectedTests(entries);
+
+        public void Flush()
+            => inner.Flush();
+
+        public void Stand(FlowStartsStanding standing, IReadOnlyCollection<string> leftSought)
+        {
+            inner.Stand(standing, leftSought);
+
+            if (read?.Invoke() is { } flow)
+            {
+                lock (_written)
+                {
+                    _stood.Add((_written.Count, flow));
+                }
+            }
+        }
+
+        public void Unstand()
+            => inner.Unstand();
     }
 
     /// <summary>The account of each attempt a crash cut off - none read from its stream - doing what the test asks as the second is asked for.</summary>
