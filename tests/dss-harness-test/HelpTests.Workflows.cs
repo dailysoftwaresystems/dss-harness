@@ -774,7 +774,8 @@ public sealed partial class HelpTests
                 + "where it still fails; where every account it could use is at its limit, or its provider's service fails past the client's own tries, the run pauses safely "
                 + "instead and resumes that very step. The recovery's steps, written once, read the step that failed as source and see every step of the flow, find what "
                 + "went wrong and put it right; then the run goes where its onSuccess says - failed-step, the step that gave it its failure, which runs again "
-                + "from where it stopped - and a failure of its own work, past its steps' retries, does what its onFailure says: pause or stop; the recovery "
+                + "from where it stopped, once: the visit's own record says what it sent the run back to, whatever became of that since, and nothing is sent back "
+                + "into a work item a plan update is bringing to rest - and a failure of its own work, past its steps' retries, does what its onFailure says: pause or stop; the recovery "
                 + "never calls itself. A step that fails again goes to the recovery again by its own onFailure, until it passes, a person is asked, or maxVisits is met (absent, "
                 + $"{FlowRecover.MostVisits} visits of one step's failures, or of one issue's, each counted on its own); past it the run asks (recoveryBound), with the advisor's recommendation of a fix: "
                 + "more, one more recovery; direct, with the fix in words, for the next one; skip, where the step is skippable; or abort.",

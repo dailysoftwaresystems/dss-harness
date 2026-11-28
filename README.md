@@ -669,13 +669,17 @@ A step that says `on` is a handler, raised by another step's ending: what depend
 handler of that ending to end - one that failed once its failure is decided, never while it asks, the recovery works on
 it or a run it stopped is still to resume - while what depends on a step that ended done starts beside the handlers its
 success raised. A handler that is a group answered `retry` is a new visit raised by the same ending, which waits on it,
-and a step run again as a new attempt raises its handlers anew, for that attempt's own ending.
+and a step run again as a new attempt raises its handlers anew, for that attempt's own ending. A `fail` answer at a
+handler's bound after a failure gives that ending up: the failure stands, and the ending waits on none of its handlers
+any more.
 
 A step gives a failure nothing handles to the workflow's `recover` by saying `onFailure: recover`,
 itself or through a group around it: steps written once that find what went wrong and put it right.
 When they are done the run goes where the recovery's `onSuccess` says - `failed-step`, the step that
 gave it its failure, which runs again from where it stopped, a handler (a step that says `on`) as a new visit raised by
-the ending it answers, which waits on it - and a failure of the recovery's own
+the ending it answers, which waits on it - once: the visit's own record says what it sent the run back to, whatever
+became of that since, and nothing is sent back into a work item a plan update is bringing to rest - and a failure of
+the recovery's own
 work does what its `onFailure` says once its steps' retries are spent: `pause` or `stop` - never the recovery again, which would be it calling itself. A step
 that fails again comes back by its own `onFailure`, until it passes or a person is asked; past
 `maxVisits` the run asks, with the advisor's recommended fix - counted for each step's failures and

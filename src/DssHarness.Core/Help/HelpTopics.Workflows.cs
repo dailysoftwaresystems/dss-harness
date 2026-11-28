@@ -117,7 +117,8 @@ public static partial class HelpTopics
         builder.AppendLine("step that ended done starts beside the handlers its success raised. A handler made again, a");
         builder.AppendLine("group answered retry or one the recovery put right, is a new visit raised by the same ending,");
         builder.AppendLine("which waits on it; and a step run again as a new attempt raises its handlers anew, for that");
-        builder.AppendLine("attempt's own ending.");
+        builder.AppendLine("attempt's own ending. A fail answer at a handler's bound after a failure gives that ending up:");
+        builder.AppendLine("the failure stands, and the ending waits on none of its handlers any more.");
         builder.AppendLine("A step gives a failure nothing handles to the workflow's");
         builder.AppendLine("recover by saying onFailure: recover, itself or through a group around it - never a");
         builder.AppendLine("reasoning step, whose agent is tried again (retries, waiting backoffSeconds, twice as long");
@@ -126,7 +127,9 @@ public static partial class HelpTopics
         builder.AppendLine("client's own tries, the run pauses safely instead and resumes that very step. The recovery's steps,");
         builder.AppendLine("written once, read the step that failed as source and see every step of the flow, find");
         builder.AppendLine("what went wrong and put it right; then the run goes where its onSuccess says - failed-step,");
-        builder.AppendLine("the step that gave it its failure, which runs again from where it stopped - and a failure");
+        builder.AppendLine("the step that gave it its failure, which runs again from where it stopped, once: the visit's");
+        builder.AppendLine("own record says what it sent the run back to, whatever became of that since, and nothing is");
+        builder.AppendLine("sent back into a work item a plan update is bringing to rest - and a failure");
         builder.AppendLine("of its own work, past its steps' retries, does what its onFailure says: pause or stop; the");
         builder.AppendLine("recovery never calls itself. A step that fails again goes to the recovery again by its own");
         builder.AppendLine("onFailure, until it");
