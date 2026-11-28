@@ -1942,17 +1942,15 @@ public sealed class FlowService(
 
                 // The last poll, the poller stopped: where an answer it takes settles the question the session paused
                 // on, the run is driven again - whatever emptying the inbox of it then meets, for it is taken - and that
-                // drive's start takes the pause or the stop the poll handed to the engine beside it, as the line says.
-                var (taken, seen, asked) = LastPoll(layout, coordinator, offered, said);
+                // drive's start takes what the engine stands on after the poll, as the line says.
+                var (taken, seen, asked, standing) = LastPoll(layout, coordinator, offered, said);
                 inbox |= seen > 0;
                 unemptied = Empty(layout, offered);
                 var goesOn = taken > 0 && end is { Status: FlowRunStatus.Paused, Pause: null };
 
-                if (asked is not null)
+                if (asked is { } handed)
                 {
-                    said.Add(goesOn
-                        ? $"a {asked} asked as the session ended was handed to the engine, and the session the run is driven on with takes it as it begins"
-                        : $"a {asked} asked as the session ended was taken with it");
+                    said.Add(AskedAsTheSessionEnded(handed, goesOn ? standing : null));
                 }
 
                 if (goesOn)
@@ -2153,22 +2151,51 @@ public sealed class FlowService(
     /// <summary>
     /// The last poll of a session, its poller stopped: a pause or a stop asked as the session ended is handed to the engine
     /// as every poll hands one (<see cref="HandOnWhatIsAsked"/>) - the session an answer this poll takes drives the run on
-    /// with takes it as it begins, and where none follows it ends with this session - and an answer the loop never weighed
-    /// - never offered it, or handed back - is taken here. What cannot be read is said and left for the next session of the
-    /// run, and the session's end stands. Emptying the inbox of what the session settled is <see cref="Empty"/>'s, after,
-    /// apart from the take: a removal that fails never unsays an answer taken.
+    /// with takes what the engine then stands on as it begins, and where none follows it ends with this session - and an
+    /// answer the loop never weighed - never offered it, or handed back - is taken here. What the engine stands on is read
+    /// of the engine once both are handed to it (<see cref="FlowCoordinator.AskedOfTheNextStart"/>), never of what
+    /// <c>stop.json</c> held: an abort this poll takes, or a stop handed to it before, stands in the place of a pause asked
+    /// beside it. What cannot be read is said and left for the next session of the run, and the session's end stands.
+    /// Emptying the inbox of what the session settled is <see cref="Empty"/>'s, after, apart from the take: a removal that
+    /// fails never unsays an answer taken.
     /// </summary>
-    /// <returns>How many answers were taken, how many were read, and what was asked through <c>stop.json</c> - <c>pause</c> or <c>stop</c> - or null where nothing was.</returns>
-    private (int Taken, int Seen, string? Asked) LastPoll(OrchestratorLayout layout, FlowCoordinator coordinator, Offered offered, List<string> said)
+    /// <returns>
+    /// How many answers were taken, how many were read, what was asked through <c>stop.json</c> - null where nothing was -
+    /// and what the engine's next start stands on after the poll, null where it stands on nothing.
+    /// </returns>
+    private (int Taken, int Seen, FlowAsked? Asked, FlowAsked? Standing) LastPoll(OrchestratorLayout layout, FlowCoordinator coordinator, Offered offered, List<string> said)
     {
-        string? asked = null;
+        FlowAsked? asked = null;
         var (taken, seen) = Guarded("asked of the engine as its session ended", said, () =>
         {
             asked = HandOnWhatIsAsked(layout, coordinator);
             return TakeInbox(layout, coordinator, offered, said);
         });
 
-        return (taken, seen, asked);
+        return (taken, seen, asked, coordinator.AskedOfTheNextStart);
+    }
+
+    /// <summary>
+    /// What a session says of a pause or a stop asked through <c>stop.json</c> as it ended (<paramref name="asked"/>), by what
+    /// the engine stands on after its last poll (<paramref name="standing"/>): taken with the session where no drive follows
+    /// it, or the engine stands on nothing; taken by the start of the drive that follows where the engine stands on it; and,
+    /// where the engine stands on another - a stop, asked of it by an abort the poll took or before the poll, beside the pause
+    /// asked - that the other replaces it, and is what the drive's start takes.
+    /// </summary>
+    /// <param name="asked">What <c>stop.json</c> asked.</param>
+    /// <param name="standing">What the next drive's start stands on; null where no drive follows, or it stands on nothing.</param>
+    private static string AskedAsTheSessionEnded(FlowAsked asked, FlowAsked? standing)
+    {
+        var what = WordOf(asked);
+
+        return standing switch
+        {
+            null => $"a {what} asked as the session ended was taken with it",
+            { } held when held == asked => $"a {what} asked as the session ended was handed to the engine, and the session the run is driven on with takes it as it begins",
+            { } held => $"a {what} asked as the session ended was handed to the engine, and a {WordOf(held)} asked of it replaces it: the session the run is driven on with takes the {WordOf(held)} as it begins",
+        };
+
+        static string WordOf(FlowAsked ask) => ask.ToString().ToLower(CultureInfo.InvariantCulture);
     }
 
     /// <summary>
@@ -2177,20 +2204,21 @@ public sealed class FlowService(
     /// cancelled and ended stopped by the loop, which alone owns the graph. The one owner of an ask a poll takes, every
     /// tick's (<see cref="Tick"/>) and the session's last (<see cref="LastPoll"/>) alike: what is taken from the file is
     /// never only removed, so a stop or a pause read as a session ends reaches the engine as one read while it runs does,
-    /// and the next session it drives takes it as it begins, as it takes one asked between sessions by any other way.
+    /// and the next session it drives takes it as it begins, as it takes one asked between sessions by any other way - by
+    /// the engine's own rule of what it stands on, a stop asked of it keeping no pause beside it.
     /// </summary>
-    /// <returns>What was asked - <c>pause</c> or <c>stop</c> - or null where nothing was.</returns>
-    private string? HandOnWhatIsAsked(OrchestratorLayout layout, FlowCoordinator coordinator)
+    /// <returns>What was asked, or null where nothing was: what the engine stands on after it is the engine's to say (<see cref="FlowCoordinator.AskedOfTheNextStart"/>).</returns>
+    private FlowAsked? HandOnWhatIsAsked(OrchestratorLayout layout, FlowCoordinator coordinator)
     {
         switch (_store.TakeStopFile(layout))
         {
             case { Pause: { } pause }:
                 coordinator.RequestPause("command", pause.All);
-                return "pause";
+                return FlowAsked.Pause;
 
             case { Stop: not null }:
                 coordinator.RequestStop();
-                return "stop";
+                return FlowAsked.Stop;
 
             default:
                 return null;
