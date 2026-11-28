@@ -639,4 +639,54 @@ public sealed class FlowRecoverTests
         Assert.Same(coordinator.Instances["fold"], again.RaisedBy);
         Assert.Equal("reconcile", coordinator.Instances["fold"].HandledBy);
     }
+
+    /// <summary>
+    /// A rerun of what the recovery put right that an answer gave up stays given up: the redirect that would leave an agent
+    /// open asked, stay counted the step handled by the recovery, and the session that goes on - whose start makes every
+    /// rerun its records still owe - finds none owed, for the step's record says what took its failure, and the run ends
+    /// done without asking again.
+    /// </summary>
+    [Fact]
+    public async Task ARecoveryRerunGivenUpByStay_IsNeverOwedAgain_AtTheNextSessionsStart()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: round
+                onFailure: recover
+                steps:
+                  - name: worker
+                    type: create-agent
+                    agent: maker
+                  - name: check
+                    type: orient
+                    dependsOn: [worker]
+            """);
+        var runner = new FakeRunner()
+            .On("worker", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"agent": "a1"}""")))
+            .On("check", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var cancel = TestContext.Current.CancellationToken;
+
+        var paused = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, paused.Status);
+        var asked = One(coordinator.OpenQuestions, question => question.Kind == "openAgents");
+        Assert.Equal("recover", asked.Instance);
+        Assert.True(coordinator.TryAnswer(asked.Id, "stay", out _));
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Empty(coordinator.OpenQuestions);
+        Assert.Equal("recover", coordinator.Instances["round"].HandledBy);
+        Assert.Equal(["round.worker", "round.check", "recover.mend"], runner.Started);
+        Assert.DoesNotContain(coordinator.Instances.Keys, id => id == "round+2");
+    }
 }

@@ -528,11 +528,16 @@ public static class FlowStatus
             }
 
             var beside = MemberKey(step.Instance).Scope;
+            var standing = StateOf(step) ?? FlowInstanceState.NotStarted;
 
+            // A visit raised for this ending is one raised for the attempt the source is in, read by the engine's own rule
+            // of which attempt a raise answered.
             foreach (var (handler, id) in FlowInstance.RaisesOwed(
                 step.Instance,
+                standing,
                 handlers,
-                handler => members[(beside, handler)].Any(visit => string.Equals(visit.RaisedBy, step.Instance, StringComparison.Ordinal)),
+                handler => members[(beside, handler)].Any(visit => string.Equals(visit.RaisedBy, step.Instance, StringComparison.Ordinal)
+                    && FlowInstance.AttemptRaisedFor(visit.RaisedByAttempt, standing, step.Attempt, step.EndedFor, step.FailureOf()) == step.Attempt),
                 handler => members[(beside, handler)].Select(visit => FlowInstanceId.VisitOf(visit.Instance)).DefaultIfEmpty(0).Max()))
             {
                 raises.Add(new FlowStepRecord(

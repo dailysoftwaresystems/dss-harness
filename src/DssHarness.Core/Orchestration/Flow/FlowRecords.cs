@@ -260,6 +260,12 @@ public sealed record FlowEvent(
 /// for every other record, and for a visit a build that kept none recorded: a resume reads its thread from the visits,
 /// the duplicates and the joins that had ended when it was made.
 /// </param>
+/// <param name="RaisedByAttempt">
+/// A handler's visit: the attempt of the instance <paramref name="RaisedBy"/> names whose ending raised it, written with its
+/// first record - a source run again as a new attempt raises its handlers anew for that attempt's ending, so which raise
+/// answers which ending is read from here. Null for every other record, and for a visit a build that kept none recorded,
+/// whose attempt is read from its source's record (<see cref="FlowInstance.AttemptRaisedFor"/>).
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -315,7 +321,8 @@ public sealed record FlowStepRecord(
     FlowStepMeasure? Measure = null,
     long? DrawnIn = null,
     FlowLoopCount? Counted = null,
-    FlowRecoveryThread? Thread = null)
+    FlowRecoveryThread? Thread = null,
+    int? RaisedByAttempt = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -354,6 +361,8 @@ public sealed record FlowStepRecord(
             : Handlers is { Count: > 0 } && Handlers.Any(handler => handler.Problem() is not null) ? $"its handlers hold one that is not a state: {Handlers.First(handler => handler.Problem() is not null).Problem()}"
             : HandledBy is not null && !FlowInstanceId.IsWellFormed(HandledBy) && !FlowQuestionIds.IsWellFormed(HandledBy) ? $"'{HandledBy}' names neither an instance nor a question"
             : RaisedBy is not null && !FlowInstanceId.IsWellFormed(RaisedBy) ? $"'{RaisedBy}' is not an instance id"
+            : RaisedByAttempt is not null && RaisedBy is null ? "it names the attempt of what raised it, and names nothing that raised it"
+            : RaisedByAttempt < 1 ? $"it was raised for attempt {RaisedByAttempt.Value.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
             : RaisedByUpdate is not null && !FlowUpdateIds.IsId(RaisedByUpdate) ? $"'{RaisedByUpdate}' is not an update's id"
             : LeftBy is not null && !FlowInstanceId.IsWellFormed(LeftBy) ? $"'{LeftBy}' is not an instance id"
             : Told?.Any(told => !FlowUpdateIds.IsId(told.Update) || string.IsNullOrWhiteSpace(told.How)) == true ? "one it was told holds no update or no way it reached it"
@@ -1711,6 +1720,7 @@ public sealed record FlowStartsStanding(DateTimeOffset At, FlowPauseRequest? Pau
 /// <param name="DrawnIn">Where the pass that drew it stands in the run's own order (<see cref="FlowStepRecord.DrawnIn"/>); null until the engine draws it.</param>
 /// <param name="Counted">A repeat's that a plan update was planned in: where its bound counts from (<see cref="FlowStepRecord.Counted"/>); null for every other.</param>
 /// <param name="Thread">A visit of the recovery's: what it puts right, as it was decided when the visit was made (<see cref="FlowStepRecord.Thread"/>); null for every other.</param>
+/// <param name="RaisedByAttempt">A handler's visit: the attempt of its source whose ending raised it (<see cref="FlowStepRecord.RaisedByAttempt"/>); null for every other.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -1766,4 +1776,5 @@ public sealed record FlowSnapshotStep(
     FlowStepMeasure? Measure = null,
     long? DrawnIn = null,
     FlowLoopCount? Counted = null,
-    FlowRecoveryThread? Thread = null);
+    FlowRecoveryThread? Thread = null,
+    int? RaisedByAttempt = null);
