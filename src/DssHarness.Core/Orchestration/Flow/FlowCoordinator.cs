@@ -678,8 +678,10 @@ public sealed class FlowCoordinator
     /// changes it while it holds, written at once over the run's state (<see cref="TakeTheStartsStanding"/>), and said by
     /// every write made after it (<see cref="AsWritten"/>) - the stop's moment the one the loop applies the stop at
     /// (<see cref="ApplyTheStop"/>), the pause's the one the loop begins it at (<see cref="PauseInOrderAsync"/>), each read
-    /// by the loop from the standing it takes itself as it does so - until the next session's start, which takes its own;
-    /// taken back where the start never goes on. Null where nothing was asked of the start. Held under <see cref="_writing"/>.
+    /// by the loop from the standing it takes itself as it does so - until its session ends, however it ends, once its last
+    /// write is made (<see cref="LetTheSessionsStandingGo"/>): it is that session's, and the next session's start takes its
+    /// own; taken back where the start never goes on. Null where nothing was asked of the start. Held under
+    /// <see cref="_writing"/>.
     /// </summary>
     private FlowStartsStanding? _startsStanding;
 
@@ -687,7 +689,8 @@ public sealed class FlowCoordinator
     /// Whether the run's state may still say the engine is starting (<see cref="FlowFile.Starting"/>): from the engine's
     /// making over the run's records - its session's claim marks the state so - and wherever a write said so since, until a
     /// write says it is not, the start's own end among them, or the start ends without going on, after which it says nothing
-    /// of the run's state and the session's release takes the claim's mark back (<see cref="EndTheStartThatNeverWentOn"/>).
+    /// of the run's state and the session's release takes the claim's mark back (<see cref="EndTheStartThatNeverWentOn"/>),
+    /// or its session ends, however it ends (<see cref="LetTheSessionsStandingGo"/>).
     /// A stop or a pause asked while it may writes what the engine stands on at once (<see cref="TakeTheStartsStanding"/>),
     /// whether or not the start is still under way: the start's held writes say starting once they are made, before its own
     /// end is written. Held under <see cref="_writing"/>.
@@ -1398,23 +1401,18 @@ public sealed class FlowCoordinator
     /// reach until the hold is made, and never what the session before left it saying, a run a crash ended running - and
     /// every write made after it says so, a held one among them (<see cref="AsWritten"/>). Written outside the hold, inside
     /// the one section every write of the run's records is made in, so it never meets one half made nor writes over one made
-    /// since; a standing the asks no longer give - a later session's start asked nothing - is let go of, nothing written.
+    /// since; a standing the asks no longer give is let go of, nothing written. Each session's start takes its own, from what
+    /// is asked of it alone, for the session before let its standing go as it ended (<see cref="LetTheSessionsStandingGo"/>).
     /// The loop takes it too, as it applies the stop (<see cref="ApplyTheStop"/>) and begins the pause
     /// (<see cref="PauseInOrderAsync"/>), and reads the moment it does so at from what it took, never apart from it: an
     /// asker takes the standing only after its ask is made, so the loop may meet the ask first, and whichever of the two
     /// takes it first gives the moment the loop applies and every write says - the other finds it taken.
     /// </summary>
-    /// <param name="anew">Whether a session's start begins, which takes its own standing: a later session's, from what is asked of it alone.</param>
     /// <returns>What the start stands on as this leaves it; null where it stands on nothing.</returns>
-    private FlowStartsStanding? TakeTheStartsStanding(bool anew = false)
+    private FlowStartsStanding? TakeTheStartsStanding()
     {
         lock (_writing)
         {
-            if (anew)
-            {
-                _startsStanding = null;
-            }
-
             if (!StartUnderWay && !_startingWritten && _startsStanding is null)
             {
                 return null;
@@ -1625,6 +1623,11 @@ public sealed class FlowCoordinator
     /// </remarks>
     public async Task<FlowSessionEnd> RunAsync(CancellationToken cancellationToken)
     {
+        if (_inSession)
+        {
+            throw new InvalidOperationException("A session of this run is already being driven; the coordinator owns one at a time.");
+        }
+
         Drive(1);
 
         try
@@ -1633,6 +1636,8 @@ public sealed class FlowCoordinator
         }
         finally
         {
+            // The session's last write is made, however it ended: what its start stood on is its own, and goes with it.
+            LetTheSessionsStandingGo();
             Drive(-1);
         }
     }
@@ -1656,14 +1661,26 @@ public sealed class FlowCoordinator
         }
     }
 
+    /// <summary>
+    /// Lets go of what the session's start stood on as the session ends, however it ends - in order, refused, by its token or
+    /// by a defect - once its last write is made: a start's standing is its session's, said by every write that session
+    /// makes (<see cref="AsWritten"/>), and the engine is starting no more, whatever a write its start held said
+    /// (<see cref="_startingWritten"/>). So no ask made between sessions stands on anything: a stop or a pause asked then
+    /// writes nothing until the next session's start takes it (<see cref="TakeTheStartsStanding"/>), at the moment that start
+    /// begins - whether or not an earlier start took a standing.
+    /// </summary>
+    private void LetTheSessionsStandingGo()
+    {
+        lock (_writing)
+        {
+            _startsStanding = null;
+            _startingWritten = false;
+        }
+    }
+
     /// <summary>The session <see cref="RunAsync"/> drives, the loop's own from its first line to its last.</summary>
     private async Task<FlowSessionEnd> SessionAsync(CancellationToken cancellationToken)
     {
-        if (_inSession)
-        {
-            throw new InvalidOperationException("A session of this run is already being driven; the coordinator owns one at a time.");
-        }
-
         // A stop the last session applied has ended that session, and this one is its resume: the run goes on. One
         // asked since - between sessions, by an abort answered then - is applied before anything else, and this
         // session says so over what it finds.
@@ -1701,8 +1718,9 @@ public sealed class FlowCoordinator
         _starting = true;
 
         // What is asked of the engine as its session's start begins is what the start stands on - a stop pending, a pause
-        // asked and not taken up - and a later session's start takes its own: the run's state says it at once.
-        _ = TakeTheStartsStanding(anew: _sessions > 1);
+        // asked and not taken up - and a later session's start takes its own, the session before having let its standing go:
+        // the run's state says it at once.
+        _ = TakeTheStartsStanding();
 
         // How the session leaves: in order, through its end below; by its cancellation token once it went on, which ends
         // it now and writes what it charged and holds all the same; or by a refusal of its start or a defect, which writes

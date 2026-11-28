@@ -863,6 +863,78 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// What a session's start stood on is that session's, let go as the session ends: a session its token ends once its
+    /// start is over, the pause that start took still to be carried out - the run's state saying it begun and not complete
+    /// - leaves no standing behind it, so a stop asked of the engine between that session and the next writes nothing, as it
+    /// writes nothing where no earlier start took a standing, and the next session's start stands on the stop from the moment
+    /// it begins, alike.
+    /// </summary>
+    /// <param name="earlier">Whether the first session's start took a pause.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AStopAskedBetweenSessions_WritesTheSame_WhetherOrNotAnEarlierStartTookAStanding(bool earlier)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var store = harness.OrchestrationStore;
+        var clock = new ManualClock();
+        var asked = clock.GetUtcNow();
+
+        using (records)
+        {
+            var kept = new Standings(records, () => store.ReadFlow(layout));
+            var coordinator = TestAdvice.Coordinator(definition, new Runner(), new RunnerFacts(), clock, records: kept, runName: "r1");
+            using var ending = CancellationTokenSource.CreateLinkedTokenSource(Token);
+
+            // The session's token ends it as its start's own end is written, before its loop takes anything up.
+            kept.AfterAWrite = (kind, _) =>
+            {
+                if (kind == FlowChangeKind.StartEnded)
+                {
+                    ending.Cancel();
+                }
+            };
+
+            if (earlier)
+            {
+                coordinator.RequestPause("command");
+            }
+
+            _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => coordinator.RunAsync(ending.Token).WaitAsync(Bound, Token));
+            kept.AfterAWrite = null;
+
+            var left = store.ReadFlow(layout)!;
+            Assert.Equal((earlier ? "command" : null, earlier ? asked : (DateTimeOffset?)null, (DateTimeOffset?)null), (left.Pause?.Cause, left.Pause?.At, left.Pause?.CompletedAt));
+
+            // Between the sessions, a while after the first ended: the stop is asked, and stands on nothing yet.
+            clock.Advance(TimeSpan.FromMinutes(1));
+            var before = (kept.Stood.Count, kept.Written.Count);
+            coordinator.RequestStop();
+
+            Assert.Equal(before, (kept.Stood.Count, kept.Written.Count));
+            Assert.Null(store.ReadFlow(layout)!.StoppingSince);
+
+            // The next session's start stands on it from the moment it begins.
+            clock.Advance(TimeSpan.FromMinutes(1));
+            var driven = clock.GetUtcNow();
+
+            Assert.Equal(FlowRunStatus.Stopped, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            var stood = Assert.Single(kept.Stood.Skip(before.Item1));
+            Assert.Equal((before.Item2, (DateTimeOffset?)driven), (stood.Writes, stood.Flow.StoppingSince));
+            Assert.All(kept.Written.Skip(before.Item2), write => Assert.Equal((DateTimeOffset?)driven, write.StoppingSince));
+        }
+    }
+
+    /// <summary>
     /// A start that takes a stop and then never goes on - a defect ends it before its hold is made - writes nothing of
     /// itself: what its standing wrote at once over the run's state and its questions - the stop applied, and the question
     /// the crashed session left sought deferred as the start defers it - is put back as the claim found them.
