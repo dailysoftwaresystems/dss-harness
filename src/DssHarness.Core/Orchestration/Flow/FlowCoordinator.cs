@@ -401,7 +401,11 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>Whether this attempt let its tree go while its legs work on: every copy made, every leg in the tree itself ended.</summary>
     internal bool Copied;
 
-    /// <summary>The instance whose ending raised this one - a handler's source, the step whose failure a recovery took.</summary>
+    /// <summary>
+    /// The instance whose ending raised this one - a handler's source; the step whose failure a visit of the recovery took,
+    /// or the triage whose issue it fixes; the step that reported the issue a triage triages. Only a handler is one its
+    /// source's ending waits on (the coordinator's <c>EndingOf</c>).
+    /// </summary>
     internal FlowInstance? RaisedBy;
 
     /// <summary>The id of the instance whose ending raised this one, as the record holds it until the resume resolves it.</summary>
@@ -5982,7 +5986,7 @@ public sealed class FlowCoordinator
         {
             _ = _pendingEndings.Remove(pending.Source.Id);
 
-            foreach (var handler in pending.Handlers.Where(handler => handler.RaisedBy is not null))
+            foreach (var handler in pending.Handlers)
             {
                 SetHandlerState(pending.Source, handler.Step.Name, "left");
             }
@@ -11358,9 +11362,6 @@ public sealed class FlowCoordinator
             return false;
         }
 
-        var raisedFor = new List<FlowInstance>();
-        FlowInstance? then = null;
-
         foreach (var handler in fitting)
         {
             // One visit for each handler raised: the one a when that could not be read failed is that visit, and so is
@@ -11379,20 +11380,15 @@ public sealed class FlowCoordinator
             {
                 BeginTheBlockOf(raised, scope);
             }
-
-            raisedFor.Add(raised);
-
-            if (handler.Then is not null)
-            {
-                then = raised;
-            }
         }
 
+        // The ending waits on the visits just raised, read as a resume reads them back: each handler the record now holds
+        // raised is one that fits.
         instance.FailureSettled = !failed;
-        var pending = new PendingEnding(instance, failed, raisedFor, then);
+        var pending = EndingOf(instance, scope);
         _pendingEndings[instance.Id] = pending;
 
-        if (raisedFor.All(Ended))
+        if (pending.Handlers.All(Ended))
         {
             // Every handler it raised has ended already - one whose when could not be read, one an earlier raise made
             // that ended before the crash: the ending is settled now, for no handler's end is left to settle it.
@@ -11408,6 +11404,36 @@ public sealed class FlowCoordinator
     /// </summary>
     private FlowInstance? RaisedFor(FlowInstance source, string handler, Scope scope)
         => _created.LastOrDefault(visit => ReferenceEquals(visit.DeclaredScope, scope) && visit.Step.Name == handler && ReferenceEquals(visit.RaisedBy, source));
+
+    /// <summary>
+    /// The ending of <paramref name="source"/>, declared in <paramref name="scope"/>, as it waits on its handlers: the visit
+    /// of each handler its own record holds raised (<see cref="RaisedFor"/>), in the order the scope declares them - the
+    /// one reading of which instances an ending waits on and settles with, made where the raise is made
+    /// (<see cref="RaiseFor"/>) and where a resume rebuilds an ending its records left waiting, so the two hold the same
+    /// handlers. Never every instance that names the source as what raised it: a triage of an issue it reported
+    /// (<see cref="RaiseIssues"/>) and a visit of the recovery that took its failure name it too, and no ending waits on
+    /// either - what depends on the source waits for its handlers alone, and its record names only them as it settles.
+    /// Each handler held raised has its visit here: the raise makes each in the pass that says it, and an ending a resume
+    /// rebuilds owes no raise (<see cref="RaisesOwedBy"/>).
+    /// </summary>
+    private PendingEnding EndingOf(FlowInstance source, Scope scope)
+    {
+        var handlers = DeclarationsOf(scope)
+            .Where(declaration => declaration.On?.Step == source.Step.Name && source._handlers.Any(held => held.Handler == declaration.Name && held.State == "raised"))
+            .Select(declaration => RaisedFor(source, declaration.Name, scope)
+                ?? throw new InvalidOperationException($"'{source.Id}' holds '{declaration.Name}' raised for its ending, and no visit of it raised for that ending is in the run"))
+            .ToList();
+
+        return new PendingEnding(source, source.State == FlowInstanceState.Failed, handlers, handlers.FirstOrDefault(handler => handler.Step.Then is not null));
+    }
+
+    /// <summary>
+    /// The ending <paramref name="visit"/> is a handler of, where that ending still waits: one of the handlers its source's
+    /// ending waits on (<see cref="EndingOf"/>) - never a triage of an issue that source reported, nor a visit of the
+    /// recovery that took its failure, which name the source as what raised them too and settle nothing of its ending.
+    /// </summary>
+    private PendingEnding? EndingHandledBy(FlowInstance visit)
+        => visit.RaisedBy is { } source && _pendingEndings.TryGetValue(source.Id, out var pending) && pending.Handlers.Contains(visit) ? pending : null;
 
     /// <summary>
     /// Begins the block of <paramref name="raised"/>, a visit of a handler that is a group, declared in
@@ -11672,7 +11698,7 @@ public sealed class FlowCoordinator
     /// <summary>Where an instance's ending leaves what waits on it: a handler that ended settles its source's ending.</summary>
     private void MaybeSettle(FlowInstance instance)
     {
-        if (instance.RaisedBy is { } source && _pendingEndings.TryGetValue(source.Id, out var pending) && pending.Handlers.All(Ended))
+        if (EndingHandledBy(instance) is { } pending && pending.Handlers.All(Ended))
         {
             SettleEnding(pending);
         }
@@ -11951,13 +11977,13 @@ public sealed class FlowCoordinator
             return;
         }
 
-        if (visit.RaisedBy is { } source && _pendingEndings.TryGetValue(source.Id, out var pending) && pending.Handlers.Contains(visit))
+        if (EndingHandledBy(visit) is { } pending)
         {
             // A handler left before it ended took nothing: the ending it was raised for is abandoned - never settled, by
             // it or by a sibling that ran, and its source never counted handled by a handler that never ran - and the
             // source's record says the handler was left, so no resume rebuilds the ending either (Abandoned).
-            _ = _pendingEndings.Remove(source.Id);
-            SetHandlerState(source, visit.Step.Name, "left");
+            _ = _pendingEndings.Remove(pending.Source.Id);
+            SetHandlerState(pending.Source, visit.Step.Name, "left");
         }
 
         visit.SkippedBecause = visit.State is FlowInstanceState.NotStarted ? $"withdrawn before it started: {because}" : because;
@@ -17065,15 +17091,12 @@ public sealed class FlowCoordinator
                 // it makes one the record says with no visit of it made - a crash between the two records
                 // (FlowInstance.RaisesOwed). An ending a redirect abandoned is never waited on again, whatever its other
                 // handlers did.
-                if (!RaisesOwedBy(source).Any() && source._handlers.Any(handler => handler.State == "raised") && !Abandoned(source))
+                if (!RaisesOwedBy(source).Any() && source._handlers.Any(handler => handler.State == "raised") && !Abandoned(source) && source.DeclaredScope is { } declared)
                 {
-                    // An ending whose handlers were raised and not all done: the run goes on waiting for them.
-                    var handlers = _created.Where(created => created.RaisedBy == source).ToList();
-                    _pendingEndings[source.Id] = new PendingEnding(
-                        source,
-                        source.State == FlowInstanceState.Failed,
-                        handlers,
-                        handlers.FirstOrDefault(handler => handler.Step.Then is not null));
+                    // An ending whose handlers were raised and not all done: the run goes on waiting for them - the visits
+                    // of its own handlers, as its raise made them (EndingOf), never a triage of an issue it reported nor a
+                    // visit of the recovery, which name it as what raised them too.
+                    _pendingEndings[source.Id] = EndingOf(source, declared);
                     source.FailureSettled = source.State != FlowInstanceState.Failed;
                 }
             }
