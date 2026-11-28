@@ -1902,9 +1902,10 @@ public sealed class FlowCoordinator
 
             if (_thenRead)
             {
-                // The then of the update under way as the replay read it from the redirect it names - decided where the
-                // process ended between the redirect's write and the entry's, undecided where an older build's entry named
-                // it before a redirect the process never wrote - is written into the update's entry, once (ReadTheThen).
+                // The then of the update under way as the replay read it from the redirect it names, or the question that
+                // redirect asked - decided where the process ended between the redirect's write and the entry's, undecided
+                // where an older build's entry named it before a redirect the process never wrote - is written into the
+                // update's entry, once (ReadTheThen).
                 _thenRead = false;
                 Put(records => records.Updates(_updates));
             }
@@ -5375,9 +5376,10 @@ public sealed class FlowCoordinator
                 // is the decision written into the update's entry. A crash before the redirect's write leaves the then
                 // undecided, and the session that takes the run up decides it again, asking again where it asked - the
                 // question written without its redirect asks of nothing, and the replay withdraws it; one between the two
-                // leaves the redirect owed, which the replay reads as the then decided, the entry completed at the session's
-                // start (ReadTheThen) - so the plan never stands on a check that never ran on it. A visit the redirect left
-                // says it was made.
+                // leaves the redirect owed - or its question answered, where a stay the workflow's answers give took the
+                // redirect out as it was asked - which the replay reads as the then decided, the entry completed at the
+                // session's start (ReadTheThen) - so the plan never stands on a check that never ran on it, nor is a stay
+                // ever asked again. A visit the redirect left says it was made.
                 var target = _definition.Amend!.Then!;
                 DecideTheThen(planner, target);
                 PutUpdate((_updates.Updates.FirstOrDefault(entry => entry.Id == update.Id) ?? update) with { Then = target });
@@ -5496,15 +5498,21 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Reads, as the replay takes the run up, whether the <c>then</c> of the plan update under way was decided - by its one
-    /// fact, the redirect it names, decided in its own write before the update's entry says it (<see cref="SettleUpdates"/>)
-    /// - and puts the entry right in memory where it says otherwise, the session's start writing it (<see cref="_thenRead"/>),
-    /// so the entry is what <see cref="NextOfTheUpdate"/> reads, once. A redirect its planning step owes beside an entry
-    /// naming no then - the process ended between the two writes - is the then decided, never decided again, whatever
-    /// becomes of the redirect after, a <c>stay</c> that gives it up among it. And an entry an older build wrote, naming the
-    /// then before the redirect's write, beside nothing that redirect leaves in the records - no redirect owed, no visit it
-    /// left, no visit of the step it names made since the planning step, no question it asked open or answered - is the
-    /// process ended between those two writes, the then undecided: it is decided again, so the plan never stands on a check
-    /// that never ran on it.
+    /// fact, the redirect it names, decided in its own write before the update's entry says it (<see cref="SettleUpdates"/>),
+    /// with the question it asks of agents it would leave open written just before - and puts the entry right in memory
+    /// where it says otherwise, the session's start writing it (<see cref="_thenRead"/>), so the entry is what
+    /// <see cref="NextOfTheUpdate"/> reads, once. A redirect its planning step owes beside an entry naming no then - the
+    /// process ended between the two writes - is the then decided, never decided again, whatever becomes of the redirect
+    /// after; and so is a question of open agents its planning step asked, open or answered, whatever the entry says: a
+    /// <c>stay</c> takes the redirect out of the records at once, before the entry names the then - one the workflow's
+    /// <c>answers</c> give, taken as the question is raised, or a person's taken before a session's start has written the
+    /// entry as read here - and its question is all that is left of the decision. A question counts whatever the entry says
+    /// because none is answered before its redirect is written, in this build or an older one, and one written without its
+    /// redirect asks of nothing: the replay withdrew it before this reads. And an entry an older build wrote, naming the then
+    /// before the redirect's write, beside nothing that redirect leaves in the records - no redirect owed, no visit it left,
+    /// no visit of the step it names made since the planning step, no question it asked open or answered - is the process
+    /// ended between those two writes, the then undecided: it is decided again, so the plan never stands on a check that
+    /// never ran on it.
     /// </summary>
     private void ReadTheThen()
     {
@@ -5517,11 +5525,11 @@ public sealed class FlowCoordinator
 
         var target = DeclarationsOf(scope).FirstOrDefault(declaration => declaration.Name == then);
         var decided = _redirects.Any(redirect => ReferenceEquals(redirect.Handler, planner))
+            || _questions.Any(asked => asked is { Kind: "openAgents", State: "open" or "answered" } && asked.Instance == planner.Id)
             || update.Then is not null
                 && (target is null
                     || _created.Any(visit => visit.LeftBy == planner.Id)
-                    || _created.Skip(_created.IndexOf(planner) + 1).Any(visit => ReferenceEquals(visit.Step, target))
-                    || _questions.Any(asked => asked is { Kind: "openAgents", State: "open" or "answered" } && asked.Instance == planner.Id));
+                    || _created.Skip(_created.IndexOf(planner) + 1).Any(visit => ReferenceEquals(visit.Step, target)));
 
         if (decided == (update.Then is not null))
         {
