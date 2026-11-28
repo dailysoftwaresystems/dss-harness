@@ -5413,8 +5413,10 @@ waits until the pause is complete; `stop-orchestrator`, which waits while the en
 every 5 minutes, its own Ctrl+C ending the wait with the stop left asked) and `inbox.json`
 (`answer-orchestrator` to a running engine, each answer under an id of its own). The poller never
 waits on what it hands the engine; what it cannot read is said once and read again, anything else
-asks the run to pause; a last poll at the session's end takes what came late, and the next session
-takes what is left. The engine takes an answer offered before a session begins at its start, before
+asks the run to pause; a last poll at the session's end takes what came late - a pause or a stop
+handed to the engine as every poll hands one (`FlowService.HandOnWhatIsAsked`), never only removed,
+so where an answer that poll takes drives the run on, that drive's start takes it as it begins, and
+where none does it ends with the session - and the next session takes what is left. The engine takes an answer offered before a session begins at its start, before
 anything is admitted - so a resume is never refused over the question it settles - and hands one left
 unread as its session ends back cancelled, never refused, so it stays in the inbox for whoever takes it
 next; what a step spent that came late is counted. Every answer handed over is weighed by one owner
