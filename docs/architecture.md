@@ -4704,10 +4704,13 @@ token: in the loop's wait for what the run learns, which the token ends at once 
 pass, and after every wait the token does not end itself - a pause's or a plan update's handoff turns, whose answers it
 keeps - so once it has, nothing more is drawn, decided, started or waited for, a pause under way never completing and
 an instance a plan update brings to rest neither coming to rest nor visited again until the next session
-(`PauseInOrderAsync`, `SettlePiecesEndingAsync`). The loop's one read of its channel is armed with no token and is the
-loop's across its waits and its sessions, left armed by a wait it did not win and by a session's end and taken by the
-next wait, while each wait observes its own session's token: no message is lost to a wait that no longer stands, and
-the token of a session that ended ends nothing of a later one. It writes what it charged and holds all the same: each
+(`PauseInOrderAsync`, `SettlePiecesEndingAsync`). The loop's one wait on its channel waits for a message to arrive and
+reads none: it is armed with no token and is the loop's across its waits and its sessions, left armed by a wait it did
+not win and by a session's end, while each wait observes its own session's token - so the token of a session that ended
+ends nothing of a later one - and every message stays in the channel until the loop reads it, so whether one waits has
+one owner (`AMessageWaits`) that sees every message: an answer that comes while the loop is busy after a wait that a
+retry's time, a drain's bound or the budget's tick won is taken before the session ends, never handed back unweighed by
+a session that ended paused on the question it settles. It writes what it charged and holds all the same: each
 advice it ends deferred as a stop defers it and taken by `Took`, its recommendation kept where it returned one, and the
 session's last record with every spend among it (`FlowCoordinator.RecordTheSessionsEnd`, the one owner of that record,
 `Finish`'s too), saying `cancelled` with the steps it leaves running - their runners are not the token's to end - and

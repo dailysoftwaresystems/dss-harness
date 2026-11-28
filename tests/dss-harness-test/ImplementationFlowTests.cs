@@ -61,9 +61,11 @@ public sealed class ImplementationFlowTests
     /// providers and tiers init seeds and whatever of <paramref name="ground"/> it asks, and whose slot holds the keys
     /// of both providers - over the engine's own step runners with every machine step the flow's mechanics do not
     /// reach answered by <see cref="MachineSteps"/> - the class-closure check among them, save where
-    /// <paramref name="closures"/> asks the engine's own.
+    /// <paramref name="closures"/> asks the engine's own - and on <paramref name="clock"/>, where a test gives one: a
+    /// clock that holds the bound the test passes (<see cref="TimerClock"/>), so the test moves the run past it, never
+    /// waits it out.
     /// </summary>
-    private static async Task<Kit> PrepareAsync(TempDirectory temp, Action<Scripted>? script = null, string? keys = null, Ground? ground = null, Action<MachineSteps>? machine = null, Action<HarnessConfig>? adjust = null, IFileSystem? files = null, Func<HarnessFactory, IAgentRunner>? walking = null, bool commits = false, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null, bool closures = false)
+    private static async Task<Kit> PrepareAsync(TempDirectory temp, Action<Scripted>? script = null, string? keys = null, Ground? ground = null, Action<MachineSteps>? machine = null, Action<HarnessConfig>? adjust = null, IFileSystem? files = null, Func<HarnessFactory, IAgentRunner>? walking = null, bool commits = false, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null, bool closures = false, TimeProvider? clock = null)
     {
         var harness = new HarnessFactory();
         var template = AgentProviderTemplates.Read();
@@ -124,11 +126,11 @@ public sealed class ImplementationFlowTests
         script?.Invoke(agents);
         machine?.Invoke(steps);
 
-        return new Kit(harness, temp, agents, steps, Service(harness, agents, steps, files, walking?.Invoke(harness), commits, updates, closures));
+        return new Kit(harness, temp, agents, steps, Service(harness, agents, steps, files, walking?.Invoke(harness), commits, updates, closures, clock));
     }
 
-    /// <summary>The service over the engine's own runners: every type the flow's head works through for real, the rest answered by the machine script - over <paramref name="files"/> where one is given, so a test stands between the engine and its records, and reasoning worked by <paramref name="walking"/> where one is given, so the engine's own fallback walk runs over a client a test scripts, and its commits worked by the engine's own commit runner where <paramref name="commits"/> says so, and its Claude Code made ready by <paramref name="updates"/> where one is given.</summary>
-    private static FlowService Service(HarnessFactory harness, Scripted agents, MachineSteps machine, IFileSystem? files = null, IAgentRunner? walking = null, bool commits = false, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null, bool closures = false)
+    /// <summary>The service over the engine's own runners: every type the flow's head works through for real, the rest answered by the machine script - over <paramref name="files"/> where one is given, so a test stands between the engine and its records, and reasoning worked by <paramref name="walking"/> where one is given, so the engine's own fallback walk runs over a client a test scripts, and its commits worked by the engine's own commit runner where <paramref name="commits"/> says so, and its Claude Code made ready by <paramref name="updates"/> where one is given, on <paramref name="clock"/> where one is given and the system's where none is.</summary>
+    private static FlowService Service(HarnessFactory harness, Scripted agents, MachineSteps machine, IFileSystem? files = null, IAgentRunner? walking = null, bool commits = false, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null, bool closures = false, TimeProvider? clock = null)
     {
         var fileSystem = files ?? harness.FileSystem;
         var store = files is null ? harness.OrchestrationStore : new OrchestrationStore(fileSystem, harness.Output);
@@ -229,7 +231,7 @@ public sealed class ImplementationFlowTests
             agents,
             keys,
             new TestIsolation(),
-            clock: null,
+            clock,
             timings: Quick);
     }
 
@@ -3602,9 +3604,16 @@ public sealed class ImplementationFlowTests
         {
             using var temp = new TempDirectory();
             var moved = MachineSteps.Moved("the leg's inputs moved while it ran");
+
+            // A clock that holds the retry table's waits for a leg whose inputs moved, and runs every other wait on the
+            // system's timer: the run polls and looks as it would, and each retry's wait passes when the test says, never
+            // after the real seconds it names.
+            TimeSpan[] retries = [.. Enumerable.Range(0, 3).Select(retry => FlowRetry.Wait(LegExit.InputsMoved, OutcomeCause.None, retry)!.Value)];
+            var clock = new TimerClock(holds: retries);
             var kit = await PrepareAsync(
                 temp,
                 ground: new Ground(Legs: true),
+                clock: clock,
                 script: agents => agents.Queue(
                     "diagnostician",
                     Completed(Diagnosis(
@@ -3613,7 +3622,21 @@ public sealed class ImplementationFlowTests
                         choices: [Choice("Retry the verify", "the step runs again once the tree settles")]))),
                 machine: steps => steps.Queue("test", MachineSteps.Green(), moved, moved, moved, moved));
 
-            var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+            var starting = StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            // Each retry's wait, once it is armed - the only waits the clock holds - is passed in its turn, while the session
+            // runs: one that ends first armed no more of them, and what it did is the assertions' to say.
+            foreach (var wait in retries)
+            {
+                if (await Task.WhenAny(clock.WaitingAsync(), starting).WaitAsync(Bound, Token) == starting)
+                {
+                    break;
+                }
+
+                clock.Advance(wait);
+            }
+
+            var paused = await starting;
 
             Assert.Equal(FlowExit.Paused, paused.ExitCode);
 
@@ -5582,8 +5605,15 @@ public sealed class ImplementationFlowTests
             Held building = null!;
             var taken = 0;
 
+            // A clock that holds the handoff turn's bound alone - the 180 s a step that declares no handoffSeconds is given
+            // - and runs every other wait on the system's timer: the run polls and looks as it would, and the held builder,
+            // which answers no turn, is passed its bound when the test says, never after the real seconds it names.
+            var handoffBound = TimeSpan.FromSeconds(180);
+            var clock = new TimerClock(holds: [handoffBound]);
+
             var kit = await PrepareAsync(
                 temp,
+                clock: clock,
                 script: agents =>
                 {
                     agents.Queue(
@@ -5648,6 +5678,12 @@ public sealed class ImplementationFlowTests
             // stopped, ended for the update, its handoff written - and the item is done again by redo in the same
             // worktree, the agent its round made taken and not made again.
             var approving = AnswerOneAsync(kit, approval.Id, "approve");
+
+            // The held builder answers no turn: once its turn's bound is armed - the one wait the clock holds - the clock is
+            // moved past it, and the attempt is ended, handed off.
+            Assert.Equal(0, clock.Waiting);
+            await clock.WaitingAsync().WaitAsync(Bound, Token);
+            clock.Advance(handoffBound);
 
             FlowStepRecord? ended = null;
             AgentStepRequest? again = null;

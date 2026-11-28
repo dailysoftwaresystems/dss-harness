@@ -164,6 +164,12 @@ public sealed class FlowCoordinatorTests
         /// <summary>The last snapshot written.</summary>
         public FlowSnapshot? Last { get; private set; }
 
+        /// <summary>
+        /// Told of each change as the coordinator writes it - its kind, its instance and the state it went to - on the
+        /// coordinator's own thread, before the write returns: so a test acts at one exact point of what the loop does.
+        /// </summary>
+        public Action<FlowChangeKind, string?, string?>? Writing { get; set; }
+
         /// <summary>The first change written after this call of <paramref name="kind"/> whose detail is <paramref name="detail"/>.</summary>
         public Task SaidAsync(FlowChangeKind kind, string detail)
         {
@@ -207,6 +213,8 @@ public sealed class FlowCoordinatorTests
                     said.TrySetResult();
                 }
             }
+
+            Writing?.Invoke(kind, instance, to);
         }
 
         /// <inheritdoc/>
@@ -2338,6 +2346,83 @@ public sealed class FlowCoordinatorTests
         Assert.Equal("passed its timeoutMinutes (1), and its runner did not end within 90 s of the stop", stopped.Error);
         Assert.Single(runner.Runs);
         gate.Done();
+    }
+
+    /// <summary>
+    /// An answer that reaches the engine while nothing of the run runs is taken before the session ends, whatever won the
+    /// loop's last wait: here a drain's bound - the step stopped for its time limit gives up its runner, deaf to the stop
+    /// - and the answer to the run's open question comes as the loop records that step failed, after the drain won the
+    /// wait and before the loop looks again at what waits for it. The session goes on with what the answer settles, to
+    /// the run's end - never ending paused on a question whose answer the engine holds, handing it back unweighed.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerThatComesAsTheLoopRecordsWhatAWakeEnded_IsTakenBeforeTheSessionEnds()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+              - name: gate
+                type: build
+                timeoutMinutes: 1
+                onFailure: continue
+              - name: after
+                type: orient
+                dependsOn: [holding]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var bound = TimeSpan.FromSeconds(30);
+        var runner = new FakeRunner();
+        var gate = runner.Hold("gate");
+        var clock = new TimerClock();
+        var records = new Snapshots();
+        var coordinator = TestAdvice.Coordinator(definition, runner, new RunnerFacts(), clock, records: records);
+        var advised = records.SaidAsync(FlowChangeKind.Advised, "q1 left without a recommendation");
+        var offered = new TaskCompletionSource<Task<FlowWeighed>>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // The answer is handed to the engine once, on the loop's own thread, as the loop first records the step whose drain
+        // gave up on its runner: the drain has won the loop's wait, and the loop has yet to look at what waits for it.
+        records.Writing = (kind, instance, to) =>
+        {
+            if (kind == FlowChangeKind.Step && instance == "gate" && to == nameof(FlowInstanceState.Failed) && !offered.Task.IsCompleted)
+            {
+                _ = offered.TrySetResult(coordinator.OfferAnswerAsync("q1", "go"));
+            }
+        };
+
+        try
+        {
+            var session = coordinator.RunAsync(cancel);
+
+            // The question recommended, then the step's time limit passed and, its runner running on, the drain's bound.
+            await advised.WaitAsync(bound, cancel);
+            await clock.WaitingAsync().WaitAsync(bound, cancel);
+            clock.Advance(TimeSpan.FromMinutes(1));
+            await clock.WaitingAsync().WaitAsync(bound, cancel);
+            clock.Advance(PointOfNoReturn.SafePauseDrain);
+
+            var end = await session.WaitAsync(bound, cancel);
+
+            // The session went on with the answer, to the run's end, the question it settled closed.
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Empty(coordinator.OpenQuestions);
+            Assert.Equal(
+                (FlowInstanceState.Done, FlowInstanceState.Failed, FlowInstanceState.Done),
+                (coordinator.Instances["holding"].State, coordinator.Instances["gate"].State, coordinator.Instances["after"].State));
+            Assert.Equal(["gate", "after"], runner.Started);
+
+            // And the answer was weighed and taken by the session it reached - never handed back for another to weigh.
+            var weighed = await (await offered.Task.WaitAsync(bound, cancel)).WaitAsync(bound, cancel);
+
+            Assert.Equal((FlowHandedOver.Taken, (string?)null), (weighed.How, weighed.Problem));
+        }
+        finally
+        {
+            gate.Done();
+        }
     }
 
     /// <summary>A hard stop met while a step drains for its time limit wins: the step ends stopped, to run again at the resume, and not failed.</summary>

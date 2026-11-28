@@ -664,13 +664,15 @@ public sealed class FlowCoordinator
     private FlowSessionEnd? _last;
 
     /// <summary>
-    /// The loop's one read of its channel, armed with no token and the loop's across waits and sessions until what it read
-    /// is taken: a wait a retry's time, a drain's bound, the budget's tick or a session's token won leaves it armed, as a
-    /// session's end does, and the next wait - this session's or the next one's - takes what it read
-    /// (<see cref="WaitNextAsync"/>), so no message is lost to a wait that no longer stands, and no session's token is
-    /// carried into another session's wait.
+    /// The loop's one wait on its channel: for a message to arrive, reading none - armed with no token and the loop's
+    /// across waits and sessions until it has seen one arrive. A wait a retry's time, a drain's bound, the budget's tick or
+    /// a session's token won leaves it armed, as a session's end does, for the next wait - this session's or the next
+    /// one's (<see cref="WaitNextAsync"/>) - so no session's token is carried into another session's wait. It takes
+    /// nothing, so every message stays in the channel until the loop reads it, and the loop's every look at what waits for
+    /// it - whether one does (<see cref="AMessageWaits"/>), and what a session's start and end take - sees each: none is
+    /// held where no look sees it, as a read armed across waits would hold the message it took.
     /// </summary>
-    private Task<Message>? _pending;
+    private Task<bool>? _arrival;
 
     /// <summary>
     /// What reached the loop after its last read that speaks of an attempt still running, kept by a session that ended
@@ -1570,9 +1572,10 @@ public sealed class FlowCoordinator
                     continue;
                 }
 
-                // An answer offered from outside the session may sit unread while nothing runs: it is taken before
-                // the session ends over a question an answer has settled, for the loop alone applies it.
-                if (_messages.Reader.TryPeek(out _))
+                // An answer offered from outside the session may sit unread while nothing runs - whatever won the loop's
+                // last wait: it is taken before the session ends over a question an answer has settled, for the loop
+                // alone applies it.
+                if (AMessageWaits())
                 {
                     await WaitNextAsync(cancellationToken).ConfigureAwait(false);
                     continue;
@@ -13046,9 +13049,10 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Waits for the next thing the run learns - a completion, an event of a leg, a retry's time coming, or the budget's
-    /// tick - and takes it. The loop's one read of the channel (<see cref="_pending"/>) is armed with no token and kept
-    /// across the waits it does not win and across sessions, so no message is read by a wait that no longer stands; the
-    /// wait itself is the session's, which its token ends at once, the read left armed for whoever waits next.
+    /// tick - and takes it: a message already waiting at once. The loop's one wait on the channel (<see cref="_arrival"/>)
+    /// waits for a message to arrive and reads none, so a message stays in the channel until the loop reads it here; it is
+    /// armed with no token and kept across the waits it does not win and across sessions, while the wait itself is the
+    /// session's, which its token ends at once.
     /// </summary>
     /// <param name="cancellationToken">The session's token: ends this wait at once, and no other session's.</param>
     private async Task WaitNextAsync(CancellationToken cancellationToken)
@@ -13056,16 +13060,10 @@ public sealed class FlowCoordinator
         // The pass ends here: what it wrote is on the disk before anything is waited for.
         EndThePass();
 
-        if (_pending is { IsCompleted: true } read)
+        if (TakeWaiting())
         {
-            TakeMessage(read.Result);
-            _pending = null;
             return;
         }
-
-        // Armed with no token: a session's token ends its own wait, never the read, which outlives the wait and the
-        // session alike and is read by the next wait - so the token of a session that ended is never met by a later one.
-        _pending ??= _messages.Reader.ReadAsync(CancellationToken.None).AsTask();
 
         // The minutes a reason step runs count while it runs: the run wakes when those running now would bring the
         // budget to its reserve, so a long one pauses the run there and not only when its attempt ends.
@@ -13074,48 +13072,65 @@ public sealed class FlowCoordinator
 
         try
         {
-            if (_wakes.Count == 0 && tick is null)
+            while (true)
             {
-                TakeMessage(await _pending.WaitAsync(cancellationToken).ConfigureAwait(false));
-                _pending = null;
-                return;
-            }
+                // Armed with no token: a session's token ends its own wait, never the wait for an arrival, which outlives
+                // the wait and the session alike - so the token of a session that ended is never met by a later one. One
+                // that saw an arrival the loop has read since - at a session's start or end - is armed again.
+                if (_arrival is { IsCompleted: true })
+                {
+                    _arrival = null;
+                }
 
-            var earliest = _wakes.OrderBy(wake => wake.At).FirstOrDefault();
-            var waits = new List<Task>(3) { _pending };
+                _arrival ??= _messages.Reader.WaitToReadAsync(CancellationToken.None).AsTask();
 
-            if (earliest is not null)
-            {
-                waits.Add(earliest.Delay);
-            }
+                if (_wakes.Count == 0 && tick is null)
+                {
+                    _ = await _arrival.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    var earliest = _wakes.OrderBy(wake => wake.At).FirstOrDefault();
+                    var waits = new List<Task>(3) { _arrival };
 
-            if (tick is not null)
-            {
-                waits.Add(tick);
-            }
+                    if (earliest is not null)
+                    {
+                        waits.Add(earliest.Delay);
+                    }
 
-            var done = await Task.WhenAny(waits).WaitAsync(cancellationToken).ConfigureAwait(false);
+                    if (tick is not null)
+                    {
+                        waits.Add(tick);
+                    }
 
-            if (done == tick)
-            {
-                // The loop goes round, and reads the budget as it stands now.
-                return;
-            }
+                    var done = await Task.WhenAny(waits).WaitAsync(cancellationToken).ConfigureAwait(false);
 
-            if (done != _pending)
-            {
-                Woken(earliest!);
-                return;
+                    if (done == tick)
+                    {
+                        // The loop goes round, and reads the budget as it stands now.
+                        return;
+                    }
+
+                    if (done != _arrival)
+                    {
+                        Woken(earliest!);
+                        return;
+                    }
+                }
+
+                // A message arrived and won the wait: it is taken.
+                _arrival = null;
+
+                if (TakeWaiting())
+                {
+                    return;
+                }
             }
         }
         finally
         {
             tickEnds.Cancel();
         }
-
-        // The read won the wait: what it read is taken.
-        TakeMessage(await _pending.ConfigureAwait(false));
-        _pending = null;
 
         void Woken(Wake earliest)
         {
@@ -13167,9 +13182,9 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Reads every message already waiting for the loop - what a session that ended while steps ran kept for the next
-    /// (<see cref="_carried"/>), then what an earlier read holds, then what the channel holds - and hands each to
-    /// <paramref name="take"/>, waiting on nothing. A read still armed takes the channel's next message as it comes, so the
-    /// channel holds none meanwhile and is left to it.
+    /// (<see cref="_carried"/>), then what the channel holds - and hands each to <paramref name="take"/>, waiting on
+    /// nothing. The loop's wait for an arrival reads none (<see cref="_arrival"/>), so the channel holds every message the
+    /// loop has not read.
     /// </summary>
     private void EachQueued(Action<Message> take)
     {
@@ -13184,20 +13199,31 @@ public sealed class FlowCoordinator
             }
         }
 
-        if (_pending is { IsCompleted: true } read)
-        {
-            _pending = null;
-
-            if (read.IsCompletedSuccessfully)
-            {
-                take(read.Result);
-            }
-        }
-
-        while (_pending is null && _messages.Reader.TryRead(out var message))
+        while (_messages.Reader.TryRead(out var message))
         {
             take(message);
         }
+    }
+
+    /// <summary>
+    /// Whether a message waits for the loop: the one owner of it, which the loop asks before it ends a session over nothing
+    /// running. The channel holds every message the loop has not read - its wait for an arrival reads none
+    /// (<see cref="_arrival"/>) - so an answer that came while the loop was busy after a wait something else won is seen
+    /// here, however soon after it came.
+    /// </summary>
+    private bool AMessageWaits()
+        => _messages.Reader.TryPeek(out _);
+
+    /// <summary>Takes the first message waiting for the loop, where one does (<see cref="AMessageWaits"/>); whether one did.</summary>
+    private bool TakeWaiting()
+    {
+        if (!_messages.Reader.TryRead(out var message))
+        {
+            return false;
+        }
+
+        TakeMessage(message);
+        return true;
     }
 
     /// <summary>

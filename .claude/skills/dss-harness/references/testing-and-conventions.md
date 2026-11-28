@@ -60,7 +60,7 @@ All in [`tests/dss-harness-test`](../../../../tests/dss-harness-test):
 | `HostTestDoubles` | Scripted hosts and copies (`ScriptedHostCommands`, `NoHosts`, `NoHostCopies`, `RecordingLauncher`) |
 | `QuietProcessRunner`, `QuietProcessTable` | A program that says one line, stays silent for a given life and exits 0 (for stall bounds); a machine running only this test process and any others given |
 | `OrchestrationKit`, `SyncKit`, `AdmissionKit`, `ActionKit` | Ready-made scenes for those areas |
-| `ManualClock`, `JumpingClock`, `SteppingClock`, `ClockWatch` | `TimeProvider` doubles; `ClockWatch` tells a test the wall clock stepped, and real-build tests skip on it |
+| `ManualClock`, `JumpingClock`, `SteppingClock`, `TimerClock`, `ClockWatch` | `TimeProvider` doubles; `TimerClock`'s timers fire only when the test moves it past them - every wait, or only the waits it is told to hold, the rest on the system's timer - so a test passes a bound (a handoff turn's, a drain's, a retry's) once it is armed and never waits it out; `ClockWatch` tells a test the wall clock stepped, and real-build tests skip on it |
 | `PathAssert`, `Prose`, `TestLinks`, `HeapWatch` | Path equality across platforms, prose matching and the repository's documents, links where the system allows them, memory measured |
 | `WorkflowFiles` | The embedded workflows, read as lines, jobs and steps — see [release-and-ci.md](release-and-ci.md) §7 |
 | `BuildTools` | Skip or fail a test that needs real build tools |
